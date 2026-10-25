@@ -1,0 +1,48 @@
+# Private holdings / broker data
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+*.csv
+*.xlsx
+*.xls
+*.jsonl
+*.log
+*.key
+*.pem
+.env
+.env.*
+longbridge_app_key.py
+longbridge_quotes.json
+# Tests/reports/cache/build
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+build/
+dist/
+reports/
+exports/
+cache/
+scratch/
+.DS_Store
+# Note: references/个人投资总览.xlsx is intentionally in this local handoff bundle.
+# Never commit it to a public git remote.
+
+# Local golden source extraction contains private portfolio values
+tests/fixtures/excel_snapshot.json
+*.egg-info/
+pysidedeploy.spec
+deployment/
+*.app/
+
+# Local broker authorization and migration inputs
+api_config.json
+schwab_config.json
+schwab_token.json
+原始数据/
+数据库/
+nuitka-crash-report.xml
+*.zip

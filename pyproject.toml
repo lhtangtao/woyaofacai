@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "money-portfolio-desktop"
+version = "0.3.0"
+description = "本地只读的中文投资管理、收益回放和核对工具"
+requires-python = ">=3.11"
+dependencies = ["PySide6>=6.8,<7", "longbridge==5.2.1"]
+
+[project.optional-dependencies]
+sync = ["pandas==2.2.3", "openpyxl==3.1.5", "schwab-py==1.5.1", "requests>=2.32,<3"]
+dev = ["pytest>=8,<10", "pytest-qt>=4.4,<5", "ruff>=0.9,<1"]
+
+[project.scripts]
+money-portfolio = "portfolio.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+portfolio = ["resources/*.sql", "resources/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+qt_api = "pyside6"
+markers = ["real: 显式指定真实数据库时才运行的只读测试"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

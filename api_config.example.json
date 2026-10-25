@@ -1,0 +1,18 @@
+{
+  "longbridge": {
+    "app_key": "YOUR_LONGBRIDGE_APP_KEY",
+    "app_secret": "YOUR_LONGBRIDGE_APP_SECRET",
+    "access_token": "YOUR_LONGBRIDGE_ACCESS_TOKEN"
+  },
+  "schwab": {
+    "enabled": false,
+    "app_key": "YOUR_SCHWAB_APP_KEY",
+    "app_secret": "YOUR_SCHWAB_APP_SECRET",
+    "callback_url": "https://127.0.0.1",
+    "token_file": "schwab_token.json",
+    "account_number": "YOUR_ACCOUNT_NUMBER",
+    "history_start": "2025-01-01",
+    "use_market_data": false,
+    "history_price_basis": "official_close"
+  }
+}
