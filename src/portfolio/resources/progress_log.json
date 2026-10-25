@@ -1,5 +1,17 @@
 [
   {
+    "time": "2026-10-26 04:45",
+    "title": "双端功能栏1:1完全对齐与AI咨询记录双向互通共享（一套数据库、一套会话）",
+    "tag": "已完成",
+    "author": "Antigravity",
+    "details": [
+      "修改者：Antigravity（双端左侧功能导航栏 1:1 结构对齐、AI 股票分析移动端原生化、双端本地持久化会话文件全打通、桌面/手机咨询历史双向实时互通共享）",
+      "需求背景：用户指出启动桌面端和手机端之后，两个程序的左侧功能栏应该保持一致；且在 AI 股票分析等页面中选择标的（如 AAOX）时，手机端能够看到电脑端之前的咨询记录，反之手机端的新咨询也能在电脑端同步展现，本质上两端应使用同一套数据库和同一套 AI 会话。",
+      "实施落地：1) templates/mobile.html 抽屉菜单重构为桌面端的 5 大标准分组（资产管理、交易与收益、AI 助手、图表分析、系统管理），标题统一为「投资资产管理」；2) 移动端增加独立的 view-ai-stock 原生股票研报页面与底部快捷栏；3) app.py 增加 /api/ai/stock/* 端点并直连本地 ~/Library/Application Support/MoneyPortfolio/ 下的 ai_chat_sessions.json 与 ai_stock_analysis_sessions.json；4) 手机与桌面两端在切换 Ticker（如 AAOX）或发送问答时，均读写完全相同的本地 JSON 文件；5) 桌面端增加 switch_to_session 动态热重载，两端互通即时生效无需重启。",
+      "验证结果：编写并执行 verify_bi_directional_ai_sync.py 独立脚本，成功验证双端共享路径有效、AAOX 电脑端历史成功拉取、手机端写入即时生效、抽屉结构 100% 匹配，测试全部通过，未运行 pytest。"
+    ]
+  },
+  {
     "time": "2026-10-26 04:30",
     "title": "移动端 AI 投顾助手全量对齐桌面端：多维筛选、4大快捷洞察、真实账本注入、Markdown与分账隔离",
     "tag": "已完成",

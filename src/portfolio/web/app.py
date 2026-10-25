@@ -57,7 +57,65 @@ DEFAULT_USERS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# In-memory user-isolated AI chat histories
+# Local persistent AI session paths (100% shared with desktop AIAssistantPage & AIStockAnalysisPage)
+def get_ai_data_dir() -> Path:
+    """Return local disk storage directory matching desktop QStandardPaths.GenericDataLocation."""
+    base_dir = Path.home() / "Library" / "Application Support" / "MoneyPortfolio"
+    if not base_dir.exists():
+        base_dir = Path.home() / ".money_portfolio"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return base_dir
+
+
+def load_ai_chat_sessions() -> Dict[str, List[Dict[str, Any]]]:
+    """Load persistent AI portfolio chat sessions (shared with desktop AIAssistantPage)."""
+    path = get_ai_data_dir() / "ai_chat_sessions.json"
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to load ai_chat_sessions.json: {e}")
+        return {}
+
+
+def save_ai_chat_sessions(sessions: Dict[str, List[Dict[str, Any]]]):
+    """Save persistent AI portfolio chat sessions (shared with desktop AIAssistantPage)."""
+    path = get_ai_data_dir() / "ai_chat_sessions.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sessions, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save ai_chat_sessions.json: {e}")
+
+
+def load_ai_stock_sessions() -> Dict[str, List[Dict[str, Any]]]:
+    """Load persistent AI pure stock research sessions (shared with desktop AIStockAnalysisPage)."""
+    path = get_ai_data_dir() / "ai_stock_analysis_sessions.json"
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to load ai_stock_analysis_sessions.json: {e}")
+        return {}
+
+
+def save_ai_stock_sessions(sessions: Dict[str, List[Dict[str, Any]]]):
+    """Save persistent AI pure stock research sessions (shared with desktop AIStockAnalysisPage)."""
+    path = get_ai_data_dir() / "ai_stock_analysis_sessions.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sessions, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save ai_stock_analysis_sessions.json: {e}")
+
+
+# In-memory fallback
 _ai_chat_histories: Dict[str, List[Dict[str, Any]]] = {}
 
 # Shared service references
@@ -363,19 +421,170 @@ def api_ai_filters():
 
 @app.route("/api/ai/history", methods=["GET"])
 def api_ai_history():
-    """Return AI chat history isolated by user account."""
-    u = get_current_user()
-    username = u.get("username", "admin")
-    return jsonify({"status": "ok", "username": username, "history": _ai_chat_histories.get(username, [])})
+    """Return AI portfolio chat history from disk matching desktop AIAssistantPage."""
+    person_id, person_name = get_current_user_scope()
+    req_person = request.args.get("person", "").strip()
+    req_channel = request.args.get("channel", "").strip() or "全部渠道"
+    req_symbol = request.args.get("symbol", "").strip().upper().removesuffix(".US") or "全部股票"
+
+    if person_id is not None:
+        target_person = person_name or "拉科"
+    else:
+        target_person = req_person or "全部人员"
+
+    session_key = f"{target_person}___{req_channel}___{req_symbol}"
+    sessions = load_ai_chat_sessions()
+    history = sessions.get(session_key)
+
+    # If empty, try fallback if person was 全部人员 or 个人
+    if history is None:
+        if target_person in ("全部人员", "全部启用人员"):
+            history = sessions.get(f"个人___{req_channel}___{req_symbol}", [])
+        else:
+            history = []
+
+    # Map message objects so they have content, role, time_str
+    formatted = []
+    for m in history:
+        formatted.append({
+            "role": m.get("role", "user"),
+            "content": m.get("content", m.get("text", "")),
+            "text": m.get("content", m.get("text", "")),
+            "time_str": m.get("time_str", m.get("time", "")),
+            "time": m.get("time_str", m.get("time", "")),
+            "scope_tag": m.get("scope_tag", ""),
+        })
+
+    return jsonify({
+        "status": "ok",
+        "session_key": session_key,
+        "history": formatted,
+    })
 
 
 @app.route("/api/ai/clear", methods=["POST"])
 def api_ai_clear():
-    """Clear AI conversation history for the current user."""
-    u = get_current_user()
-    username = u.get("username", "admin")
-    _ai_chat_histories[username] = []
-    return jsonify({"status": "ok", "message": "会话历史已清空", "username": username})
+    """Clear AI conversation history for a specific combination on disk."""
+    data = request.get_json() or {}
+    person_id, person_name = get_current_user_scope()
+    req_person = data.get("person", "").strip()
+    req_channel = data.get("channel", "").strip() or "全部渠道"
+    req_symbol = data.get("symbol", "").strip().upper().removesuffix(".US") or "全部股票"
+
+    if person_id is not None:
+        target_person = person_name or "拉科"
+    else:
+        target_person = req_person or "全部人员"
+
+    session_key = f"{target_person}___{req_channel}___{req_symbol}"
+    sessions = load_ai_chat_sessions()
+    sessions[session_key] = []
+    save_ai_chat_sessions(sessions)
+    return jsonify({"status": "ok", "message": f"会话历史已清空: {session_key}", "session_key": session_key})
+
+
+@app.route("/api/ai/stock/history", methods=["GET"])
+def api_ai_stock_history():
+    """Return pure stock fundamental research history from disk matching desktop AIStockAnalysisPage."""
+    raw_symbol = request.args.get("symbol", "").strip().upper().removesuffix(".US")
+    symbol = raw_symbol if raw_symbol and raw_symbol != "全部股票" else "全部股票"
+    sessions = load_ai_stock_sessions()
+    history = sessions.get(symbol, [])
+
+    welcome_message = None
+    if not history:
+        if symbol != "全部股票":
+            welcome_message = (
+                f"您好！已为您切换至 **{symbol}** 的纯股票深度研究频道。\n\n"
+                f"• **研究标的**：**{symbol}**\n"
+                f"• **纯粹独立**：本页面**不依赖您的个人数据库账本**，专注于深入剖析 **{symbol}** 这家公司本身的商业模式、财报财务健康度、技术壁垒、竞争护城河与未来成长前景。\n\n"
+                f"您可以直接针对 **{symbol}** 的近期财报、核心业务亮点或未来催化剂提出任何疑问。"
+            )
+        else:
+            welcome_message = (
+                f"您好！已为您进入 **全市场与行业宏观** 股票分析频道。\n\n"
+                f"• **当前范围**：全部股票（宏观行业研究模式）\n"
+                f"• **独立隔离**：在此处提出的问题聚焦于宏观市场、行业板块趋势或赛道对比。\n\n"
+                f"如需针对某只具体标的（如 INTC、NVDA、AAPL）进行深入研报诊断，只需在上方「输入 Ticker」中选择即可。"
+            )
+
+    formatted = []
+    for m in history:
+        formatted.append({
+            "role": m.get("role", "user"),
+            "content": m.get("content", m.get("text", "")),
+            "text": m.get("content", m.get("text", "")),
+            "time_str": m.get("time_str", m.get("time", "")),
+            "time": m.get("time_str", m.get("time", "")),
+            "symbol_tag": m.get("symbol_tag", symbol),
+        })
+
+    return jsonify({
+        "status": "ok",
+        "symbol": symbol,
+        "history": formatted,
+        "welcome_message": welcome_message,
+    })
+
+
+@app.route("/api/ai/stock/chat", methods=["POST"])
+def api_ai_stock_chat():
+    """Execute pure stock fundamental research via Codex and persist to disk (shared with desktop)."""
+    try:
+        data = request.get_json() or {}
+        user_message = data.get("message", "").strip()
+        raw_symbol = data.get("symbol", "").strip().upper().removesuffix(".US")
+        symbol = raw_symbol if raw_symbol and raw_symbol != "全部股票" else "全部股票"
+        model = data.get("model") or None
+
+        if not user_message:
+            return jsonify({"status": "error", "message": "消息内容不能为空"}), 400
+
+        reply = CodexAIService.ask_stock(
+            user_message,
+            symbol=symbol if symbol != "全部股票" else None,
+            model=model,
+        )
+
+        time_str = datetime.now().strftime("%H:%M:%S")
+
+        sessions = load_ai_stock_sessions()
+        stock_msgs = sessions.setdefault(symbol, [])
+        stock_msgs.append({
+            "role": "user",
+            "content": user_message,
+            "time_str": time_str,
+            "symbol_tag": symbol,
+        })
+        stock_msgs.append({
+            "role": "assistant",
+            "content": reply,
+            "time_str": time_str,
+            "symbol_tag": symbol,
+        })
+        save_ai_stock_sessions(sessions)
+
+        return jsonify({
+            "status": "ok",
+            "symbol": symbol,
+            "reply": reply,
+            "time": time_str,
+        })
+    except Exception as e:
+        logger.exception("AI stock analysis failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/ai/stock/clear", methods=["POST"])
+def api_ai_stock_clear():
+    """Clear pure stock fundamental research history for a symbol on disk."""
+    data = request.get_json() or {}
+    raw_symbol = data.get("symbol", "").strip().upper().removesuffix(".US")
+    symbol = raw_symbol if raw_symbol and raw_symbol != "全部股票" else "全部股票"
+    sessions = load_ai_stock_sessions()
+    sessions[symbol] = []
+    save_ai_stock_sessions(sessions)
+    return jsonify({"status": "ok", "message": f"已清空【{symbol}】研报分析历史", "symbol": symbol})
 
 
 @app.route("/api/network/info", methods=["GET"])
@@ -983,8 +1192,6 @@ def api_ai_chat():
 
         reply = CodexAIService.ask(user_message, context=context_str, model=model)
 
-        u = get_current_user()
-        username = u.get("username", "admin")
         time_str = datetime.now().strftime("%H:%M:%S")
 
         scope_desc = [
@@ -993,27 +1200,32 @@ def api_ai_chat():
             f"{target_symbol or '全部股票'}",
         ]
         scope_tag = " · ".join(scope_desc)
+        session_key = f"{target_person or '全部人员'}___{req_channel or '全部渠道'}___{target_symbol or '全部股票'}"
 
-        _ai_chat_histories.setdefault(username, []).append({
+        # Persist to disk matching desktop AIAssistantPage
+        sessions = load_ai_chat_sessions()
+        session_msgs = sessions.setdefault(session_key, [])
+        session_msgs.append({
             "role": "user",
-            "text": user_message,
-            "time": time_str,
+            "content": user_message,
+            "time_str": time_str,
             "scope_tag": scope_tag,
         })
-        _ai_chat_histories[username].append({
-            "role": "ai",
-            "text": reply,
-            "time": time_str,
+        session_msgs.append({
+            "role": "assistant",
+            "content": reply,
+            "time_str": time_str,
             "scope_tag": scope_tag,
         })
+        save_ai_chat_sessions(sessions)
 
         return jsonify({
             "status": "ok",
             "reply": reply,
             "symbol": target_symbol,
             "scope_tag": scope_tag,
+            "session_key": session_key,
             "time": time_str,
-            "username": username,
         })
     except Exception as e:
         logger.exception("AI chat failed")

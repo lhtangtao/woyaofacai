@@ -501,6 +501,9 @@ class AIAssistantPage(QWidget):
         # 检查是否需要补齐筛选器
         if self.stock_search.count() <= 1 and self.window and getattr(self.window, "info", None):
             self.populate_filters(self.window.info)
+        else:
+            # 实时从本地磁盘载入可能在手机端新增的咨询会话
+            self.switch_to_session(self.current_session_key())
 
         # 刷新所有气泡的高度（如果在后台期间接收到了新回复）
         if self._need_adjust_views:
@@ -533,10 +536,12 @@ class AIAssistantPage(QWidget):
     def switch_to_session(self, new_session_key: str):
         """
         无缝切换到新会话频道：
-        1. 清理当前视图中的消息气泡；
-        2. 载入对应会话频道的历史消息；
-        3. 如果新会话首次进入，生成该频道的专属欢迎卡片。
+        1. 重新从本地磁盘载入最新会话（实时同步手机移动端与桌面端的问答历史）；
+        2. 清理当前视图中的消息气泡；
+        3. 载入对应会话频道的历史消息；
+        4. 如果新会话首次进入，生成该频道的专属欢迎卡片。
         """
+        self.load_sessions()
         self.active_session_key = new_session_key
 
         # 清除现有气泡组件（保留最下方的 stretch）

@@ -1051,119 +1051,123 @@
       
       <div class="drawer-group-title">资产管理</div>
       <div class="drawer-item" onclick="switchView('overview')">
-        <span class="icon">💼</span>
-        <span>资产总览看板</span>
+        <span class="icon">㗊</span>
+        <span>资产总览</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('今日盈亏')">
+        <span class="icon">📈</span>
+        <span>今日盈亏</span>
       </div>
       <div class="drawer-item" onclick="loadReport('当前持仓')">
-        <span class="icon">📈</span>
-        <span>当前持仓明细</span>
+        <span class="icon">👝</span>
+        <span>当前持仓</span>
         <span class="badge-cnt" id="cntHoldings">28</span>
       </div>
       <div class="drawer-item" onclick="loadReport('股票汇总')">
-        <span class="icon">📋</span>
-        <span>股票全量汇总</span>
-      </div>
-      <div class="drawer-item" onclick="loadReport('渠道汇总')">
-        <span class="icon">🏦</span>
-        <span>券商渠道资产</span>
-      </div>
-      <div class="drawer-item" onclick="loadReport('分类汇总')">
-        <span class="icon">🗂️</span>
-        <span>持仓分类资产</span>
+        <span class="icon">▦</span>
+        <span>股票汇总</span>
       </div>
       <div class="drawer-item" onclick="loadReport('人员资产')">
         <span class="icon">👥</span>
-        <span>人员分账资产</span>
+        <span>人员资产</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('渠道汇总')">
+        <span class="icon">🏛</span>
+        <span>券商资产</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('股票归属')">
+        <span class="icon">🕒</span>
+        <span>股票归属</span>
       </div>
       <div class="drawer-item" onclick="loadReport('收益日历')">
         <span class="icon">📅</span>
-        <span>收益日历矩阵</span>
-      </div>
-      <div class="drawer-item" onclick="loadReport('季度矩阵')">
-        <span class="icon">📊</span>
-        <span>季度收益矩阵</span>
-      </div>
-
-      <div class="drawer-group-title">行情与专业K线</div>
-      <div class="drawer-item" onclick="switchView('monitoring')">
-        <span class="icon">🎯</span>
-        <span>行情监控看板</span>
-        <span class="badge-cnt" id="cntWatch">25</span>
-      </div>
-      <div class="drawer-item" onclick="switchView('kline')">
-        <span class="icon">📉</span>
-        <span>专业K线与指标</span>
-      </div>
-      <div class="drawer-item" onclick="switchMonitoringSub('rules')">
-        <span class="icon">🔔</span>
-        <span>预警监控规则</span>
-      </div>
-      <div class="drawer-item" onclick="switchMonitoringSub('alerts')">
-        <span class="icon">⚡</span>
-        <span>历史预警记录</span>
+        <span>持仓财报日历</span>
       </div>
 
       <div class="drawer-group-title">交易与收益</div>
       <div class="drawer-item" onclick="switchView('trades')">
-        <span class="icon">🧾</span>
-        <span>交易流水明细</span>
+        <span class="icon">⇄</span>
+        <span>交易明细</span>
         <span class="badge-cnt" id="cntTrades">1454</span>
       </div>
-      <div class="drawer-item" onclick="loadReport('清仓收益')">
-        <span class="icon">💰</span>
-        <span>已清仓历史收益</span>
-      </div>
       <div class="drawer-item" onclick="loadReport('每日持仓收益')">
-        <span class="icon">📆</span>
+        <span class="icon">📅</span>
         <span>每日持仓收益</span>
       </div>
       <div class="drawer-item" onclick="loadReport('每月持仓收益')">
-        <span class="icon">🗓️</span>
+        <span class="icon">📈</span>
         <span>每月持仓收益</span>
       </div>
       <div class="drawer-item" onclick="loadReport('每月微操收益')">
-        <span class="icon">⚡</span>
-        <span>做T日内微操收益</span>
+        <span class="icon">⇄</span>
+        <span>每月微操收益</span>
       </div>
-      <div class="drawer-item" onclick="loadReport('微操配对证据')">
-        <span class="icon">🔍</span>
-        <span>微操逐笔配对记录</span>
+      <div class="drawer-item" onclick="loadReport('清仓收益')">
+        <span class="icon">👝</span>
+        <span>清仓收益</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('月度净投入明细')">
+        <span class="icon">📈</span>
+        <span>月度净投入</span>
+      </div>
+
+      <div class="drawer-group-title">AI 助手</div>
+      <div class="drawer-item" onclick="switchView('ai')">
+        <span class="icon">🤖</span>
+        <span>AI 投资问答</span>
+      </div>
+      <div class="drawer-item" onclick="switchView('monitoring')">
+        <span class="icon">📈</span>
+        <span>行情监控中心</span>
+        <span class="badge-cnt" id="cntWatch">25</span>
+      </div>
+      <div class="drawer-item" onclick="switchView('ai-stock')">
+        <span class="icon">📈</span>
+        <span>AI 股票分析</span>
+      </div>
+
+      <div class="drawer-group-title">图表分析</div>
+      <div class="drawer-item" onclick="switchCharts('trend')">
+        <span class="icon">📈</span>
+        <span>资产走势图</span>
       </div>
       <div class="drawer-item" onclick="loadReport('月度趋势')">
         <span class="icon">📈</span>
-        <span>月度收益与资产趋势</span>
+        <span>月度走势详情</span>
       </div>
-
-      <div class="drawer-group-title">图表分析中心 (27大图表)</div>
       <div class="drawer-item" onclick="switchCharts('pie')">
-        <span class="icon">🥧</span>
-        <span>资产结构占比</span>
+        <span class="icon">📊</span>
+        <span>持仓分布</span>
       </div>
-      <div class="drawer-item" onclick="switchCharts('trend')">
-        <span class="icon">📉</span>
-        <span>月度收益走势</span>
-      </div>
-      <div class="drawer-item" onclick="switchCharts('rank')">
-        <span class="icon">🏆</span>
-        <span>标的盈亏排行榜</span>
+      <div class="drawer-item" onclick="switchCharts('all')">
+        <span class="icon">📈</span>
+        <span>走势图</span>
       </div>
       <div class="drawer-item" onclick="switchCharts('extremes')">
         <span class="icon">🔥</span>
-        <span>最爽与最惨五天</span>
+        <span>Top日汇总</span>
       </div>
-      <div class="drawer-item" onclick="switchCharts('all')">
-        <span class="icon">📊</span>
-        <span>全部 27 个图表</span>
+      <div class="drawer-item" onclick="switchCharts('rank')">
+        <span class="icon">🏆</span>
+        <span>收益排行榜</span>
+      </div>
+      <div class="drawer-item" onclick="switchView('kline')">
+        <span class="icon">🔍</span>
+        <span>证券详情</span>
       </div>
 
-      <div class="drawer-group-title">AI 投顾与设置</div>
-      <div class="drawer-item" onclick="switchView('ai')">
-        <span class="icon">🤖</span>
-        <span>AI 智能投资顾问</span>
-      </div>
+      <div class="drawer-group-title">系统管理</div>
       <div class="drawer-item" onclick="switchView('settings')">
         <span class="icon">⚙️</span>
-        <span>Bark推送 / 远程访问</span>
+        <span>设置与推送</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('指标说明')">
+        <span class="icon">📋</span>
+        <span>指标说明</span>
+      </div>
+      <div class="drawer-item" onclick="loadReport('导入批次')">
+        <span class="icon">📝</span>
+        <span>数据检查与批次</span>
       </div>
 
     </div>
@@ -1461,6 +1465,49 @@
       </div>
     </section>
 
+    <!-- 7b. VIEW: AI STOCK ANALYSIS (AI 股票分析 · 纯股票基本面研报) -->
+    <section id="view-ai-stock" class="view-page">
+      <!-- Status & Clear Bar -->
+      <div class="ai-status-bar">
+        <div class="ai-status-left">
+          <span id="aiStockStatusBadge" class="ai-status-badge">🟢 已连接 Codex (ChatGPT 订阅)</span>
+        </div>
+        <button class="ai-btn-clear" onclick="clearAiStockChat()" title="清空此标的对话">🗑️ 清空此标的对话</button>
+      </div>
+
+      <!-- Ticker Filter Card -->
+      <div class="ai-filter-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;color:var(--text-main);">📈 锁定研究股票:</div>
+          <div id="aiStockHint" style="font-size:11px;color:var(--accent-light);font-weight:600;">当前标的: 全部股票 (宏观模式)</div>
+        </div>
+        <select id="aiStockFilterSymbol" class="ai-select" onchange="onAiStockSymbolChanged(this.value)">
+          <option value="全部股票">全部股票 (全市场与宏观模式)</option>
+        </select>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:8px;line-height:1.4;">
+          💡 纯粹围绕选定股票本身的基本面、商业模式、财报财务健康度、技术壁垒与前景进行深度研判，不加载个人账本数据。
+        </div>
+      </div>
+
+      <!-- Preset Prompt Pills Carousel (Desktop 4 Presets) -->
+      <div class="pill-carousel ai-pill-carousel">
+        <div class="pill" onclick="sendStockPresetPrompt('请深入解读该公司的最新财报表现，重点分析营收增速、毛利率变动、自由现金流状况及关键盈利质量指标。')">📊 财报深度解读与核心指标</div>
+        <div class="pill" onclick="sendStockPresetPrompt('请分析该公司的核心商业壁垒、护城河深度，以及相对于行业主要竞争对手的关键优势与劣势。')">🚀 核心商业模式与护城河</div>
+        <div class="pill" onclick="sendStockPresetPrompt('请分析未来 1 到 3 年该公司可能迎来的核心增长驱动力、行业结构性机遇以及重要的业务催化剂事件。')">🔮 未来 1~3 年增长催化剂</div>
+        <div class="pill" onclick="sendStockPresetPrompt('请深入剖析当前该公司面临的核心下行风险、行业周期性压力、监管或客户集中度风险。')">⚠️ 潜在下行风险与利空隐患</div>
+      </div>
+
+      <!-- Chat Messages Container -->
+      <div class="chat-box" id="stockChatBox">
+      </div>
+
+      <!-- Input Bar -->
+      <div class="chat-input-bar">
+        <input type="text" id="aiStockInput" class="chat-input" placeholder="输入股票疑问、财报讨论、行业竞争或商业前景..." enterkeyhint="send" onkeydown="if(event.key==='Enter') sendAiStockMessage()">
+        <button id="aiStockSendBtn" class="chat-send" onclick="sendAiStockMessage()">↑</button>
+      </div>
+    </section>
+
     <!-- 8. VIEW: SETTINGS & REMOTE (Bark推送与远程公网) -->
     <section id="view-settings" class="view-page">
       
@@ -1542,13 +1589,13 @@
       <span class="tab-icon">📉</span>
       <span class="tab-label">K线</span>
     </div>
-    <div class="tab-item" id="tabNavCharts" onclick="switchView('charts')">
-      <span class="tab-icon">📊</span>
-      <span class="tab-label">图表</span>
-    </div>
     <div class="tab-item" id="tabNavAi" onclick="switchView('ai')">
       <span class="tab-icon">🤖</span>
-      <span class="tab-label">AI</span>
+      <span class="tab-label">AI问答</span>
+    </div>
+    <div class="tab-item" id="tabNavAiStock" onclick="switchView('ai-stock')">
+      <span class="tab-icon">🔬</span>
+      <span class="tab-label">股票研报</span>
     </div>
   </nav>
 
@@ -1615,7 +1662,8 @@
         'charts': { title: '图表分析中心', badge: '27大图表' },
         'trades': { title: '交易流水明细', badge: '1454笔' },
         'monitoring': { title: '行情监控中心', badge: '监控雷达' },
-        'ai': { title: 'AI 投资顾问', badge: '深度思考' },
+        'ai': { title: 'AI 投资问答', badge: '真实账本' },
+        'ai-stock': { title: 'AI 股票分析', badge: '标的研报' },
         'settings': { title: '推送与公网设置', badge: '连接中心' },
       };
       const info = titleMap[viewName] || { title: 'Money Portfolio', badge: '移动版' };
@@ -1627,8 +1675,8 @@
       if (viewName === 'overview') document.getElementById('tabNavOverview')?.classList.add('active');
       if (viewName === 'report' && state.currentReport === '当前持仓') document.getElementById('tabNavHoldings')?.classList.add('active');
       if (viewName === 'kline') document.getElementById('tabNavKline')?.classList.add('active');
-      if (viewName === 'charts') document.getElementById('tabNavCharts')?.classList.add('active');
       if (viewName === 'ai') document.getElementById('tabNavAi')?.classList.add('active');
+      if (viewName === 'ai-stock') document.getElementById('tabNavAiStock')?.classList.add('active');
 
       // Resize or render charts in target view
       window.scrollTo(0, 0);
@@ -1644,6 +1692,8 @@
         fetchMonitoringSymbols();
       } else if (viewName === 'ai') {
         initAiAssistant();
+      } else if (viewName === 'ai-stock') {
+        initAiStockAnalysis();
       }
     }
 
@@ -1655,6 +1705,7 @@
       else if (state.currentView === 'trades') fetchTrades();
       else if (state.currentView === 'monitoring') fetchMonitoringSymbols();
       else if (state.currentView === 'ai') initAiAssistant(true);
+      else if (state.currentView === 'ai-stock') initAiStockAnalysis(true);
       else alert('数据已同步');
     }
 
@@ -2356,23 +2407,33 @@
     }
 
     async function fetchAiHistory() {
+      const person = document.getElementById('aiFilterPerson')?.value || '';
+      const channel = document.getElementById('aiFilterChannel')?.value || '全部渠道';
+      const symbol = document.getElementById('aiFilterSymbol')?.value || '全部股票';
+
       try {
-        const res = await fetch('/api/ai/history');
+        const query = `person=${encodeURIComponent(person)}&channel=${encodeURIComponent(channel)}&symbol=${encodeURIComponent(symbol)}`;
+        const res = await fetch(`/api/ai/history?${query}`);
         const data = await res.json();
+        const box = document.getElementById('chatBox');
+        if (!box) return;
+        box.innerHTML = '';
+
         if (data.status === 'ok' && Array.isArray(data.history) && data.history.length > 0) {
-          const box = document.getElementById('chatBox');
-          box.innerHTML = '';
           data.history.forEach((m, idx) => {
-            if (m.role === 'user') {
+            const isUser = m.role === 'user';
+            const textContent = m.content || m.text || '';
+            const timeVal = m.time_str || m.time || '';
+            if (isUser) {
               box.innerHTML += `
                 <div class="msg msg-user">
                   ${m.scope_tag ? `<div class="msg-scope-tag">${escapeHtml(m.scope_tag)}</div>` : ''}
-                  <div class="msg-text">${escapeHtml(m.text)}</div>
-                  <div class="msg-time">${escapeHtml(m.time || '')}</div>
+                  <div class="msg-text">${escapeHtml(textContent)}</div>
+                  <div class="msg-time">${escapeHtml(timeVal)}</div>
                 </div>
               `;
             } else {
-              const bodyHtml = renderMarkdown(m.text);
+              const bodyHtml = renderMarkdown(textContent);
               const copyId = `ai_copy_${idx}`;
               box.innerHTML += `
                 <div class="msg msg-ai">
@@ -2381,15 +2442,30 @@
                   </div>
                   <div class="msg-ai-body">${bodyHtml}</div>
                   <div class="msg-ai-footer">
-                    <button class="ai-btn-copy" id="${copyId}" onclick="copyAiReply(this, ${JSON.stringify(m.text).replace(/"/g, '&quot;')})">📋 复制回答</button>
-                    <span class="msg-time">${escapeHtml(m.time || '')}</span>
+                    <button class="ai-btn-copy" id="${copyId}" onclick="copyAiReply(this, ${JSON.stringify(textContent).replace(/"/g, '&quot;')})">📋 复制回答</button>
+                    <span class="msg-time">${escapeHtml(timeVal)}</span>
                   </div>
                 </div>
               `;
             }
           });
-          window.scrollTo(0, document.body.scrollHeight);
+        } else {
+          // Greeting card for this combination
+          const scopeLabel = `${person || '全部人员'} · ${channel} · ${symbol}`;
+          box.innerHTML = `
+            <div class="msg msg-ai" id="aiDefaultGreeting">
+              <div class="msg-ai-header">
+                <span class="ai-avatar-badge">🤖 AI 专属投顾 · 会话就绪</span>
+              </div>
+              <div class="msg-ai-body">
+                您好！已为您切换至 <strong>${escapeHtml(scopeLabel)}</strong> 的独立对话频道。<br><br>
+                在此处提出的持仓成本诊断、做T流水复盘、买卖策略分析等问题，将与桌面端<strong>实时互通共享</strong>。
+              </div>
+              <div class="msg-time">准备就绪</div>
+            </div>
+          `;
         }
+        window.scrollTo(0, document.body.scrollHeight);
       } catch (e) {
         console.warn('Failed to fetch AI history:', e);
       }
@@ -2403,6 +2479,7 @@
       } else if (input && !input.value.trim()) {
         input.placeholder = '输入投资疑问、持仓诊断或做T策略...';
       }
+      fetchAiHistory();
     }
 
     function sendPresetPrompt(promptText) {
@@ -2530,25 +2607,284 @@
     }
 
     async function clearAiChat() {
-      if (!confirm('确定清空当前账号的 AI 会话历史吗？')) return;
+      const person = document.getElementById('aiFilterPerson')?.value || '';
+      const channel = document.getElementById('aiFilterChannel')?.value || '全部渠道';
+      const symbol = document.getElementById('aiFilterSymbol')?.value || '全部股票';
+      if (!confirm(`确定清空当前【${person || '全部人员'} · ${channel} · ${symbol}】的会话历史吗？`)) return;
       try {
-        const res = await fetch('/api/ai/clear', { method: 'POST' });
+        const res = await fetch('/api/ai/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ person, channel, symbol })
+        });
         const data = await res.json();
         if (data.status === 'ok') {
-          const box = document.getElementById('chatBox');
-          if (box) {
+          fetchAiHistory();
+        }
+      } catch (e) {
+        alert('清空失败: ' + e.message);
+      }
+    }
+
+    // --- AI Stock Analysis Logic (100% Shared with Desktop AIStockAnalysisPage) ---
+    let aiStockThinkingTimer = null;
+    let aiStockThinkingSeconds = 0;
+    let aiStockThinkingDots = 0;
+    let aiStockInitialized = false;
+
+    async function initAiStockAnalysis(force = false) {
+      if (aiStockInitialized && !force) return;
+      aiStockInitialized = true;
+      await Promise.all([
+        fetchAiStockStatus(),
+        populateAiStockSymbols(),
+      ]);
+      const currentSym = document.getElementById('aiStockFilterSymbol')?.value || '全部股票';
+      await loadAiStockHistory(currentSym);
+    }
+
+    async function fetchAiStockStatus() {
+      const badge = document.getElementById('aiStockStatusBadge');
+      if (!badge) return;
+      try {
+        const res = await fetch('/api/ai/status');
+        const data = await res.json();
+        if (data.status === 'ok') {
+          if (data.logged_in) {
+            const acc = data.account_type || 'ChatGPT';
+            badge.innerText = `🟢 已连接 Codex (${acc} 订阅)`;
+            badge.style.color = '#34D399';
+            badge.style.background = 'rgba(16, 185, 129, 0.15)';
+            badge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+          } else if (data.installed) {
+            badge.innerText = '🟡 未登录 (终端执行 codex login)';
+            badge.style.color = '#FBBF24';
+            badge.style.background = 'rgba(245, 158, 11, 0.15)';
+          } else {
+            badge.innerText = '🔴 未安装 Codex CLI';
+            badge.style.color = '#F87171';
+            badge.style.background = 'rgba(239, 68, 68, 0.15)';
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch AI stock status:', e);
+      }
+    }
+
+    async function populateAiStockSymbols() {
+      const sel = document.getElementById('aiStockFilterSymbol');
+      if (!sel) return;
+      try {
+        const res = await fetch('/api/ai/filters');
+        const data = await res.json();
+        if (data.status === 'ok' && data.symbols) {
+          const currentVal = sel.value || '全部股票';
+          sel.innerHTML = '';
+          data.symbols.forEach(sym => {
+            const opt = document.createElement('option');
+            opt.value = sym;
+            opt.innerText = sym === '全部股票' ? '全部股票 (全市场与宏观模式)' : `${sym} 深度研报`;
+            sel.appendChild(opt);
+          });
+          if (data.symbols.includes(currentVal)) {
+            sel.value = currentVal;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to populate AI stock symbols:', e);
+      }
+    }
+
+    function onAiStockSymbolChanged(symbol) {
+      const hint = document.getElementById('aiStockHint');
+      if (hint) {
+        hint.innerText = symbol === '全部股票' ? '当前标的: 全部股票 (宏观模式)' : `当前标的: 【${symbol}】专属独立研报`;
+      }
+      loadAiStockHistory(symbol);
+    }
+
+    async function loadAiStockHistory(symbol) {
+      const box = document.getElementById('stockChatBox');
+      if (!box) return;
+      try {
+        const res = await fetch(`/api/ai/stock/history?symbol=${encodeURIComponent(symbol)}`);
+        const data = await res.json();
+        box.innerHTML = '';
+        if (data.status === 'ok') {
+          if (Array.isArray(data.history) && data.history.length > 0) {
+            data.history.forEach((m, idx) => {
+              const isUser = m.role === 'user';
+              const textContent = m.content || m.text || '';
+              const timeVal = m.time_str || m.time || '';
+              if (isUser) {
+                box.innerHTML += `
+                  <div class="msg msg-user">
+                    <div class="msg-scope-tag">股票研报 · ${escapeHtml(symbol)}</div>
+                    <div class="msg-text">${escapeHtml(textContent)}</div>
+                    <div class="msg-time">${escapeHtml(timeVal)}</div>
+                  </div>
+                `;
+              } else {
+                const bodyHtml = renderMarkdown(textContent);
+                const copyId = `stock_copy_${idx}`;
+                box.innerHTML += `
+                  <div class="msg msg-ai">
+                    <div class="msg-ai-header">
+                      <span class="ai-avatar-badge">🔬 标的深度商业与基本面分析</span>
+                    </div>
+                    <div class="msg-ai-body">${bodyHtml}</div>
+                    <div class="msg-ai-footer">
+                      <button class="ai-btn-copy" id="${copyId}" onclick="copyAiReply(this, ${JSON.stringify(textContent).replace(/"/g, '&quot;')})">📋 复制研报</button>
+                      <span class="msg-time">${escapeHtml(timeVal)}</span>
+                    </div>
+                  </div>
+                `;
+              }
+            });
+          } else if (data.welcome_message) {
+            const bodyHtml = renderMarkdown(data.welcome_message);
             box.innerHTML = `
-              <div class="msg msg-ai" id="aiDefaultGreeting">
+              <div class="msg msg-ai">
                 <div class="msg-ai-header">
-                  <span class="ai-avatar-badge">🤖 AI 专属投顾</span>
+                  <span class="ai-avatar-badge">🔬 股票研报分析 · 会话就绪</span>
                 </div>
-                <div class="msg-ai-body">
-                  会话历史已清空。您可以随时提出新的投资疑问、成本分析或做T策略。
-                </div>
-                <div class="msg-time">已重置</div>
+                <div class="msg-ai-body">${bodyHtml}</div>
+                <div class="msg-time">准备就绪</div>
               </div>
             `;
           }
+        }
+        window.scrollTo(0, document.body.scrollHeight);
+      } catch (e) {
+        console.warn('Failed to load stock history:', e);
+      }
+    }
+
+    function sendStockPresetPrompt(promptText) {
+      const input = document.getElementById('aiStockInput');
+      if (!input) return;
+      input.value = promptText;
+      sendAiStockMessage();
+    }
+
+    async function sendAiStockMessage() {
+      const input = document.getElementById('aiStockInput');
+      const text = input ? input.value.trim() : '';
+      if (!text) return;
+      input.value = '';
+
+      const sendBtn = document.getElementById('aiStockSendBtn');
+      if (sendBtn) sendBtn.disabled = true;
+      if (input) input.disabled = true;
+
+      const symbol = document.getElementById('aiStockFilterSymbol')?.value || '全部股票';
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const box = document.getElementById('stockChatBox');
+
+      // Append user bubble
+      box.innerHTML += `
+        <div class="msg msg-user">
+          <div class="msg-scope-tag">股票研报 · ${escapeHtml(symbol)}</div>
+          <div class="msg-text">${escapeHtml(text)}</div>
+          <div class="msg-time">${timeStr}</div>
+        </div>
+      `;
+
+      // Append dynamic thinking bubble
+      const loadingId = 'stockLoading_' + Date.now();
+      box.innerHTML += `
+        <div class="msg msg-ai msg-thinking" id="${loadingId}">
+          <div class="ai-thinking-row">
+            <span class="ai-thinking-spinner"></span>
+            <span>🤖 Codex 正在深入剖析【${escapeHtml(symbol)}】基本面 (<span id="stockThinkingSec">0</span>s · 运算中<span id="stockThinkingDots">.</span>)</span>
+          </div>
+        </div>
+      `;
+      window.scrollTo(0, document.body.scrollHeight);
+
+      // Start elapsed timer
+      aiStockThinkingSeconds = 0;
+      aiStockThinkingDots = 0;
+      if (aiStockThinkingTimer) clearInterval(aiStockThinkingTimer);
+      aiStockThinkingTimer = setInterval(() => {
+        aiStockThinkingSeconds++;
+        aiStockThinkingDots = (aiStockThinkingDots + 1) % 4;
+        const secEl = document.getElementById('stockThinkingSec');
+        const dotsEl = document.getElementById('stockThinkingDots');
+        if (secEl) secEl.innerText = aiStockThinkingSeconds;
+        if (dotsEl) dotsEl.innerText = '.'.repeat(aiStockThinkingDots || 1);
+      }, 1000);
+
+      try {
+        const res = await fetch('/api/ai/stock/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: symbol, message: text })
+        });
+
+        clearInterval(aiStockThinkingTimer);
+        aiStockThinkingTimer = null;
+
+        const data = await res.json();
+        const loadEl = document.getElementById(loadingId);
+        if (data.status === 'ok' && loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          const bodyHtml = renderMarkdown(data.reply);
+          loadEl.innerHTML = `
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge">🔬 标的深度商业与基本面分析</span>
+            </div>
+            <div class="msg-ai-body">${bodyHtml}</div>
+            <div class="msg-ai-footer">
+              <button class="ai-btn-copy" onclick="copyAiReply(this, ${JSON.stringify(data.reply).replace(/"/g, '&quot;')})">📋 复制研报</button>
+              <span class="msg-time">${escapeHtml(data.time || timeStr)}</span>
+            </div>
+          `;
+        } else if (loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          loadEl.innerHTML = `
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge" style="color:var(--loss);">❌ 分析未能完成</span>
+            </div>
+            <div class="msg-ai-body" style="color:var(--loss);">${escapeHtml(data.message || '未知错误')}</div>
+            <div class="msg-time">${timeStr}</div>
+          `;
+        }
+      } catch (err) {
+        if (aiStockThinkingTimer) clearInterval(aiStockThinkingTimer);
+        const loadEl = document.getElementById(loadingId);
+        if (loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          loadEl.innerHTML = `
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge" style="color:var(--loss);">❌ 网络异常</span>
+            </div>
+            <div class="msg-ai-body" style="color:var(--loss);">${escapeHtml(err.message)}</div>
+            <div class="msg-time">${timeStr}</div>
+          `;
+        }
+      } finally {
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) {
+          input.disabled = false;
+          input.focus();
+        }
+        window.scrollTo(0, document.body.scrollHeight);
+      }
+    }
+
+    async function clearAiStockChat() {
+      const symbol = document.getElementById('aiStockFilterSymbol')?.value || '全部股票';
+      if (!confirm(`确定清空【${symbol}】的研报分析历史吗？`)) return;
+      try {
+        const res = await fetch('/api/ai/stock/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: symbol })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          loadAiStockHistory(symbol);
         }
       } catch (e) {
         alert('清空失败: ' + e.message);

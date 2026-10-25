@@ -438,7 +438,8 @@ class AIStockAnalysisPage(QWidget):
         return sym
 
     def switch_to_session(self, new_session_key: str):
-        """无缝切换至对应股票的专属分析频道"""
+        """无缝切换至对应股票的专属分析频道（实时载入可能在手机端新增的咨询记录）"""
+        self.load_sessions()
         self.active_session_key = new_session_key
 
         while self.chat_layout.count() > 1:
@@ -567,6 +568,9 @@ class AIStockAnalysisPage(QWidget):
         # 检查是否需要补齐标的列表
         if self.stock_search.count() <= 1 and self.window and getattr(self.window, "info", None):
             self.populate_filters(self.window.info)
+        else:
+            # 实时从本地磁盘载入可能在手机端新增的咨询会话
+            self.switch_to_session(self.current_session_key())
 
         # 刷新所有气泡的高度（如果在后台期间接收到了新研报）
         if self._need_adjust_views:
