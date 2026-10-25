@@ -995,6 +995,10 @@
           <span>均线状态:</span>
           <span id="statCross">无交叉</span>
         </div>
+        <div class="stat-row" style="grid-column: span 2; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 6px; margin-top: 2px;">
+          <span style="font-size: 11px;">全均线组:</span>
+          <span id="statMaAll" style="font-size: 11px; font-weight: 500; color: var(--accent-light); text-align: right;">-</span>
+        </div>
       </div>
 
       <!-- Sub-Indicator Selector Toolbar -->
@@ -1490,6 +1494,15 @@
           document.getElementById('statLow52').innerText = data.technicals.LOW52 ? '$' + formatNumber(data.technicals.LOW52) : '-';
           document.getElementById('statTrend').innerText = `${data.technicals.SHORT} / ${data.technicals.MEDIUM}`;
           document.getElementById('statCross').innerText = data.technicals.CROSS || '无交叉';
+
+          const maItems = [];
+          if (data.ma.ma5 && data.ma.ma5.length) maItems.push('MA5: ' + formatNumber(data.ma.ma5[data.ma.ma5.length - 1]));
+          if (data.ma.ma10 && data.ma.ma10.length) maItems.push('MA10: ' + formatNumber(data.ma.ma10[data.ma.ma10.length - 1]));
+          if (data.ma.ma20 && data.ma.ma20.length) maItems.push('MA20: ' + formatNumber(data.ma.ma20[data.ma.ma20.length - 1]));
+          if (data.ma.ma50 && data.ma.ma50.length) maItems.push('MA50: ' + formatNumber(data.ma.ma50[data.ma.ma50.length - 1]));
+          if (data.ma.ma200 && data.ma.ma200.length) maItems.push('MA200: ' + formatNumber(data.ma.ma200[data.ma.ma200.length - 1]));
+          const elMaAll = document.getElementById('statMaAll');
+          if (elMaAll) elMaAll.innerText = maItems.join('  ·  ');
 
           renderKlineChart();
         } else {

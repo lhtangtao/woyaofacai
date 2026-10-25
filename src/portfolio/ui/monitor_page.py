@@ -417,8 +417,8 @@ class MonitoringPage(QWidget):
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setMinimumSectionSize(60)
-        col_widths = (130, 92, 68, 68, 68, 68, 76, 85, 78, 85)
+        self.table.horizontalHeader().setMinimumSectionSize(36)
+        col_widths = (120, 90, 70, 70, 70, 70, 78, 80, 75, 42)
         for col_idx, width in enumerate(col_widths):
             self.table.setColumnWidth(col_idx, width)
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -521,56 +521,57 @@ class MonitoringPage(QWidget):
         self.chart = MonitorChart()
         detail_layout.addWidget(self.chart)
 
-        # Technical Indicators Grid with Quick "+ Add Rule" Buttons
-        ind_group = QGroupBox("技术指标详情与一键监控")
+        # Technical Indicators Grid with Quick Add/Edit Rule Icon Buttons
+        ind_group = QGroupBox("技术指标详情与监控预警")
         ind_box = QVBoxLayout(ind_group)
-        ind_box.setSpacing(8)
+        ind_box.setContentsMargins(8, 6, 8, 6)
+        ind_box.setSpacing(4)
 
-        # 1. MA
+        # 1. Full MA Moving Averages (All periods)
         c1, self.lbl_ma_summary = self._create_indicator_card(
-            "📈 均线组 (MA20 / 50 / 200 / 250)",
-            "＋监控交叉",
+            "📈 均线组",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="PRICE_MA_CROSS"),
+            tooltip="新建/编辑【均线交叉/偏离】监控预警规则",
         )
         ind_box.addWidget(c1)
 
         # 2. RSI
         c2, self.lbl_rsi_summary = self._create_indicator_card(
-            "🎯 RSI 强弱指标 (RSI14)",
-            "＋监控超买超卖",
+            "🎯 RSI14",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="RSI"),
+            tooltip="新建/编辑【RSI超买超卖】监控预警规则",
         )
         ind_box.addWidget(c2)
 
         # 3. MACD
         c3, self.lbl_macd_summary = self._create_indicator_card(
-            "⚡ MACD 指标 (12, 26, 9)",
-            "＋监控金死叉",
+            "⚡ MACD",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="MACD"),
+            tooltip="新建/编辑【MACD金叉死叉】监控预警规则",
         )
         ind_box.addWidget(c3)
 
         # 4. BOLL
         c4, self.lbl_boll_summary = self._create_indicator_card(
-            "📊 布林通道 (BOLL 20, 2)",
-            "＋监控布林突破",
+            "📊 布林带",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="PRICE"),
+            tooltip="新建/编辑【布林通道突破】监控预警规则",
         )
         ind_box.addWidget(c4)
 
         # 5. Volume
         c5, self.lbl_vol_summary = self._create_indicator_card(
-            "📦 成交量对比 (VMA5 / VMA20)",
-            "＋监控放量突破",
+            "📦 成交量",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="VOLUME"),
+            tooltip="新建/编辑【成交量放量突破】监控预警规则",
         )
         ind_box.addWidget(c5)
 
         # 6. ATH & 52W
         c6, self.lbl_ath_summary = self._create_indicator_card(
-            "🏆 52周极值与历史最高回撤",
-            "＋监控新高/回撤",
+            "🏆 极值/回撤",
             lambda: self._open_rule_dialog(default_symbol=self.selected, default_type="ATH_DRAWDOWN"),
+            tooltip="新建/编辑【52周新高/回撤】监控预警规则",
         )
         ind_box.addWidget(c6)
 
@@ -588,36 +589,38 @@ class MonitoringPage(QWidget):
         self.range.currentIndexChanged.connect(self.draw_chart)
         self.panel.currentIndexChanged.connect(self.draw_chart)
 
-    def _create_indicator_card(self, title: str, btn_text: str, on_btn_click):
+    def _create_indicator_card(self, title: str, on_btn_click, tooltip: str = ""):
         card_frame = QFrame()
         card_frame.setStyleSheet(
-            "QFrame { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; }"
+            "QFrame { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 4px; }"
         )
-        vbox = QVBoxLayout(card_frame)
-        vbox.setContentsMargins(10, 6, 10, 6)
-        vbox.setSpacing(3)
+        row = QHBoxLayout(card_frame)
+        row.setContentsMargins(8, 3, 6, 3)
+        row.setSpacing(8)
 
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
         lbl_title = QLabel(f"<b>{title}</b>")
-        lbl_title.setStyleSheet("color: #1E293B; font-size: 12px;")
-        top_row.addWidget(lbl_title)
-        top_row.addStretch()
-
-        btn = QPushButton(btn_text)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px; padding: 2px 8px; font-size: 11px; color: #2563EB; font-weight: 500; }"
-            "QPushButton:hover { background: #EFF6FF; border-color: #3B82F6; }"
-        )
-        btn.clicked.connect(on_btn_click)
-        top_row.addWidget(btn)
-        vbox.addLayout(top_row)
+        lbl_title.setStyleSheet("color: #1E293B; font-size: 11px; min-width: 62px;")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(lbl_title)
 
         lbl_values = QLabel("—")
         lbl_values.setWordWrap(True)
-        lbl_values.setStyleSheet("color: #475569; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;")
-        vbox.addWidget(lbl_values)
+        lbl_values.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lbl_values.setStyleSheet(
+            "color: #334155; font-size: 11px; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;"
+        )
+        row.addWidget(lbl_values, 1)
+
+        btn = QPushButton("➕")
+        btn.setFixedSize(22, 22)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip(tooltip or f"新建/编辑【{title}】监控预警规则")
+        btn.setStyleSheet(
+            "QPushButton { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 4px; font-size: 11px; color: #1D4ED8; font-weight: bold; padding: 0px; }"
+            "QPushButton:hover { background: #DBEAFE; border-color: #3B82F6; color: #1E40AF; }"
+        )
+        btn.clicked.connect(on_btn_click)
+        row.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         return card_frame, lbl_values
 
@@ -1023,7 +1026,7 @@ class MonitoringPage(QWidget):
                     for k in ("SHORT", "MEDIUM", "LONG")
                 ),
                 rules_badge,
-                "＋新建规则",
+                "➕",
             ]
 
             for col, value in enumerate(values):
@@ -1046,7 +1049,12 @@ class MonitoringPage(QWidget):
                         font.setBold(True)
                         item.setFont(font)
                 elif col == 9:
+                    clean_sym = symbol.removesuffix(".US")
+                    item.setToolTip(f"点击为【{clean_sym}】新建/编辑监控预警规则")
                     item.setForeground(QColor("#2563EB"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
 
                 self.table.setItem(row, col, item)
 
@@ -1178,24 +1186,28 @@ class MonitoringPage(QWidget):
         )
 
         m = data.get("metrics", {})
-        # Update technical indicator sections (2-line card values)
-        ma_txt = f"MA20: {fmt(m.get('MA20'))}   ·   MA50: {fmt(m.get('MA50'))}   ·   MA200: {fmt(m.get('MA200'))}   ·   距MA200: {fmt(m.get('DEV200'), suffix='%')}"
+        # Update technical indicator sections: display ALL MA lines (5, 10, 20, 50, 60, 120, 200, 250) + dev
+        ma_parts = []
+        for n in PERIODS:  # (5, 10, 20, 50, 60, 120, 200, 250)
+            ma_parts.append(f"MA{n}: {fmt(m.get('MA' + str(n)))}")
+        dev200_str = fmt(m.get('DEV200'), suffix='%')
+        ma_txt = "   ·   ".join(ma_parts) + f"   ·   距MA200: {dev200_str}"
         self.lbl_ma_summary.setText(ma_txt)
 
         rsi_val = m.get("RSI14")
         rsi_state = "超买 (>70)" if rsi_val and rsi_val >= 70 else "超卖 (<30)" if rsi_val and rsi_val <= 30 else "常态中性"
-        self.lbl_rsi_summary.setText(f"当前 RSI14: {fmt(rsi_val)}   ({rsi_state})")
+        self.lbl_rsi_summary.setText(f"数值: {fmt(rsi_val)}   ({rsi_state})")
 
-        macd_txt = f"DIF: {fmt(m.get('DIF'))}   ·   DEA: {fmt(m.get('DEA'))}   ·   柱状图: {fmt(m.get('MACD'))}"
+        macd_txt = f"DIF: {fmt(m.get('DIF'))}   ·   DEA: {fmt(m.get('DEA'))}   ·   MACD柱: {fmt(m.get('MACD'))}"
         self.lbl_macd_summary.setText(macd_txt)
 
         boll_txt = f"上轨: {fmt(m.get('BOLL_UP'))}   ·   中轨: {fmt(m.get('BOLL_MID'))}   ·   下轨: {fmt(m.get('BOLL_LOW'))}"
         self.lbl_boll_summary.setText(boll_txt)
 
-        vol_txt = f"5日均量 (VMA5): {fmt(m.get('VMA5'))}   ·   20日均量 (VMA20): {fmt(m.get('VMA20'))}"
+        vol_txt = f"5日均量: {fmt(m.get('VMA5'))}   ·   20日均量: {fmt(m.get('VMA20'))}"
         self.lbl_vol_summary.setText(vol_txt)
 
-        ath_txt = f"52周高/低: {fmt(m.get('HIGH52'))} / {fmt(m.get('LOW52'))}   ·   历史最高: {fmt(m.get('AVAILABLE_HIGH'))} (回撤: {fmt(m.get('DRAWDOWN'), suffix='%')})"
+        ath_txt = f"52周高/低: {fmt(m.get('HIGH52'))} / {fmt(m.get('LOW52'))}   ·   最高: {fmt(m.get('AVAILABLE_HIGH'))} (距最高: {fmt(m.get('DRAWDOWN'), suffix='%')})"
         self.lbl_ath_summary.setText(ath_txt)
 
         bars = data.get("bars", [])
