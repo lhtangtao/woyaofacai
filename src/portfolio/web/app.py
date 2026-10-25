@@ -3,7 +3,8 @@
 Provides a responsive, touch-optimized web interface for iPhone / iPad,
 exposing full portfolio holdings, desktop analytical reports (28 reports),
 27 ECharts financial charts, professional K-line candlestick charts with
-technical indicators, AI investment advising, and Bark push notifications.
+technical indicators, AI investment advising, Bark push notifications,
+and multi-user role-based authentication with account isolation (e.g. 拉科).
 """
 
 from datetime import date, datetime
@@ -19,7 +20,7 @@ import subprocess
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
 
 from portfolio.domain.models import Ledger, QueryScope
 from portfolio.domain.technical_indicators import series, technicals
@@ -38,11 +39,86 @@ app = Flask(
     template_folder=str(Path(__file__).parent / "templates"),
     static_folder=str(Path(__file__).parent / "static"),
 )
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "money_portfolio_lake_secret_key_2026")
+
+# User account defaults and credentials
+DEFAULT_USERS: Dict[str, Dict[str, Any]] = {
+    "拉科": {
+        "password": "lake",
+        "role": "user",
+        "person_id": 5,
+        "person_name": "拉科",
+    },
+    "admin": {
+        "password": "admin",
+        "role": "admin",
+        "person_id": None,
+        "person_name": "管理员",
+    },
+}
+
+# In-memory user-isolated AI chat histories
+_ai_chat_histories: Dict[str, List[Dict[str, Any]]] = {}
 
 # Shared service references
 _analytics_svc: Optional[AnalyticsService] = None
 _trades_svc: Optional[TradesService] = None
 _monitor_store: Optional[MonitorStore] = None
+
+
+def load_all_users() -> Dict[str, Dict[str, Any]]:
+    """Load users merging DEFAULT_USERS with api_config.json if available."""
+    users = dict(DEFAULT_USERS)
+    if API_CONFIG_PATH.is_file():
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                if "users" in cfg and isinstance(cfg["users"], dict):
+                    users.update(cfg["users"])
+        except Exception as e:
+            logger.warning(f"Failed to load users from api_config: {e}")
+    return users
+
+
+def get_current_user() -> Dict[str, Any]:
+    """Resolve current user from session, headers, or query param, fallback to admin."""
+    # 1. From session
+    u = session.get("user")
+    if u and isinstance(u, dict) and u.get("username"):
+        return u
+
+    # 2. From header or query param (for API clients/scripts)
+    auth_user = request.headers.get("X-User") or request.args.get("auth_user")
+    if auth_user:
+        all_u = load_all_users()
+        if auth_user in all_u:
+            usr = dict(all_u[auth_user])
+            usr.pop("password", None)
+            usr["username"] = auth_user
+            return usr
+
+    # 3. Default session
+    return {"username": "admin", "role": "admin", "person_id": None, "person_name": "管理员"}
+
+
+def get_current_user_scope() -> Tuple[Optional[int], Optional[str]]:
+    """Return (person_id, person_name) tuple for current user."""
+    u = get_current_user()
+    if u and u.get("person_id"):
+        return u["person_id"], u.get("person_name")
+    return None, None
+
+
+def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD") -> QueryScope:
+    """Build QueryScope strictly filtered by current user's person_id if restricted."""
+    person_id, _ = get_current_user_scope()
+    person_ids = (person_id,) if person_id else None
+    return QueryScope(
+        as_of=as_of or date.today(),
+        reporting_currency=currency,
+        ledger=Ledger.PERSON,
+        person_ids=person_ids,
+    )
 
 
 def get_analytics_service() -> AnalyticsService:
@@ -101,7 +177,6 @@ def get_network_info() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Try checking tailscale CLI directly if available
     if not tailscale_ips:
         try:
             ts_res = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=2)
@@ -159,6 +234,7 @@ def safe_float(val: Any) -> Optional[float]:
 @app.route("/")
 def index():
     net = get_network_info()
+    user = get_current_user()
     return render_template(
         "mobile.html",
         lan_ip=net["lan_ip"],
@@ -166,7 +242,60 @@ def index():
         all_lan_ips=net["all_lan_ips"],
         port=net["port"],
         bark_url=notification_service.bark_url or "",
+        current_user=user,
     )
+
+
+# --- Authentication & User Management Routes ---
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    """Authenticate user with username and password (e.g. 拉科 / lake)."""
+    try:
+        data = request.get_json() or {}
+        username = data.get("username", "").strip()
+        password = data.get("password", "").strip()
+
+        if not username or not password:
+            return jsonify({"status": "error", "message": "账号或密码不能为空"}), 400
+
+        all_u = load_all_users()
+        if username not in all_u or all_u[username].get("password") != password:
+            return jsonify({"status": "error", "message": "账号或密码错误"}), 401
+
+        target = dict(all_u[username])
+        target.pop("password", None)
+        target["username"] = username
+
+        session["user"] = target
+        logger.info(f"User logged in: {username} (person_id: {target.get('person_id')})")
+        return jsonify({"status": "ok", "message": f"欢迎，{username}！", "user": target})
+    except Exception as e:
+        logger.exception("Login error")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def api_auth_me():
+    """Return current logged-in user profile and permissions."""
+    u = get_current_user()
+    return jsonify({"status": "ok", "user": u})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    """Clear user session and reset to default."""
+    session.pop("user", None)
+    return jsonify({"status": "ok", "message": "已退出登录", "user": get_current_user()})
+
+
+@app.route("/api/ai/history", methods=["GET"])
+def api_ai_history():
+    """Return AI chat history isolated by user account."""
+    u = get_current_user()
+    username = u.get("username", "admin")
+    return jsonify({"status": "ok", "username": username, "history": _ai_chat_histories.get(username, [])})
 
 
 @app.route("/api/network/info", methods=["GET"])
@@ -177,10 +306,10 @@ def api_network_info():
 
 @app.route("/api/overview", methods=["GET"])
 def api_overview():
-    """Calculate portfolio summary, holdings, channels and category breakdown."""
+    """Calculate portfolio summary, holdings, channels and category breakdown for current user."""
     try:
         svc = get_analytics_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        scope = get_user_query_scope()
         res = svc.calculate(scope)
 
         holdings_report = res.reports.get("当前持仓")
@@ -191,14 +320,12 @@ def api_overview():
         total_pnl = sum(Decimal(str(r.values[10])) for r in rows if r.values[10] is not None)
         pnl_pct = (total_pnl / total_cost * 100) if total_cost else Decimal("0")
 
-        # Today's PnL from 当日盈亏 chart or report
+        # Today's PnL from 每日持仓收益 if available
         daily_pnl = 0.0
         daily_rep = res.reports.get("每日持仓收益")
         if daily_rep and daily_rep.rows:
-            # Get latest available date
             latest_day = daily_rep.rows[-1].values[0]
             daily_rows = [r for r in daily_rep.rows if r.values[0] == latest_day]
-            # Column 18 is usually day PnL in 每日持仓收益
             try:
                 day_sum = sum(Decimal(str(r.values[18])) for r in daily_rows if r.values[18] is not None)
                 daily_pnl = float(day_sum)
@@ -257,9 +384,11 @@ def api_overview():
                     "total_asset": safe_float(r.values[5]),
                 })
 
+        u = get_current_user()
         return jsonify({
             "status": "ok",
             "as_of": date.today().isoformat(),
+            "user": u,
             "total_value": float(total_value),
             "total_cost": float(total_cost),
             "total_pnl": float(total_pnl),
@@ -278,10 +407,10 @@ def api_overview():
 
 @app.route("/api/reports/list", methods=["GET"])
 def api_reports_list():
-    """Return categorized list of all 28 desktop reports."""
+    """Return categorized list of all 28 desktop reports filtered for current user."""
     try:
         svc = get_analytics_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        scope = get_user_query_scope()
         res = svc.calculate(scope)
 
         groups = [
@@ -324,13 +453,13 @@ def api_reports_list():
             },
         ]
 
-        # Attach row count if report exists
         for g in groups:
             for item in g["reports"]:
                 rep = res.reports.get(item["name"])
                 item["row_count"] = len(rep.rows) if rep else 0
 
-        return jsonify({"status": "ok", "groups": groups})
+        u = get_current_user()
+        return jsonify({"status": "ok", "user": u, "groups": groups})
     except Exception as e:
         logger.exception("Failed to get reports list")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -338,10 +467,11 @@ def api_reports_list():
 
 @app.route("/api/report/<report_name>", methods=["GET"])
 def api_get_report(report_name: str):
-    """Retrieve tabular data for any specified desktop report with search, sorting, and pagination."""
+    """Retrieve tabular data for any specified report filtered by current user."""
     try:
         svc = get_analytics_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        currency = request.args.get("currency", "USD")
+        scope = get_user_query_scope(currency=currency)
         res = svc.calculate(scope)
 
         rep = res.reports.get(report_name)
@@ -350,19 +480,16 @@ def api_get_report(report_name: str):
 
         columns = list(rep.columns)
 
-        # Parse query params
         search = request.args.get("search", "").strip().lower()
         sort_col_idx = request.args.get("sort_col", None)
         sort_dir = request.args.get("sort_dir", "asc").lower()
         page = max(1, int(request.args.get("page", 1)))
         page_size = int(request.args.get("page_size", 50))
 
-        # Convert rows
         all_rows = []
         for r in rep.rows:
             row_vals = [serialize_val(v) for v in r.values]
             if search:
-                # Check if any cell matches search query
                 match = False
                 for cell in row_vals:
                     if cell is not None and search in str(cell).lower():
@@ -372,7 +499,6 @@ def api_get_report(report_name: str):
                     continue
             all_rows.append(row_vals)
 
-        # Sort if requested
         if sort_col_idx is not None:
             try:
                 col_idx = int(sort_col_idx)
@@ -393,7 +519,6 @@ def api_get_report(report_name: str):
 
         total_count = len(all_rows)
 
-        # Paginate
         if page_size > 0:
             total_pages = max(1, math.ceil(total_count / page_size))
             start_idx = (page - 1) * page_size
@@ -403,8 +528,10 @@ def api_get_report(report_name: str):
             total_pages = 1
             page_rows = all_rows
 
+        u = get_current_user()
         return jsonify({
             "status": "ok",
+            "user": u,
             "name": report_name,
             "columns": columns,
             "rows": page_rows,
@@ -420,10 +547,10 @@ def api_get_report(report_name: str):
 
 @app.route("/api/charts", methods=["GET"])
 def api_charts():
-    """Serialize all 27 desktop analytical charts into ECharts-ready format."""
+    """Serialize all 27 desktop analytical charts into ECharts-ready format for current user."""
     try:
         svc = get_analytics_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        scope = get_user_query_scope()
         res = svc.calculate(scope)
 
         selected_month = request.args.get("month", None)
@@ -449,7 +576,8 @@ def api_charts():
                 "vertical_lines": [list(vl) for vl in c.vertical_lines],
             })
 
-        return jsonify({"status": "ok", "charts": payload, "count": len(payload)})
+        u = get_current_user()
+        return jsonify({"status": "ok", "user": u, "charts": payload, "count": len(payload)})
     except Exception as e:
         logger.exception("Failed to build charts")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -457,10 +585,10 @@ def api_charts():
 
 @app.route("/api/trades", methods=["GET"])
 def api_trades():
-    """Retrieve paginated trade transactions with metadata and execution details."""
+    """Retrieve paginated trade transactions strictly filtered for current user."""
     try:
         ts = get_trades_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        scope = get_user_query_scope()
 
         page = max(1, int(request.args.get("page", 1)))
         size = max(1, min(100, int(request.args.get("size", 30))))
@@ -468,7 +596,6 @@ def api_trades():
         broker = request.args.get("broker", "").strip().upper() or None
         side = request.args.get("side", "").strip() or None
 
-        # Custom filter if provided
         filters = {}
         if symbol:
             filters["symbol"] = symbol
@@ -497,8 +624,10 @@ def api_trades():
                 "order_id": str(r.values[14] or ""),
             })
 
+        u = get_current_user()
         return jsonify({
             "status": "ok",
+            "user": u,
             "total": trade_page.total,
             "page": trade_page.page,
             "size": trade_page.size,
@@ -572,7 +701,6 @@ def api_monitoring_kline():
         if not symbol:
             return jsonify({"status": "error", "message": "缺少标的代码参数"}), 400
 
-        # Try exact, then .US
         search_keys = [symbol, f"{symbol}.US", symbol.removesuffix(".US")]
         bars = None
         target_sym = symbol
@@ -591,7 +719,6 @@ def api_monitoring_kline():
 
         last, data = technicals(bars)
 
-        # Dates & OHLCV in ECharts Candlestick format: [open, close, lowest, highest, volume]
         dates = [b.day.isoformat() for b in bars]
         ohlcv = [[float(b.open), float(b.close), float(b.low), float(b.high), float(b.volume)] for b in bars]
         volumes = [float(b.volume) for b in bars]
@@ -666,7 +793,6 @@ def api_monitoring():
         rules = store.get_rules()
         events = store.get_alert_events(limit=50)
 
-        # Deduplicate targets by analysis_symbol
         seen = set()
         clean_targets = []
         for t in raw_targets:
@@ -739,7 +865,7 @@ def api_toggle_rule(rule_id: str):
 
 @app.route("/api/ai/chat", methods=["POST"])
 def api_ai_chat():
-    """Handle conversational questions with portfolio context on mobile."""
+    """Handle conversational questions with portfolio context strictly isolated to current user."""
     try:
         data = request.get_json() or {}
         user_message = data.get("message", "").strip()
@@ -749,22 +875,39 @@ def api_ai_chat():
             return jsonify({"status": "error", "message": "消息内容不能为空"}), 400
 
         svc = get_analytics_service()
-        scope = QueryScope(as_of=date.today(), reporting_currency="USD", ledger=Ledger.PERSON)
+        person_id, person_name = get_current_user_scope()
+        scope = get_user_query_scope()
         analytics = svc.calculate(scope)
 
         context_str = CodexAIService.build_portfolio_context(
             analytics,
-            person_name="个人",
+            person_name=person_name or "个人",
             symbol=symbol,
         )
 
         reply = CodexAIService.ask(user_message, context=context_str)
 
+        u = get_current_user()
+        username = u.get("username", "admin")
+        time_str = datetime.now().strftime("%H:%M:%S")
+
+        _ai_chat_histories.setdefault(username, []).append({
+            "role": "user",
+            "text": user_message,
+            "time": time_str,
+        })
+        _ai_chat_histories[username].append({
+            "role": "ai",
+            "text": reply,
+            "time": time_str,
+        })
+
         return jsonify({
             "status": "ok",
             "reply": reply,
             "symbol": symbol,
-            "time": datetime.now().strftime("%H:%M:%S"),
+            "time": time_str,
+            "username": username,
         })
     except Exception as e:
         logger.exception("AI chat failed")
@@ -773,15 +916,26 @@ def api_ai_chat():
 
 @app.route("/api/ai/analyze_stock", methods=["POST"])
 def api_ai_analyze_stock():
-    """Generate in-depth AI investment research report for a specific stock."""
+    """Generate in-depth AI investment research report for a specific stock with user portfolio scope."""
     try:
         data = request.get_json() or {}
         symbol = data.get("symbol", "").strip().upper()
         if not symbol:
             return jsonify({"status": "error", "message": "请指定股票代码"}), 400
 
+        svc = get_analytics_service()
+        person_id, person_name = get_current_user_scope()
+        scope = get_user_query_scope()
+        analytics = svc.calculate(scope)
+
+        context_str = CodexAIService.build_portfolio_context(
+            analytics,
+            person_name=person_name or "个人",
+            symbol=symbol,
+        )
+
         prompt = f"请针对股票 {symbol} 进行深度技术面与基本面投资分析，结合我的当前持仓及近期技术指标给出操作建议。"
-        reply = CodexAIService.ask_stock(prompt=prompt, symbol=symbol)
+        reply = CodexAIService.ask(prompt, context=context_str)
 
         return jsonify({
             "status": "ok",
@@ -856,6 +1010,7 @@ def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = Fal
         print(f"  • 外出公网 (Tailscale): http://{net['tailscale_ip']}:{port}")
     else:
         print("  • 外出公网: 未检测到 Tailscale，已支持同局域网访问，安装 Tailscale 后自动生效公网")
+    print("  • 支持用户: 拉科 (lake) / admin (admin)")
     print("==================================================================")
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 

@@ -718,9 +718,12 @@
     <button class="nav-btn" onclick="toggleDrawer()" title="打开全功能菜单">☰</button>
     <div class="top-title" id="pageTitle">
       <span>Money Portfolio</span>
-      <span class="badge" id="topBadge">移动工作站</span>
+      <span class="badge" id="topBadge" onclick="openLoginModal()" style="cursor:pointer;" title="点击切换用户">👤 管理员</span>
     </div>
-    <button class="nav-btn" onclick="refreshCurrentView()" title="刷新">↻</button>
+    <div style="display:flex;gap:6px;">
+      <button class="nav-btn" onclick="openLoginModal()" title="登录/切换用户" style="font-size:14px;">👤</button>
+      <button class="nav-btn" onclick="refreshCurrentView()" title="刷新">↻</button>
+    </div>
   </header>
 
   <!-- Left Slide-Out Drawer Navigation -->
@@ -729,10 +732,38 @@
     <div class="drawer-header">
       <div>
         <div class="drawer-brand">📊 Money Portfolio</div>
-        <div class="drawer-subtitle">桌面端同等全量数据移动版</div>
+        <div class="drawer-subtitle" id="drawerUserSubtitle">当前用户: 管理员 (全量账本)</div>
       </div>
+      <button class="nav-btn" onclick="openLoginModal()" style="width:34px;height:30px;font-size:11px;padding:0;margin-right:4px;" title="切换用户">切换</button>
       <button class="nav-btn" onclick="closeDrawer()" style="width:30px;height:30px;font-size:14px;">✕</button>
     </div>
+
+  <!-- Login / Switch User Modal -->
+  <div class="drawer-overlay" id="loginModalOverlay" onclick="closeLoginModal()"></div>
+  <div class="login-modal" id="loginModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90%;max-width:340px;background:#161F30;border:1px solid var(--border);border-radius:18px;padding:20px;z-index:2100;box-shadow:0 20px 40px rgba(0,0,0,0.8);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:16px;font-weight:800;">🔐 切换 / 登录账户</div>
+      <button class="nav-btn" onclick="closeLoginModal()" style="width:28px;height:28px;font-size:12px;">✕</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-sub);margin-bottom:14px;line-height:1.4;">
+      登录专属用户后，系统将严格隔离资产数据，仅呈现属于该用户的持仓、交易流水与 AI 问答。
+    </p>
+
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
+      <input type="text" id="loginInputUser" class="table-search" placeholder="输入用户名 (如 拉科 或 admin)" style="padding:10px;font-size:13px;">
+      <input type="password" id="loginInputPass" class="table-search" placeholder="输入密码 (如 lake 或 admin)" style="padding:10px;font-size:13px;">
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button class="pill" style="flex:1;justify-content:center;font-size:11px;" onclick="quickFillUser('拉科', 'lake')">👤 拉科 (lake)</button>
+      <button class="pill" style="flex:1;justify-content:center;font-size:11px;" onclick="quickFillUser('admin', 'admin')">👑 管理员 (全量)</button>
+    </div>
+
+    <div style="display:flex;gap:8px;">
+      <button class="page-btn" style="flex:1;padding:10px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-weight:700;" onclick="submitLogin()">确认登录</button>
+      <button class="page-btn" style="padding:10px;background:var(--card-sub);color:var(--loss);" onclick="submitLogout()">重置管理员</button>
+    </div>
+  </div>
     <div class="drawer-content">
       
       <div class="drawer-group-title">资产管理</div>
@@ -1981,6 +2012,92 @@
       return text.replace(/[&<>"']/g, m => map[m]);
     }
 
+    // --- Authentication & User Switch ---
+    async function checkCurrentUser() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.status === 'ok' && data.user) {
+          updateUserBadge(data.user);
+        }
+      } catch (e) {
+        console.error('Check user error:', e);
+      }
+    }
+
+    function updateUserBadge(user) {
+      state.currentUser = user;
+      const isLake = user.username === '拉科';
+      const badgeText = isLake ? '👤 拉科 (专属)' : `👤 ${user.username}`;
+      const subtitleText = isLake ? '当前用户: 拉科 (专属受限账本)' : `当前用户: ${user.username} (全量账本)`;
+
+      const badgeEl = document.getElementById('topBadge');
+      if (badgeEl) {
+        badgeEl.innerText = badgeText;
+        badgeEl.style.color = isLake ? '#38BDF8' : 'var(--accent-light)';
+      }
+      const subEl = document.getElementById('drawerUserSubtitle');
+      if (subEl) subEl.innerText = subtitleText;
+    }
+
+    function openLoginModal() {
+      document.getElementById('loginModal').style.display = 'block';
+      document.getElementById('loginModalOverlay').classList.add('open');
+      closeDrawer();
+    }
+
+    function closeLoginModal() {
+      document.getElementById('loginModal').style.display = 'none';
+      document.getElementById('loginModalOverlay').classList.remove('open');
+    }
+
+    function quickFillUser(u, p) {
+      document.getElementById('loginInputUser').value = u;
+      document.getElementById('loginInputPass').value = p;
+    }
+
+    async function submitLogin() {
+      const u = document.getElementById('loginInputUser').value.trim();
+      const p = document.getElementById('loginInputPass').value.trim();
+      if (!u || !p) {
+        alert('请输入用户名和密码');
+        return;
+      }
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          updateUserBadge(data.user);
+          closeLoginModal();
+          alert(`登录成功！当前视角已切换至【${data.user.username}】专属账本`);
+          refreshCurrentView();
+        } else {
+          alert('登录失败: ' + data.message);
+        }
+      } catch (err) {
+        alert('登录异常: ' + err.message);
+      }
+    }
+
+    async function submitLogout() {
+      try {
+        const res = await fetch('/api/auth/logout', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          updateUserBadge(data.user);
+          closeLoginModal();
+          alert('已重置为全量管理员视角');
+          refreshCurrentView();
+        }
+      } catch (err) {
+        alert('重置异常: ' + err.message);
+      }
+    }
+
     // Window resize handler for ECharts
     window.addEventListener('resize', () => {
       Object.values(chartInstances).forEach(c => c && c.resize());
@@ -1988,6 +2105,7 @@
 
     // Initial Bootstrap
     document.addEventListener('DOMContentLoaded', () => {
+      checkCurrentUser();
       fetchOverview();
       fetchKline('AAOI');
     });
