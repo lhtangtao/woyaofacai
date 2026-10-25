@@ -1,5 +1,17 @@
 [
   {
+    "time": "2026-10-26 03:55",
+    "title": "iPhone 移动端全量对齐升级：28大桌面报表、27个专业图表、K线技术指标与Tailscale公网支持",
+    "tag": "已完成",
+    "author": "Antigravity",
+    "details": [
+      "修改者：Antigravity（移动端全量功能对齐重构、左侧抽屉导航、桌面级报表引擎、ECharts专业K线与27大图表集成、Tailscale公网支持）",
+      "需求背景：用户反馈移动端原型相对桌面端过于简化，要求将桌面端的全部功能、数据及图表在手机端完整查看，且要求通过公网在外随时访问家中的 Mac，并确认选择「方案一：Tailscale」直连方案。",
+      "实施落地：1) 新增 /api/reports/list 与 /api/report/<report_name> 动态报表接口，覆盖全部 28 个桌面核心报表（当前持仓、股票汇总、清仓收益、渠道/分类汇总、人员资产、收益日历、季度矩阵、做T微操等），支持搜索、排序与分页；2) 新增 /api/charts 接口与 ECharts 移动端集成，序列化桌面全部 27 个图表（占比饼图、收益走势、收益排行、最爽/最惨交易日等）；3) 新增 /api/monitoring/kline 接口，打通 10,593 条历史日K数据库，支持日K蜡烛图、MA均线组、MACD/RSI/BOLL副图切换及52周范围/趋势诊断卡片；4) 新增 /api/trades 分页流水与 /api/monitoring/symbols 标的监控雷达；5) templates/mobile.html 采用 iOS 抽屉式侧边栏（☰）与固定首列的 MobileFinanceTable 财务表格；6) 启动脚本与后台自动识别 Tailscale 虚拟网 IP（100.x.x.x）与局域网 IP，并提供图文配置指南。",
+      "验证结果：编写并执行 verify_mobile_full_parity.py 独立脚本，21 项核心端点与报表对齐测试 100% 成功通过，严格遵守规范未运行任何 pytest。"
+    ]
+  },
+  {
     "time": "2026-10-26 02:05",
     "title": "iPhone 移动端 Web/PWA 看板与 Bark 锁屏极速预警系统上线",
     "tag": "已完成",
