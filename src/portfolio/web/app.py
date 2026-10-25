@@ -290,12 +290,92 @@ def api_auth_logout():
     return jsonify({"status": "ok", "message": "已退出登录", "user": get_current_user()})
 
 
+@app.route("/api/ai/status", methods=["GET"])
+def api_ai_status():
+    """Return Codex AI CLI login status and account type."""
+    status = CodexAIService.check_login_status()
+    return jsonify({"status": "ok", **status})
+
+
+@app.route("/api/ai/filters", methods=["GET"])
+def api_ai_filters():
+    """Return person, channel, and symbol filters available for current user."""
+    try:
+        svc = get_analytics_service()
+        person_id, person_name = get_current_user_scope()
+        scope = get_user_query_scope()
+        analytics = svc.calculate(scope)
+        u = get_current_user()
+
+        # 1. Persons list
+        if person_id is not None:
+            # Restricted user (e.g. 拉科): locked strictly to their own person
+            persons = [{"id": person_id, "name": person_name, "locked": True}]
+        else:
+            # Admin user: can select all or specific person
+            persons = [{"id": None, "name": "全部启用人员", "locked": False}]
+            try:
+                info = get_trades_service().source_info()
+                for p in info.persons:
+                    if p.get("enabled"):
+                        persons.append({"id": p["id"], "name": p["name"], "locked": False})
+            except Exception:
+                pass
+
+        # 2. Holdings & Channels
+        holdings_rep = analytics.reports.get("当前持仓")
+        symbols_set = set()
+        channels_set = set()
+        if holdings_rep and holdings_rep.rows:
+            for r in holdings_rep.rows:
+                if len(r.values) > 0 and r.values[0]:
+                    channels_set.add(str(r.values[0]).strip())
+                if len(r.values) > 2 and r.values[2]:
+                    sym = str(r.values[2]).strip().upper().removesuffix(".US")
+                    if sym:
+                        symbols_set.add(sym)
+
+        # Also get recent traded symbols from 交易回放 for completeness
+        trades_rep = analytics.reports.get("交易回放")
+        if trades_rep and trades_rep.rows:
+            for r in trades_rep.rows[:100]:
+                if len(r.values) > 1 and r.values[1]:
+                    channels_set.add(str(r.values[1]).strip())
+                if len(r.values) > 3 and r.values[3]:
+                    sym = str(r.values[3]).strip().upper().removesuffix(".US")
+                    if sym:
+                        symbols_set.add(sym)
+
+        channels = ["全部渠道"] + sorted(list(channels_set))
+        symbols = ["全部股票"] + sorted(list(symbols_set))
+
+        return jsonify({
+            "status": "ok",
+            "user": u,
+            "persons": persons,
+            "channels": channels,
+            "symbols": symbols,
+        })
+    except Exception as e:
+        logger.exception("Failed to get AI filters")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route("/api/ai/history", methods=["GET"])
 def api_ai_history():
     """Return AI chat history isolated by user account."""
     u = get_current_user()
     username = u.get("username", "admin")
     return jsonify({"status": "ok", "username": username, "history": _ai_chat_histories.get(username, [])})
+
+
+@app.route("/api/ai/clear", methods=["POST"])
+def api_ai_clear():
+    """Clear AI conversation history for the current user."""
+    u = get_current_user()
+    username = u.get("username", "admin")
+    _ai_chat_histories[username] = []
+    return jsonify({"status": "ok", "message": "会话历史已清空", "username": username})
 
 
 @app.route("/api/network/info", methods=["GET"])
@@ -869,43 +949,69 @@ def api_ai_chat():
     try:
         data = request.get_json() or {}
         user_message = data.get("message", "").strip()
-        symbol = data.get("symbol", "").strip().upper().removesuffix(".US") or None
+        req_symbol = data.get("symbol", "").strip().upper().removesuffix(".US")
+        req_channel = data.get("channel", "").strip()
+        req_person = data.get("person", "").strip()
+        include_context = bool(data.get("include_context", True))
+        model = data.get("model") or None
 
         if not user_message:
             return jsonify({"status": "error", "message": "消息内容不能为空"}), 400
 
-        svc = get_analytics_service()
         person_id, person_name = get_current_user_scope()
-        scope = get_user_query_scope()
-        analytics = svc.calculate(scope)
+        if person_id is not None:
+            # Strictly locked to current user (e.g. 拉科)
+            target_person = person_name
+        else:
+            # Admin user
+            target_person = req_person if req_person and req_person not in ("全部启用人员", "全部人员") else None
 
-        context_str = CodexAIService.build_portfolio_context(
-            analytics,
-            person_name=person_name or "个人",
-            symbol=symbol,
-        )
+        target_channels = (req_channel,) if req_channel and req_channel != "全部渠道" else None
+        target_symbol = req_symbol if req_symbol and req_symbol != "全部股票" else None
 
-        reply = CodexAIService.ask(user_message, context=context_str)
+        context_str = ""
+        if include_context:
+            svc = get_analytics_service()
+            scope = get_user_query_scope()
+            analytics = svc.calculate(scope)
+            context_str = CodexAIService.build_portfolio_context(
+                analytics,
+                person_name=target_person,
+                channel_names=target_channels,
+                symbol=target_symbol,
+            )
+
+        reply = CodexAIService.ask(user_message, context=context_str, model=model)
 
         u = get_current_user()
         username = u.get("username", "admin")
         time_str = datetime.now().strftime("%H:%M:%S")
 
+        scope_desc = [
+            f"{target_person or '全部人员'}",
+            f"{req_channel or '全部渠道'}",
+            f"{target_symbol or '全部股票'}",
+        ]
+        scope_tag = " · ".join(scope_desc)
+
         _ai_chat_histories.setdefault(username, []).append({
             "role": "user",
             "text": user_message,
             "time": time_str,
+            "scope_tag": scope_tag,
         })
         _ai_chat_histories[username].append({
             "role": "ai",
             "text": reply,
             "time": time_str,
+            "scope_tag": scope_tag,
         })
 
         return jsonify({
             "status": "ok",
             "reply": reply,
-            "symbol": symbol,
+            "symbol": target_symbol,
+            "scope_tag": scope_tag,
             "time": time_str,
             "username": username,
         })

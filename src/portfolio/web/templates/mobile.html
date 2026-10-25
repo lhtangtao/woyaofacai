@@ -17,6 +17,14 @@
     }
   </script>
 
+  <!-- Local offline cached marked.js with CDN fallback for AI Markdown rendering -->
+  <script src="/static/js/marked.min.js"></script>
+  <script>
+    if (typeof marked === 'undefined') {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>');
+    }
+  </script>
+
   <style>
     :root {
       --bg: #0B0F19;
@@ -559,27 +567,143 @@
       font-weight: 600;
     }
 
-    /* AI Chat */
+    /* AI Assistant & Chat Styling */
+    .ai-status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 0 4px;
+    }
+    .ai-status-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34D399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .ai-btn-clear {
+      background: var(--card-sub);
+      border: 1px solid var(--border);
+      color: var(--text-sub);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .ai-btn-clear:active {
+      background: var(--card-highlight);
+    }
+
+    /* AI Scope Filter Card */
+    .ai-filter-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .ai-filter-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .ai-filter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .ai-filter-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .ai-select {
+      background: var(--card-sub);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 8px;
+      padding: 6px 8px;
+      outline: none;
+      width: 100%;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .ai-select:focus {
+      border-color: var(--accent);
+    }
+    .ai-context-toggle-row {
+      display: flex;
+      align-items: center;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .ai-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-sub);
+      cursor: pointer;
+      user-select: none;
+    }
+    .ai-checkbox-label input[type="checkbox"] {
+      width: 15px;
+      height: 15px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    /* Preset Prompt Pills Carousel */
+    .ai-pill-carousel {
+      margin-bottom: 12px;
+    }
+
+    /* Chat Messages Box */
     .chat-box {
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      margin-bottom: 75px;
+      gap: 14px;
+      margin-bottom: 80px;
     }
     .msg {
-      max-width: 86%;
-      padding: 12px 16px;
-      border-radius: 18px;
+      max-width: 90%;
+      padding: 12px 14px;
+      border-radius: 16px;
       font-size: 13px;
-      line-height: 1.5;
+      line-height: 1.55;
       user-select: text;
       -webkit-user-select: text;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      position: relative;
     }
     .msg-user {
       align-self: flex-end;
-      background: #0284C7;
-      color: #FFF;
+      background: linear-gradient(135deg, #0284C7 0%, #0369A1 100%);
+      color: #FFFFFF;
       border-bottom-right-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .msg-scope-tag {
+      font-size: 10px;
+      opacity: 0.85;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-bottom: 6px;
+    }
+    .msg-user .msg-text {
+      white-space: pre-wrap;
+      word-break: break-word;
     }
     .msg-ai {
       align-self: flex-start;
@@ -587,20 +711,170 @@
       border: 1px solid var(--border);
       color: var(--text-main);
       border-bottom-left-radius: 4px;
+      width: 94%;
+      max-width: 94%;
+    }
+    .msg-ai-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .ai-avatar-badge {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-light);
+    }
+    .msg-ai-body {
+      word-break: break-word;
+    }
+    .msg-ai-body p {
+      margin: 0 0 8px 0;
+    }
+    .msg-ai-body p:last-child {
+      margin-bottom: 0;
+    }
+    .msg-ai-body h1, .msg-ai-body h2, .msg-ai-body h3, .msg-ai-body h4 {
+      margin: 10px 0 6px 0;
+      color: var(--accent-light);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .msg-ai-body ul, .msg-ai-body ol {
+      margin: 0 0 8px 0;
+      padding-left: 18px;
+    }
+    .msg-ai-body li {
+      margin-bottom: 4px;
+    }
+    .msg-ai-body blockquote {
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
+      margin: 8px 0;
+      color: var(--text-sub);
+      background: rgba(2, 132, 199, 0.05);
+      border-radius: 0 4px 4px 0;
+    }
+    .msg-ai-body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .msg-ai-body pre {
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 11px;
+      margin: 8px 0;
+    }
+    .msg-ai-body pre code {
+      background: transparent;
+      padding: 0;
+    }
+    /* Horizontal Scrolling Tables for Mobile */
+    .msg-ai-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+      font-size: 11px;
+      display: block;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .msg-ai-body th {
+      background: var(--card-sub);
+      color: var(--accent-light);
+      padding: 7px 10px;
+      font-weight: 600;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .msg-ai-body td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      white-space: nowrap;
+    }
+    .msg-ai-body tr:last-child td {
+      border-bottom: none;
+    }
+    .msg-ai-body tr:nth-child(even) td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    /* AI Card Actions & Copy */
+    .msg-ai-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .ai-btn-copy {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-sub);
+      font-size: 10px;
+      padding: 3px 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .ai-btn-copy:active {
+      background: var(--accent);
+      color: #FFF;
     }
     .msg-time {
       font-size: 10px;
-      opacity: 0.6;
-      margin-top: 4px;
-      text-align: right;
+      color: var(--text-muted);
     }
+
+    /* Dynamic Thinking Bubble Indicator */
+    .msg-thinking {
+      background: var(--card-bg);
+      border: 1px dashed var(--accent);
+      animation: pulseThinking 2s infinite ease-in-out;
+    }
+    @keyframes pulseThinking {
+      0%, 100% { border-color: rgba(2, 132, 199, 0.4); }
+      50% { border-color: rgba(56, 189, 248, 1); }
+    }
+    .ai-thinking-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--accent-light);
+    }
+    .ai-thinking-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(56, 189, 248, 0.3);
+      border-top-color: var(--accent-light);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
     .chat-input-bar {
       position: fixed;
-      bottom: calc(58px + var(--safe-bottom));
+      bottom: calc(56px + var(--safe-bottom));
       left: 0;
       right: 0;
       background: rgba(11, 15, 25, 0.95);
       backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       padding: 8px 14px;
       display: flex;
       gap: 8px;
@@ -617,6 +891,9 @@
       font-size: 13px;
       outline: none;
     }
+    .chat-input:focus {
+      border-color: var(--accent);
+    }
     .chat-send {
       background: #0284C7;
       border: none;
@@ -629,6 +906,12 @@
       align-items: center;
       justify-content: center;
       cursor: pointer;
+      flex-shrink: 0;
+    }
+    .chat-send:disabled {
+      background: #475569;
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     /* Fixed Bottom Tab Bar */
@@ -1110,22 +1393,71 @@
 
     <!-- 7. VIEW: AI ADVISOR (AI 投资问答) -->
     <section id="view-ai" class="view-page">
-      <div class="pill-carousel">
-        <div class="pill" onclick="sendQuickPrompt('结合我的持仓，分析当前资产集中度与风险暴露')">📊 分析持仓集中度</div>
-        <div class="pill" onclick="sendQuickPrompt('今天哪些标的跌幅最大或出现超跌信号？')">⚡ 查看超跌标的</div>
-        <div class="pill" onclick="sendQuickPrompt('帮我盘点一下做T微操贡献最大的股票')">🎯 做T收益盘点</div>
+      <!-- Status & Clear Bar -->
+      <div class="ai-status-bar">
+        <div class="ai-status-left">
+          <span id="aiStatusBadge" class="ai-status-badge">🟢 已连接 Codex (ChatGPT 订阅)</span>
+        </div>
+        <button class="ai-btn-clear" onclick="clearAiChat()" title="清空会话历史">🗑️ 清空会话</button>
       </div>
 
-      <div class="chat-box" id="chatBox">
-        <div class="msg msg-ai">
-          您好！我是 Money Portfolio 专属 AI 投顾助手。我已同步您的最新持仓（28只标的）、历史盈亏与实时技术指标。有什么我可以为您分析的吗？
-          <div class="msg-time">刚刚</div>
+      <!-- Scope Filter Card -->
+      <div class="ai-filter-card">
+        <div class="ai-filter-row">
+          <div class="ai-filter-group">
+            <label class="ai-filter-label">归属人员</label>
+            <select id="aiFilterPerson" class="ai-select" onchange="onAiFilterChanged()">
+              <option value="">全部启用人员</option>
+            </select>
+          </div>
+          <div class="ai-filter-group">
+            <label class="ai-filter-label">交易渠道</label>
+            <select id="aiFilterChannel" class="ai-select" onchange="onAiFilterChanged()">
+              <option value="全部渠道">全部渠道</option>
+            </select>
+          </div>
+          <div class="ai-filter-group">
+            <label class="ai-filter-label">聚焦标的</label>
+            <select id="aiFilterSymbol" class="ai-select" onchange="onAiFilterChanged()">
+              <option value="全部股票">全部股票</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="ai-context-toggle-row">
+          <label class="ai-checkbox-label">
+            <input type="checkbox" id="aiContextCheckbox" checked>
+            <span>携带组合真实背景 (持仓成本/成交流水/清仓表现)</span>
+          </label>
         </div>
       </div>
 
+      <!-- Preset Prompt Pills Carousel (Desktop 4 Presets) -->
+      <div class="pill-carousel ai-pill-carousel">
+        <div class="pill" onclick="sendPresetPrompt('请分析我当前选定范围内的持仓成本与浮动盈亏，重点评估该标的的成本安全垫以及后续补仓/做T摊薄的空间。')">📊 诊断持仓成本与做T空间</div>
+        <div class="pill" onclick="sendPresetPrompt('请结合我的已清仓标的清仓后表现数据，详细分析哪些股票成功逃顶、哪些股票过早卖飞，并总结清仓时机经验。')">🚀 清仓卖飞与逃顶复盘</div>
+        <div class="pill" onclick="sendPresetPrompt('请综合我的资产总体表现、净投入与持仓盈亏，为我生成一份条理分明的近期投资复盘与表现总结报告。')">📝 生成近期投资总结</div>
+        <div class="pill" onclick="sendPresetPrompt('请评估我投资组合中大盘 ETF 与杠杆标的的仓位暴露比例与风险集中度。')">🛡️ 杠杆与大盘风险评估</div>
+      </div>
+
+      <!-- Chat Messages Container -->
+      <div class="chat-box" id="chatBox">
+        <div class="msg msg-ai" id="aiDefaultGreeting">
+          <div class="msg-ai-header">
+            <span class="ai-avatar-badge">🤖 AI 专属投顾</span>
+          </div>
+          <div class="msg-ai-body">
+            您好！我是您的专属 AI 投顾助手。我已同步您的真实投资账本（含持仓均价、浮动盈亏与近期流水明细）。<br><br>
+            您可以使用上方的<strong>人员、渠道、标的</strong>筛选器针对特定股票或全局组合进行提问，或点击上方的<strong>快捷洞察</strong>卡片快速生成专业报告。
+          </div>
+          <div class="msg-time">准备就绪</div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
       <div class="chat-input-bar">
-        <input type="text" id="aiInput" class="chat-input" placeholder="输入问题或股票代码 (如 AAOI 策略)..." onkeydown="if(event.key==='Enter') sendAiMessage()">
-        <button class="chat-send" onclick="sendAiMessage()">↑</button>
+        <input type="text" id="aiInput" class="chat-input" placeholder="输入投资疑问、持仓诊断或做T策略..." enterkeyhint="send" onkeydown="if(event.key==='Enter') sendAiMessage()">
+        <button id="aiSendBtn" class="chat-send" onclick="sendAiMessage()">↑</button>
       </div>
     </section>
 
@@ -1310,6 +1642,8 @@
         fetchTrades();
       } else if (viewName === 'monitoring') {
         fetchMonitoringSymbols();
+      } else if (viewName === 'ai') {
+        initAiAssistant();
       }
     }
 
@@ -1320,6 +1654,7 @@
       else if (state.currentView === 'charts') fetchCharts();
       else if (state.currentView === 'trades') fetchTrades();
       else if (state.currentView === 'monitoring') fetchMonitoringSymbols();
+      else if (state.currentView === 'ai') initAiAssistant(true);
       else alert('数据已同步');
     }
 
@@ -1905,60 +2240,341 @@
       }
     }
 
-    // --- AI Chat Logic ---
+    // --- AI Assistant Logic (Full Desktop Parity) ---
+    let aiThinkingTimer = null;
+    let aiThinkingSeconds = 0;
+    let aiThinkingDots = 0;
+    let aiAssistantInitialized = false;
+
+    function renderMarkdown(mdText) {
+      if (!mdText) return '';
+      if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+          return marked.parse(mdText);
+        } catch (e) {
+          console.warn('marked error:', e);
+        }
+      }
+      // Clean fallback formatting
+      let html = escapeHtml(mdText);
+      html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      html = html.replace(/\n/g, '<br>');
+      return html;
+    }
+
+    async function initAiAssistant(force = false) {
+      if (aiAssistantInitialized && !force) return;
+      aiAssistantInitialized = true;
+      await Promise.all([
+        fetchAiStatus(),
+        fetchAiFilters(),
+        fetchAiHistory()
+      ]);
+    }
+
+    async function fetchAiStatus() {
+      const badge = document.getElementById('aiStatusBadge');
+      if (!badge) return;
+      try {
+        const res = await fetch('/api/ai/status');
+        const data = await res.json();
+        if (data.status === 'ok') {
+          if (data.logged_in) {
+            const acc = data.account_type || 'ChatGPT';
+            badge.innerText = `🟢 已连接 Codex (${acc} 订阅)`;
+            badge.style.color = '#34D399';
+            badge.style.background = 'rgba(16, 185, 129, 0.15)';
+            badge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+          } else if (data.installed) {
+            badge.innerText = '🟡 未登录 (终端执行 codex login)';
+            badge.style.color = '#FBBF24';
+            badge.style.background = 'rgba(245, 158, 11, 0.15)';
+            badge.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+          } else {
+            badge.innerText = '🔴 未安装 Codex CLI';
+            badge.style.color = '#F87171';
+            badge.style.background = 'rgba(239, 68, 68, 0.15)';
+            badge.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch AI status:', e);
+      }
+    }
+
+    async function fetchAiFilters() {
+      try {
+        const res = await fetch('/api/ai/filters');
+        const data = await res.json();
+        if (data.status !== 'ok') return;
+
+        // 1. Persons
+        const personSel = document.getElementById('aiFilterPerson');
+        if (personSel && data.persons) {
+          personSel.innerHTML = '';
+          data.persons.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.name === '全部启用人员' ? '' : p.name;
+            opt.innerText = p.name;
+            personSel.appendChild(opt);
+          });
+          if (data.persons.length === 1 && data.persons[0].locked) {
+            personSel.disabled = true;
+            personSel.title = '当前账号已隔离';
+          } else {
+            personSel.disabled = false;
+          }
+        }
+
+        // 2. Channels
+        const chSel = document.getElementById('aiFilterChannel');
+        if (chSel && data.channels) {
+          chSel.innerHTML = '';
+          data.channels.forEach(ch => {
+            const opt = document.createElement('option');
+            opt.value = ch;
+            opt.innerText = ch;
+            chSel.appendChild(opt);
+          });
+        }
+
+        // 3. Symbols
+        const symSel = document.getElementById('aiFilterSymbol');
+        if (symSel && data.symbols) {
+          symSel.innerHTML = '';
+          data.symbols.forEach(sym => {
+            const opt = document.createElement('option');
+            opt.value = sym;
+            opt.innerText = sym;
+            symSel.appendChild(opt);
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to fetch AI filters:', e);
+      }
+    }
+
+    async function fetchAiHistory() {
+      try {
+        const res = await fetch('/api/ai/history');
+        const data = await res.json();
+        if (data.status === 'ok' && Array.isArray(data.history) && data.history.length > 0) {
+          const box = document.getElementById('chatBox');
+          box.innerHTML = '';
+          data.history.forEach((m, idx) => {
+            if (m.role === 'user') {
+              box.innerHTML += `
+                <div class="msg msg-user">
+                  ${m.scope_tag ? `<div class="msg-scope-tag">${escapeHtml(m.scope_tag)}</div>` : ''}
+                  <div class="msg-text">${escapeHtml(m.text)}</div>
+                  <div class="msg-time">${escapeHtml(m.time || '')}</div>
+                </div>
+              `;
+            } else {
+              const bodyHtml = renderMarkdown(m.text);
+              const copyId = `ai_copy_${idx}`;
+              box.innerHTML += `
+                <div class="msg msg-ai">
+                  <div class="msg-ai-header">
+                    <span class="ai-avatar-badge">🤖 AI 投顾深度分析</span>
+                  </div>
+                  <div class="msg-ai-body">${bodyHtml}</div>
+                  <div class="msg-ai-footer">
+                    <button class="ai-btn-copy" id="${copyId}" onclick="copyAiReply(this, ${JSON.stringify(m.text).replace(/"/g, '&quot;')})">📋 复制回答</button>
+                    <span class="msg-time">${escapeHtml(m.time || '')}</span>
+                  </div>
+                </div>
+              `;
+            }
+          });
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+      } catch (e) {
+        console.warn('Failed to fetch AI history:', e);
+      }
+    }
+
+    function onAiFilterChanged() {
+      const sym = document.getElementById('aiFilterSymbol')?.value || '全部股票';
+      const input = document.getElementById('aiInput');
+      if (input && !input.value.trim() && sym !== '全部股票') {
+        input.placeholder = `针对 ${sym} 提出问题，如持仓诊断或做T空间...`;
+      } else if (input && !input.value.trim()) {
+        input.placeholder = '输入投资疑问、持仓诊断或做T策略...';
+      }
+    }
+
+    function sendPresetPrompt(promptText) {
+      const input = document.getElementById('aiInput');
+      if (!input) return;
+      input.value = promptText;
+      sendAiMessage();
+    }
+
     async function sendAiMessage() {
       const input = document.getElementById('aiInput');
-      const text = input.value.trim();
+      const text = input ? input.value.trim() : '';
       if (!text) return;
       input.value = '';
 
-      const box = document.getElementById('chatBox');
-      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const sendBtn = document.getElementById('aiSendBtn');
+      if (sendBtn) sendBtn.disabled = true;
+      if (input) input.disabled = true;
 
-      // Append user msg
+      const person = document.getElementById('aiFilterPerson')?.value || '';
+      const channel = document.getElementById('aiFilterChannel')?.value || '全部渠道';
+      const symbol = document.getElementById('aiFilterSymbol')?.value || '全部股票';
+      const includeContext = document.getElementById('aiContextCheckbox')?.checked ?? true;
+
+      const scopeTag = `${person || '全部人员'} · ${channel} · ${symbol}`;
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const box = document.getElementById('chatBox');
+
+      // Append user bubble
       box.innerHTML += `
         <div class="msg msg-user">
-          ${escapeHtml(text)}
+          <div class="msg-scope-tag">${escapeHtml(scopeTag)}</div>
+          <div class="msg-text">${escapeHtml(text)}</div>
           <div class="msg-time">${timeStr}</div>
         </div>
       `;
 
-      // Loading bubble
+      // Append dynamic thinking bubble
       const loadingId = 'aiLoading_' + Date.now();
       box.innerHTML += `
-        <div class="msg msg-ai" id="${loadingId}">
-          正在结合您的完整持仓与行情深入思考... ⏳
-          <div class="msg-time">${timeStr}</div>
+        <div class="msg msg-ai msg-thinking" id="${loadingId}">
+          <div class="ai-thinking-row">
+            <span class="ai-thinking-spinner"></span>
+            <span>🤖 Codex 正在结合真实账本深度分析中 (<span id="thinkingSec">0</span>s · 运算中<span id="thinkingDots">.</span>)</span>
+          </div>
         </div>
       `;
       window.scrollTo(0, document.body.scrollHeight);
+
+      // Start elapsed timer
+      aiThinkingSeconds = 0;
+      aiThinkingDots = 0;
+      if (aiThinkingTimer) clearInterval(aiThinkingTimer);
+      aiThinkingTimer = setInterval(() => {
+        aiThinkingSeconds++;
+        aiThinkingDots = (aiThinkingDots + 1) % 4;
+        const secEl = document.getElementById('thinkingSec');
+        const dotsEl = document.getElementById('thinkingDots');
+        if (secEl) secEl.innerText = aiThinkingSeconds;
+        if (dotsEl) dotsEl.innerText = '.'.repeat(aiThinkingDots || 1);
+      }, 1000);
 
       try {
         const res = await fetch('/api/ai/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({
+            message: text,
+            person: person,
+            channel: channel,
+            symbol: symbol,
+            include_context: includeContext
+          })
         });
+
+        clearInterval(aiThinkingTimer);
+        aiThinkingTimer = null;
+
         const data = await res.json();
         const loadEl = document.getElementById(loadingId);
-        if (data.status === 'ok') {
+        if (data.status === 'ok' && loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          const bodyHtml = renderMarkdown(data.reply);
           loadEl.innerHTML = `
-            ${escapeHtml(data.reply).replace(/\n/g, '<br>')}
-            <div class="msg-time">${data.time}</div>
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge">🤖 AI 投顾深度分析</span>
+            </div>
+            <div class="msg-ai-body">${bodyHtml}</div>
+            <div class="msg-ai-footer">
+              <button class="ai-btn-copy" onclick="copyAiReply(this, ${JSON.stringify(data.reply).replace(/"/g, '&quot;')})">📋 复制回答</button>
+              <span class="msg-time">${escapeHtml(data.time || timeStr)}</span>
+            </div>
           `;
-        } else {
-          loadEl.innerHTML = `<span style="color:var(--loss);">思考失败: ${data.message}</span>`;
+        } else if (loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          loadEl.innerHTML = `
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge" style="color:var(--loss);">❌ 分析未能完成</span>
+            </div>
+            <div class="msg-ai-body" style="color:var(--loss);">${escapeHtml(data.message || '未知错误')}</div>
+            <div class="msg-time">${timeStr}</div>
+          `;
         }
       } catch (err) {
+        if (aiThinkingTimer) clearInterval(aiThinkingTimer);
         const loadEl = document.getElementById(loadingId);
-        if (loadEl) loadEl.innerHTML = `<span style="color:var(--loss);">网络请求失败: ${err.message}</span>`;
+        if (loadEl) {
+          loadEl.classList.remove('msg-thinking');
+          loadEl.innerHTML = `
+            <div class="msg-ai-header">
+              <span class="ai-avatar-badge" style="color:var(--loss);">❌ 网络异常</span>
+            </div>
+            <div class="msg-ai-body" style="color:var(--loss);">${escapeHtml(err.message)}</div>
+            <div class="msg-time">${timeStr}</div>
+          `;
+        }
+      } finally {
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) {
+          input.disabled = false;
+          input.focus();
+        }
+        window.scrollTo(0, document.body.scrollHeight);
       }
-      window.scrollTo(0, document.body.scrollHeight);
     }
 
-    function sendQuickPrompt(prompt) {
-      document.getElementById('aiInput').value = prompt;
-      sendAiMessage();
+    async function clearAiChat() {
+      if (!confirm('确定清空当前账号的 AI 会话历史吗？')) return;
+      try {
+        const res = await fetch('/api/ai/clear', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          const box = document.getElementById('chatBox');
+          if (box) {
+            box.innerHTML = `
+              <div class="msg msg-ai" id="aiDefaultGreeting">
+                <div class="msg-ai-header">
+                  <span class="ai-avatar-badge">🤖 AI 专属投顾</span>
+                </div>
+                <div class="msg-ai-body">
+                  会话历史已清空。您可以随时提出新的投资疑问、成本分析或做T策略。
+                </div>
+                <div class="msg-time">已重置</div>
+              </div>
+            `;
+          }
+        }
+      } catch (e) {
+        alert('清空失败: ' + e.message);
+      }
+    }
+
+    function copyAiReply(btn, text) {
+      if (!navigator.clipboard) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } else {
+        navigator.clipboard.writeText(text);
+      }
+      if (btn) {
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '已复制 ✓';
+        btn.style.color = '#34D399';
+        setTimeout(() => {
+          btn.innerHTML = originalText;
+          btn.style.color = '';
+        }, 2000);
+      }
     }
 
     // --- Bark & Settings ---
