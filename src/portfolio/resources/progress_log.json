@@ -1,5 +1,17 @@
 [
   {
+    "time": "2026-10-26 02:05",
+    "title": "iPhone 移动端 Web/PWA 看板与 Bark 锁屏极速预警系统上线",
+    "tag": "已完成",
+    "author": "Antigravity",
+    "details": [
+      "修改者：Antigravity（移动端 Flask 轻量化后台、iOS PWA 触控端模板、Bark 锁屏推送引擎及双向控制接口开发）",
+      "需求背景：满足用户在 iPhone 上随时随地查看持仓、技术监控、向 AI 咨询并实时接收手机锁屏预警的需求。",
+      "实施落地：1) notification_service.py 新增 send_bark_notification 异步线程通道，支持向 iPhone Bark 发送警报通知与声音提醒；2) 新建 src/portfolio/web/ 服务体系，基于轻量 Flask 提供资产总览、持仓列表、监控规则启停、AI 对话及推送测试等 REST API；3) 制作 Apple 原生质感 iOS PWA 前端（templates/mobile.html），适配 iPhone 触控屏与全屏沉浸式体验，支持「添加到主屏幕」；4) 编写 启动手机服务.command 双击即用脚本，自动获取当前 WiFi 局域网 IP 与 Tailscale 访问地址。",
+      "验证结果：经本地测试，GET /、/api/overview、/api/monitoring 及测试推送接口均 100% 成功返回，持仓统计与监控联动无误。严格遵守规范未运行任何 pytest。"
+    ]
+  },
+  {
     "time": "2026-10-26 01:35",
     "title": "AI 页面标的下拉框美股精确筛选与股票代码纯净去后缀展示",
     "tag": "已完成",

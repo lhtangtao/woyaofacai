@@ -1,5 +1,25 @@
 # 变更日志
 
+## 2026-10-26 02:05 · iPhone 移动端 Web/PWA 看板与 Bark 锁屏极速预警系统上线 [Antigravity]
+
+- 修改者：Antigravity（移动端 Flask 轻量化后台、iOS PWA 触控端模板、Bark 锁屏推送引擎及双向控制接口开发）。
+- 需求背景：
+  - 用户希望在 iPhone 手机上随时查看 Money Portfolio 的资产持仓、技术监控、AI 问答及接收股票突破报警。
+- 架构设计与实现落地：
+  1. **iPhone 锁屏推送集成（`notification_service.py`）**：
+     - 在原生通知服务中新增 `send_bark_notification` 异步推送通道；
+     - 当长桥行情检测到价格突破、均线金叉死叉等事件时，除了本地 macOS 通知外，自动向 iPhone 触发秒级高优先级通知；
+     - 支持在配置及移动端一键测试推送。
+  2. **移动端服务后台与 REST API（`src/portfolio/web/app.py`）**：
+     - 提供 `/api/overview`、`/api/monitoring`、`/api/rules/<id>/toggle`、`/api/ai/chat` 及 `/api/bark/config` 等接口；
+     - 自动检测并输出 Mac 本地 WiFi 局域网 IP（`192.168.100.27`）及 Tailscale 虚拟 IP。
+  3. **iOS 专属全屏 PWA 前端（`templates/mobile.html`）**：
+     - 采用 Apple 原生暗黑金融风格设计，支持安全区与手势；
+     - 底部四大 Tab 导航：持仓明细看板、技术监控与规则启停、AI 对话咨询、Bark 手机推送配置；
+     - 支持在 Safari 中「添加到主屏幕」获得全屏原生体验。
+  4. **便捷启动**：
+     - 根目录提供 [`启动手机服务.command`](file:///Users/tangtao/money3/启动手机服务.command)，双击即可在 Mac 上运行移动端服务。
+
 ## 2026-10-26 01:35 · AI 页面标的下拉框美股精确筛选与股票代码纯净去后缀展示 [Antigravity]
 
 - 修改者：Antigravity（AI 模块标的联想筛选器重构、剔除非美股证券标的、股票代码去除 `.us` / `.US` 后缀与全局纯净代码呈现）。

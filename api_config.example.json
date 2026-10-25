@@ -14,5 +14,9 @@
     "history_start": "2025-01-01",
     "use_market_data": false,
     "history_price_basis": "official_close"
+  },
+  "bark": {
+    "enabled": true,
+    "url": "https://api.day.app/YOUR_BARK_DEVICE_KEY"
   }
 }
