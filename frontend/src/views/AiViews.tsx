@@ -21,7 +21,7 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const fetchHistory = () => {
-    const promise = mode === "chat" ? api.aiChatHistory() : api.aiStockHistory();
+    const promise = mode === "chat" ? api.aiChatHistory() : api.aiStockHistory(symbol);
     promise
       .then((res) => {
         if (res.status === "ok") {
@@ -33,7 +33,7 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
 
   useEffect(() => {
     fetchHistory();
-  }, [mode]);
+  }, [mode, symbol]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -58,7 +58,7 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
       if (res.status === "ok") {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: res.reply || res.content || res.response, time: new Date().toLocaleTimeString() },
+          { role: "assistant", content: res.answer || res.reply || res.content || res.response || "", time: new Date().toLocaleTimeString() },
         ]);
       } else {
         setMessages((prev) => [

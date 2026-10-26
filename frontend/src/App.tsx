@@ -10,6 +10,7 @@ import { EntitiesView } from "./views/EntitiesView";
 import { EarningsView } from "./views/EarningsView";
 import { AiViews } from "./views/AiViews";
 import { SystemViews } from "./views/SystemViews";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { api } from "./api/client";
 import { SystemBootstrap, UserProfile, PersonItem, ReportMeta } from "./types";
 
@@ -47,6 +48,7 @@ export const App: React.FC = () => {
       .then((data) => {
         if (data.status === "ok") {
           setBootstrap(data);
+          setError(null);
           // If user has isolated person_id, initialize with it
           if (data.user?.person_id != null) {
             setSelectedPersonId(data.user.person_id);
@@ -61,8 +63,12 @@ export const App: React.FC = () => {
           setError("初始化服务失败");
         }
       })
-      .catch((err) => {
-        setError(err.message || "请求后端 API 异常");
+      .catch((err: any) => {
+        if (err.status === 401 || err.loginRequired || err.message?.includes("登录")) {
+          setShowLogin(true);
+        } else {
+          setError(err.message || "请求后端 API 异常");
+        }
       })
       .finally(() => setLoading(false));
   };
@@ -70,6 +76,12 @@ export const App: React.FC = () => {
   useEffect(() => {
     loadBootstrap();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const onAuthRequired = () => setShowLogin(true);
+    window.addEventListener("money_auth_required", onAuthRequired);
+    return () => window.removeEventListener("money_auth_required", onAuthRequired);
+  }, []);
 
   // Apply theme to HTML root
   useEffect(() => {
@@ -230,94 +242,96 @@ export const App: React.FC = () => {
 
         {/* Dynamic Route Body */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
-          {currentRoute === "overview" && <DashboardView personId={selectedPersonId} />}
+          <ErrorBoundary fallbackTitle="页面视图渲染异常">
+            {currentRoute === "overview" && <DashboardView personId={selectedPersonId} />}
 
-          {currentRoute === "trades" && (
-            <TradesView
-              personId={selectedPersonId}
-              persons={bootstrap?.persons || []}
-              accounts={bootstrap?.accounts || []}
-            />
-          )}
+            {currentRoute === "trades" && (
+              <TradesView
+                personId={selectedPersonId}
+                persons={bootstrap?.persons || []}
+                accounts={bootstrap?.accounts || []}
+              />
+            )}
 
-          {currentRoute.startsWith("reports:") && (
-            <ReportsView
-              key={currentRoute}
-              initialReportName={currentRoute.replace("reports:", "")}
-              personId={selectedPersonId}
-              reportsList={bootstrap?.reports || []}
-            />
-          )}
+            {currentRoute.startsWith("reports:") && (
+              <ReportsView
+                key={currentRoute}
+                initialReportName={currentRoute.replace("reports:", "")}
+                personId={selectedPersonId}
+                reportsList={bootstrap?.reports || []}
+              />
+            )}
 
-          {currentRoute === "monitor" && <MonitorView />}
+            {currentRoute === "monitor" && <MonitorView />}
 
-          {currentRoute === "people" && <EntitiesView type="people" personId={selectedPersonId} />}
-          {currentRoute === "brokers" && <EntitiesView type="brokers" personId={selectedPersonId} />}
-          {currentRoute === "ownership" && <EntitiesView type="ownership" personId={selectedPersonId} />}
+            {currentRoute === "people" && <EntitiesView type="people" personId={selectedPersonId} />}
+            {currentRoute === "brokers" && <EntitiesView type="brokers" personId={selectedPersonId} />}
+            {currentRoute === "ownership" && <EntitiesView type="ownership" personId={selectedPersonId} />}
 
-          {currentRoute === "earnings" && <EarningsView />}
+            {currentRoute === "earnings" && <EarningsView />}
 
-          {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
-          {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
+            {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
+            {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
 
-          {currentRoute === "charts" && <ChartsView mode="gallery" personId={selectedPersonId} />}
-          {currentRoute === "charts:monthly" && <ChartsView mode="gallery" personId={selectedPersonId} />}
-          {currentRoute === "charts:distribution" && <ChartsView mode="gallery" personId={selectedPersonId} />}
-          {currentRoute === "charts:gallery" && <ChartsView mode="gallery" personId={selectedPersonId} />}
-          {currentRoute === "top_days" && <ChartsView mode="top_days" personId={selectedPersonId} />}
-          {currentRoute === "top_months" && <ChartsView mode="top_months" personId={selectedPersonId} />}
-          {currentRoute === "ranking" && <ChartsView mode="ranking" personId={selectedPersonId} />}
+            {currentRoute === "charts" && <ChartsView mode="asset" personId={selectedPersonId} />}
+            {currentRoute === "charts:monthly" && <ChartsView mode="monthly" personId={selectedPersonId} />}
+            {currentRoute === "charts:distribution" && <ChartsView mode="distribution" personId={selectedPersonId} />}
+            {currentRoute === "charts:gallery" && <ChartsView mode="gallery" personId={selectedPersonId} />}
+            {currentRoute === "top_days" && <ChartsView mode="top_days" personId={selectedPersonId} />}
+            {currentRoute === "top_months" && <ChartsView mode="top_months" personId={selectedPersonId} />}
+            {currentRoute === "ranking" && <ChartsView mode="ranking" personId={selectedPersonId} />}
 
-          {currentRoute === "system:db" && (
-            <SystemViews
-              mode="db"
-              user={bootstrap?.user || null}
-              theme={theme}
-              onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
-              greenProfit={greenProfit}
-              onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
-            />
-          )}
-          {currentRoute === "system:reconcile" && (
-            <SystemViews
-              mode="reconcile"
-              user={bootstrap?.user || null}
-              theme={theme}
-              onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
-              greenProfit={greenProfit}
-              onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
-            />
-          )}
-          {currentRoute === "system:metrics" && (
-            <SystemViews
-              mode="metrics"
-              user={bootstrap?.user || null}
-              theme={theme}
-              onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
-              greenProfit={greenProfit}
-              onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
-            />
-          )}
-          {currentRoute === "system:progress" && (
-            <SystemViews
-              mode="progress"
-              user={bootstrap?.user || null}
-              theme={theme}
-              onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
-              greenProfit={greenProfit}
-              onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
-            />
-          )}
-          {currentRoute === "settings" && (
-            <SystemViews
-              mode="settings"
-              user={bootstrap?.user || null}
-              theme={theme}
-              onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
-              greenProfit={greenProfit}
-              onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
-            />
-          )}
+            {currentRoute === "system:db" && (
+              <SystemViews
+                mode="db"
+                user={bootstrap?.user || null}
+                theme={theme}
+                onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+                greenProfit={greenProfit}
+                onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+              />
+            )}
+            {currentRoute === "system:reconcile" && (
+              <SystemViews
+                mode="reconcile"
+                user={bootstrap?.user || null}
+                theme={theme}
+                onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+                greenProfit={greenProfit}
+                onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+              />
+            )}
+            {currentRoute === "system:metrics" && (
+              <SystemViews
+                mode="metrics"
+                user={bootstrap?.user || null}
+                theme={theme}
+                onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+                greenProfit={greenProfit}
+                onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+              />
+            )}
+            {currentRoute === "system:progress" && (
+              <SystemViews
+                mode="progress"
+                user={bootstrap?.user || null}
+                theme={theme}
+                onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+                greenProfit={greenProfit}
+                onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+              />
+            )}
+            {currentRoute === "settings" && (
+              <SystemViews
+                mode="settings"
+                user={bootstrap?.user || null}
+                theme={theme}
+                onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+                greenProfit={greenProfit}
+                onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+              />
+            )}
+          </ErrorBoundary>
         </div>
       </main>
 

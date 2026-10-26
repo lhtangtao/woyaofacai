@@ -17,6 +17,7 @@ Provides unified, robust endpoints for:
 
 from collections import defaultdict
 import csv
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import io
@@ -30,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, Response, g, jsonify, request
 
-from portfolio.domain.models import QueryScope, exact_text
+from portfolio.domain.models import QueryScope, TradeFilters, exact_text
 from portfolio.domain.technical_indicators import DailyBar, series, technicals
 from portfolio.paths import DATABASE_PATH, PROJECT_DIR
 from portfolio.services.ai_service import CodexAIService as AIService
@@ -91,7 +92,7 @@ def get_earnings_service() -> EarningsService:
     from PySide6.QtCore import QStandardPaths
     store_path = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "live_quotes.sqlite3"
     quote_store = QuoteStore(store_path) if store_path.exists() else None
-    return EarningsService(quote_store=quote_store)
+    return EarningsService(store=quote_store)
 
 
 def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD", person_id: Optional[int] = None) -> QueryScope:
@@ -163,6 +164,8 @@ def api_bootstrap():
                 record_count = cur.fetchone()[0]
                 cur.execute("SELECT id, name FROM persons WHERE enabled=1 ORDER BY id")
                 persons = [{"id": r[0], "name": r[1]} for r in cur.fetchall()]
+                if ctx and not ctx.is_lan_viewer() and not ctx.is_admin() and ctx.allowed_person_ids is not None:
+                    persons = [p for p in persons if p["id"] in ctx.allowed_person_ids]
         except Exception:
             pass
 
@@ -406,7 +409,19 @@ def api_reports_detail(report_name: str):
         scope = get_user_query_scope(person_id=person_id)
         res = svc.calculate(scope)
 
-        report = res.reports.get(report_name)
+        report = None
+        if report_name in ("今日盈亏", "当日盈亏"):
+            from portfolio.engine.today_holdings import today_holdings
+            holdings_rep = res.reports.get("当前持仓")
+            if holdings_rep:
+                report = today_holdings(res, holdings_rep, None)
+        elif report_name == "股票归属":
+            report = res.reports.get("人员划转") or res.reports.get("股票汇总")
+        elif report_name == "券商资产":
+            report = res.reports.get("渠道汇总") or res.reports.get("账户资产")
+        else:
+            report = res.reports.get(report_name)
+
         if not report:
             return jsonify({"status": "error", "message": f"未找到报表: {report_name}"}), 404
 
@@ -446,35 +461,43 @@ def api_reports_detail(report_name: str):
         start_idx = (page - 1) * page_size
         paged_rows = filtered_rows[start_idx : start_idx + page_size]
 
-        # Format items with column mapping
+        # Format items as objects and rows as 2D cell arrays
         paged_items = []
+        paged_arrays = []
         for r in paged_rows:
             item_dict = {}
+            row_arr = []
             for idx, col in enumerate(columns):
                 val = r.values[idx] if idx < len(r.values) else None
-                item_dict[col] = serialize_val(val)
-            item_dict["_meta"] = {k: serialize_val(v) for k, v in r.metadata.items()}
+                s_val = serialize_val(val)
+                item_dict[col] = s_val
+                row_arr.append(s_val)
+            item_dict["_meta"] = {k: serialize_val(v) for k, v in r.metadata.items()} if hasattr(r, "metadata") else {}
             paged_items.append(item_dict)
+            paged_arrays.append(row_arr)
 
-        # Calculate totals
+        # Calculate totals & summary_row
         totals = {}
+        summary_row = None
         if hasattr(report, "totals") and getattr(report, "totals"):
             for idx, col in enumerate(columns):
                 t_val = report.totals.values[idx] if idx < len(report.totals.values) else None
                 if t_val is not None:
                     totals[col] = serialize_val(t_val)
+            summary_row = [totals.get(col) for col in columns]
 
         return jsonify({
             "status": "ok",
             "name": report_name,
             "columns": columns,
-            "rows": paged_items,
+            "rows": paged_arrays,
             "items": paged_items,
             "total_rows": total_rows,
             "total": total_rows,
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
+            "summary_row": summary_row,
             "totals": totals,
             "note": getattr(report, "note", ""),
             "snapshot_id": datetime.now().isoformat(),
@@ -496,20 +519,52 @@ def api_trades_list():
     try:
         svc = get_trades_service()
         person_id, _ = get_current_user_scope()
+        req_person_id = request.args.get("person_id", type=int)
+        if person_id is None and req_person_id is not None:
+            person_id = req_person_id
 
         page = max(1, request.args.get("page", 1, type=int))
-        page_size = max(1, min(200, request.args.get("page_size", 25, type=int)))
-        symbol = request.args.get("symbol")
-        channel = request.args.get("channel")
-        side = request.args.get("side")
-        search = (request.args.get("search") or "").strip().lower()
+        page_size = max(1, min(200, request.args.get("size", request.args.get("page_size", 25, type=int), type=int)))
+        symbol = (request.args.get("symbol") or "").strip().upper() or None
+        channel = (request.args.get("broker") or request.args.get("channel") or "").strip() or None
+        side = (request.args.get("side") or "").strip().upper() or None
+        search = (request.args.get("search") or "").strip() or None
 
         scope = get_user_query_scope(person_id=person_id)
+        if search:
+            scope = replace(scope, search=search)
+
+        # Resolve symbol -> instrument_ids
+        if symbol:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                sym_rows = conn.execute("SELECT id FROM instruments WHERE symbol = ? OR symbol LIKE ?", (symbol, f"{symbol}.%")).fetchall()
+                if sym_rows:
+                    scope = replace(scope, instrument_ids=tuple(r[0] for r in sym_rows))
+                else:
+                    scope = replace(scope, instrument_ids=(-99999,))
+
+        # Resolve channel/broker -> account_ids
+        if channel:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                acc_rows = conn.execute("SELECT id FROM broker_accounts WHERE broker_code = ? OR display_name = ?", (channel, channel)).fetchall()
+                if acc_rows:
+                    scope = replace(scope, account_ids=tuple(r[0] for r in acc_rows))
+                else:
+                    scope = replace(scope, account_ids=(-99999,))
+
+        # Map side
+        trade_filters = None
+        if side:
+            side_map = {"买入": "BUY", "卖出": "SELL", "BUY": "BUY", "SELL": "SELL", "转入": "TRANSFER_IN", "转出": "TRANSFER_OUT"}
+            db_side = side_map.get(side, side)
+            trade_filters = TradeFilters(side=db_side)
+
         page_0 = max(0, page - 1)
         page_obj = svc.get_trades(
             scope,
             page=page_0,
             size=page_size,
+            filters=trade_filters,
         )
 
         normalized_items = []
@@ -536,16 +591,6 @@ def api_trades_list():
                 "source": vals[15] if len(vals) > 15 else meta.get("source_path"),
                 "person_name": meta.get("person_name") or "—",
             }
-            if symbol and str(trade_obj["symbol"]).upper() != symbol.upper():
-                continue
-            if channel and str(trade_obj["broker"]).upper() != channel.upper():
-                continue
-            if side and str(trade_obj["side"]).upper() != side.upper():
-                continue
-            if search:
-                row_str = f"{trade_obj['symbol']} {trade_obj['broker']} {trade_obj['person_name']} {trade_obj['side']}".lower()
-                if search not in row_str:
-                    continue
             normalized_items.append(trade_obj)
 
         total_rows = page_obj.total
@@ -565,6 +610,7 @@ def api_trades_list():
             "total_pages": total_pages,
             "pagination": {
                 "page": page,
+                "page_size": page_size,
                 "size": page_size,
                 "total": total_rows,
                 "total_pages": total_pages,
@@ -585,6 +631,19 @@ def api_trade_detail():
         trade_id = request.args.get("trade_id", type=int)
         if not trade_id:
             return jsonify({"status": "error", "message": "Missing trade_id parameter"}), 400
+
+        ctx: AuthContext = getattr(g, "auth_context", None)
+        if ctx and not ctx.is_lan_viewer() and not ctx.is_admin() and ctx.allowed_person_ids is not None:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                placeholders = ",".join("?" * len(ctx.allowed_person_ids))
+                has_access = conn.execute(
+                    f"SELECT 1 FROM person_operations WHERE source_record_id = ? AND person_id IN ({placeholders}) LIMIT 1",
+                    [trade_id, *ctx.allowed_person_ids],
+                ).fetchone()
+                if not has_access:
+                    record_audit_event("TRADE_DETAIL_ACCESS_DENIED", ctx.username, ctx.access_mode, request.remote_addr, "FORBIDDEN", {"trade_id": trade_id})
+                    return jsonify({"status": "error", "message": "权限不足：无权访问该交易来源记录"}), 403
+
         svc = get_trades_service()
         provenance = svc.get_trade_provenance(trade_id, sensitive=False)
         return jsonify({
@@ -633,6 +692,10 @@ def api_people_assets():
                 "cash": serialize_val(Decimal(str(total_asset or "0")) - stock_v),
                 "stock_value": serialize_val(stock_v),
             })
+
+        ctx: AuthContext = getattr(g, "auth_context", None)
+        if ctx and not ctx.is_lan_viewer() and not ctx.is_admin() and ctx.allowed_person_ids is not None:
+            people_list = [p for p in people_list if p["person_id"] in ctx.allowed_person_ids]
 
         return jsonify({"status": "ok", "people": people_list, "count": len(people_list)})
     except Exception as e:
@@ -720,6 +783,11 @@ def api_stock_ownership():
             for a in alerts_raw
         ]
 
+        ctx: AuthContext = getattr(g, "auth_context", None)
+        if ctx and not ctx.is_lan_viewer() and not ctx.is_admin() and ctx.allowed_person_ids is not None:
+            report_data = [r for r in report_data if r.get("person_id") in ctx.allowed_person_ids]
+            alerts_data = []
+
         return jsonify({
             "status": "ok",
             "choices": [{"id": c[0], "symbol": c[1]} for c in choices],
@@ -770,29 +838,17 @@ def api_earnings_calendar():
                         "actual_eps": serialize_val(getattr(ev, "actual_eps", None)),
                         "status": getattr(ev, "status", "待发布"),
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Earnings cache query warning: {e}")
 
-        if not events_data and holdings_symbols:
-            unique_syms = sorted(list(set(holdings_symbols)))[:12]
-            for i, sym in enumerate(unique_syms):
-                day_offset = (i * 2 + 5) % 28 + 1
-                ev_date = date(year, month, day_offset)
-                events_data.append({
-                    "symbol": sym,
-                    "company_name": f"{sym} Corporation",
-                    "date": ev_date.isoformat(),
-                    "market_session": "盘前" if i % 2 == 0 else "盘后",
-                    "estimated_eps": 1.25 + i * 0.1,
-                    "actual_eps": 1.30 + i * 0.1 if ev_date < date.today() else None,
-                    "status": "已公布" if ev_date < date.today() else "待发布",
-                })
-
+        # Real data only: no fake EPS data generation
         return jsonify({
             "status": "ok",
             "year": year,
             "month": month,
             "events": events_data,
+            "calendar": events_data,
+            "items": events_data,
             "count": len(events_data),
         })
     except Exception as e:
@@ -1039,20 +1095,27 @@ def api_monitoring_rules_list():
     rules = store.get_rules()
     serialized = []
     for r in rules:
+        sym = getattr(r, "analysis_symbol", None) or getattr(r, "monitored_symbol", None) or getattr(r, "symbol", "")
+        rule_name = getattr(r, "name", "") or getattr(r, "rule_name", "")
+        sound = getattr(r, "sound_name", "Glass")
+        channels = getattr(r, "notification_channels", "in_app,desktop")
         serialized.append({
             "id": r.rule_id,
             "rule_id": r.rule_id,
-            "symbol": r.symbol.removesuffix(".US"),
-            "full_symbol": r.symbol,
-            "rule_name": r.rule_name,
+            "symbol": sym.removesuffix(".US") if sym else "",
+            "full_symbol": sym,
+            "name": rule_name,
+            "rule_name": rule_name,
             "rule_type": r.rule_type,
-            "expression": r.expression,
+            "expression": r.expression if isinstance(r.expression, (dict, list)) else str(r.expression),
             "enabled": bool(r.enabled),
-            "sound": r.sound,
-            "channels": r.channels,
-            "created_at": r.created_at,
+            "sound": sound,
+            "sound_name": sound,
+            "channels": channels,
+            "notification_channels": channels,
+            "created_at": getattr(r, "created_at", ""),
         })
-    return jsonify({"status": "ok", "items": serialized, "count": len(serialized)})
+    return jsonify({"status": "ok", "rules": serialized, "items": serialized, "count": len(serialized)})
 
 
 @api_v1.route("/monitoring/rules/save", methods=["POST"])
@@ -1071,17 +1134,23 @@ def api_monitoring_rule_save():
     target_sym = symbol if symbol.endswith(".US") else f"{symbol}.US"
     rule_id = data.get("rule_id") or data.get("id") or f"rule_{int(datetime.now().timestamp() * 1000)}"
 
+    expr = data.get("expression")
+    if not isinstance(expr, dict):
+        expr = {"threshold": data.get("threshold", 100), "op": ">="}
+
     rule = MonitorRule(
         rule_id=rule_id,
-        symbol=target_sym,
-        rule_name=data.get("rule_name") or f"{symbol} 价格监控",
-        rule_type=data.get("rule_type", "PRICE"),
-        expression=data.get("expression") or f"price >= {data.get('threshold', 100)}",
-        channels=data.get("channels", "in_app,desktop,bark"),
-        sound=data.get("sound", "Glass"),
-        enabled=1 if data.get("enabled", False) else 0,
         scope_key="PORTFOLIO",
+        analysis_symbol=target_sym,
+        monitored_symbol=target_sym,
+        name=data.get("rule_name") or data.get("name") or f"{symbol.removesuffix('.US')} 价格监控",
+        rule_type=data.get("rule_type", "PRICE"),
+        expression=expr,
+        notification_channels=data.get("channels") or data.get("notification_channels") or "in_app,desktop",
+        sound_name=data.get("sound") or data.get("sound_name") or "Glass",
+        enabled=bool(data.get("enabled", False)),
         created_at=datetime.now().isoformat(),
+        updated_at=datetime.now().isoformat(),
     )
 
     if data.get("is_new", False) or not store.get_rule(rule_id):
@@ -1210,18 +1279,20 @@ def api_monitoring_kline():
         target_sym = symbol if symbol.endswith(".US") else f"{symbol}.US"
         bars_objs = store.bars(target_sym) or store.bars(symbol)
         if not bars_objs:
-            bars_objs = []
-            base_p = 100.0
-            for i in range(60):
-                d = date.today() - timedelta(days=60 - i)
-                op = round(base_p + math.sin(i * 0.3) * 5, 2)
-                cl = round(op + math.cos(i * 0.2) * 3, 2)
-                hi = round(max(op, cl) + 2.0, 2)
-                lo = round(min(op, cl) - 2.0, 2)
-                vol = 100000 + int(math.sin(i) * 30000)
-                bars_objs.append(
-                    DailyBar(d, Decimal(str(op)), Decimal(str(hi)), Decimal(str(lo)), Decimal(str(cl)), Decimal(str(vol)))
-                )
+            return jsonify({
+                "status": "ok",
+                "symbol": symbol,
+                "dates": [],
+                "ohlcv": [],
+                "candles": [],
+                "volumes": [],
+                "bars": [],
+                "ma": {},
+                "macd": {},
+                "rsi": [],
+                "technicals": {},
+                "message": f"暂无标的 {symbol} 的历史 K 线数据",
+            })
 
         s = series(bars_objs)
         t_pair = technicals(bars_objs)
@@ -1351,11 +1422,15 @@ def api_ai_history():
 def api_ai_chat():
     """Deliver a user prompt to AI investment assistant and record conversation."""
     data = request.get_json(silent=True) or {}
-    prompt = (data.get("prompt") or "").strip()
+    prompt = (data.get("prompt") or data.get("message") or "").strip()
     if not prompt:
         return jsonify({"status": "error", "message": "请输入咨询问题"}), 400
 
     person_id, person_name = get_current_user_scope()
+    req_person_id = data.get("person_id")
+    if person_id is None and req_person_id is not None:
+        person_id = req_person_id
+
     requested_person = request.args.get("person", "全部人员")
     if person_name:
         requested_person = person_name
@@ -1378,7 +1453,14 @@ def api_ai_chat():
     sessions[session_key] = current_msgs[-50:]
     save_ai_sessions("ai_chat_sessions.json", sessions)
 
-    return jsonify({"status": "ok", "answer": answer, "session_key": session_key})
+    return jsonify({
+        "status": "ok",
+        "answer": answer,
+        "reply": answer,
+        "content": answer,
+        "response": answer,
+        "session_key": session_key,
+    })
 
 
 @api_v1.route("/ai/clear", methods=["POST"])
@@ -1411,7 +1493,7 @@ def api_ai_stock_chat():
     """Ask stock-specific questions and generate stock analysis report."""
     data = request.get_json(silent=True) or {}
     symbol = (data.get("symbol") or "AAOI").strip().upper()
-    prompt = (data.get("prompt") or "").strip()
+    prompt = (data.get("prompt") or data.get("message") or "").strip()
     if not prompt:
         return jsonify({"status": "error", "message": "请输入咨询问题"}), 400
 
@@ -1420,9 +1502,11 @@ def api_ai_stock_chat():
     if store:
         target_sym = symbol if symbol.endswith(".US") else f"{symbol}.US"
         st = store.state(target_sym)
-        tech_info = f"标的 {symbol} 当前行情与指标: {json.dumps(st, ensure_ascii=False)}"
+        if st:
+            tech_info = f"标的 {symbol} 当前行情与指标: {json.dumps(st, ensure_ascii=False)}"
 
-    answer = AIService.ask_stock(symbol, prompt, additional_context=tech_info)
+    prompt_to_send = f"{prompt}\n\n附标的技术面信息：{tech_info}" if tech_info else prompt
+    answer = AIService.ask_stock(prompt_to_send, symbol=symbol)
 
     sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
     current_msgs = sessions.get(symbol, [])
@@ -1431,7 +1515,14 @@ def api_ai_stock_chat():
     sessions[symbol] = current_msgs[-50:]
     save_ai_sessions("ai_stock_analysis_sessions.json", sessions)
 
-    return jsonify({"status": "ok", "answer": answer, "symbol": symbol})
+    return jsonify({
+        "status": "ok",
+        "answer": answer,
+        "reply": answer,
+        "content": answer,
+        "response": answer,
+        "symbol": symbol,
+    })
 
 
 # ------------------------------------------------------------------------------
@@ -1577,24 +1668,44 @@ def api_export_report_csv(report_name: str):
     """Export any report to standard CSV."""
     try:
         svc = get_analytics_service()
-        scope = get_user_query_scope()
+        person_id = request.args.get("person_id", type=int)
+        scope = get_user_query_scope(person_id=person_id)
         res = svc.calculate(scope)
 
-        report = res.reports.get(report_name)
+        report = None
+        if report_name in ("今日盈亏", "当日盈亏"):
+            from portfolio.engine.today_holdings import today_holdings
+            holdings_rep = res.reports.get("当前持仓")
+            if holdings_rep:
+                report = today_holdings(res, holdings_rep, None)
+        elif report_name == "股票归属":
+            report = res.reports.get("人员划转") or res.reports.get("股票汇总")
+        elif report_name == "券商资产":
+            report = res.reports.get("渠道汇总") or res.reports.get("账户资产")
+        else:
+            report = res.reports.get(report_name)
+
         if not report:
             return jsonify({"status": "error", "message": f"未找到报表: {report_name}"}), 404
 
+        search = (request.args.get("search") or "").strip().lower()
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(report.columns)
         for r in report.rows:
+            if search:
+                row_str = " ".join(str(v or "") for v in r.values).lower()
+                if search not in row_str:
+                    continue
             writer.writerow([serialize_val(v) for v in r.values])
 
         csv_data = output.getvalue().encode("utf-8-sig")
+        from urllib.parse import quote
+        safe_filename = quote(f"{report_name}.csv")
         return Response(
             csv_data,
-            mimetype="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={report_name}.csv"},
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}"},
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1607,6 +1718,10 @@ def api_export_trades_csv():
     try:
         svc = get_trades_service()
         person_id, _ = get_current_user_scope()
+        req_person_id = request.args.get("person_id", type=int)
+        if person_id is None and req_person_id is not None:
+            person_id = req_person_id
+
         scope = get_user_query_scope(person_id=person_id)
         page_obj = svc.get_trades(scope, page=0, size=100000)
 
@@ -1620,8 +1735,8 @@ def api_export_trades_csv():
         csv_data = output.getvalue().encode("utf-8-sig")
         return Response(
             csv_data,
-            mimetype="text/csv",
-            headers={"Content-Disposition": "attachment; filename=trades_export.csv"},
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''trades_export.csv"},
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

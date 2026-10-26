@@ -128,8 +128,15 @@ export interface ReportDetailData {
   report_name?: string;
   message?: string;
   columns: string[];
-  rows: any[][];
+  rows: any[];
+  items?: Record<string, any>[];
   summary_row?: any[] | null;
+  totals?: Record<string, any>;
   types?: string[];
   total_rows?: number;
+  total?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
+  note?: string;
 }

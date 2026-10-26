@@ -105,9 +105,10 @@ class AuthContext:
             "is_authenticated": self.is_authenticated,
             "is_lan": self.access_mode in ("LOCAL_LOOPBACK", "DIRECT_PHYSICAL_LAN"),
             "login_required": self.is_unauthenticated(),
-            "can_admin": self.has_capability("manage_users"),
-            "can_write": self.has_capability("modify_rules"),
-            "can_chat": self.has_capability("execute_ai_chat"),
+            "can_admin": self.has_capability(CAP_MANAGE_USERS),
+            "can_write": self.has_capability(CAP_MANAGE_RULES),
+            "can_chat": self.has_capability(CAP_AI_CHAT),
+            "can_bark": self.has_capability(CAP_MANAGE_BARK),
             "capabilities": list(self.capabilities),
         }
 

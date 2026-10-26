@@ -29,7 +29,13 @@ export async function requestApi<T = any>(
   if (response.status === 401) {
     // Remote unauthenticated
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.message || "需要登录");
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("money_auth_required"));
+    }
+    const err: any = new Error(data.message || "需要登录");
+    err.status = 401;
+    err.loginRequired = true;
+    throw err;
   }
 
   if (response.status === 403) {
@@ -97,10 +103,22 @@ export const api = {
 
   // Reports
   reportsList: () => requestApi("/api/v1/reports"),
-  reportDetail: (reportName: string, personId?: number | null, search?: string) => {
+  reportDetail: (
+    reportName: string,
+    personId?: number | null,
+    search?: string,
+    page?: number,
+    pageSize?: number,
+    sortCol?: string,
+    sortDir?: string
+  ) => {
     const query = new URLSearchParams();
     if (personId != null) query.set("person_id", String(personId));
     if (search) query.set("search", search);
+    if (page != null) query.set("page", String(page));
+    if (pageSize != null) query.set("page_size", String(pageSize));
+    if (sortCol) query.set("sort_col", sortCol);
+    if (sortDir) query.set("sort_dir", sortDir);
     return requestApi<ReportDetailData>(`/api/v1/reports/${encodeURIComponent(reportName)}?${query.toString()}`);
   },
 
@@ -108,7 +126,12 @@ export const api = {
   people: () => requestApi("/api/v1/people"),
   brokers: () => requestApi("/api/v1/brokers"),
   ownership: () => requestApi("/api/v1/ownership"),
-  earningsCalendar: () => requestApi("/api/v1/earnings-calendar"),
+  earningsCalendar: (year?: number, month?: number) => {
+    const query = new URLSearchParams();
+    if (year != null) query.set("year", String(year));
+    if (month != null) query.set("month", String(month));
+    return requestApi(`/api/v1/earnings-calendar?${query.toString()}`);
+  },
 
   // Charts
   charts: (personId?: number | null) => {
@@ -166,15 +189,16 @@ export const api = {
     requestApi("/api/v1/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, person_id: personId }),
+      body: JSON.stringify({ prompt: message, message, person_id: personId }),
     }),
   aiClear: () => requestApi("/api/v1/ai/clear", { method: "POST" }),
-  aiStockHistory: () => requestApi("/api/v1/ai/stock/history"),
+  aiStockHistory: (symbol?: string) =>
+    requestApi(symbol ? `/api/v1/ai/stock/history?symbol=${encodeURIComponent(symbol)}` : "/api/v1/ai/stock/history"),
   aiStockChat: (symbol: string, message: string) =>
     requestApi("/api/v1/ai/stock/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, message }),
+      body: JSON.stringify({ symbol, prompt: message, message }),
     }),
 
   // System Diagnostics

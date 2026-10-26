@@ -87,7 +87,7 @@ export const MonitorView: React.FC = () => {
     setRulesOpen(true);
     api.monitoringRules().then((res) => {
       if (res.status === "ok") {
-        setRules(res.rules || []);
+        setRules(res.rules || res.items || []);
       }
     });
   };
@@ -392,6 +392,10 @@ export const MonitorView: React.FC = () => {
               {klineLoading ? (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
                   正在加载 {klineSymbol} 历史 K 线...
+                </div>
+              ) : !klineData || !klineData.dates || klineData.dates.length === 0 ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-muted)" }}>
+                  暂无 {klineSymbol} 历史行情数据（非交易时段或未收录）
                 </div>
               ) : (
                 <ReactECharts option={buildKlineOption()} style={{ height: "100%", width: "100%" }} />

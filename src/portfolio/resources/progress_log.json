@@ -1,5 +1,27 @@
 [
   {
+    "time": "2026-10-26 20:50",
+    "title": "Money Portfolio v3.1 Web 端问题集中修复：今日盈亏动态报表、报表 DTO 与健壮渲染、安全测试 100% 隔离、角色横向越权拦截、伪造数据彻底清理",
+    "tag": "已完成",
+    "author": "Antigravity",
+    "details": [
+      "修改者：Antigravity（代码修改）严格执行用户最高开发原则「原 Mac PySide6 桌面端是唯一的界面、功能、数据和交互基准，所有修复让 Web 端向原桌面端看齐」：",
+      "P0-01 今日盈亏无法展示修复：在 /api/v1/reports/<report_name> 与 /api/v1/export/report/<report_name> 中集成 today_holdings 动态报表生成逻辑，按持仓与最新收盘/实时估值呈现渠道、Ticker、持仓数量、昨收价、最新价、今日涨跌幅、今日盈亏与占比等 14 列完整数据。",
+      "P0-02 报表空白与 DTO 统一：前后端统一 Report DTO 规范，后端同时输出 2D 单元格二维数组 rows 与键值字典列表 items，前端通过列索引和列名安全提取单元格值，彻底杜绝 TypeError: row.map is not a function 异常；引入 ErrorBoundary 错误边界组件防止白屏。",
+      "P0-03 安全测试环境 100% 隔离：在 tests/test_unified_parity.py 中引入 tempfile.TemporaryDirectory() 与 set_security_db_path()，并在执行前后通过 SHA256 哈希校验确保本地真实的 security.sqlite3 物理文件 100% 字节不变、零修改。",
+      "P0-04 越权查看他人资产拦截：普通用户访问 /api/v1/people、/api/v1/ownership、/api/v1/bootstrap 严格限制在自身名下（allowed_person_ids）；在 /api/v1/trades/detail 严格校验交易来源归属，普通用户越权探测他人交易直接拒绝并返回 403 Forbidden。",
+      "P0-05 彻底删除正弦波与虚构数据：从 /api/v1/monitoring/kline 中彻底删除正弦/余弦伪造的 60 天 DailyBar；从 /api/v1/earnings-calendar 中彻底删除伪造 EPS 算术循环；无数据时如实呈现空列表或友好占位提示，严禁填入假数据。",
+      "P1-01 公网登录流程健全：在 Web 前端监听 401 认证拦截事件，公网未登录用户即刻弹出登录模态弹窗，登录成功后自动重新加载用户工作区。",
+      "P1-02 AI 投资问答与股票研报对齐：修复前后端属性名匹配（prompt/message、answer/reply/content），修复 AIService.ask_stock 参数顺序与技术面注入错误，支持标的切换自动重载对话历史。",
+      "P1-03 行情监控规则 CRUD 修复：对齐 MonitorRule 的实际字段（analysis_symbol、name、sound_name、notification_channels），修复规则列表展示、新增保存及启停开关。",
+      "P1-04 持仓财报日历接口对齐：修复 EarningsService 构造函数入参（store=quote_store），前端支持上个月/本月/下个月切换。",
+      "P1-05 交易明细 SQL 级精确分页与筛选：将渠道/标的/方向/搜索条件在 SQL 层面执行过滤后再分页，彻底解决此前先截断后内存过滤导致数据丢失和分页错乱的问题。",
+      "P1-06 图表页面功能细分：资产走势图、月度走势图、持仓分布图与 27 维图集分别映射到对应模式与图表集，修复 ECharts 渲染配置转换。",
+      "P1-07 导出交互完善：报表 CSV 导出继承当前出资人员及搜索过滤，支持今日盈亏导出及标准 UTF-8 编码文件名。",
+      "P1-08 权限与用户切换一致：在 AuthContext.to_dict() 中对齐 CAP_MANAGE_USERS、CAP_MANAGE_RULES、CAP_AI_CHAT、CAP_MANAGE_BARK。"
+    ]
+  },
+  {
     "time": "2026-10-26 19:48",
     "title": "统一前端架构方向紧急纠偏：Mac原生PySide6桌面100%保留为基准，Web浏览器端1:1完整复刻原生桌面体验",
     "tag": "已完成",

@@ -1,15 +1,19 @@
 import React, { useEffect, useState } from "react";
-import { Calendar, AlertCircle } from "lucide-react";
+import { Calendar, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 
 export const EarningsView: React.FC = () => {
+  const today = new Date();
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchCalendar = (y: number, m: number) => {
     setLoading(true);
     api
-      .earningsCalendar()
+      .earningsCalendar(y, m)
       .then((res) => {
         if (res.status === "ok") {
           setData(res);
@@ -17,99 +21,142 @@ export const EarningsView: React.FC = () => {
       })
       .catch((err) => console.error("Failed to load earnings calendar:", err))
       .finally(() => setLoading(false));
-  }, []);
+  };
 
-  if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "300px", color: "var(--brand)" }}>
-        正在同步持仓标的财报日历与 EPS 预期...
-      </div>
-    );
-  }
+  useEffect(() => {
+    fetchCalendar(year, month);
+  }, [year, month]);
 
-  const items = data?.calendar || data?.items || [];
+  const handlePrevMonth = () => {
+    if (month === 1) {
+      setYear(year - 1);
+      setMonth(12);
+    } else {
+      setMonth(month - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (month === 12) {
+      setYear(year + 1);
+      setMonth(1);
+    } else {
+      setMonth(month + 1);
+    }
+  };
+
+  const handleCurrentMonth = () => {
+    setYear(today.getFullYear());
+    setMonth(today.getMonth() + 1);
+  };
+
+  const items = data?.events || data?.calendar || data?.items || [];
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto" }}>
-      <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
-        <Calendar size={18} color="var(--brand)" />
-        <span>当前持仓标的财报披露日历与 EPS 业绩追踪</span>
-      </div>
+    <ErrorBoundary fallbackTitle="持仓财报日历渲染异常">
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto" }}>
+        {/* Header & Month Navigation */}
+        <div
+          className="card-panel"
+          style={{
+            padding: "10px 14px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "10px",
+          }}
+        >
+          <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+            <Calendar size={18} color="var(--brand)" />
+            <span>持仓标的财报披露日历 ({year} 年 {month} 月)</span>
+          </div>
 
-      <div className="table-container">
-        <table className="finance-table">
-          <thead>
-            <tr>
-              <th>标的代码</th>
-              <th>财报公布日期</th>
-              <th>发布时段</th>
-              <th style={{ textAlign: "right" }}>当前持有股数</th>
-              <th style={{ textAlign: "right" }}>持仓市值 (USD)</th>
-              <th style={{ textAlign: "right" }}>EPS 预期值</th>
-              <th style={{ textAlign: "right" }}>EPS 实际值</th>
-              <th style={{ textAlign: "right" }}>业绩意外幅度</th>
-              <th>倒计时 / 状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={9} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
-                  近 90 天内暂无财报公布计划或数据已全部归档
-                </td>
-              </tr>
-            ) : (
-              items.map((r: any, idx: number) => {
-                const surprise = r.surprise ? Number(r.surprise) : null;
-                const isSurprisePositive = surprise != null && surprise > 0;
-                return (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 700, color: "var(--text-heading)" }}>{r.symbol}</td>
-                    <td>{r.date || r.earnings_date}</td>
-                    <td>
-                      <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", background: "var(--hover-bg)" }}>
-                        {r.time === "bmo" ? "开盘前 (BMO)" : r.time === "amc" ? "盘后 (AMC)" : r.time || "盘后"}
-                      </span>
-                    </td>
-                    <td className="font-mono" style={{ textAlign: "right" }}>
-                      {Number(r.shares || r.quantity || 0).toLocaleString()}
-                    </td>
-                    <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                      ${Number(r.market_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                    <td className="font-mono" style={{ textAlign: "right" }}>
-                      {r.eps_estimate != null ? `$${r.eps_estimate}` : "—"}
-                    </td>
-                    <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                      {r.eps_actual != null ? `$${r.eps_actual}` : "—"}
-                    </td>
-                    <td
-                      className={`font-mono ${isSurprisePositive ? "profit-text" : surprise != null ? "loss-text" : ""}`}
-                      style={{ textAlign: "right" }}
-                    >
-                      {surprise != null ? `${surprise > 0 ? "+" : ""}${surprise.toFixed(2)}%` : "—"}
-                    </td>
-                    <td>
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          padding: "2px 6px",
-                          borderRadius: "4px",
-                          background: r.days_until <= 3 ? "var(--error-bg)" : "var(--table-alternate)",
-                          color: r.days_until <= 3 ? "var(--loss-color)" : "var(--text-muted)",
-                        }}
-                      >
-                        {r.status || (r.days_until != null ? `${r.days_until} 天后` : "已公布")}
-                      </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <button onClick={handlePrevMonth} className="btn" title="上个月">
+              <ChevronLeft size={14} />
+              <span>上月</span>
+            </button>
+            <button onClick={handleCurrentMonth} className="btn" title="返回本月">
+              本月
+            </button>
+            <button onClick={handleNextMonth} className="btn" title="下个月">
+              <span>下月</span>
+              <ChevronRight size={14} />
+            </button>
+            <button onClick={() => fetchCalendar(year, month)} className="btn btn-quiet" title="刷新">
+              <RefreshCw size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* Calendar / Events Table */}
+        <div className="table-container">
+          {loading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "300px", color: "var(--brand)" }}>
+              正在查询 {year} 年 {month} 月持仓标的财报披露记录...
+            </div>
+          ) : (
+            <table className="finance-table">
+              <thead>
+                <tr>
+                  <th>标的代码</th>
+                  <th>公司名称</th>
+                  <th>披露日期</th>
+                  <th>发布时段</th>
+                  <th style={{ textAlign: "right" }}>EPS 预期值</th>
+                  <th style={{ textAlign: "right" }}>EPS 实际值</th>
+                  <th>披露状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: "center", padding: "50px", color: "var(--text-muted)" }}>
+                      {year} 年 {month} 月暂无持仓标的财报披露记录（真实行情缓存数据）
                     </td>
                   </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                ) : (
+                  items.map((r: any, idx: number) => {
+                    return (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 700, color: "var(--text-heading)" }}>{r.symbol}</td>
+                        <td>{r.company_name || r.name || "—"}</td>
+                        <td>{r.date || "—"}</td>
+                        <td>
+                          <span style={{ fontSize: "11px", padding: "2px 6px", borderRadius: "4px", background: "var(--hover-bg)" }}>
+                            {r.market_session || r.time || "盘后"}
+                          </span>
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.estimated_eps != null ? `$${Number(r.estimated_eps).toFixed(2)}` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                          {r.actual_eps != null ? `$${Number(r.actual_eps).toFixed(2)}` : "—"}
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              padding: "2px 6px",
+                              borderRadius: "4px",
+                              background: r.status === "已公布" ? "var(--hover-bg)" : "var(--table-alternate)",
+                              color: r.status === "已公布" ? "var(--profit-color)" : "var(--text-muted)",
+                            }}
+                          >
+                            {r.status || "待发布"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
-    </div>
+    </ErrorBoundary>
   );
 };
