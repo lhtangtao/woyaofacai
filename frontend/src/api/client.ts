@@ -1,5 +1,43 @@
 import { SystemBootstrap, TradeItem, WatchlistItem, ReportDetailData } from "../types";
 
+export interface TodayFilters {
+  person_id?: number | null;
+  as_of?: string;
+  ticker?: string;
+  channel?: string;
+  search?: string;
+  live?: string;
+  sort_col?: string;
+  sort_dir?: string;
+}
+
+export const todayQuery = (filters: TodayFilters) => {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value != null && value !== "") query.set(key, String(value));
+  });
+  return query.toString();
+};
+
+type Amount = string | null;
+export interface PnlPoint { time: string; pnl: Amount; session: string | null }
+export interface TodaySnapshot {
+  status: string; name: string; columns: string[]; rows: (string | number | null)[][];
+  items: Record<string, any>[]; total_rows: number; note: string;
+  summary: { pnl: Amount; rate: Amount; up: number; down: number; flat: number; unknown: number; cumulative: Amount };
+  channels: { channel: string; pnl: Amount; asset: Amount }[];
+  selected_channels: { channel: string; pnl: Amount; asset: Amount }[];
+  asset_total: Amount;
+  available_channels: string[]; tickers: string[];
+  quote: { status: string; session: string; fresh: number; count: number; refreshed_at: string; enabled: boolean;
+    latest_at: string | null; reference_dates: string[] };
+  source: { path: string; identity: string; selected_day: string; profit_day: string | null; person_ids: number[] | null };
+  curve: { day: string; target_day: string; fallback: boolean; points: PnlPoint[];
+    interval_minutes: number; historical: boolean; warning: string; pending: boolean; message: string;
+    boundaries: { time: string; label: string }[]; complete_points: number;
+    latest: PnlPoint | null; high: PnlPoint | null; low: PnlPoint | null };
+}
+
 function getCsrfToken(): string {
   const match = document.cookie.match(new RegExp("(^| )money_csrf_token=([^;]+)"));
   return match ? match[2] : "";
@@ -64,11 +102,8 @@ export const api = {
   },
 
   // Holdings & Today Intraday PnL
-  holdingsToday: (personId?: number | null) => {
-    const query = new URLSearchParams();
-    if (personId != null) query.set("person_id", String(personId));
-    return requestApi(`/api/v1/holdings/today?${query.toString()}`);
-  },
+  holdingsToday: (filters: TodayFilters = {}, signal?: AbortSignal) =>
+    requestApi<TodaySnapshot>(`/api/v1/holdings/today?${todayQuery(filters)}`, { signal }),
 
   // Trades & Provenance
   trades: (params: {

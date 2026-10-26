@@ -27,6 +27,7 @@ import math
 from pathlib import Path
 import sqlite3
 import tempfile
+from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, Response, g, jsonify, request
@@ -101,8 +102,9 @@ def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD", pe
     target_person_ids = None
 
     if ctx and not ctx.is_lan_viewer() and not ctx.is_admin():
-        if ctx.allowed_person_ids is not None:
-            target_person_ids = tuple(ctx.allowed_person_ids)
+        # Empty/unbound person permissions must never become the engine's
+        # falsy "all people" scope.
+        target_person_ids = tuple(ctx.allowed_person_ids or (-99999,))
 
     if person_id is not None:
         if target_person_ids is not None:
@@ -318,47 +320,56 @@ def api_portfolio_overview():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+_today_service = None
+_today_service_lock = RLock()
+
+
+class TodayQueryError(ValueError):
+    pass
+
+
+def get_today_service():
+    global _today_service
+    from portfolio.services.web_today import WebTodayService
+    with _today_service_lock:
+        if _today_service is None:
+            _today_service = WebTodayService(DATABASE_PATH)
+        return _today_service
+
+
+def today_payload(*, include_curve=True):
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    try:
+        selected = date.fromisoformat(request.args.get("as_of") or today.isoformat())
+    except ValueError as exc:
+        raise TodayQueryError("日期格式无效。") from exc
+    if selected > today:
+        raise TodayQueryError("截止日期不能晚于今天。")
+    scope = get_user_query_scope(as_of=selected, person_id=request.args.get("person_id", type=int))
+    # Whole-security search preserves all cost history, exactly as native global search.
+    scope = replace(scope, search=(request.args.get("search") or "").strip())
+    return get_today_service().snapshot(
+        scope, ticker=(request.args.get("ticker") or "").strip(),
+        channel=request.args.get("channel") or None,
+        enabled=request.args.get("live", "1") != "0",
+        sort_col=request.args.get("sort_col"),
+        descending=request.args.get("sort_dir", "desc") == "desc",
+        include_curve=include_curve,
+    )
+
+
 @api_v1.route("/holdings/today", methods=["GET"])
 @require_capability(CAP_VIEW_ASSETS)
 def api_holdings_today():
-    """Retrieve today's holdings with real-time intraday PnL and quote status."""
+    """One immutable native-equivalent snapshot: cards, curves, channels and rows."""
     try:
-        svc = get_analytics_service()
-        person_id = request.args.get("person_id", type=int)
-        scope = get_user_query_scope(person_id=person_id)
-        res = svc.calculate(scope)
-
-        today_rep = res.reports.get("今日盈亏") or res.reports.get("当前持仓")
-        columns = list(today_rep.columns) if today_rep else []
-        items = []
-
-        if today_rep:
-            for r in today_rep.rows:
-                row_dict = {}
-                for idx, col in enumerate(columns):
-                    v = r.values[idx] if idx < len(r.values) else None
-                    row_dict[col] = serialize_val(v)
-                row_dict["_meta"] = {k: serialize_val(v) for k, v in r.metadata.items()}
-                items.append(row_dict)
-
-        totals_dict = {}
-        if hasattr(today_rep, "totals") and getattr(today_rep, "totals"):
-            for idx, col in enumerate(columns):
-                t_val = today_rep.totals.values[idx] if idx < len(today_rep.totals.values) else None
-                if t_val is not None:
-                    totals_dict[col] = serialize_val(t_val)
-
-        return jsonify({
-            "status": "ok",
-            "columns": columns,
-            "items": items,
-            "totals": totals_dict,
-            "session": getattr(today_rep, "session", "盘中"),
-            "snapshot_id": datetime.now().isoformat(),
-        })
-    except Exception as e:
-        logger.exception("Holdings today error")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify(today_payload())
+    except TodayQueryError:
+        return jsonify(status="error", message="日期或筛选参数无效，请检查后重试。"), 400
+    except Exception:
+        logger.error("Today's P&L snapshot failed", exc_info=False)
+        return jsonify(status="error", message="今日盈亏读取失败，请检查账本及行情缓存后重试；已有数据保留。"), 503
 
 
 # ------------------------------------------------------------------------------
@@ -403,6 +414,8 @@ def api_reports_list():
 @require_capability(CAP_VIEW_ASSETS)
 def api_reports_detail(report_name: str):
     """Deliver full column metadata, rows, totals and pagination for any requested report."""
+    if report_name in ("今日盈亏", "当日盈亏"):
+        return api_holdings_today()
     try:
         svc = get_analytics_service()
         person_id = request.args.get("person_id", type=int)
@@ -410,12 +423,7 @@ def api_reports_detail(report_name: str):
         res = svc.calculate(scope)
 
         report = None
-        if report_name in ("今日盈亏", "当日盈亏"):
-            from portfolio.engine.today_holdings import today_holdings
-            holdings_rep = res.reports.get("当前持仓")
-            if holdings_rep:
-                report = today_holdings(res, holdings_rep, None)
-        elif report_name == "股票归属":
+        if report_name == "股票归属":
             report = res.reports.get("人员划转") or res.reports.get("股票汇总")
         elif report_name == "券商资产":
             report = res.reports.get("渠道汇总") or res.reports.get("账户资产")
@@ -1666,6 +1674,21 @@ def api_system_reconcile():
 @require_capability(CAP_VIEW_ASSETS)
 def api_export_report_csv(report_name: str):
     """Export any report to standard CSV."""
+    if report_name in ("今日盈亏", "当日盈亏"):
+        try:
+            payload = today_payload(include_curve=False)
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(payload["columns"])
+            writer.writerows(payload["rows"])
+            from urllib.parse import quote
+            return Response(output.getvalue().encode("utf-8-sig"),
+                            mimetype="text/csv; charset=utf-8",
+                            headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote("今日盈亏.csv")})
+        except TodayQueryError:
+            return jsonify(status="error", message="日期或筛选参数无效。"), 400
+        except Exception:
+            return jsonify(status="error", message="今日盈亏导出失败，请重试。"), 503
     try:
         svc = get_analytics_service()
         person_id = request.args.get("person_id", type=int)
@@ -1673,12 +1696,7 @@ def api_export_report_csv(report_name: str):
         res = svc.calculate(scope)
 
         report = None
-        if report_name in ("今日盈亏", "当日盈亏"):
-            from portfolio.engine.today_holdings import today_holdings
-            holdings_rep = res.reports.get("当前持仓")
-            if holdings_rep:
-                report = today_holdings(res, holdings_rep, None)
-        elif report_name == "股票归属":
+        if report_name == "股票归属":
             report = res.reports.get("人员划转") or res.reports.get("股票汇总")
         elif report_name == "券商资产":
             report = res.reports.get("渠道汇总") or res.reports.get("账户资产")

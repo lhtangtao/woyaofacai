@@ -10,6 +10,11 @@ from portfolio.domain.models import Ledger, from_e8
 from portfolio.domain.trade_time import event_order_time
 
 
+def instrument_catalog(connection):
+    """Market identity for quote adapters, without loading personal ledger rows."""
+    return {r['id']: dict(r) for r in connection.execute('SELECT id,symbol,market FROM instruments')}
+
+
 def load_snapshot(connection, scope, *, cancel=None, with_prices=True):
     # Date-range/search filters must never remove the opening history of a position.
     full_scope = replace(scope, start_date=None, search="", audit=False)

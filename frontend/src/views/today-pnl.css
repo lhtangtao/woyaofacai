@@ -1,0 +1,24 @@
+.today-pnl { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding-bottom: 24px; }
+.today-pnl > * { flex-shrink: 0; }
+.today-toolbar, .today-quote { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px; }
+.today-toolbar label, .today-quote label { display: flex; gap: 6px; align-items: center; }
+.today-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.today-card { min-height: 72px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.today-card strong { font-size: 19px; font-variant-numeric: tabular-nums; }
+.today-pnl h3 { font-size: 15px; color: var(--text-heading); margin-bottom: 8px; }
+.today-pnl p { font-size: 12px; line-height: 1.65; color: var(--text-muted); white-space: pre-line; }
+.today-curve, .today-channels { padding: 16px; }
+.today-warning { color: var(--warning-color) !important; background: var(--warning-bg); padding: 10px; border-radius: 8px; white-space: pre-line; }
+.today-channels { display: grid; grid-template-columns: 58% 42%; }
+.today-channels > div { min-width: 0; }
+.today-channel { width: 100%; display: flex; justify-content: space-between; gap: 12px; padding: 15px; margin: 8px 0; border: 1px solid var(--border-color); border-radius: 8px; background: var(--hover-bg); color: var(--text-main); cursor: pointer; }
+.today-channel.selected { background: var(--brand-selected); border-color: var(--brand); }
+.today-asset-track { flex: 1; min-width: 16px; height: 20px; background: var(--table-alternate); border-radius: 3px; }
+.today-asset-track > span { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
+.today-channel.selected .today-asset-track > span { background: var(--text-subtle); }
+.today-table { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 12px; }
+.today-table th { cursor: pointer; }
+.today-table .num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+.today-table th:first-child, .today-table td:first-child { position: sticky; left: 0; background: var(--bg-panel); z-index: 1; }
+.today-source { overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .today-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .today-channels { grid-template-columns: 1fr; } }

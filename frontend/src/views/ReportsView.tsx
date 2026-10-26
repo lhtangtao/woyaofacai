@@ -3,6 +3,7 @@ import { Download, Search, Table, AlertCircle, ChevronLeft, ChevronRight, ArrowU
 import { api } from "../api/client";
 import { ReportDetailData, ReportMeta } from "../types";
 import { ErrorBoundary } from "../components/ErrorBoundary";
+import { TodayPnlView } from "./TodayPnlView";
 
 interface ReportsViewProps {
   initialReportName?: string;
@@ -35,6 +36,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   }, [initialReportName]);
 
   const loadReport = (targetPage = page) => {
+    if (currentReport === "今日盈亏") return;
     setLoading(true);
     setError(null);
     api
@@ -98,6 +100,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const columns = reportData?.columns || [];
   const totalRows = reportData?.total_rows ?? reportData?.total ?? rows.length;
   const totalPages = reportData?.total_pages || Math.max(1, Math.ceil(totalRows / pageSize));
+
+  if (currentReport === "今日盈亏") return (
+    <ErrorBoundary fallbackTitle="今日盈亏渲染异常"><TodayPnlView personId={personId} /></ErrorBoundary>
+  );
 
   return (
     <ErrorBoundary fallbackTitle={`报表【${currentReport}】渲染异常`}>
