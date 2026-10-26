@@ -1,5 +1,28 @@
 # 变更日志
 
+## 2026-10-26 17:00 · 安全漏洞专项修复：安全测试100%隔离真实安全数据库与Bark推送密钥防泄露加固 [Codex]
+
+- 修改者：Codex（代码修改）针对安全测试修改真实账号密码及 Bark 推送链接泄露两项严重安全隐患进行彻底重构与自动化防护，新增 AC-41 至 AC-46 验收规范，实现测试零污染与敏感凭据全流程鉴权隔离。
+- 漏洞一根因与修复方案（安全测试修改真实用户密码）：
+  - **根因**：原测试套件 `tests/test_prd_v2_security.py` 在 `setUpClass` 中直接针对宿主目录 `~/Library/Application Support/MoneyPortfolio/security.sqlite3` 调用 `init_security_db()` 和 `set_user_password()`，导致每次运行测试都会覆盖真实用户的密码哈希；且在 `tearDownClass` 中硬编码将「拉科」密码重置为 `"lake123"`，若真实用户改过密码或增加了其他用户（如「巴小」），测试会导致真实密码被篡改。
+  - **修复实现**：
+    1. 在 `credentials.py` 中引入 `set_security_db_path()`、`reset_security_db_path()` 及 `isolated_security_db()` 上下文管理器，并在 `get_security_db_path()` 中优先读取内存动态覆盖及环境变量 `MONEY_SECURITY_DB_PATH`；
+    2. 测试套件加载前自动创建独立的临时目录与测试 SQLite 数据库，全量初始化、哈希计算、会话分配、审计日志均发生在该隔离测试库中；
+    3. 彻底删除 `tearDownClass` 中将任何真实账号重置为固定密码的危险逻辑；
+    4. 增加自动化回归测试 `test_ac_41_real_security_database_completely_untouched`，通过基线快照与 SHA-256 校验，严格确保测试运行全流程（无论成功或异常退出）真实安全数据库 100% 零修改。
+- 漏洞二根因与修复方案（Bark 推送链接泄露给未授权访客）：
+  - **根因**：Web 路由 `index()` 在渲染 `mobile.html` 时直接将 `notification_service.bark_url` 注入模板并在 `<input id="barkInputUrl" value="{{ bark_url }}">` 中明文展示。由于物理局域网允许免登录只读访问，任何局域网访客、公网未登录用户或普通用户查看 HTML 源码即可获取管理员的完整 Bark 推送 Key。
+  - **修复实现**：
+    1. **HTML 模板彻底脱敏**：从 `index()` 传参及 `mobile.html` 模板中彻底移除 `bark_url`，HTML 页面源码及 DOM 中绝不包含任何 Bark URL 或敏感 Key；
+    2. **专用鉴权接口**：新增 `GET /api/bark/config`，受细粒度权限 `CAP_MANAGE_BARK`（仅管理员具备）保护。局域网只读访客、未登录公网访客及普通用户（拉科、巴小）均被严格拦截（403/401）；
+    3. **前端按权限差异化呈现**：管理员登录后前端异步调用 `GET /api/bark/config` 动态加载回显；普通用户和匿名访客端不渲染输入框，仅展示「已配置 / 未配置」状态；
+    4. **保存与测试接口加固**：`POST /api/bark/config` 保存成功响应中剔除原始 URL 回显；`notification_service.py` 新增 `mask_bark_url` 与 `sanitize_log_message`，在日志与异常中自动将 Key 脱敏为掩码（如 `https://api.day.app/N3****jd/`），杜绝异常日志泄漏凭据；
+    5. **业务功能零破坏**：完整保留盘中行情监控预警触发推送、预警测试发送及配置保存功能。
+- 自动化验证结果：
+  - 执行 `PYTHONPATH=src .venv/bin/python tests/test_prd_v2_security.py`，全套 32 项自动化测试（AC-01 ~ AC-46）全部通过；
+  - 生产安全数据库 `security.sqlite3` 哈希在测试前后完全一致（`13572a1c80f6302afcb3ed359739c9f1f1e4a6e0e9ad531c7bfc1a400a39d5af`），实现字节级零修改；
+  - 财务核心数据库 `money.sqlite3` 与 `交易流水.xlsx` 资产核算完全零变动。
+
 ## 2026-10-26 13:16 · 局域网免登录与公网/Tailscale账号密码认证体系全量改造上线（完整达成PRD v2.0全部40项验收条件） [Codex]
 
 - 修改者：Codex（代码修改）完成 Money Portfolio 局域网免登录与公网/Tailscale 账号密码认证架构全面重构，覆盖 PRD v2.0 规定的全部 40 项验收条件（AC-01 ~ AC-40）与 9 大安全漏洞（SEC-01 ~ SEC-09）治理。

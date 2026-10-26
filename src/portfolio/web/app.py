@@ -474,7 +474,7 @@ def index():
         tailscale_ip=net["tailscale_ip"],
         all_lan_ips=net["all_lan_ips"],
         port=net["port"],
-        bark_url=notification_service.bark_url or "",
+        bark_configured=bool(notification_service.bark_url),
         current_user=user_data,
         is_remote_login=ctx.is_unauthenticated() if ctx else False,
         is_lan_viewer=ctx.is_lan_viewer() if ctx else False,
@@ -1544,6 +1544,17 @@ def api_ai_analyze_stock():
 # ------------------------------------------------------------------------------
 
 
+@app.route("/api/bark/config", methods=["GET"])
+@require_capability(CAP_MANAGE_BARK)
+def api_get_bark_config():
+    """Retrieve Bark configuration (Admin only). Sensitive URL is never exposed to non-admins."""
+    return jsonify({
+        "status": "ok",
+        "configured": bool(notification_service.bark_url),
+        "url": notification_service.bark_url or "",
+    })
+
+
 @app.route("/api/bark/test", methods=["POST"])
 @require_capability(CAP_MANAGE_BARK)
 def api_bark_test():
@@ -1565,7 +1576,8 @@ def api_bark_test():
         record_audit_event("BARK_TEST", g.auth_context.username, g.auth_context.access_mode, request.remote_addr, "PUSH_SENT")
         return jsonify({"status": "ok", "message": "测试推送已发出，请查看 iPhone 锁屏通知！"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.warning(f"Bark test notification failed: {e}")
+        return jsonify({"status": "error", "message": "测试推送发送失败，请检查网络或配置"}), 500
 
 
 @app.route("/api/bark/config", methods=["POST"])
@@ -1594,9 +1606,10 @@ def api_bark_config():
 
         notification_service.set_bark_url(url)
         record_audit_event("BARK_CONFIG", g.auth_context.username, g.auth_context.access_mode, request.remote_addr, "CONFIG_UPDATED")
-        return jsonify({"status": "ok", "message": "Bark 配置已成功保存！", "url": url})
+        return jsonify({"status": "ok", "message": "Bark 配置已成功保存！", "configured": bool(url)})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.error(f"Failed to update Bark config: {e}")
+        return jsonify({"status": "error", "message": "保存 Bark 配置失败，请检查服务器日志"}), 500
 
 
 @app.route("/api/network/info", methods=["GET"])

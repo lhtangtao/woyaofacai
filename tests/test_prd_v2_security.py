@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive Automated Test Suite for Money Portfolio Security Architecture PRD v2.0
-Validates Acceptance Criteria AC-01 through AC-40.
+Validates Acceptance Criteria AC-01 through AC-46.
 """
 
 import os
@@ -10,6 +10,8 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import hashlib
+from unittest.mock import patch
 from pathlib import Path
 from datetime import date
 
@@ -17,13 +19,16 @@ from datetime import date
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from portfolio.web.app import app, CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
-from portfolio.web.security.network_access import (
-    classify_network_access,
-    get_active_physical_lan_networks,
-    _classify_ip_address,
-)
+# Create temporary isolated database environment BEFORE any portfolio modules load
+_TEST_TEMP_DIR = tempfile.TemporaryDirectory()
+_TEST_DB_PATH = Path(_TEST_TEMP_DIR.name) / "test_security.sqlite3"
+os.environ["MONEY_SECURITY_DB_PATH"] = str(_TEST_DB_PATH)
+
 from portfolio.web.security.credentials import (
+    get_security_db_path,
+    get_default_security_db_path,
+    set_security_db_path,
+    reset_security_db_path,
     init_security_db,
     hash_password,
     verify_password,
@@ -33,7 +38,21 @@ from portfolio.web.security.credentials import (
     toggle_user_enabled,
     record_login_attempt,
     is_login_rate_limited,
-    get_security_db_path,
+)
+
+# Explicitly ensure custom path is active in memory
+set_security_db_path(_TEST_DB_PATH)
+
+from portfolio.services.notification_service import (
+    notification_service,
+    mask_bark_url,
+    sanitize_log_message,
+)
+from portfolio.web.app import app, CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
+from portfolio.web.security.network_access import (
+    classify_network_access,
+    get_active_physical_lan_networks,
+    _classify_ip_address,
 )
 from portfolio.web.security.sessions import (
     create_session,
@@ -55,21 +74,66 @@ from portfolio.web.security.csrf import generate_csrf_token
 
 
 class TestPRDv2SecurityArchitecture(unittest.TestCase):
-    """Rigorous verification suite for all 40 Acceptance Criteria."""
+    """Rigorous verification suite for all Acceptance Criteria (including AC-41 to AC-46)."""
 
     @classmethod
     def setUpClass(cls):
         app.testing = True
         cls.client = app.test_client()
+
+        # 1. Snapshot real production database baseline to verify zero modification
+        cls._real_db_path = get_default_security_db_path()
+        cls._real_db_exists = cls._real_db_path.is_file()
+        if cls._real_db_exists:
+            cls._real_db_bytes_before = cls._real_db_path.read_bytes()
+            cls._real_db_sha256_before = hashlib.sha256(cls._real_db_bytes_before).hexdigest()
+        else:
+            cls._real_db_bytes_before = None
+            cls._real_db_sha256_before = None
+
+        # 2. Strict verification: active db MUST be our temporary test db, NEVER the real db!
+        active_db = get_security_db_path().resolve()
+        if cls._real_db_exists and active_db == cls._real_db_path.resolve():
+            raise RuntimeError(f"FATAL SECURITY VIOLATION: Test suite attempting to run against production DB: {active_db}")
+
+        # 3. Initialize schema and isolated test accounts inside temporary test DB
         init_security_db()
-        # Set up known passwords for testing
         set_user_password("admin", "AdminValidPass2026!")
         set_user_password("拉科", "LakeValidPass2026!")
+        try:
+            create_user("巴小", "BaxiaoValidPass2026!", role="user", person_name="巴小")
+        except Exception:
+            set_user_password("巴小", "BaxiaoValidPass2026!")
+
+        # 4. Save notification service bark_url original state
+        cls._original_bark_url = notification_service.bark_url
 
     @classmethod
     def tearDownClass(cls):
-        # Restore user passwords so testing doesn't break production accounts
-        set_user_password("拉科", "lake123")
+        # Restore in-memory notification service state
+        notification_service.set_bark_url(cls._original_bark_url)
+
+        # 1. Reset security db path back to default production path
+        reset_security_db_path()
+        if "MONEY_SECURITY_DB_PATH" in os.environ:
+            del os.environ["MONEY_SECURITY_DB_PATH"]
+
+        # 2. Clean up temporary directory and database
+        try:
+            _TEST_TEMP_DIR.cleanup()
+        except Exception:
+            pass
+
+        # 3. Strict verification: Real production database MUST be completely untouched!
+        if cls._real_db_exists:
+            current_bytes = cls._real_db_path.read_bytes()
+            current_sha256 = hashlib.sha256(current_bytes).hexdigest()
+            if current_sha256 != cls._real_db_sha256_before:
+                raise AssertionError(
+                    f"CRITICAL: Real security database was modified during testing!\n"
+                    f"Expected SHA256: {cls._real_db_sha256_before}\n"
+                    f"Actual SHA256:   {current_sha256}"
+                )
 
     def setUp(self):
         self.client = app.test_client()
@@ -506,6 +570,202 @@ class TestPRDv2SecurityArchitecture(unittest.TestCase):
                     (401, 403),
                     f"Route {test_url} must deny unauthenticated remote access, got {res.status_code}",
                 )
+
+    # --------------------------------------------------------------------------
+    # 7. Test Isolation & Bark Credential Protection (AC-41 through AC-46)
+    # --------------------------------------------------------------------------
+
+    def test_ac_41_real_security_database_completely_untouched(self):
+        """AC-41: Automated verification that real user security.sqlite3 is 100% isolated and untouched."""
+        # 1. Assert active database is temporary test DB, NOT production path
+        active_db = get_security_db_path().resolve()
+        if self._real_db_exists:
+            self.assertNotEqual(
+                str(active_db),
+                str(self._real_db_path.resolve()),
+                "Active security DB path must NOT point to production security database!",
+            )
+
+        # 2. Assert real database file byte hash is unchanged
+        if self._real_db_exists:
+            current_bytes = self._real_db_path.read_bytes()
+            current_sha = hashlib.sha256(current_bytes).hexdigest()
+            self.assertEqual(
+                current_sha,
+                self._real_db_sha256_before,
+                "Real security.sqlite3 hash mismatch! Production database was touched.",
+            )
+
+        # 3. Perform write operations in test environment and re-verify real DB untouched
+        set_user_password("admin", "TemporaryIsolatedPass2026!")
+        if self._real_db_exists:
+            current_bytes = self._real_db_path.read_bytes()
+            current_sha = hashlib.sha256(current_bytes).hexdigest()
+            self.assertEqual(
+                current_sha,
+                self._real_db_sha256_before,
+                "Real security.sqlite3 modified after set_user_password!",
+            )
+        # Restore admin test password
+        set_user_password("admin", "AdminValidPass2026!")
+
+    def test_ac_42_bark_url_not_in_html_for_anonymous_or_unauthenticated(self):
+        """AC-42: Sensitive Bark URL is never injected into HTML for anonymous LAN or WAN visitors."""
+        test_secret_url = "https://api.day.app/SECRET_KEY_lan_test_7788/"
+        notification_service.set_bark_url(test_secret_url)
+
+        # Anonymous physical LAN visitor
+        lan_nets = get_active_physical_lan_networks()
+        lan_ip = str(list(lan_nets[0].hosts())[10]) if lan_nets else "192.168.1.155"
+
+        res_lan = self.client.get("/", environ_overrides={"REMOTE_ADDR": lan_ip})
+        self.assertEqual(res_lan.status_code, 200)
+        html_lan = res_lan.data.decode("utf-8")
+        self.assertNotIn("SECRET_KEY_lan_test_7788", html_lan)
+        self.assertNotIn("https://api.day.app", html_lan)
+        self.assertNotIn('id="barkInputUrl"', html_lan)
+        self.assertIn("已配置", html_lan)
+
+        # Unauthenticated remote WAN visitor (e.g. 198.51.100.99)
+        res_wan = self.client.get("/", environ_overrides={"REMOTE_ADDR": "198.51.100.99"})
+        self.assertEqual(res_wan.status_code, 200)
+        html_wan = res_wan.data.decode("utf-8")
+        self.assertNotIn("SECRET_KEY_lan_test_7788", html_wan)
+        self.assertNotIn("https://api.day.app", html_wan)
+        self.assertNotIn('id="barkInputUrl"', html_wan)
+
+    def test_ac_43_bark_url_not_accessible_to_regular_users(self):
+        """AC-43: Regular users (e.g. 拉科, 巴小) cannot view, configure, or test Bark notifications."""
+        test_secret_url = "https://api.day.app/SECRET_KEY_lake_forbidden_9999/"
+        notification_service.set_bark_url(test_secret_url)
+        wan_ip = "198.51.100.42"
+
+        # Login as regular user 拉科
+        res_login = self.client.post(
+            "/api/auth/login",
+            json={"username": "拉科", "password": "LakeValidPass2026!"},
+            environ_overrides={"REMOTE_ADDR": wan_ip},
+        )
+        self.assertEqual(res_login.status_code, 200)
+
+        # 1. HTML view does NOT contain Bark secret URL or input
+        res_page = self.client.get("/", environ_overrides={"REMOTE_ADDR": wan_ip})
+        html = res_page.data.decode("utf-8")
+        self.assertNotIn("SECRET_KEY_lake_forbidden_9999", html)
+        self.assertNotIn('id="barkInputUrl"', html)
+
+        # 2. GET /api/bark/config is 403 Forbidden
+        res_get = self.client.get("/api/bark/config", environ_overrides={"REMOTE_ADDR": wan_ip})
+        self.assertEqual(res_get.status_code, 403)
+        self.assertNotIn("SECRET_KEY_lake_forbidden_9999", res_get.data.decode("utf-8"))
+
+        # 3. POST /api/bark/config is 403 Forbidden
+        res_post = self.post_with_csrf(
+            "/api/bark/config",
+            json_data={"url": "https://api.day.app/AttackerKey/"},
+            environ_overrides={"REMOTE_ADDR": wan_ip},
+        )
+        self.assertEqual(res_post.status_code, 403)
+
+        # 4. POST /api/bark/test is 403 Forbidden
+        res_test = self.post_with_csrf(
+            "/api/bark/test",
+            json_data={},
+            environ_overrides={"REMOTE_ADDR": wan_ip},
+        )
+        self.assertEqual(res_test.status_code, 403)
+
+    def test_ac_44_bark_config_endpoints_protected_for_unauthenticated_and_lan(self):
+        """AC-44: Bark configuration endpoints are denied for unauthenticated remote WAN and anonymous LAN."""
+        lan_nets = get_active_physical_lan_networks()
+        lan_ip = str(list(lan_nets[0].hosts())[10]) if lan_nets else "192.168.1.88"
+
+        # Anonymous LAN visitor (physical LAN subnet -> LAN_VIEWER without CAP_MANAGE_BARK -> 403 Forbidden)
+        res_lan_get = self.client.get("/api/bark/config", environ_overrides={"REMOTE_ADDR": lan_ip})
+        self.assertEqual(res_lan_get.status_code, 403)
+
+        res_lan_post = self.post_with_csrf(
+            "/api/bark/config",
+            json_data={"url": "https://api.day.app/LanTry/"},
+            environ_overrides={"REMOTE_ADDR": lan_ip},
+        )
+        self.assertEqual(res_lan_post.status_code, 403)
+
+        # Unauthenticated remote WAN visitor (198.51.100.99 -> 401 Unauthorized)
+        res_wan_get = self.client.get("/api/bark/config", environ_overrides={"REMOTE_ADDR": "198.51.100.99"})
+        self.assertEqual(res_wan_get.status_code, 401)
+
+        res_wan_post = self.post_with_csrf(
+            "/api/bark/config",
+            json_data={"url": "https://api.day.app/WanTry/"},
+            environ_overrides={"REMOTE_ADDR": "198.51.100.99"},
+        )
+        self.assertEqual(res_wan_post.status_code, 401)
+
+    def test_ac_45_admin_bark_management_and_response_sanitization(self):
+        """AC-45: Admin can view and update Bark configuration; responses omit raw sensitive URLs."""
+        test_initial_url = "https://api.day.app/SECRET_KEY_admin_ok_1122/"
+        notification_service.set_bark_url(test_initial_url)
+        wan_ip = "198.51.100.42"
+
+        # Login as admin
+        res_login = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "AdminValidPass2026!"},
+            environ_overrides={"REMOTE_ADDR": wan_ip},
+        )
+        self.assertEqual(res_login.status_code, 200)
+
+        # 1. Admin GET /api/bark/config succeeds
+        res_get = self.client.get("/api/bark/config", environ_overrides={"REMOTE_ADDR": wan_ip})
+        self.assertEqual(res_get.status_code, 200)
+        data_get = res_get.get_json()
+        self.assertTrue(data_get["configured"])
+        self.assertEqual(data_get["url"], test_initial_url)
+
+        # 2. Admin POST /api/bark/config updates configuration safely
+        new_secret_url = "https://api.day.app/NEW_SECRET_KEY_admin_3344/"
+        with tempfile.NamedTemporaryFile(suffix=".json") as tmp_cfg:
+            with patch("portfolio.web.app.API_CONFIG_PATH", new=Path(tmp_cfg.name)):
+                res_post = self.post_with_csrf(
+                    "/api/bark/config",
+                    json_data={"url": new_secret_url},
+                    environ_overrides={"REMOTE_ADDR": wan_ip},
+                )
+                self.assertEqual(res_post.status_code, 200)
+                data_post = res_post.get_json()
+                self.assertEqual(data_post["status"], "ok")
+                self.assertTrue(data_post["configured"])
+                # Asserts response body omits raw secret URL reflection
+                self.assertNotIn("url", data_post)
+                self.assertEqual(notification_service.bark_url, new_secret_url)
+
+        # 3. Admin POST /api/bark/test sends push notification without errors
+        res_test = self.post_with_csrf(
+            "/api/bark/test",
+            json_data={"url": new_secret_url},
+            environ_overrides={"REMOTE_ADDR": wan_ip},
+        )
+        self.assertEqual(res_test.status_code, 200)
+        self.assertIn("ok", res_test.get_json()["status"])
+
+    def test_ac_46_mask_bark_url_and_log_sanitization(self):
+        """AC-46: Bark URL masking and log sanitization utility functions."""
+        # Masking standard Bark device key
+        masked = mask_bark_url("https://api.day.app/N3kJs94kSjd/")
+        self.assertIn("https://api.day.app/", masked)
+        self.assertNotIn("N3kJs94kSjd", masked)
+        self.assertTrue("****" in masked)
+
+        # Masking empty/none
+        self.assertEqual(mask_bark_url(""), "")
+        self.assertEqual(mask_bark_url(None), "")
+
+        # Log sanitization removes secret keys
+        raw_error = "ConnectionError: failed at https://api.day.app/SUPERSECRETKEY999/test timeout"
+        clean = sanitize_log_message(raw_error, "https://api.day.app/SUPERSECRETKEY999/")
+        self.assertNotIn("SUPERSECRETKEY999", clean)
+        self.assertIn("****", clean)
 
 
 if __name__ == "__main__":

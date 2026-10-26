@@ -8,13 +8,16 @@ import os
 from pathlib import Path
 import sqlite3
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
+_CUSTOM_SECURITY_DB_PATH: Optional[Path] = None
 
-def get_security_db_path() -> Path:
-    """Return persistent SQLite database path for security credentials."""
+
+def get_default_security_db_path() -> Path:
+    """Return default persistent SQLite database path for security credentials."""
     base_dir = Path.home() / "Library" / "Application Support" / "MoneyPortfolio"
     if not base_dir.exists():
         base_dir = Path.home() / ".money_portfolio"
@@ -23,8 +26,62 @@ def get_security_db_path() -> Path:
         os.chmod(base_dir, 0o700)
     except Exception:
         pass
-    db_path = base_dir / "security.sqlite3"
-    return db_path
+    return base_dir / "security.sqlite3"
+
+
+def set_security_db_path(path: Optional[Union[str, Path]]) -> None:
+    """Set custom security SQLite database path (used for tests or isolated environments)."""
+    global _CUSTOM_SECURITY_DB_PATH
+    if path is None:
+        _CUSTOM_SECURITY_DB_PATH = None
+    else:
+        _CUSTOM_SECURITY_DB_PATH = Path(path).resolve()
+
+
+def reset_security_db_path() -> None:
+    """Reset custom security SQLite database path back to default production path."""
+    global _CUSTOM_SECURITY_DB_PATH
+    _CUSTOM_SECURITY_DB_PATH = None
+
+
+def get_security_db_path() -> Path:
+    """Return active SQLite database path for security credentials."""
+    if _CUSTOM_SECURITY_DB_PATH is not None:
+        return _CUSTOM_SECURITY_DB_PATH
+    env_path = os.environ.get("MONEY_SECURITY_DB_PATH")
+    if env_path:
+        return Path(env_path).resolve()
+    return get_default_security_db_path()
+
+
+@contextmanager
+def isolated_security_db(custom_path: Optional[Union[str, Path]] = None):
+    """Context manager for temporary isolated security database."""
+    import tempfile
+    old_custom = _CUSTOM_SECURITY_DB_PATH
+    old_env = os.environ.get("MONEY_SECURITY_DB_PATH")
+    temp_dir_obj = None
+    try:
+        if custom_path is None:
+            temp_dir_obj = tempfile.TemporaryDirectory()
+            target_path = Path(temp_dir_obj.name) / "test_security.sqlite3"
+        else:
+            target_path = Path(custom_path).resolve()
+        set_security_db_path(target_path)
+        os.environ["MONEY_SECURITY_DB_PATH"] = str(target_path)
+        init_security_db()
+        yield target_path
+    finally:
+        set_security_db_path(old_custom)
+        if old_env is not None:
+            os.environ["MONEY_SECURITY_DB_PATH"] = old_env
+        elif "MONEY_SECURITY_DB_PATH" in os.environ:
+            del os.environ["MONEY_SECURITY_DB_PATH"]
+        if temp_dir_obj is not None:
+            try:
+                temp_dir_obj.cleanup()
+            except Exception:
+                pass
 
 
 def get_db_connection() -> sqlite3.Connection:

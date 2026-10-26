@@ -1578,18 +1578,31 @@
 
       <!-- Bark Push Notification Card -->
       <div class="guide-card">
-        <div class="guide-title">🔔 Bark 锁屏通知推送联动</div>
+        <div class="guide-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>🔔 Bark 锁屏通知推送联动</span>
+          <span id="barkStatusBadge" style="font-size:12px;color:{{ 'var(--profit)' if bark_configured else 'var(--text-sub)' }};font-weight:700;">
+            {{ '已配置' if bark_configured else '未配置' }}
+          </span>
+        </div>
         <p style="font-size:12px;color:var(--text-sub);margin-bottom:10px;">
           通过 iOS 神器 Bark，当股票触及价格预警、MA金叉死叉或异动突破时，即便手机息屏也能在第一时间收到锁屏横幅通知与震动提示！
         </p>
 
-        <label style="font-size:11px;color:var(--text-sub);">Bark 推送链接 (如 https://api.day.app/xxxx/):</label>
-        <input type="text" id="barkInputUrl" class="table-search" style="width:100%;margin:6px 0 10px 0;padding:10px;" value="{{ bark_url }}" placeholder="https://api.day.app/您的Key/">
+        {% if current_user and 'bark:manage' in current_user.get('capabilities', []) %}
+        <div id="barkAdminSection">
+          <label style="font-size:11px;color:var(--text-sub);">Bark 推送链接 (如 https://api.day.app/xxxx/):</label>
+          <input type="text" id="barkInputUrl" class="table-search" style="width:100%;margin:6px 0 10px 0;padding:10px;" value="" placeholder="https://api.day.app/您的Key/">
 
-        <div style="display:flex;gap:10px;">
-          <button class="page-btn" style="flex:1;padding:10px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-weight:700;" onclick="saveBarkConfig()">保存配置</button>
-          <button class="page-btn" style="flex:1;padding:10px;background:var(--card-sub);font-weight:700;" onclick="testBarkPush()">测试发送锁屏推送</button>
+          <div style="display:flex;gap:10px;">
+            <button class="page-btn" style="flex:1;padding:10px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-weight:700;" onclick="saveBarkConfig()">保存配置</button>
+            <button class="page-btn" style="flex:1;padding:10px;background:var(--card-sub);font-weight:700;" onclick="testBarkPush()">测试发送锁屏推送</button>
+          </div>
         </div>
+        {% else %}
+        <div style="margin-top:8px;padding:10px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;font-size:11px;color:var(--text-sub);line-height:1.5;">
+          🔒 <strong>凭据保护提示</strong>：Bark 推送密钥属于敏感安全凭据，仅管理员登录后可查看与修改。当前为只读展示模式，后台行情监控预警通知仍将正常执行推送。
+        </div>
+        {% endif %}
       </div>
 
       <!-- Security Status Card (PRD 8.4) -->
@@ -1790,6 +1803,8 @@
         initAiAssistant();
       } else if (viewName === 'ai-stock') {
         initAiStockAnalysis();
+      } else if (viewName === 'settings') {
+        loadBarkConfig();
       }
     }
 
@@ -3016,9 +3031,32 @@
       }
     }
 
-    // --- Bark & Settings ---
+    // --- Bark & Settings (PRD 6.2 Sensitive Credential Isolation) ---
+    async function loadBarkConfig() {
+      const input = document.getElementById('barkInputUrl');
+      if (!input) return; // Non-admin or element not present
+      try {
+        const res = await fetch('/api/bark/config');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.url) {
+            input.value = data.url;
+          }
+          const badge = document.getElementById('barkStatusBadge');
+          if (badge) {
+            badge.textContent = data.configured ? '已配置' : '未配置';
+            badge.style.color = data.configured ? 'var(--profit)' : 'var(--text-sub)';
+          }
+        }
+      } catch (err) {
+        console.warn('Bark config fetch error:', err);
+      }
+    }
+
     async function saveBarkConfig() {
-      const url = document.getElementById('barkInputUrl').value.trim();
+      const input = document.getElementById('barkInputUrl');
+      if (!input) return;
+      const url = input.value.trim();
       try {
         const res = await fetch('/api/bark/config', {
           method: 'POST',
@@ -3027,13 +3065,21 @@
         });
         const data = await res.json();
         alert(data.message || '配置已保存');
+        if (res.ok) {
+          const badge = document.getElementById('barkStatusBadge');
+          if (badge) {
+            badge.textContent = data.configured ? '已配置' : '未配置';
+            badge.style.color = data.configured ? 'var(--profit)' : 'var(--text-sub)';
+          }
+        }
       } catch (err) {
         alert('保存失败: ' + err.message);
       }
     }
 
     async function testBarkPush() {
-      const url = document.getElementById('barkInputUrl').value.trim();
+      const input = document.getElementById('barkInputUrl');
+      const url = input ? input.value.trim() : '';
       try {
         const res = await fetch('/api/bark/test', {
           method: 'POST',
@@ -3236,6 +3282,7 @@
       }
       fetchOverview();
       fetchKline('AAOI');
+      loadBarkConfig();
     });
   </script>
 </body>

@@ -1,5 +1,17 @@
 [
   {
+    "time": "2026-10-26 17:00",
+    "title": "安全漏洞专项修复：安全测试100%隔离真实安全数据库（AC-41）与Bark推送密钥防泄露加固（AC-42~AC-46）",
+    "tag": "已完成",
+    "author": "Codex",
+    "details": [
+      "修改者：Codex（代码修改）针对安全测试修改真实账号密码及Bark推送链接泄露两项严重安全隐患进行彻底重构与自动化防护，新增 AC-41 至 AC-46 验收规范，实现测试零污染与敏感凭据全流程鉴权隔离。",
+      "安全测试环境完全隔离（问题一）：1) credentials.py 新增 set_security_db_path / reset_security_db_path 及 isolated_security_db 机制，支持环境变量 MONEY_SECURITY_DB_PATH 与内存动态重定向；2) 测试运行前自动创建独立临时 SQLite 数据库，测试中所有密码派生、Session 与审计记录全部写入临时环境，测试完成后自动销毁；3) 彻底废除 tearDownClass 中将真实账号密码硬编码重置为固定值的危险逻辑；4) 新增自动化测试 AC-41，通过 SHA-256 哈希校验严格证明无论测试正常运行还是异常中断，生产安全数据库（security.sqlite3）字节级别完全零修改。",
+      "Bark 推送凭据防泄露与细粒度鉴权（问题二）：1) 敏感数据脱敏剥离：从 index() 路由与 mobile.html 模板中彻底移除 bark_url 明文注入，局域网匿名访客、未登录公网访客及 HTML 源码中绝不包含完整 Bark URL 或 Key；2) 严格基于能力的鉴权通道：新增 GET /api/bark/config 专用鉴权端点（受 CAP_MANAGE_BARK 保护，仅管理员可用），普通用户（拉科、巴小）、局域网只读访客一律拒绝（403/401），前端管理员登录后异步按需加载回显，普通用户仅展示「已配置/未配置」状态卡片；3) 响应脱敏与日志净化：POST /api/bark/config 保存接口不再回显明文 Key；notification_service.py 新增 mask_bark_url 与 sanitize_log_message，异常输出中自动将 Key 替换为掩码（如 https://api.day.app/N3****jd/），杜绝日志泄露；4) 完整保留行情监控盘中预警、预警测试发送及配置保存功能。",
+      "自动化回归测试：更新 tests/test_prd_v2_security.py，新增 test_ac_41 至 test_ac_46 共 6 项深度安全测试，全套 32 项自动化安全测试 100% 通过；真实 security.sqlite3 哈希在测试前后完全一致；财务数据库与 Excel 资产核算零变动。"
+    ]
+  },
+  {
     "time": "2026-10-26 13:16",
     "title": "局域网免登录与公网/Tailscale账号密码认证体系全量改造上线（完整达成PRD v2.0全部40项验收条件）",
     "tag": "已完成",

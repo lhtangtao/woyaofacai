@@ -4,10 +4,58 @@ import logging
 import os
 import subprocess
 import threading
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def mask_bark_url(url: Optional[str]) -> str:
+    """Mask Bark device key to protect sensitive notification credentials."""
+    if not url or not url.strip():
+        return ""
+    clean = url.strip()
+    try:
+        parsed = urllib.parse.urlsplit(clean)
+        path = parsed.path.strip("/")
+        if not path:
+            return f"{parsed.scheme}://{parsed.netloc}/***"
+        segments = [s for s in path.split("/") if s]
+        masked_segments = []
+        for i, seg in enumerate(segments):
+            if i == 0:  # Device key segment
+                if len(seg) <= 4:
+                    masked_segments.append("****")
+                else:
+                    masked_segments.append(seg[:2] + "****" + seg[-2:])
+            else:
+                masked_segments.append(seg)
+        trailing_slash = "/" if clean.endswith("/") else ""
+        masked_path = "/" + "/".join(masked_segments) + trailing_slash
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, masked_path, "", ""))
+    except Exception:
+        return "https://api.day.app/****"
+
+
+def sanitize_log_message(msg: str, secret_url: Optional[str]) -> str:
+    """Ensure raw secret URLs or keys do not appear in log strings or exception outputs."""
+    if not msg:
+        return ""
+    if not secret_url:
+        return msg
+    clean_secret = secret_url.strip()
+    res = msg.replace(clean_secret, mask_bark_url(clean_secret))
+    try:
+        parsed = urllib.parse.urlsplit(clean_secret)
+        segments = [s for s in parsed.path.strip("/").split("/") if s]
+        if segments:
+            key = segments[0]
+            if len(key) >= 4:
+                res = res.replace(key, "****")
+    except Exception:
+        pass
+    return res
 
 
 class NotificationService:
@@ -68,7 +116,9 @@ class NotificationService:
                     payload["url"] = url
                 requests.post(endpoint, json=payload, timeout=5)
             except Exception as e:
-                logger.warning(f"iPhone Bark 推送发送失败: {e}")
+                masked_target = mask_bark_url(self.bark_url)
+                sanitized_err = sanitize_log_message(str(e), self.bark_url)
+                logger.warning(f"iPhone Bark 推送发送失败 (目标: {masked_target}): {sanitized_err}")
 
         threading.Thread(target=_push, daemon=True, name="money3-bark-notify").start()
 
