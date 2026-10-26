@@ -146,10 +146,11 @@ if [[ "$START_MOBILE" == "1" ]]; then
         print "      👉 http://${TAILSCALE_IP}:8888"
         print ""
     else
-        print "  🌐【2. 户外公网 5G 远程访问 (Tailscale)】"
-        print "      若需在户外通过 5G 随时访问家中 Mac："
-        print "      • 手机与 Mac 均下载 Tailscale (App Store 免费) 并登录同账号"
-        print "      • 连接后即可通过专属 Tailscale 网址随时随地直连访问！"
+        print "  🌐【2. 户外公网 5G 远程访问 (手机免装 App / 浏览器秒开)】"
+        print "      若需出门在外随时使用手机查看："
+        print "      👉 双击项目目录下的「开启公网访问.command」即可一键生成专属公网网址！"
+        print "      • 手机无需安装任何 App，微信或自带 Safari 浏览器直接打开；"
+        print "      • 登录账号：拉科  密码：lake123（仅能查看属于拉科的持仓与 AI 会话）。"
         print ""
     fi
     print "  📲【3. 一键添加为 iPhone 原生全屏桌面 App】"

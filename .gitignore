@@ -46,3 +46,7 @@ schwab_token.json
 数据库/
 nuitka-crash-report.xml
 *.zip
+
+tools/
+*.tgz
+
