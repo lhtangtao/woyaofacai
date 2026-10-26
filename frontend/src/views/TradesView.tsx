@@ -1,0 +1,309 @@
+import React, { useEffect, useState } from "react";
+import { Search, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { api } from "../api/client";
+import { TradeDrawer } from "../components/TradeDrawer";
+import { PersonItem, TradeItem } from "../types";
+
+interface TradesViewProps {
+  personId: number | null;
+  persons: PersonItem[];
+  accounts: string[];
+}
+
+export const TradesView: React.FC<TradesViewProps> = ({
+  personId,
+  persons,
+  accounts,
+}) => {
+  const [trades, setTrades] = useState<TradeItem[]>([]);
+  const [columns, setColumns] = useState<string[]>([
+    "时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额",
+    "标记", "持仓", "净投入", "成本", "操作类型", "对手方", "订单号", "来源"
+  ]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [loading, setLoading] = useState(false);
+  const [selectedTrade, setSelectedTrade] = useState<TradeItem | null>(null);
+
+  // Filters
+  const [filterBroker, setFilterBroker] = useState("");
+  const [filterSide, setFilterSide] = useState("");
+  const [filterSymbol, setFilterSymbol] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
+
+  const fetchTrades = (targetPage = page) => {
+    setLoading(true);
+    api
+      .trades({
+        page: targetPage,
+        size: pageSize,
+        person_id: personId,
+        broker: filterBroker || undefined,
+        side: filterSide || undefined,
+        symbol: filterSymbol || undefined,
+        search: filterSearch || undefined,
+      })
+      .then((res) => {
+        if (res.status === "ok") {
+          setTrades(res.trades || res.items || []);
+          if (res.columns) setColumns(res.columns);
+          setTotal(res.pagination?.total || res.total || 0);
+          setPage(res.pagination?.page || targetPage);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load trades:", err);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchTrades(1);
+  }, [personId, filterBroker, filterSide, filterSymbol]);
+
+  const handleResetFilters = () => {
+    setFilterBroker("");
+    setFilterSide("");
+    setFilterSymbol("");
+    setFilterSearch("");
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      fetchTrades(1);
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px", overflow: "hidden" }}>
+      {/* Filter Card (Matching native filterCard) */}
+      <div
+        className="card-panel"
+        style={{
+          padding: "10px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+        }}
+      >
+        {/* Broker Filter */}
+        <select
+          value={filterBroker}
+          onChange={(e) => setFilterBroker(e.target.value)}
+          className="input-control"
+          style={{ width: "124px" }}
+        >
+          <option value="">全部券商</option>
+          {accounts.map((b) => (
+            <option key={b} value={b}>
+              {b}
+            </option>
+          ))}
+        </select>
+
+        {/* Side Filter */}
+        <select
+          value={filterSide}
+          onChange={(e) => setFilterSide(e.target.value)}
+          className="input-control"
+          style={{ width: "90px" }}
+        >
+          <option value="">全部方向</option>
+          <option value="买入">买入</option>
+          <option value="卖出">卖出</option>
+          <option value="转入">转入</option>
+          <option value="转出">转出</option>
+        </select>
+
+        {/* Ticker Symbol Input */}
+        <input
+          type="text"
+          placeholder="标的代码 (如 AAPL)"
+          value={filterSymbol}
+          onChange={(e) => setFilterSymbol(e.target.value.toUpperCase())}
+          className="input-control"
+          style={{ width: "130px" }}
+        />
+
+        {/* Full-text search */}
+        <div style={{ position: "relative", flex: 1, minWidth: "150px" }}>
+          <input
+            type="text"
+            placeholder="搜索代码、订单、来源... (按回车)"
+            value={filterSearch}
+            onChange={(e) => setFilterSearch(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            className="input-control"
+            style={{ width: "100%", paddingRight: "28px" }}
+          />
+          <Search
+            size={14}
+            color="var(--text-muted)"
+            style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)" }}
+          />
+        </div>
+
+        {/* Query button */}
+        <button onClick={() => fetchTrades(1)} className="btn btn-primary" style={{ padding: "6px 14px" }}>
+          查询
+        </button>
+
+        {/* Reset button */}
+        <button onClick={handleResetFilters} className="btn" title="重置全部筛选">
+          <RotateCcw size={14} />
+          <span>重置</span>
+        </button>
+      </div>
+
+      {/* Main Content Area: Splitter between Table and Drawer */}
+      <div style={{ flex: 1, display: "flex", gap: "10px", overflow: "hidden", position: "relative" }}>
+        {/* Table Area */}
+        <div className="table-container">
+          <table className="finance-table">
+            <thead>
+              <tr>
+                {columns.map((col) => (
+                  <th key={col}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {trades.length === 0 ? (
+                <tr>
+                  <td colSpan={columns.length} style={{ textAlign: "center", padding: "40px 0", color: "var(--text-muted)" }}>
+                    {loading ? "正在加载交易流水..." : "没有符合条件的交易记录"}
+                  </td>
+                </tr>
+              ) : (
+                trades.map((t) => {
+                  const isSelected = (selectedTrade?.record_id || selectedTrade?.id) === (t.record_id || t.id);
+                  const isBuy = t.side?.includes("买");
+                  const isSell = t.side?.includes("卖");
+
+                  return (
+                    <tr
+                      key={t.record_id || t.id}
+                      onClick={() => setSelectedTrade(t)}
+                      className={isSelected ? "selected" : ""}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {/* 时间 */}
+                      <td style={{ fontSize: "12px", color: "var(--text-muted)" }}>{t.trade_date}</td>
+                      {/* 券商 */}
+                      <td style={{ fontWeight: 600 }}>{t.broker}</td>
+                      {/* 分类 */}
+                      <td>
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                            background: "var(--border-color)",
+                          }}
+                        >
+                          {t.category || "—"}
+                        </span>
+                      </td>
+                      {/* 标的 */}
+                      <td style={{ fontWeight: 700, color: "var(--text-heading)" }}>{t.symbol}</td>
+                      {/* 方向 */}
+                      <td>
+                        <span className={`badge ${isBuy ? "badge-buy" : isSell ? "badge-sell" : ""}`}>
+                          {t.side}
+                        </span>
+                      </td>
+                      {/* 数量 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {t.quantity?.toLocaleString()}
+                      </td>
+                      {/* 价格 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        ${t.price?.toFixed(4)}
+                      </td>
+                      {/* 金额 */}
+                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                        ${t.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      {/* 标记 */}
+                      <td>{t.tag || "—"}</td>
+                      {/* 持仓 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {t.post_quantity != null ? t.post_quantity.toLocaleString() : "—"}
+                      </td>
+                      {/* 净投入 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {t.post_net != null ? `$${t.post_net.toLocaleString()}` : "—"}
+                      </td>
+                      {/* 成本 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {t.post_cost != null ? `$${t.post_cost.toFixed(4)}` : "—"}
+                      </td>
+                      {/* 操作类型 */}
+                      <td>{t.kind || "市场交易"}</td>
+                      {/* 对手方 */}
+                      <td>{t.person_name || "—"}</td>
+                      {/* 订单号 */}
+                      <td className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                        {t.order_id || "—"}
+                      </td>
+                      {/* 来源 */}
+                      <td style={{ fontSize: "11px", color: "var(--text-subtle)", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis" }} title={t.source}>
+                        {t.source || "—"}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Slide-in Detail Drawer */}
+        {selectedTrade && (
+          <TradeDrawer trade={selectedTrade} onClose={() => setSelectedTrade(null)} />
+        )}
+      </div>
+
+      {/* Pagination Bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "4px 8px",
+          fontSize: "12px",
+          color: "var(--text-muted)",
+        }}
+      >
+        <div>
+          共 <span style={{ fontWeight: 600, color: "var(--text-heading)" }}>{total.toLocaleString()}</span> 笔交易记录 · 第 {page} / {totalPages} 页
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <button
+            onClick={() => fetchTrades(page - 1)}
+            disabled={page <= 1 || loading}
+            className="btn"
+            style={{ padding: "4px 8px", height: "28px" }}
+          >
+            <ChevronLeft size={14} />
+            <span>上一页</span>
+          </button>
+          <button
+            onClick={() => fetchTrades(page + 1)}
+            disabled={page >= totalPages || loading}
+            className="btn"
+            style={{ padding: "4px 8px", height: "28px" }}
+          >
+            <span>下一页</span>
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -48,5 +48,8 @@ nuitka-crash-report.xml
 *.zip
 
 tools/
+node_modules/
+frontend/node_modules/
+frontend/dist/
 *.tgz
 

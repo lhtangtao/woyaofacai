@@ -301,7 +301,16 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.ai_assistant_page.populate_filters(info)
         if hasattr(self, "stock_analysis_page"):
             self.stock_analysis_page.populate_filters(info)
-        self.person.setCurrentIndex(max(0, self.person.findData(state.get("person"))))
+        # 打开的时候默认展示「个人」
+        target_person = state.get("person")
+        if not self.restore_state or target_person is None:
+            geren_idx = self.person.findText("个人")
+            if geren_idx >= 0:
+                target_person = self.person.itemData(geren_idx)
+        person_idx = self.person.findData(target_person) if target_person is not None else -1
+        if person_idx < 0:
+            person_idx = max(0, self.person.findText("个人"))
+        self.person.setCurrentIndex(max(0, person_idx))
         self.stock.setCurrentIndex(max(0, self.stock.findData(state.get("stock"))))
         for identifier in state.get("accounts") or ():
             if identifier in self.accounts.actions_by_id:

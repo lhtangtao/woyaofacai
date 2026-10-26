@@ -455,6 +455,23 @@ def safe_float(val: Any) -> Optional[float]:
         return None
 
 
+STATIC_DIST_DIR = Path(__file__).parent / "static_dist"
+
+# Register unified REST API v1
+from portfolio.web.api_v1 import api_v1
+app.register_blueprint(api_v1)
+
+
+@app.route("/assets/<path:filename>")
+def serve_static_dist_assets(filename):
+    """Serve compiled frontend static bundles (JS, CSS, SVGs, etc.)."""
+    from flask import send_from_directory
+    assets_dir = STATIC_DIST_DIR / "assets"
+    if assets_dir.exists():
+        return send_from_directory(assets_dir, filename)
+    return jsonify({"status": "error", "message": "Static assets not found"}), 404
+
+
 # ------------------------------------------------------------------------------
 # Web Index Route
 # ------------------------------------------------------------------------------
@@ -462,6 +479,10 @@ def safe_float(val: Any) -> Optional[float]:
 
 @app.route("/")
 def index():
+    if not app.testing and (STATIC_DIST_DIR / "index.html").exists() and request.args.get("ui") != "mobile":
+        from flask import send_from_directory
+        return send_from_directory(STATIC_DIST_DIR, "index.html")
+
     net = get_network_info()
     ctx: AuthContext = getattr(g, "auth_context", None)
     user_data = ctx.to_dict() if ctx else get_current_user()

@@ -179,3 +179,37 @@ def build_auth_context(
         is_authenticated=False,
         session_id=None,
     )
+
+
+def require_capability(cap: str):
+    """Decorator to enforce granular capability check on Flask endpoints."""
+    from functools import wraps
+    from flask import g, jsonify, request
+    from portfolio.web.security.audit import record_audit_event
+
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            ctx: AuthContext = getattr(g, "auth_context", None)
+            if not ctx:
+                return jsonify({"status": "error", "code": "UNAUTHENTICATED", "message": "未登录或登录已失效"}), 401
+
+            if not ctx.has_capability(cap):
+                client_ip = request.remote_addr or "unknown"
+                record_audit_event(
+                    "UNAUTHORIZED_ACCESS",
+                    ctx.username or "anonymous",
+                    ctx.access_mode,
+                    client_ip,
+                    "DENIED",
+                    {"endpoint": request.path, "required_capability": cap},
+                )
+                if ctx.is_unauthenticated():
+                    return jsonify({"status": "error", "code": "UNAUTHENTICATED", "message": "请登录后访问"}), 401
+                return jsonify({"status": "error", "code": "FORBIDDEN", "message": f"当前权限不足以访问此资源 (需要: {cap})"}), 403
+
+            return f(*args, **kwargs)
+
+        return decorated_function
+
+    return decorator
