@@ -423,7 +423,9 @@ def api_reports_detail(report_name: str):
         res = svc.calculate(scope)
 
         report = None
-        if report_name == "股票归属":
+        if report_name == "清仓收益":
+            report = get_today_service().closed_report(res)
+        elif report_name == "股票归属":
             report = res.reports.get("人员划转") or res.reports.get("股票汇总")
         elif report_name == "券商资产":
             report = res.reports.get("渠道汇总") or res.reports.get("账户资产")
@@ -737,6 +739,25 @@ def api_brokers_channels():
     except Exception as e:
         logger.exception("Brokers channel error")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@api_v1.route("/brokers/people", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_broker_people():
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    try:
+        selected = date.fromisoformat(request.args.get('as_of') or today.isoformat())
+        if selected > today:
+            raise ValueError('future date')
+    except ValueError:
+        return jsonify(status='error', message='请选择有效的截止日期，不能晚于今天。'), 400
+    try:
+        return jsonify(get_today_service().people_snapshot(
+            get_user_query_scope(as_of=selected), enabled=request.args.get('live', '1') != '0'))
+    except Exception:
+        logger.exception('Broker people P/L unavailable')
+        return jsonify(status='error', message='人员盈亏读取失败，请稍后重试。'), 503
 
 
 @api_v1.route("/ownership", methods=["GET"])
@@ -1696,7 +1717,9 @@ def api_export_report_csv(report_name: str):
         res = svc.calculate(scope)
 
         report = None
-        if report_name == "股票归属":
+        if report_name == "清仓收益":
+            report = get_today_service().closed_report(res)
+        elif report_name == "股票归属":
             report = res.reports.get("人员划转") or res.reports.get("股票汇总")
         elif report_name == "券商资产":
             report = res.reports.get("渠道汇总") or res.reports.get("账户资产")

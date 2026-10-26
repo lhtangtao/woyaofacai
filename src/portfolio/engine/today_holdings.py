@@ -105,6 +105,18 @@ def channel_summary(rows):
                      for channel, group in sorted(groups.items()))
 
 
+def today_summary_row(rows, columns, channel=None):
+    """Shared display total for the filtered holdings, never a synthetic trade."""
+    with localcontext() as ctx:
+        ctx.prec = 50
+        values = [None] * len(columns)
+        values[0] = f'{channel} 汇总' if channel else '全部渠道汇总'
+        values[6], values[5] = today_summary(rows)[:2]
+        values[10] = strict_sum(row.values[10] for row in rows)
+        values[11] = strict_sum(row.values[11] for row in rows)
+        return ReportRow(tuple(values), {'display_summary': True})
+
+
 def lifetime_summary(analytics, live):
     """All trades through the selected date, including fully closed securities."""
     with localcontext() as ctx:

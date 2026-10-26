@@ -25,8 +25,9 @@ export interface TodaySnapshot {
   status: string; name: string; columns: string[]; rows: (string | number | null)[][];
   items: Record<string, any>[]; total_rows: number; note: string;
   summary: { pnl: Amount; rate: Amount; up: number; down: number; flat: number; unknown: number; cumulative: Amount };
-  channels: { channel: string; pnl: Amount; asset: Amount }[];
-  selected_channels: { channel: string; pnl: Amount; asset: Amount }[];
+  summary_row: (string | number | null)[];
+  channels: { channel: string; pnl: Amount; asset: Amount; rate: Amount }[];
+  selected_channels: { channel: string; pnl: Amount; asset: Amount; rate: Amount }[];
   asset_total: Amount;
   available_channels: string[]; tickers: string[];
   quote: { status: string; session: string; fresh: number; count: number; refreshed_at: string; enabled: boolean;

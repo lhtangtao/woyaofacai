@@ -6,7 +6,7 @@ from portfolio.domain.analytics import ZERO, Issue, Position, Report, ReportRow,
 
 HOLDINGS_COLUMNS = ("渠道", "分类", "Ticker", "持仓数量", "当前价($)", "持仓市值($)", "持仓成本价($)", "累计买入金额($)", "累计卖出金额($)", "累计净投入($)", "持仓盈亏金额($)", "持仓盈亏比例", "回本涨幅", "持仓市值占比")
 STOCK_COLUMNS = ("渠道", "分类", "Ticker", "当前状态", "当前持仓数量", "当前价/清仓价($)", "当前市值($)", "持仓成本价($)", "累计买入金额($)", "累计卖出金额($)", "累计净投入($)", "持仓盈亏金额($)", "持仓盈亏比例", "回本涨幅", "持仓市值占比", "累计清仓收益($)", "累计微操收益($)", "总收益贡献($)")
-CLOSED_COLUMNS = ("渠道", "分类", "Ticker", "历史总买入数量", "历史总卖出数量", "历史总买入金额($)", "历史总卖出金额($)", "清仓收益($)", "操作笔数", "买入均价($)", "卖出均价($)", "首次买入时间", "最终清仓时间")
+CLOSED_COLUMNS = ("渠道", "分类", "Ticker", "历史总买入数量", "历史总卖出数量", "历史总买入金额($)", "历史总卖出金额($)", "清仓收益($)", "操作笔数", "买入均价($)", "卖出均价($)", "当前价($)", "首次买入时间", "最终清仓时间")
 
 MIN_OPEN_QUANTITY = Decimal('0.5')
 
@@ -117,8 +117,12 @@ def position_reports(snapshot, positions, *, micro_profit=None):
                                        p.buy, p.sell, p.net, pnl, ratio(pnl, p.net), recovery, weight), info))
         if p.quantity == ZERO and not untrusted:
             gain = -p.net if p.net is not None else None
+            latest = current_price(snapshot, key[2])
+            closed_info = {**info, 'current_price_time': latest.quoted_at or latest.day if latest else None,
+                           'current_price_status': '数据库参考价' if latest else '缺少行情'}
             closed.append(ReportRow((ch, cat, symbol, p.buy_quantity, p.sell_quantity, p.buy, p.sell, gain,
-                                     p.count, ratio(p.buy, p.buy_quantity), ratio(p.sell, p.sell_quantity), p.first, p.last), info))
+                                     p.count, ratio(p.buy, p.buy_quantity), ratio(p.sell, p.sell_quantity),
+                                     latest.value if latest else None, p.first, p.last), closed_info))
         else:
             gain = ZERO if p.quantity > ZERO else None
         micro = strict_sum(value for (month, account, instrument), value in micro_profit.items() if (account, instrument) == key[1:])

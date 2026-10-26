@@ -14,6 +14,10 @@ const money = (value: string | number | null | undefined, percent = false) => va
     ...(percent ? { style: "percent" as const } : {}) });
 const color = (v: string | number | null) => v == null ? "var(--text-muted)" :
   Number(v) > 0 ? "var(--profit-color)" : Number(v) < 0 ? "var(--loss-color)" : "var(--text-main)";
+const signed = (value: string | number | null | undefined, percent = false) => value == null ? "—" :
+  `${Number(value) < 0 ? "−" : Number(value) > 0 ? "+" : ""}${percent ? "" : "$"}${money(Math.abs(Number(value)), percent)}`;
+const signStyle = (value: string | number | null | undefined) => value == null ? "unknown" :
+  Number(value) > 0 ? "positive" : Number(value) < 0 ? "negative" : "neutral";
 // Native ReportPage's visual column order; raw engine columns stay unchanged.
 const order = [0, 1, 2, 9, 3, 4, 12, 11, 13, 5, 6, 10, 7, 8];
 
@@ -67,6 +71,14 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
   const curve = snapshot?.curve;
   const visibleColumns = showQuoteColumns ? order : order.filter(i => i !== 7 && i !== 8);
   const selectChannel = (name: string) => setChannel(current => current === name ? "" : name);
+  const channelEvents = { click: (p: any) => {
+    if (p.componentType === "series" || p.componentType === "xAxis" || p.componentType === "yAxis") selectChannel(String(p.name || p.value));
+  } };
+  const channelStyle = (name: string, base: string) => ({
+    color: base, opacity: !channel || channel === name ? 1 : 0.3,
+    borderColor: channel === name ? "#2563EB" : base,
+    borderWidth: channel === name ? 3 : 0,
+  });
   const summary = snapshot?.summary;
   const presets = [
     ["盈利最多", "今日盈亏($)", "desc"], ["亏损最多", "今日盈亏($)", "asc"],
@@ -157,25 +169,37 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
     <section className="card-panel today-channels" aria-label="各渠道盈亏与资产汇总">
       <div><h3>各渠道当日盈亏（USD）</h3>
         <ReactECharts style={{ height: 285 }} notMerge option={{ animation: false,
-          grid: { left: 70, right: 25, top: 35, bottom: 40 }, tooltip: { trigger: "axis" },
+          grid: { left: 70, right: 25, top: 60, bottom: 40 },
+          tooltip: { trigger: "axis", renderMode: "richText", formatter: (params: any[]) => {
+            const c = snapshot?.channels[params[0]?.dataIndex];
+            return c ? `${c.channel}\n当日盈亏 ${signed(c.pnl)}\n当日收益率 ${signed(c.rate, true)}` : "—";
+          } },
           xAxis: { type: "category", data: (snapshot?.channels || []).map(c => c.channel), triggerEvent: true },
           yAxis: { type: "value" }, series: [{ type: "bar", barMaxWidth: 65,
             data: (snapshot?.channels || []).map(c => ({ value: c.pnl == null ? null : Number(c.pnl),
-              itemStyle: { color: c.channel === channel ? "#94A3B8" : Number(c.pnl) >= 0 ? "#16A34A" : "#DC2626" } })),
-            label: { show: true, position: "top", formatter: (p: any) => money(p.value) },
+              itemStyle: channelStyle(c.channel, Number(c.pnl) >= 0 ? "#16A34A" : "#DC2626") })),
+            label: { show: true, position: "top", lineHeight: 18, formatter: (p: any) => {
+              const c = snapshot?.channels[p.dataIndex];
+              return c ? `{${signStyle(c.pnl)}|${signed(c.pnl)}}\n{${signStyle(c.rate)}|${signed(c.rate, true)}}` : "—";
+            }, rich: { positive: { color: "#16A34A" }, negative: { color: "#DC2626" },
+              neutral: { color: "#475569" }, unknown: { color: "#94A3B8" } } },
             markLine: { symbol: "none", data: [{ yAxis: 0 }], lineStyle: { color: "#334155", width: 2 } },
-          }] }} onEvents={{ click: (p: any) => {
-            if (p.componentType === "series" || p.componentType === "xAxis") selectChannel(p.name || p.value);
-          } }} />
+          }] }} onEvents={channelEvents} />
         {snapshot?.channels.filter(c => c.pnl == null).map(c => <p key={c.channel} className="today-warning">{c.channel}：缺报价/基准，盈亏未知</p>)}
       </div>
-      <div><h3>{channel || "全部渠道"}持仓资产　{money(snapshot?.asset_total)} USD</h3><p>持仓市值 · 不含现金 · 点击渠道筛选，再点恢复全部</p>
-        {(snapshot?.channels || []).map(c => <button key={c.channel} className={`today-channel ${c.channel === channel ? "selected" : ""}`}
-          aria-pressed={c.channel === channel} onClick={() => selectChannel(c.channel)}>
-          <span>{c.channel}</span><span className="today-asset-track"><span style={{ width: `${c.asset == null ? 0 :
-            Math.min(100, 100 * Math.abs(Number(c.asset)) / Math.max(1, ...snapshot!.channels.map(v => Math.abs(Number(v.asset)))))}%` }} /></span>
-          <strong>{money(c.asset)} USD</strong>
-        </button>)}
+      <div><h3>各渠道持仓资产（USD）</h3>
+        <ReactECharts style={{ height: 285 }} notMerge option={{ animation: false,
+          grid: { left: 85, right: 95, top: 35, bottom: 40 },
+          tooltip: { trigger: "axis", valueFormatter: (v: any) => `${money(v)} USD` },
+          xAxis: { type: "value" },
+          yAxis: { type: "category", inverse: true, data: (snapshot?.channels || []).map(c => c.channel), triggerEvent: true },
+          series: [{ type: "bar", barMaxWidth: 28,
+            data: (snapshot?.channels || []).map(c => ({ value: c.asset == null ? null : Number(c.asset),
+              itemStyle: channelStyle(c.channel, "#2563EB") })),
+            label: { show: true, position: "right", formatter: (p: any) => money(p.value) },
+          }] }} onEvents={channelEvents} />
+        <p>{channel || "全部渠道"}持仓市值 {money(snapshot?.asset_total)} USD · 不含现金 · 点击任一渠道柱体筛选，再点恢复全部</p>
+        {snapshot?.channels.filter(c => c.asset == null).map(c => <p key={c.channel} className="today-warning">{c.channel}：持仓市值数据缺失</p>)}
         <table className="finance-table"><thead><tr><th>当前范围</th><th>当日盈亏</th><th>持仓市值</th></tr></thead>
           <tbody>{snapshot?.selected_channels.map(c => <tr key={c.channel}><td>{c.channel}</td><td>{money(c.pnl)}</td><td>{money(c.asset)}</td></tr>)}</tbody></table>
         {channel && <button className="btn" onClick={() => setChannel("")}>恢复全部渠道</button>}
@@ -188,7 +212,13 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
         dir: sort.col === col && sort.dir === "desc" ? "asc" : "desc" }); }}>
         {snapshot?.columns[i] || ["渠道", "Ticker", "持仓数量", "昨收价($)", "最新价($)", "今日涨跌幅", "今日盈亏($)", "行情时段", "报价时间", "成本价($)", "累计盈亏($)", "当前市值($)", "回本涨幅", "占比"][i]}
         {snapshot?.columns[i] === sort.col ? sort.dir === "desc" ? " ↓" : " ↑" : " ↕"}</th>)}</tr></thead>
-      <tbody>{snapshot?.rows.map((row, ri) => <tr key={ri}>{visibleColumns.map(i => <td key={i} className={![0, 1, 7, 8].includes(i) ? "num" : ""}
+      <tbody>{snapshot && <tr className="today-summary-row">{visibleColumns.map(i => <td key={i}
+        className={![0, 1, 7, 8].includes(i) ? "num" : ""}
+        style={{ color: [5, 6, 10].includes(i) ? color(snapshot.summary_row?.[i] ?? null) : undefined }}>
+        {i === 0 ? snapshot.summary_row?.[0] ?? `${channel || "全部渠道"}汇总` :
+          money(snapshot.summary_row?.[i], [5, 12, 13].includes(i))}
+      </td>)}</tr>}
+      {snapshot?.rows.map((row, ri) => <tr key={ri}>{visibleColumns.map(i => <td key={i} className={![0, 1, 7, 8].includes(i) ? "num" : ""}
         style={{ color: [5, 6, 10].includes(i) ? color(row[i]) : undefined }}>
         {[0, 1, 7, 8].includes(i) ? row[i] ?? "—" : money(row[i], [5, 12, 13].includes(i))}
         {i === 7 && snapshot.items[ri]?._meta.live_status && <small> · {snapshot.items[ri]._meta.live_status}</small>}

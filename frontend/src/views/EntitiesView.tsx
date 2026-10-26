@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { Users, Building2, PieChart } from "lucide-react";
 import { api } from "../api/client";
+import { BrokerPeoplePnl } from "./BrokerPeoplePnl";
 
 interface EntitiesViewProps {
   type: "people" | "brokers" | "ownership";
@@ -56,6 +57,7 @@ export const EntitiesView: React.FC<EntitiesViewProps> = ({ type, personId }) =>
         </span>
       </div>
 
+      {type === "brokers" && <BrokerPeoplePnl />}
       <div className="table-container">
         <table className="finance-table">
           <thead>

@@ -15,6 +15,19 @@ def instrument_catalog(connection):
     return {r['id']: dict(r) for r in connection.execute('SELECT id,symbol,market FROM instruments')}
 
 
+def people_catalog(connection, scope):
+    query = 'SELECT id,name FROM persons WHERE 1=1'
+    params = ()
+    if not scope.include_disabled:
+        query += ' AND enabled=1'
+    if scope.person_ids is not None:
+        if not scope.person_ids:
+            return ()
+        query += ' AND id IN (' + ','.join('?' for _ in scope.person_ids) + ')'
+        params = scope.person_ids
+    return tuple((row['id'], row['name']) for row in connection.execute(query + ' ORDER BY id', params))
+
+
 def load_snapshot(connection, scope, *, cancel=None, with_prices=True):
     # Date-range/search filters must never remove the opening history of a position.
     full_scope = replace(scope, start_date=None, search="", audit=False)

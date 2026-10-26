@@ -18,6 +18,7 @@ class PeopleBars(QWidget):
         super().__init__()
         self.rows, self.hits, self.person, self.column = (), {}, None, 1
         self.quantity_mode = False
+        self.label_mode = 'both'
         self.share_total, self.symbol = None, ''
         self.setMinimumHeight(220)
         self.setMouseTracking(True)
@@ -44,7 +45,27 @@ class PeopleBars(QWidget):
         values = [r.values[self.column] for r in self.rows if r.values[self.column] is not None]
         low, high = min([Decimal(0), *values]), max([Decimal(0), *values])
         span = high-low or Decimal(1)
-        left, width = 190, max(1, self.width()-310)
+        labels = {}
+        for i, row in enumerate(self.rows):
+            value = row.values[self.column]
+            text = f'{value:+,.2f}' if value is not None else '—'
+            rate = None
+            if self.column == 1:
+                rate = row.values[2]
+            elif self.column == 5:
+                net = row.values[8] if len(row.values) > 8 else None
+                rate = (row.values[5] / net) if (net and net > 0 and row.values[5] is not None) else None
+            if self.label_mode == 'rate':
+                text = f'{rate:+.2%}' if rate is not None else '—'
+            elif self.label_mode == 'both' and rate is not None:
+                text += f'（{rate:+.2%}）'
+            elif self.label_mode == 'both' and value is not None and self.column in (1, 5):
+                text += '（—）'
+            person_key = row.metadata.get('person_id', i) if hasattr(row, 'metadata') and row.metadata else i
+            labels[person_key] = text
+        label_width = max((p.fontMetrics().horizontalAdvance(text) for text in labels.values()), default=95) + 12
+        left = 190 + (label_width + 10 if low < 0 else 0)
+        width = max(1, self.width()-left-label_width-25)
         def x(value):
             return left+float((value-low)/span)*width
         zero = x(Decimal(0))
@@ -52,7 +73,8 @@ class PeopleBars(QWidget):
         p.drawLine(int(zero), 24, int(zero), self.height()-8)
         p.drawText(QRectF(zero-15, 3, 30, 20), Qt.AlignmentFlag.AlignCenter, '0')
         for i, row in enumerate(self.rows):
-            value, person = row.values[self.column], row.metadata['person_id']
+            value = row.values[self.column]
+            person = row.metadata.get('person_id', i) if hasattr(row, 'metadata') and row.metadata else i
             y = 30+i*44
             hit = QRectF(0, y, self.width(), 40)
             self.hits[person] = hit
@@ -62,7 +84,9 @@ class PeopleBars(QWidget):
             if value is not None:
                 end = x(value)
                 p.fillRect(QRectF(min(zero, end), y+9, max(2, abs(end-zero)), 22), QColor(t.subtle if self.person == person else t.profit if value >= 0 else t.loss))
-                p.drawText(QRectF(end+5 if value >= 0 else end-100, y, 95, 40), Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if value >= 0 else Qt.AlignmentFlag.AlignRight), (format(value, ',.8f').rstrip('0').rstrip('.')+' 股') if self.quantity_mode else f'{value:+,.2f}')
+                p.drawText(QRectF(end+5 if value >= 0 else end-label_width-5, y, label_width, 40),
+                           Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if value >= 0 else Qt.AlignmentFlag.AlignRight),
+                           labels.get(person, ''))
             else:
                 p.drawText(QRectF(zero+8, y, 180, 40), Qt.AlignmentFlag.AlignVCenter, '— 数据不完整')
 
@@ -87,6 +111,7 @@ class BrokerPeoplePage(QWidget):
         # Import lazily: ReportPage embeds this widget.
         from portfolio.ui.report_page import ReportModel
         self.bundle, self.result = None, None
+        self.table_sorts = {}
         self.mode = QComboBox()
         self.mode.addItems(('当日盈亏', '累计盈亏', '股票归属'))
         self.stock = QComboBox()
@@ -95,6 +120,11 @@ class BrokerPeoplePage(QWidget):
         self.stock.hide()
         self.order = QComboBox()
         self.order.addItems(('盈利最多', '亏损最多', '盈亏幅度最大'))
+        self.label_mode = QComboBox()
+        self.label_mode.addItem('金额和收益率', 'both')
+        self.label_mode.addItem('仅金额', 'amount')
+        self.label_mode.addItem('仅收益率', 'rate')
+        self.label_mode.setToolTip('切换柱体旁的标签；柱长与排序仍按盈亏金额。')
         outer = QVBoxLayout(self)
         controls = QHBoxLayout()
         self.title_label = QLabel('全部人员 · 权益账本')
@@ -102,6 +132,7 @@ class BrokerPeoplePage(QWidget):
         controls.addWidget(self.mode)
         controls.addWidget(self.stock)
         controls.addWidget(self.order)
+        controls.addWidget(self.label_mode)
         controls.addStretch()
         self.export = QPushButton('导出人员汇总…')
         controls.addWidget(self.export)
@@ -141,6 +172,9 @@ class BrokerPeoplePage(QWidget):
             table.frozen.setModel(table.finance_model)
             table.frozen.setSelectionModel(table.selectionModel())
             table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            for header in (table.horizontalHeader(), table.frozen.horizontalHeader()):
+                header.setSectionsClickable(True)
+                header.sectionClicked.connect(lambda column, table=table: self.sort_table(table, column))
         layout.addWidget(self.summary)
         self.detail_label = QLabel('全部人员股票明细')
         layout.addWidget(self.detail_label)
@@ -149,6 +183,7 @@ class BrokerPeoplePage(QWidget):
         self.mode.currentIndexChanged.connect(self.show_result)
         self.stock.currentIndexChanged.connect(self.show_result)
         self.order.currentIndexChanged.connect(self.show_result)
+        self.label_mode.currentIndexChanged.connect(self.show_result)
         self.summary.clicked.connect(self.select_person)
         self.summary.frozen.clicked.connect(self.select_person)
         self.export.clicked.connect(self.export_summary)
@@ -184,8 +219,28 @@ class BrokerPeoplePage(QWidget):
         self.chart.person = None if person == self.chart.person else person
         self.show_result()
 
-    @staticmethod
-    def fill(table, columns, rows):
+    def sort_table(self, table, column):
+        columns = table.finance_model.columns
+        if not 0 <= column < len(columns):
+            return
+        key = (table, self.mode.currentIndex())
+        previous = self.table_sorts.get(key)
+        self.table_sorts[key] = (columns[column], not previous[1] if previous and previous[0] == columns[column] else True)
+        self.show_result()
+
+    def fill(self, table, columns, rows):
+        rows = tuple(rows)
+        saved = self.table_sorts.get((table, self.mode.currentIndex()))
+        active = bool(saved and saved[0] in columns)
+        if active:
+            column, descending = columns.index(saved[0]), saved[1]
+            known = [row for row in rows if row.values[column] is not None]
+            missing = [row for row in rows if row.values[column] is None]
+            rows = tuple(sorted(known, key=lambda row: row.values[column], reverse=descending) + missing)
+        for header in (table.horizontalHeader(), table.frozen.horizontalHeader()):
+            header.setSortIndicatorShown(active)
+            if active:
+                header.setSortIndicator(column, Qt.SortOrder.DescendingOrder if descending else Qt.SortOrder.AscendingOrder)
         model = table.finance_model
         model.beginResetModel()
         model.columns, model.rows = columns, tuple(rows)
@@ -229,6 +284,8 @@ class BrokerPeoplePage(QWidget):
         ownership = self.mode.currentIndex() == 2
         self.stock.setVisible(ownership)
         self.order.setVisible(not ownership)
+        self.label_mode.setVisible(not ownership)
+        self.chart.label_mode = self.label_mode.currentData()
         self.chart.quantity_mode = ownership
         if hasattr(self, 'title_label'):
             self.title_label.setText('股票归属 · 人员占比' if ownership else '全部人员 · 权益账本')
@@ -261,7 +318,7 @@ class BrokerPeoplePage(QWidget):
         self.note.setText(summary.note)
         self.content.setMinimumHeight(self.chart.height()+self.summary.height()+self.detail.height()+260)
         self.detail_report = details
-        self.summary_report = replace(summary, rows=tuple(rows))
+        self.summary_report = replace(summary, rows=tuple(self.summary.finance_model.rows))
         if column == 1:
             positive = sum(r.values[1] is not None and r.values[1] > 0 for r in rows if r.metadata['person_id'] != 'residual')
             negative = sum(r.values[1] is not None and r.values[1] < 0 for r in rows if r.metadata['person_id'] != 'residual')

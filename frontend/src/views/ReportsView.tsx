@@ -249,6 +249,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         return (
                           <td
                             key={colIdx}
+                            title={colName.startsWith("当前价(") ? `${reportData.items?.[rowIdx]?._meta?.current_price_status || "参考价"} · ${reportData.items?.[rowIdx]?._meta?.current_price_time || "时间未知"}` : undefined}
                             className={isNumeric ? "font-mono" : ""}
                             style={{
                               textAlign: isNumeric ? "right" : "left",

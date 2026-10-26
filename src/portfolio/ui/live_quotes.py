@@ -270,7 +270,29 @@ class LiveQuotesPanel(QWidget):
         self.window.refresh()
         return True
 
+    def update_closed_prices(self, quotes=None, session=None):
+        page = self.window.performance_page
+        if page.selector.currentText() != '清仓收益' or '清仓收益' not in page.reports:
+            return
+        from portfolio.services.closed_quotes import closed_current_prices
+        now = datetime.now(UTC)
+        cached = self.window.quote_store.load(now)[0] if self.window.quote_store else {}
+        report = closed_current_prices(page.reports['清仓收益'], self.instruments,
+                                       {**cached, **(quotes or {})}, now, session,
+                                       self.window.currency.currentData())
+        page.reports = {**page.reports, '清仓收益': report}
+        page.report = report
+        page.note.setText(report.note)
+        number = page.page
+        if tuple(page.table.finance_model.columns) != report.columns:
+            page.select_report('清仓收益')
+        else:
+            page.apply_local_filter()
+        page.page = min(number, max(0, (len(page.sorted_rows) - 1) // 200))
+        page.show_page()
+
     def render(self):
+        self.update_closed_prices()
         self.refresh_channel_cash()
         if self.refresh_history():
             return
@@ -319,6 +341,8 @@ class LiveQuotesPanel(QWidget):
             self.summary.setText('历史持仓与收益报表继续可用')
             return
         holdings = list(self.analytics.reports['当前持仓'].rows)
+        if self.window.performance_page.selector.currentText() == '清仓收益':
+            holdings.extend(self.window.performance_page.reports.get('清仓收益', self.analytics.reports['清仓收益']).rows)
         people = self.window.asset_page.broker_page
         if self.window.broker_people_view() and people and people.bundle is not None:
             holdings.extend(people.bundle.broker.reports['当前持仓'].rows)
@@ -346,6 +370,7 @@ class LiveQuotesPanel(QWidget):
             self.summary.setText('正在读取本时段报价，当前盈亏计算中…')
             return
         now = datetime.now(UTC)
+        self.update_closed_prices(quotes, session)
         report, total, floating, count = live_holdings(self.analytics, self.instruments, quotes, session, now)
         self.window.dashboard.set_metrics(live_metrics(self.analytics, report, session, now))
         self.update_today(report, session, quotes, now)

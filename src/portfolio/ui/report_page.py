@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from portfolio.domain.analytics import ReportRow
 from portfolio.domain.models import exact_text
-from portfolio.engine.today_holdings import lifetime_total, today_summary
+from portfolio.engine.today_holdings import lifetime_total, today_summary, today_summary_row
 from portfolio.ui.channel_overview import ChannelOverview
 from portfolio.ui.finance_table import FinanceModel
 from portfolio.ui.metric_card import MetricCard
@@ -50,6 +50,13 @@ class ReportModel(FinanceModel):
             return None
         row, column = self.rows[index.row()], self.columns[index.column()]
         value = row.values[index.column()] if index.column() < len(row.values) else None
+        if row.metadata.get('display_summary'):
+            if role == Qt.ItemDataRole.BackgroundRole:
+                return QColor(tokens(self.parent()).alternate)
+            if role == Qt.ItemDataRole.FontRole:
+                font = numeric_font(12 if getattr(self.parent(), 'compact', False) else 13)
+                font.setBold(True)
+                return font
         if role == Qt.ItemDataRole.DisplayRole:
             if isinstance(value, Decimal):
                 if column == "持有股数":
@@ -63,6 +70,8 @@ class ReportModel(FinanceModel):
                 return f"{value:,.2f}"
             return exact_text(value)
         if role == Qt.ItemDataRole.ToolTipRole:
+            if column.startswith('当前价(') and row.metadata.get('current_price_status'):
+                return f"{row.metadata['current_price_status']} · {row.metadata.get('current_price_time') or '时间未知'}"
             return None
         if role == Qt.ItemDataRole.FontRole and isinstance(value, Decimal):
             return numeric_font(12 if getattr(self.parent(), "compact", False) else 13)
@@ -187,7 +196,8 @@ class ReportPage(QWidget):
             header.sectionClicked.connect(lambda column, header=header: self.open_sort_menu(column, header))
         self.table.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.horizontalHeader().customContextMenuRequested.connect(self.column_menu)
-        self.table.doubleClicked.connect(lambda index: self.drill.emit(self.table.finance_model.rows[index.row()].metadata))
+        self.table.doubleClicked.connect(lambda index: self.drill.emit(self.table.finance_model.rows[index.row()].metadata)
+                                         if not self.table.finance_model.rows[index.row()].metadata.get('display_summary') else None)
         self.table.selectionModel().currentRowChanged.connect(self.show_details)
         split.addWidget(self.table)
         self.details = QPlainTextEdit()
@@ -310,6 +320,8 @@ class ReportPage(QWidget):
     def show_page(self):
         is_today = bool(self.report and self.report.name == '今日盈亏')
         rows = self.sorted_rows if is_today else self.sorted_rows[self.page * 200:(self.page + 1) * 200]
+        if is_today:
+            rows = (today_summary_row(rows, self.report.columns, self.channel_overview.selected_channel), *rows)
         self.table.finance_model.replace(rows)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if is_today else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if is_today else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -500,5 +512,6 @@ class ReportPage(QWidget):
             return
         path, _ = QFileDialog.getSaveFileName(self, "导出计算结果（不覆盖已有文件）", self.report.name + ".xlsx", "Excel (*.xlsx);;CSV (*.csv);;JSON (*.json)")
         if path:
-            rows = self.table.finance_model.rows if self.export_mode.currentIndex() == 1 else self.sorted_rows
+            rows = (tuple(row for row in self.table.finance_model.rows if not row.metadata.get('display_summary'))
+                    if self.export_mode.currentIndex() == 1 else self.sorted_rows)
             self.export_requested.emit(replace(self.report, rows=tuple(rows)), Path(path))

@@ -112,11 +112,44 @@ MOBILE_LOG="/tmp/money_mobile.log"
 touch "$MOBILE_LOG"
 
 if [[ "$START_MOBILE" == "1" ]]; then
+    # Build only when source files are newer than the shipped entry point.
+    # A normal relaunch must never keep serving stale Web code.
+    if "$APP_DIR/.venv/bin/python" - "$APP_DIR" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+entry = root / 'src/portfolio/web/static_dist/index.html'
+inputs = list((root / 'frontend/src').rglob('*')) + list((root / 'frontend').glob('*'))
+newest = max((p.stat().st_mtime_ns for p in inputs if p.is_file()), default=0)
+sys.exit(0 if not entry.exists() or newest > entry.stat().st_mtime_ns else 1)
+PY
+    then
+        if ! command -v npm >/dev/null 2>&1; then
+            print "❌ Web 源码已更新，需要 Node.js/npm 构建；本次停止启动，避免展示旧页面。"
+            exit 1
+        fi
+        print "🔧 正在生成最新 Web 页面（不运行测试）…"
+        npm --prefix "$APP_DIR/frontend" run build
+    fi
     EXISTING_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
     if [[ -n "$EXISTING_PID" ]]; then
-        if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app"; then
-            MOBILE_PID="$EXISTING_PID"
-            IS_MOBILE_RUNNING=1
+        if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app" &&
+            lsof -a -p "$EXISTING_PID" -d cwd -Fn 2>/dev/null | grep -Fxq "n$APP_DIR"; then
+            print "♻️ 正在重启本项目 Web 服务以载入最新代码…"
+            kill "$EXISTING_PID"
+            for i in {1..25}; do
+                if ! kill -0 "$EXISTING_PID" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.2
+            done
+            if kill -0 "$EXISTING_PID" 2>/dev/null; then
+                print "❌ 旧 Web 服务未能退出，请关闭后重新启动。"
+                exit 1
+            fi
+        else
+            print "❌ 8888 端口被其他进程占用；请释放端口后重新启动 Money3。"
+            exit 1
         fi
     fi
 

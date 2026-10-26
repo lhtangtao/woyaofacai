@@ -28,11 +28,15 @@ class WrappedHeader(QHeaderView):
             if text.startswith(prefix) and len(text) > len(prefix):
                 text = prefix + "\n" + text[len(prefix):]
                 break
-        painter.setPen(tokens(self).muted)
-        painter.setFont(self.font())
-        painter.drawText(rect.adjusted(4, 3, -17, -3), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
         active = self.isSortIndicatorShown() and self.sortIndicatorSection() == logical
         painter.setPen(tokens(self).brand if active else tokens(self).muted)
+        font = self.font()
+        if active:
+            font.setBold(True)
+            arrow = " ↑" if self.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder else " ↓"
+            text = f"{text}{arrow}"
+        painter.setFont(font)
+        painter.drawText(rect.adjusted(4, 3, -17, -3), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
         x, y = rect.right() - 9, rect.center().y()
         direction = -1 if active and self.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder else 1
         painter.drawLine(x - 3, y - direction, x, y + direction * 2)
