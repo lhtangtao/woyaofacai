@@ -14,7 +14,7 @@ Security & Access Control (PRD v2.0):
 - Original financial database & Excel strictly read-only.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from functools import wraps
 import json
@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from flask import Flask, g, jsonify, render_template, request, session
 
 from portfolio.domain.models import Ledger, QueryScope
-from portfolio.domain.technical_indicators import series, technicals
+from portfolio.domain.technical_indicators import DailyBar, series, technicals
 from portfolio.paths import API_CONFIG_PATH, DATABASE_PATH, PROJECT_DIR
 from portfolio.services.ai_service import CodexAIService
 from portfolio.services.analytics_service import AnalyticsService
@@ -1089,54 +1089,82 @@ def api_monitoring_kline():
         bars_objs = store.bars(target_sym) or store.bars(symbol)
         if not bars_objs:
             # Synthesize fallback bars if offline
-            bars = []
+            bars_objs = []
             base_p = 100.0
             for i in range(60):
-                d_str = (date.today() - timedelta(days=60 - i)).isoformat()
-                op = base_p + math.sin(i * 0.3) * 5
-                cl = op + math.cos(i * 0.2) * 3
-                hi = max(op, cl) + 2.0
-                lo = min(op, cl) - 2.0
+                d = date.today() - timedelta(days=60 - i)
+                op = round(base_p + math.sin(i * 0.3) * 5, 2)
+                cl = round(op + math.cos(i * 0.2) * 3, 2)
+                hi = round(max(op, cl) + 2.0, 2)
+                lo = round(min(op, cl) - 2.0, 2)
                 vol = 100000 + int(math.sin(i) * 30000)
-                bars.append({"date": d_str, "open": op, "close": cl, "high": hi, "low": lo, "volume": vol})
-        else:
-            bars = [
-                {
-                    "date": b.day.isoformat(),
-                    "open": float(b.open),
-                    "close": float(b.close),
-                    "high": float(b.high),
-                    "low": float(b.low),
-                    "volume": float(b.volume or 0),
-                }
-                for b in bars_objs
-            ]
+                bars_objs.append(
+                    DailyBar(d, Decimal(str(op)), Decimal(str(hi)), Decimal(str(lo)), Decimal(str(cl)), Decimal(str(vol)))
+                )
 
-        closes = [b["close"] for b in bars]
-        ma5 = series(closes, 5)
-        ma10 = series(closes, 10)
-        ma20 = series(closes, 20)
-        ma50 = series(closes, 50)
-        ma200 = series(closes, 200)
+        # Calculate technical indicators
+        s = series(bars_objs)
+        t_pair = technicals(bars_objs)
+        tech_dict = t_pair[0] if isinstance(t_pair, tuple) else t_pair
 
-        # Technical indicators
-        last_m = technicals(closes) if len(closes) >= 5 else {}
+        def to_float(val):
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except Exception:
+                return str(val)
+
+        dates = [b.day.isoformat() for b in bars_objs]
+        ohlcv = [
+            [to_float(b.open), to_float(b.close), to_float(b.low), to_float(b.high), to_float(b.volume or 0)]
+            for b in bars_objs
+        ]
+        volumes = [to_float(b.volume or 0) for b in bars_objs]
+        latest_close = to_float(bars_objs[-1].close) if bars_objs else 0.0
+
+        ma = {
+            "ma5": [to_float(v) for v in s.get("MA5", [])],
+            "ma10": [to_float(v) for v in s.get("MA10", [])],
+            "ma20": [to_float(v) for v in s.get("MA20", [])],
+            "ma50": [to_float(v) for v in s.get("MA50", [])],
+            "ma200": [to_float(v) for v in s.get("MA200", [])],
+        }
+
+        macd = {
+            "dif": [to_float(v) for v in s.get("DIF", [])],
+            "dea": [to_float(v) for v in s.get("DEA", [])],
+            "bar": [to_float(v) for v in s.get("MACD", [])],
+        }
+
+        rsi = [to_float(v) for v in s.get("RSI14", [])]
+        technicals_clean = {k: to_float(v) for k, v in tech_dict.items()}
+
+        bars_data = [
+            {
+                "date": b.day.isoformat(),
+                "open": to_float(b.open),
+                "close": to_float(b.close),
+                "high": to_float(b.high),
+                "low": to_float(b.low),
+                "volume": to_float(b.volume or 0),
+            }
+            for b in bars_objs
+        ]
 
         return jsonify({
             "status": "ok",
             "symbol": symbol,
-            "bars": bars,
-            "count": len(bars),
-            "indicators": {
-                "ma5": ma5,
-                "ma10": ma10,
-                "ma20": ma20,
-                "ma50": ma50,
-                "ma200": ma200,
-                "latest_rsi": last_m.get("RSI14"),
-                "trend_short": last_m.get("SHORT", "—"),
-                "trend_long": last_m.get("LONG", "—"),
-            },
+            "dates": dates,
+            "ohlcv": ohlcv,
+            "volumes": volumes,
+            "latest_close": latest_close,
+            "ma": ma,
+            "macd": macd,
+            "rsi": rsi,
+            "technicals": technicals_clean,
+            "bars": bars_data,
+            "count": len(bars_objs),
         })
     except Exception as e:
         logger.exception(f"Kline error for {symbol}")
