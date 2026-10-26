@@ -206,7 +206,7 @@ fi
 if [[ "$START_DESKTOP" == "1" ]]; then
     if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
         print "  🖥️ 正在启动桌面端图形界面 (PySide6)..."
-        print "------------------------------------------------------------------\n"
+        print -- "------------------------------------------------------------------\n"
         "$APP_DIR/.venv/bin/python" -m portfolio "${APP_ARGS[@]}"
         DESKTOP_EXIT=$?
 
