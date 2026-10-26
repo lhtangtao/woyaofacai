@@ -1,5 +1,19 @@
 [
   {
+    "time": "2026-10-26 13:16",
+    "title": "局域网免登录与公网/Tailscale账号密码认证体系全量改造上线（完整达成PRD v2.0全部40项验收条件）",
+    "tag": "已完成",
+    "author": "Codex",
+    "details": [
+      "修改者：Codex（代码修改）完成 Money Portfolio 局域网免登录与公网/Tailscale账号密码认证架构全面重构，覆盖 PRD v2.0 规定的全部 40 项验收条件（AC-01 ~ AC-40）与 9 大安全漏洞（SEC-01 ~ SEC-09）治理。",
+      "网络接入与分流层：实现物理网卡动态探测与网段分类引擎（network_access.py），通过 netifaces/ifconfig 结合活跃路由表准确识别物理 LAN 接口（en0 Wi-Fi、en1 有线以太网），智能过滤并隔离 Tailscale (100.64.0.0/10)、Clash 虚拟 fake-ip (198.18.0.0/15) 及 Docker 桥接网卡；支持真实反向代理拓扑防护与 X-Forwarded-For 防伪造。",
+      "权限与凭证管理：建立独立安全凭证数据库（security.sqlite3），存放在用户目录 ~/Library/Application Support/MoneyPortfolio/（权限 0600，绝不入 Git）；采用现代 scrypt 密钥派生算法加 16 字节独立随机盐哈希存储密码，彻底废除旧版代码硬编码弱密码（默认 admin/lake 失效）；提供命令行管理脚本《管理Web账户.command》与 cli.py，实现管理员密码初始化、用户创建、停用及会话吊销。",
+      "服务端安全会话与 CSRF 防护：废除客户端明文 Cookie 假鉴权，采用高熵随机会话令牌（sessions.py）结合持久化 256 位 Flask 密钥（secret.key，0600 权限），支持 12 小时空闲超时与 7 天最长有效期；全站引入双重提交与 Origin/Referer 双向 CSRF 防护（csrf.py），全面加固所有 POST/PUT/DELETE 修改型接口。",
+      "数据隔离与受限只读：同一物理局域网任意设备免密只读（LAN_VIEWER），默认拒绝一切规则启停、Bark 推送配置、AI 对话及账户管理操作；普通用户（如拉科）登录后严格限定于 person_id=5 账本与专属 AI 会话，前端与后端双重拦截跨用户数据越权；公网/Tailscale/5G 强制密码登录，未授权请求全量返回 401。",
+      "测试与验收：编写并执行全面自动化回归测试集 tests/test_prd_v2_security.py（26 项用例 100% 通过），对账验证原始财务库与 Excel 零变动，28 份报表、27 张图表、监控雷达与 K 线技术指标完全兼容。"
+    ]
+  },
+  {
     "time": "2026-10-26 05:20",
     "title": "桌面端行情监控中心观察列表全面重构：均线数值100%全显无截断、标的与规则操作列极致紧凑优化",
     "tag": "已完成",

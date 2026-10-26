@@ -1,5 +1,38 @@
 # 变更日志
 
+## 2026-10-26 13:16 · 局域网免登录与公网/Tailscale账号密码认证体系全量改造上线（完整达成PRD v2.0全部40项验收条件） [Codex]
+
+- 修改者：Codex（代码修改）完成 Money Portfolio 局域网免登录与公网/Tailscale 账号密码认证架构全面重构，覆盖 PRD v2.0 规定的全部 40 项验收条件（AC-01 ~ AC-40）与 9 大安全漏洞（SEC-01 ~ SEC-09）治理。
+- 需求背景与核心原则：
+  - 依照《Money_Portfolio_局域网免登录_公网账号密码_完整PRD_v2.0.md》，满足家庭日常看盘极致便捷性与外出公网访问绝对安全性的双重需求；
+  - 严守四大底线：同一物理局域网任意设备免登录只读（LAN_VIEWER）；公网、异地 Wi-Fi、4G/5G、Tailscale（100.64.0.0/10）必须账号密码登录；局域网免登录用户仅具只读权限（绝不为管理员）；不得改动原始财务库与 Excel；修复全部已知安全漏洞。
+- 架构设计与实现落地：
+  1. **物理网络接口动态探测与分类分流引擎（`network_access.py`）**：
+     - 基于系统接口路由精准识别宿主 Mac 当前活跃的物理网卡（`en0` 无线 Wi-Fi、`en1` 有线以太网）物理子网；
+     - 强制排除并隔离 Tailscale CGNAT（`100.64.0.0/10`）、Clash/VPN 虚拟网段（`198.18.0.0/15`）及容器桥接接口，杜绝虚拟网卡误判为物理 LAN；
+     - 精准识别反向代理拓扑，拦截伪造的 `X-Forwarded-For`、`X-User`、`auth_user` 欺骗攻击。
+  2. **独立凭证存储与现代 scrypt 密钥加固（`credentials.py`）**：
+     - 凭证数据库与财务核心数据库物理完全隔离，存储在宿主目录 `~/Library/Application Support/MoneyPortfolio/security.sqlite3`（权限 0600，绝不入 Git 仓库）；
+     - 密码哈希彻底告别明文与弱哈希，采用标准 `hashlib.scrypt`（N=16384, r=8, p=1）结合 16 字节高熵随机盐；
+     - 种子初始化采用随机密码，彻底废除旧版硬编码的 `admin/admin` 与 `拉科/lake`；
+     - 具备防暴力破解限流保护（15 分钟内连续 5 次失败封禁），并提供《管理Web账户.command》本地终端管理工具。
+  3. **服务端高熵会话管理与 CSRF 双向防御（`sessions.py`, `csrf.py`）**：
+     - 生成并持久化 256 位 Flask 随机密钥（`secret.key`，0600 权限），重启服务不丢失会话；
+     - 服务端数据库跟踪会话生命周期，支持 12 小时空闲超时、7 天绝对超时、单点登出、改密及停用账号一键吊销所有旧会话；
+     - 全站启用双重提交 Cookie 结合 Origin/Referer 双向比对的 CSRF 防御机制，严密保护所有 POST/PUT/DELETE 状态修改接口。
+  4. **最小权限与多租户数据隔离上下文（`auth_context.py`）**：
+     - 构建只读不可变的 `AuthContext` 请求上下文与细粒度能力模型（`CAP_VIEW_ASSETS`, `CAP_VIEW_MARKET`, `CAP_MANAGE_RULES`, `CAP_AI_CHAT`, `CAP_MANAGE_USERS`, `CAP_MANAGE_BARK`）；
+     - 局域网访客具有全量资产与行情只读权，执行规则调整、Bark 推送、AI 会话或账户管理一律拦截返回 403；
+     - 普通用户（如拉科）登录后强绑定至 `person_id=5`，底层查询范围与 AI 会话均被绝对约束在个人子账本内，禁止通过任何 URL 参数越权跨穿。
+  5. **移动端响应式交互与全屏远程认证界面（`mobile.html`）**：
+     - 远程未认证访问展示沉浸式全屏登录卡片（`remoteLoginScreen`），顶栏身份徽标实时反映 `🛜 局域网访客 · 只读` / `👑 管理员` / `👤 拉科 (专属)` / `🔒 远程未登录`；
+     - 设置页新增「🛡️ 访问安全状态」卡片，明确显示网络免密状态与公共 Wi-Fi 安全警示；
+     - 前端 fetch 统一拦截器，自动装配 CSRF Token 并智能处理 401 认证唤醒。
+- 验证结果：
+  - 编写并执行全覆盖测试套件 `tests/test_prd_v2_security.py`，26 项涵盖网络分类、免登只读、公网拦截、凭证哈希、会话吊销、防伪造、CSRF 防护、防爆破、本地初始化、只读库完整性与路由默认拒绝的自动化用例 100% 通过（26/26 OK）；
+  - 财务回归测试（`test_performance.py`, `test_today_holdings.py`, `test_data_layer.py`）与监控中心测试（`test_monitoring.py`）全部通过，原始财务库 `money.sqlite3` 与 `交易流水.xlsx` 零变动；
+  - 严格遵守规范，未运行任何 `pytest`。
+
 ## 2026-10-26 05:20 · 桌面端行情监控中心观察列表全面重构：均线数值100%全显无截断、标的与规则操作列极致紧凑优化 [Antigravity]
 
 - 修改者：Antigravity（`src/portfolio/ui/monitor_page.py` 观察列表表格列宽与表头精简重构、`setStretchLastSection(False)` 彻底解决末列操作巨大空白吞噬均线、单元格内边距紧凑化、规则与操作单元格图标化瘦身、全周期均线数值 100% 完整展示）。

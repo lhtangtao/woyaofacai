@@ -7,6 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Money Portfolio">
   <meta name="theme-color" content="#0B0F19">
+  <meta name="csrf-token" content="{{ csrf_token }}">
   <title>Money Portfolio · 移动端全量工作站</title>
   
   <!-- Local offline cached ECharts with CDN fallback -->
@@ -996,12 +997,33 @@
 </head>
 <body>
 
+  <!-- Fullscreen Remote Login Container for Unauthenticated Remote Visitors (AC-08) -->
+  <div id="remoteLoginScreen" style="{% if is_remote_login %}display:flex;{% else %}display:none;{% endif %}position:fixed;top:0;left:0;right:0;bottom:0;background:#0A0F1D;z-index:9999;flex-direction:column;justify-content:center;align-items:center;padding:24px;">
+    <div style="width:100%;max-width:340px;background:#161F30;border:1px solid var(--border);border-radius:20px;padding:26px 20px;box-shadow:0 20px 50px rgba(0,0,0,0.8);text-align:center;">
+      <div style="font-size:32px;margin-bottom:8px;">📊</div>
+      <div style="font-size:19px;font-weight:800;color:var(--text-main);">Money Portfolio</div>
+      <div style="font-size:13px;color:var(--accent-light);font-weight:600;margin-top:4px;margin-bottom:18px;">安全远程访问认证</div>
+      <p style="font-size:12px;color:var(--text-sub);line-height:1.5;margin-bottom:18px;">
+        当前通过 Tailscale / 5G / 公网远程连接，请输入账号密码以查看授权的投资资产与分析数据。
+      </p>
+      
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;">
+        <input type="text" id="remoteLoginUser" class="table-search" placeholder="输入用户名 (如 admin 或 拉科)" style="padding:12px;font-size:14px;border-radius:10px;">
+        <input type="password" id="remoteLoginPass" class="table-search" placeholder="输入密码" style="padding:12px;font-size:14px;border-radius:10px;">
+      </div>
+      
+      <button class="page-btn" style="width:100%;padding:12px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-size:14px;font-weight:700;border-radius:10px;" onclick="submitRemoteLogin()">立即登录</button>
+      
+      <div id="remoteLoginError" style="color:var(--loss);font-size:12px;margin-top:12px;display:none;"></div>
+    </div>
+  </div>
+
   <!-- Top Glass Navigation Bar -->
   <header class="top-bar">
     <button class="nav-btn" onclick="toggleDrawer()" title="打开全功能菜单">☰</button>
     <div class="top-title" id="pageTitle">
       <span>Money Portfolio</span>
-      <span class="badge" id="topBadge" onclick="openLoginModal()" style="cursor:pointer;" title="点击切换用户">👤 管理员</span>
+      <span class="badge" id="topBadge" onclick="openLoginModal()" style="cursor:pointer;" title="点击切换用户">🛜 局域网访客 · 只读</span>
     </div>
     <div style="display:flex;gap:6px;">
       <button class="nav-btn" onclick="openLoginModal()" title="登录/切换用户" style="font-size:14px;">👤</button>
@@ -1015,9 +1037,9 @@
     <div class="drawer-header">
       <div>
         <div class="drawer-brand">📊 Money Portfolio</div>
-        <div class="drawer-subtitle" id="drawerUserSubtitle">当前用户: 管理员 (全量账本)</div>
+        <div class="drawer-subtitle" id="drawerUserSubtitle">当前身份: 局域网访客 (全量只读资产)</div>
       </div>
-      <button class="nav-btn" onclick="openLoginModal()" style="width:34px;height:30px;font-size:11px;padding:0;margin-right:4px;" title="切换用户">切换</button>
+      <button class="nav-btn" onclick="openLoginModal()" style="width:34px;height:30px;font-size:11px;padding:0;margin-right:4px;" title="切换用户">登录</button>
       <button class="nav-btn" onclick="closeDrawer()" style="width:30px;height:30px;font-size:14px;">✕</button>
     </div>
 
@@ -1025,26 +1047,21 @@
   <div class="drawer-overlay" id="loginModalOverlay" onclick="closeLoginModal()"></div>
   <div class="login-modal" id="loginModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90%;max-width:340px;background:#161F30;border:1px solid var(--border);border-radius:18px;padding:20px;z-index:2100;box-shadow:0 20px 40px rgba(0,0,0,0.8);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <div style="font-size:16px;font-weight:800;">🔐 切换 / 登录账户</div>
+      <div style="font-size:16px;font-weight:800;">🔐 登录 / 切换账户</div>
       <button class="nav-btn" onclick="closeLoginModal()" style="width:28px;height:28px;font-size:12px;">✕</button>
     </div>
     <p style="font-size:12px;color:var(--text-sub);margin-bottom:14px;line-height:1.4;">
-      登录专属用户后，系统将严格隔离资产数据，仅呈现属于该用户的持仓、交易流水与 AI 问答。
+      同一物理局域网下免登录只读；登录专属用户后，系统将解锁管理权限或呈现专属于该用户的账本及 AI 会话。
     </p>
 
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
       <input type="text" id="loginInputUser" class="table-search" placeholder="输入用户名 (如 拉科 或 admin)" style="padding:10px;font-size:13px;">
-      <input type="password" id="loginInputPass" class="table-search" placeholder="输入密码 (如 lake 或 admin)" style="padding:10px;font-size:13px;">
-    </div>
-
-    <div style="display:flex;gap:8px;margin-bottom:14px;">
-      <button class="pill" style="flex:1;justify-content:center;font-size:11px;" onclick="quickFillUser('拉科', 'lake')">👤 拉科 (lake)</button>
-      <button class="pill" style="flex:1;justify-content:center;font-size:11px;" onclick="quickFillUser('admin', 'admin')">👑 管理员 (全量)</button>
+      <input type="password" id="loginInputPass" class="table-search" placeholder="输入密码" style="padding:10px;font-size:13px;">
     </div>
 
     <div style="display:flex;gap:8px;">
       <button class="page-btn" style="flex:1;padding:10px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-weight:700;" onclick="submitLogin()">确认登录</button>
-      <button class="page-btn" style="padding:10px;background:var(--card-sub);color:var(--loss);" onclick="submitLogout()">重置管理员</button>
+      <button class="page-btn" style="padding:10px;background:var(--card-sub);color:var(--loss);" onclick="submitLogout()">退出登录</button>
     </div>
   </div>
     <div class="drawer-content">
@@ -1571,6 +1588,22 @@
         </div>
       </div>
 
+      <!-- Security Status Card (PRD 8.4) -->
+      <div class="chart-card" style="margin-top:14px;padding:16px;">
+        <div style="font-size:14px;font-weight:700;color:var(--accent-light);margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+          <span>🛡️ 访问安全状态 (PRD v2.0)</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-sub);line-height:1.6;display:flex;flex-direction:column;gap:6px;">
+          <div>• 局域网免登录: <span style="color:var(--profit);font-weight:700;">开启</span> (同物理局域网免密码只读查看资产与行情)</div>
+          <div>• 远程网络防护: <span style="color:var(--accent-light);font-weight:700;">强制密码</span> (Tailscale / 5G / 公网需密码登录)</div>
+          <div>• 密码加密算法: <span style="color:#FFF;">scrypt (带 16 字节独立随机盐)</span></div>
+          <div>• 会话与防伪造: <span style="color:#FFF;">服务端高熵会话 + CSRF 双向令牌防跨站</span></div>
+        </div>
+        <div style="margin-top:12px;padding:10px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;font-size:11px;color:#FCA5A5;line-height:1.4;">
+          ⚠️ 安全提示：只要处于同一物理局域网，其他设备也能免密查看开放的资产信息。请勿在网吧、机场等不可信公共网络中开启本服务。
+        </div>
+      </div>
+
     </section>
 
   </main>
@@ -1601,6 +1634,39 @@
 
   <!-- JAVASCRIPT APPLICATION LOGIC -->
   <script>
+    // Security & CSRF Token Helper (PRD 6.2, AC-21)
+    function getCsrfToken() {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (meta && meta.content) return meta.content;
+      const match = document.cookie.match(new RegExp('(^| )money_csrf_token=([^;]+)'));
+      if (match) return decodeURIComponent(match[2]);
+      return '';
+    }
+
+    // Intercept window.fetch to automatically attach CSRF tokens and handle 401
+    const _origFetch = window.fetch;
+    window.fetch = async function(resource, init = {}) {
+      init = init || {};
+      init.headers = init.headers || {};
+      const method = (init.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        const token = getCsrfToken();
+        if (token) {
+          if (init.headers instanceof Headers) {
+            init.headers.set('X-CSRF-Token', token);
+          } else {
+            init.headers['X-CSRF-Token'] = token;
+          }
+        }
+      }
+      const res = await _origFetch(resource, init);
+      if (res.status === 401 && typeof resource === 'string' && !resource.includes('/api/auth/login')) {
+        const remoteScreen = document.getElementById('remoteLoginScreen');
+        if (remoteScreen) remoteScreen.style.display = 'flex';
+      }
+      return res;
+    };
+
     // Global Application State
     const state = {
       currentView: 'overview',
@@ -2971,22 +3037,44 @@
         const data = await res.json();
         if (data.status === 'ok' && data.user) {
           updateUserBadge(data.user);
+          return data.user;
         }
       } catch (e) {
         console.error('Check user error:', e);
       }
+      return null;
     }
 
     function updateUserBadge(user) {
+      if (!user) return;
       state.currentUser = user;
-      const isLake = user.username === '拉科';
-      const badgeText = isLake ? '👤 拉科 (专属)' : `👤 ${user.username}`;
-      const subtitleText = isLake ? '当前用户: 拉科 (专属受限账本)' : `当前用户: ${user.username} (全量账本)`;
+      
+      let badgeText = '👤 ' + (user.display_name || user.username);
+      let subtitleText = `当前身份: ${user.display_name || user.username}`;
+      let badgeColor = 'var(--accent-light)';
+
+      if (user.role === 'admin') {
+        badgeText = '👑 管理员';
+        subtitleText = `当前用户: ${user.display_name || '管理员'} (全量管理员权限)`;
+        badgeColor = '#F59E0B';
+      } else if (user.role === 'lan_viewer') {
+        badgeText = '🛜 局域网访客 · 只读';
+        subtitleText = '当前身份: 局域网访客 (全量只读资产)';
+        badgeColor = '#10B981';
+      } else if (user.role === 'user' || user.username === '拉科') {
+        badgeText = `👤 ${user.display_name || user.username} (专属)`;
+        subtitleText = `当前用户: ${user.display_name || user.username} (专属受限账本)`;
+        badgeColor = '#38BDF8';
+      } else if (!user.authenticated) {
+        badgeText = '🔒 远程未登录';
+        subtitleText = '当前连接: 远程未登录 (请输入账号密码)';
+        badgeColor = '#EF4444';
+      }
 
       const badgeEl = document.getElementById('topBadge');
       if (badgeEl) {
         badgeEl.innerText = badgeText;
-        badgeEl.style.color = isLake ? '#38BDF8' : 'var(--accent-light)';
+        badgeEl.style.color = badgeColor;
       }
       const subEl = document.getElementById('drawerUserSubtitle');
       if (subEl) subEl.innerText = subtitleText;
@@ -3003,9 +3091,50 @@
       document.getElementById('loginModalOverlay').classList.remove('open');
     }
 
-    function quickFillUser(u, p) {
-      document.getElementById('loginInputUser').value = u;
-      document.getElementById('loginInputPass').value = p;
+    async function submitRemoteLogin() {
+      const u = document.getElementById('remoteLoginUser').value.trim();
+      const p = document.getElementById('remoteLoginPass').value.trim();
+      const errEl = document.getElementById('remoteLoginError');
+      if (errEl) errEl.style.display = 'none';
+      if (!u || !p) {
+        if (errEl) {
+          errEl.innerText = '请输入用户名和密码';
+          errEl.style.display = 'block';
+        } else {
+          alert('请输入用户名和密码');
+        }
+        return;
+      }
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          const screen = document.getElementById('remoteLoginScreen');
+          if (screen) screen.style.display = 'none';
+          updateUserBadge(data.user);
+          fetchOverview();
+          fetchKline('AAOI');
+          refreshCurrentView();
+        } else {
+          if (errEl) {
+            errEl.innerText = data.message || '登录失败，请检查账号密码';
+            errEl.style.display = 'block';
+          } else {
+            alert('登录失败: ' + (data.message || '用户名或密码错误'));
+          }
+        }
+      } catch (err) {
+        if (errEl) {
+          errEl.innerText = '登录异常: ' + err.message;
+          errEl.style.display = 'block';
+        } else {
+          alert('登录异常: ' + err.message);
+        }
+      }
     }
 
     async function submitLogin() {
@@ -3025,10 +3154,10 @@
         if (data.status === 'ok') {
           updateUserBadge(data.user);
           closeLoginModal();
-          alert(`登录成功！当前视角已切换至【${data.user.username}】专属账本`);
+          alert(`登录成功！当前身份: 【${data.user.display_name || data.user.username}】`);
           refreshCurrentView();
         } else {
-          alert('登录失败: ' + data.message);
+          alert('登录失败: ' + (data.message || '用户名或密码错误'));
         }
       } catch (err) {
         alert('登录异常: ' + err.message);
@@ -3042,11 +3171,17 @@
         if (data.status === 'ok') {
           updateUserBadge(data.user);
           closeLoginModal();
-          alert('已重置为全量管理员视角');
-          refreshCurrentView();
+          if (data.is_lan) {
+            alert('已退出登录，恢复为局域网免登录只读视角');
+            refreshCurrentView();
+          } else {
+            alert('已安全退出登录');
+            const screen = document.getElementById('remoteLoginScreen');
+            if (screen) screen.style.display = 'flex';
+          }
         }
       } catch (err) {
-        alert('重置异常: ' + err.message);
+        alert('退出异常: ' + err.message);
       }
     }
 
@@ -3056,8 +3191,12 @@
     });
 
     // Initial Bootstrap
-    document.addEventListener('DOMContentLoaded', () => {
-      checkCurrentUser();
+    document.addEventListener('DOMContentLoaded', async () => {
+      const user = await checkCurrentUser();
+      const remoteScreen = document.getElementById('remoteLoginScreen');
+      if (remoteScreen && remoteScreen.style.display !== 'none' && (!user || (!user.authenticated && !user.is_lan))) {
+        return;
+      }
       fetchOverview();
       fetchKline('AAOI');
     });
