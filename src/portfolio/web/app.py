@@ -833,6 +833,19 @@ def api_reports_list():
         scope = get_user_query_scope()
         res = svc.calculate(scope)
         reports_meta = []
+
+        # Ensure 今日盈亏 is included at the front, matching desktop sidebar
+        from portfolio.engine.today_holdings import today_holdings
+        holdings_rep = res.reports.get("当前持仓")
+        if holdings_rep:
+            today_rep = today_holdings(res, holdings_rep, None)
+            reports_meta.append({
+                "name": "今日盈亏",
+                "columns": list(today_rep.columns),
+                "row_count": len(today_rep.rows),
+                "description": "按持仓查看当日盈亏与累计盈亏",
+            })
+
         for name, r in res.reports.items():
             reports_meta.append({
                 "name": name,
@@ -849,27 +862,58 @@ def api_reports_list():
 @app.route("/api/report/<report_name>", methods=["GET"])
 @require_capability(CAP_VIEW_ASSETS)
 def api_report_detail(report_name: str):
-    """Return tabular data for a specific financial report."""
+    """Return tabular data for a specific financial report with pagination and search."""
     try:
         svc = get_analytics_service()
         scope = get_user_query_scope()
         res = svc.calculate(scope)
 
-        report = res.reports.get(report_name)
+        report = None
+        if report_name in ("今日盈亏", "当日盈亏"):
+            from portfolio.engine.today_holdings import today_holdings
+            holdings_rep = res.reports.get("当前持仓")
+            if holdings_rep:
+                report = today_holdings(res, holdings_rep, None)
+        elif report_name == "股票归属":
+            report = res.reports.get("人员划转") or res.reports.get("股票汇总")
+        elif report_name == "券商资产":
+            report = res.reports.get("渠道汇总") or res.reports.get("账户资产")
+        else:
+            report = res.reports.get(report_name)
+
         if not report:
             return jsonify({"status": "error", "message": f"报告 '{report_name}' 未找到"}), 404
 
         columns = list(report.columns)
-        rows_data = []
+
+        # Pagination & Search parameters
+        search = request.args.get("search", "").strip().lower()
+        page = max(1, request.args.get("page", 1, type=int))
+        page_size = max(1, min(100, request.args.get("page_size", 20, type=int)))
+
+        # Convert rows to 2D array matching columns
+        all_rows = []
         for r in report.rows:
-            row_dict = {}
-            for idx, col in enumerate(columns):
+            row_vals = []
+            row_text = ""
+            for idx in range(len(columns)):
                 val = r.values[idx] if idx < len(r.values) else None
-                row_dict[col] = serialize_val(val)
-            rows_data.append(row_dict)
+                s_val = serialize_val(val)
+                row_vals.append(s_val)
+                if s_val is not None:
+                    row_text += " " + str(s_val).lower()
+
+            if search and search not in row_text:
+                continue
+            all_rows.append(row_vals)
+
+        total_rows = len(all_rows)
+        total_pages = max(1, math.ceil(total_rows / page_size))
+        start_idx = (page - 1) * page_size
+        paged_rows = all_rows[start_idx : start_idx + page_size]
 
         totals = {}
-        if report.totals:
+        if hasattr(report, "totals") and getattr(report, "totals"):
             for idx, col in enumerate(columns):
                 t_val = report.totals.values[idx] if idx < len(report.totals.values) else None
                 if t_val is not None:
@@ -879,9 +923,13 @@ def api_report_detail(report_name: str):
             "status": "ok",
             "name": report_name,
             "columns": columns,
-            "rows": rows_data,
+            "rows": paged_rows,
+            "total": total_rows,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
             "totals": totals,
-            "row_count": len(rows_data),
+            "row_count": len(paged_rows),
         })
     except Exception as e:
         logger.exception(f"Report {report_name} error")

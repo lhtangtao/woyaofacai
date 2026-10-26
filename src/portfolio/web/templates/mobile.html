@@ -1919,11 +1919,17 @@
               let extraClass = '';
 
               if (typeof cell === 'number') {
-                displayVal = formatNumber(cell);
-                const colName = data.columns[colIdx];
-                if (colName && (colName.includes('盈亏') || colName.includes('收益'))) {
+                const colName = data.columns[colIdx] || '';
+                if (colName.includes('幅') || colName.includes('比') || colName.includes('率')) {
+                  displayVal = (cell * 100).toFixed(2) + '%';
                   if (cell > 0) extraClass = 'val-profit';
                   else if (cell < 0) extraClass = 'val-loss';
+                } else {
+                  displayVal = formatNumber(cell);
+                  if (colName.includes('盈亏') || colName.includes('收益')) {
+                    if (cell > 0) extraClass = 'val-profit';
+                    else if (cell < 0) extraClass = 'val-loss';
+                  }
                 }
               }
               return `<td class="${extraClass}">${displayVal}</td>`;
