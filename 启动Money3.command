@@ -5,25 +5,30 @@ cd "$APP_DIR"
 export MONEY3_HOME="$APP_DIR"
 
 # ==============================================================================
-# Money Portfolio 双端联合启动器 (Desktop GUI + Mobile Web/PWA)
+# Money Portfolio 全功能一键联合启动器 (Desktop GUI + Mobile Web + 公网访问)
 # ==============================================================================
 # 功能说明：
-# - 默认行为：执行单个脚本，同时启动桌面端图形界面 (PySide6) 与手机端全量服务 (Port 8888)
+# - 默认行为：双击一键启动全部组件：
+#   1. 手机端后台服务 (Flask Web / PWA on Port 8888)
+#   2. 公网安全直连隧道 (ngrok 自动分配公网 HTTPS 网址，免装 App 秒开)
+#   3. 桌面端图形界面 (PySide6 GUI)
 # - 数据同步参数：
 #   ./启动Money3.command --api        (强制完整券商API+Excel同步后启动)
 #   ./启动Money3.command --excel      (强制仅本地Excel同步后启动)
 #   ./启动Money3.command --no-sync    (强制跳过同步直接启动)
 # - 服务模式参数：
-#   ./启动Money3.command --only-mobile (仅启动手机端后台服务，不打开桌面端GUI)
-#   ./启动Money3.command --no-mobile   (仅启动桌面端GUI，不启动手机端服务)
-#   ./启动Money3.command --stop-mobile (停止正在运行的手机端后台服务)
+#   ./启动Money3.command --only-mobile (仅启动手机后台与公网隧道，不打开桌面端GUI)
+#   ./启动Money3.command --no-public   (仅启动桌面端与局域网手机端，不开启公网隧道)
+#   ./启动Money3.command --no-mobile   (仅启动桌面端GUI，不启动手机端服务与公网)
+#   ./启动Money3.command --stop        (一键停止手机后台服务与公网隧道)
 # ==============================================================================
 
 SYNC_API="${SYNC_API:-0}"
 SYNC_EXCEL_ONLY="${SYNC_EXCEL_ONLY:-0}"
 START_MOBILE=1
+START_PUBLIC=1
 START_DESKTOP=1
-STOP_MOBILE=0
+STOP_ALL=0
 
 APP_ARGS=()
 for arg in "$@"; do
@@ -40,25 +45,30 @@ for arg in "$@"; do
             SYNC_API=0
             SYNC_EXCEL_ONLY=0
             ;;
-        --only-mobile)
+        --only-mobile|--only-public|--server-only)
             START_MOBILE=1
+            START_PUBLIC=1
             START_DESKTOP=0
+            ;;
+        --no-public)
+            START_PUBLIC=0
             ;;
         --no-mobile)
             START_MOBILE=0
+            START_PUBLIC=0
             ;;
-        --stop-mobile|--stop)
-            STOP_MOBILE=1
+        --stop-mobile|--stop|--stop-all)
+            STOP_ALL=1
             ;;
         --help|-h)
             print "用法: ./启动Money3.command [选项]"
             print ""
             print "常规启动选项:"
-            print "  (无参数)          同时启动桌面端 GUI 与手机端全量服务 (默认推荐)"
-            print "  --only-mobile    仅启动手机端后台服务 (iPhone/iPad/远程)，不打开桌面端窗口"
+            print "  (无参数)          一键启动桌面端 GUI、手机端服务与公网直连隧道 (默认推荐)"
+            print "  --only-mobile    仅启动手机后台服务与公网隧道，不打开桌面端图形窗口"
+            print "  --no-public      仅启动桌面端与局域网手机端，不建立公网隧道"
             print "  --no-mobile      仅启动桌面端 GUI，不启动手机端服务"
-            print "  --stop-mobile    停止正在运行的手机端后台服务"
-            print "  --stop           同 --stop-mobile"
+            print "  --stop           一键停止正在运行的手机端后台服务与公网隧道"
             print ""
             print "数据同步选项:"
             print "  --api, --sync    启动前强制调用券商API完整同步数据"
@@ -73,15 +83,22 @@ for arg in "$@"; do
 done
 
 # ------------------------------------------------------------------------------
-# 停止手机端服务处理
+# 停止服务处理 (--stop / --stop-all)
 # ------------------------------------------------------------------------------
-if [[ "$STOP_MOBILE" == "1" ]]; then
+if [[ "$STOP_ALL" == "1" ]]; then
     MOBILE_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
     if [[ -n "$MOBILE_PID" ]]; then
         kill "$MOBILE_PID" 2>/dev/null || true
         print "✅ 手机端后台服务 (PID: $MOBILE_PID) 已成功停止。"
     else
-        print "ℹ️ 手机端服务当前未在运行 (端口 8888 未被占用)。"
+        print "ℹ️ 手机端 Web 服务当前未在运行 (端口 8888 未被占用)。"
+    fi
+
+    if pgrep -f "ngrok http 8888" &>/dev/null; then
+        pkill -f "ngrok http 8888" 2>/dev/null || true
+        print "✅ 公网隧道 (ngrok) 已安全停止。"
+    else
+        print "ℹ️ 公网隧道当前未在运行。"
     fi
     exit 0
 fi
@@ -95,7 +112,6 @@ MOBILE_LOG="/tmp/money_mobile.log"
 touch "$MOBILE_LOG"
 
 if [[ "$START_MOBILE" == "1" ]]; then
-    # 检查端口 8888 是否已有服务运行
     EXISTING_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
     if [[ -n "$EXISTING_PID" ]]; then
         if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app"; then
@@ -104,7 +120,6 @@ if [[ "$START_MOBILE" == "1" ]]; then
         fi
     fi
 
-    # 若未运行，启动后台守护进程
     if [[ "$IS_MOBILE_RUNNING" == "0" ]]; then
         nohup "$APP_DIR/.venv/bin/python" -m portfolio.web.app >> "$MOBILE_LOG" 2>&1 &
         MOBILE_PID=$!
@@ -117,49 +132,122 @@ if [[ "$START_MOBILE" == "1" ]]; then
             sleep 0.2
         done
     fi
-
-    # 获取 WiFi 局域网 IP 与 Tailscale 远程 IP
-    WIFI_IP=$(ifconfig | grep -E '^\s*inet ' | awk '{print $2}' | grep -v '^127\.' | grep -v '^198\.18\.' | grep -v '^100\.' | head -n 1)
-    [[ -z "$WIFI_IP" ]] && WIFI_IP="127.0.0.1"
-
-    TAILSCALE_IP=$(ifconfig | grep -E '^\s*inet ' | awk '{print $2}' | grep '^100\.' | head -n 1)
-    if [[ -z "$TAILSCALE_IP" ]] && which tailscale &>/dev/null; then
-        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -n 1)
-    fi
-
-    print "\n=================================================================="
-    print "  🚀 Money Portfolio 双端联合启动器 (桌面端 + 手机端)"
-    print "=================================================================="
-    if [[ "$IS_MOBILE_RUNNING" == "1" ]]; then
-        print "  ✅ 手机端后台服务已就绪！ (PID: $MOBILE_PID, 端口: 8888)"
-    else
-        print "  ⚠️ 手机端服务正在启动中 (端口: 8888)..."
-    fi
-    print ""
-    print "  📱【1. 家中同一 WiFi 局域网访问 (iPhone / iPad)】"
-    print "      打开 iPhone Safari 浏览器输入："
-    print "      👉 http://${WIFI_IP}:8888"
-    print ""
-    if [[ -n "$TAILSCALE_IP" ]]; then
-        print "  🌐【2. 户外公网 5G 远程访问 (Tailscale 已连接)】"
-        print "      打开 iPhone Safari 浏览器输入："
-        print "      👉 http://${TAILSCALE_IP}:8888"
-        print ""
-    else
-        print "  🌐【2. 户外公网 5G 远程访问 (手机免装 App / 浏览器秒开)】"
-        print "      若需出门在外随时使用手机查看："
-        print "      👉 双击项目目录下的「开启公网访问.command」即可一键生成专属公网网址！"
-        print "      • 手机无需安装任何 App，微信或自带 Safari 浏览器直接打开；"
-        print "      • 登录账号：拉科  密码：lake123（仅能查看属于拉科的持仓与 AI 会话）。"
-        print ""
-    fi
-    print "  📲【3. 一键添加为 iPhone 原生全屏桌面 App】"
-    print "      在 Safari 打开上述网址 -> 点击底部「分享」按钮 ->「添加到主屏幕」"
-    print "=================================================================="
 fi
 
 # ------------------------------------------------------------------------------
-# 2. 执行前置数据同步 (可选)
+# 2. 启动并检测公网直连隧道 (ngrok -> Port 8888)
+# ------------------------------------------------------------------------------
+NGROK_BIN="$APP_DIR/tools/ngrok"
+NGROK_LOG="/tmp/money_ngrok.log"
+PUBLIC_URL=""
+IS_NGROK_RUNNING=0
+
+if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$NGROK_BIN" ]]; then
+    # 先检查是否已有运行中的 ngrok 隧道并提取 URL
+    PUBLIC_URL=$("$APP_DIR/.venv/bin/python" -c "
+import urllib.request, json
+try:
+    with urllib.request.urlopen('http://127.0.0.1:4040/api/tunnels', timeout=0.8) as resp:
+        data = json.loads(resp.read().decode())
+        for t in data.get('tunnels', []):
+            if t.get('proto') == 'https':
+                print(t.get('public_url', ''))
+                break
+        else:
+            if data.get('tunnels'):
+                print(data['tunnels'][0].get('public_url', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+    if [[ -n "$PUBLIC_URL" ]]; then
+        IS_NGROK_RUNNING=1
+    else
+        # 若未运行且已配置 Token，启动后台守护进程
+        if "$NGROK_BIN" config check &>/dev/null; then
+            nohup "$NGROK_BIN" http 8888 --log=stdout > "$NGROK_LOG" 2>&1 &
+            for i in {1..30}; do
+                sleep 0.25
+                PUBLIC_URL=$("$APP_DIR/.venv/bin/python" -c "
+import urllib.request, json
+try:
+    with urllib.request.urlopen('http://127.0.0.1:4040/api/tunnels', timeout=0.8) as resp:
+        data = json.loads(resp.read().decode())
+        for t in data.get('tunnels', []):
+            if t.get('proto') == 'https':
+                print(t.get('public_url', ''))
+                break
+        else:
+            if data.get('tunnels'):
+                print(data['tunnels'][0].get('public_url', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)
+                if [[ -n "$PUBLIC_URL" ]]; then
+                    IS_NGROK_RUNNING=1
+                    break
+                fi
+            done
+        fi
+    fi
+
+    # 自动将公网地址存入系统剪贴板
+    if [[ -n "$PUBLIC_URL" ]]; then
+        echo "$PUBLIC_URL" | pbcopy 2>/dev/null || true
+    fi
+fi
+
+# ------------------------------------------------------------------------------
+# 3. 提取本地网络 IP 并展示联合启动仪表盘
+# ------------------------------------------------------------------------------
+WIFI_IP=$(ifconfig | grep -E '^\s*inet ' | awk '{print $2}' | grep -v '^127\.' | grep -v '^198\.18\.' | grep -v '^100\.' | head -n 1)
+[[ -z "$WIFI_IP" ]] && WIFI_IP="127.0.0.1"
+
+TAILSCALE_IP=$(ifconfig | grep -E '^\s*inet ' | awk '{print $2}' | grep '^100\.' | head -n 1)
+if [[ -z "$TAILSCALE_IP" ]] && which tailscale &>/dev/null; then
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null | head -n 1)
+fi
+
+print "\n=================================================================="
+print "  🚀 Money Portfolio 全功能一键联合启动器"
+print "=================================================================="
+if [[ "$IS_MOBILE_RUNNING" == "1" ]]; then
+    print "  ✅ 1. 手机端 Web 核心服务已就绪 (端口: 8888, PID: $MOBILE_PID)"
+else
+    print "  ⚠️ 1. 手机端 Web 服务未启动"
+fi
+
+if [[ -n "$PUBLIC_URL" ]]; then
+    print "  ✅ 2. 公网直连安全隧道已建立 (已自动复制公网网址到剪贴板！)"
+else
+    print "  ℹ️ 2. 公网隧道未运行 (如需开启请确认已配置 tools/ngrok)"
+fi
+
+if [[ "$START_DESKTOP" == "1" ]]; then
+    print "  ✅ 3. 正在启动桌面端图形界面 (PySide6)..."
+else
+    print "  ℹ️ 3. 手机端独立模式 (已跳过桌面端窗口)"
+fi
+
+print ""
+print "  📱【手机访问地址 (iPhone / iPad / 安卓)】"
+print "     • 家中同一 WiFi:   👉 http://${WIFI_IP}:8888"
+if [[ -n "$PUBLIC_URL" ]]; then
+    print "     • 户外公网/5G直连: 👉 $PUBLIC_URL  (已复制剪贴板)"
+fi
+if [[ -n "$TAILSCALE_IP" ]]; then
+    print "     • Tailscale 专用网: 👉 http://${TAILSCALE_IP}:8888"
+fi
+
+print ""
+print "  👥【用户登录账号】"
+print "     • 用户名: 拉科     密码: lake123     (绑定拉科个人账本)"
+print "     • 用户名: 巴小     密码: baxiao321   (绑定巴小个人账本)"
+print "     (注: 手机浏览器直接打开网址，登录后即可查看专属持仓与盈亏)"
+print "=================================================================="
+
+# ------------------------------------------------------------------------------
+# 4. 执行前置数据同步 (可选)
 # ------------------------------------------------------------------------------
 DO_SYNC=0
 SYNC_FLAGS=()
@@ -202,25 +290,25 @@ if [[ "$DO_SYNC" == "1" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 3. 启动桌面端应用 (PySide6) 或保持手机独立模式
+# 5. 启动桌面端应用 (PySide6) 或保持手机独立后台服务
 # ------------------------------------------------------------------------------
 if [[ "$START_DESKTOP" == "1" ]]; then
     if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
-        print "  🖥️ 正在启动桌面端图形界面 (PySide6)..."
+        print "  🖥️ 桌面端主窗口已启动..."
         print -- "------------------------------------------------------------------\n"
         "$APP_DIR/.venv/bin/python" -m portfolio "${APP_ARGS[@]}"
         DESKTOP_EXIT=$?
 
         print "\n=================================================================="
-        print "  ℹ️ 桌面端已安全退出 (退出状态码: $DESKTOP_EXIT)"
+        print "  ℹ️ 桌面端已安全退出 (状态码: $DESKTOP_EXIT)"
         if [[ "$START_MOBILE" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
-            print "  📱 手机端后台服务 (PID: $MOBILE_PID) 仍在持续运行中"
-            print "  👉 手机随时可通过以下地址访问："
-            print "     http://${WIFI_IP}:8888"
-            if [[ -n "$TAILSCALE_IP" ]]; then
-                print "     http://${TAILSCALE_IP}:8888"
+            print "  📱 手机端后台服务 (Port 8888) 与 🌐 公网隧道 仍在持续运行中"
+            print "  👉 手机端随时可通过以下地址访问："
+            print "     • WiFi 局域网: http://${WIFI_IP}:8888"
+            if [[ -n "$PUBLIC_URL" ]]; then
+                print "     • 公网直连:    $PUBLIC_URL"
             fi
-            print "  💡 若需停止手机后台服务，可执行：./启动手机服务.command --stop"
+            print "  💡 若需完全停止所有后台服务，可执行：./启动Money3.command --stop"
         fi
         print "=================================================================="
         exit "$DESKTOP_EXIT"
@@ -229,10 +317,11 @@ if [[ "$START_DESKTOP" == "1" ]]; then
     print "[错误] Money3本地运行环境未准备好，请先安装本目录项目依赖。"
     exit 1
 else
-    print "\n  📱 手机端专属模式已激活 (桌面端已跳过启动)。"
-    print "  服务运行日志：$MOBILE_LOG"
-    print "  若需停止服务，可按 Ctrl + C 或运行 ./启动手机服务.command --stop"
+    print "\n  📱 手机端独立模式已就绪 (桌面端已跳过)。"
+    print "  • Web日志: $MOBILE_LOG"
+    [[ -n "$PUBLIC_URL" ]] && print "  • 隧道日志: $NGROK_LOG"
+    print "  • 若需停止服务，可按 Ctrl + C 或执行 ./启动Money3.command --stop"
     print "=================================================================="
-    trap "kill $MOBILE_PID 2>/dev/null || true; exit 0" INT TERM
+    trap "kill $MOBILE_PID 2>/dev/null || true; pkill -f 'ngrok http 8888' 2>/dev/null || true; exit 0" INT TERM
     tail -f "$MOBILE_LOG"
 fi
