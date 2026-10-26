@@ -1643,7 +1643,7 @@
       return '';
     }
 
-    // Intercept window.fetch to automatically attach CSRF tokens and handle 401
+    // Intercept window.fetch to automatically attach CSRF tokens and handle 401 & CSRF auto-recovery
     const _origFetch = window.fetch;
     window.fetch = async function(resource, init = {}) {
       init = init || {};
@@ -1663,6 +1663,32 @@
       if (res.status === 401 && typeof resource === 'string' && !resource.includes('/api/auth/login')) {
         const remoteScreen = document.getElementById('remoteLoginScreen');
         if (remoteScreen) remoteScreen.style.display = 'flex';
+      } else if (res.status === 403 && typeof resource === 'string' && !init._isRetry && method !== 'GET') {
+        try {
+          const clone = res.clone();
+          const errData = await clone.json();
+          if (errData && errData.code === 'CSRF_ERROR') {
+            // Auto-refresh CSRF token and retry once
+            const csrfResp = await _origFetch('/api/auth/csrf?refresh=1');
+            if (csrfResp.ok) {
+              const csrfData = await csrfResp.json();
+              if (csrfData && csrfData.csrf_token) {
+                document.cookie = 'money_csrf_token=' + encodeURIComponent(csrfData.csrf_token) + '; path=/; SameSite=Lax';
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta) meta.content = csrfData.csrf_token;
+                init._isRetry = true;
+                if (init.headers instanceof Headers) {
+                  init.headers.set('X-CSRF-Token', csrfData.csrf_token);
+                } else {
+                  init.headers['X-CSRF-Token'] = csrfData.csrf_token;
+                }
+                return await _origFetch(resource, init);
+              }
+            }
+          }
+        } catch (e) {
+          // ignore error parsing
+        }
       }
       return res;
     };
@@ -2619,6 +2645,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            prompt: text,
             message: text,
             person: person,
             channel: channel,

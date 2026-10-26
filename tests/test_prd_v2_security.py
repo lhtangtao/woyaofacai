@@ -66,6 +66,11 @@ class TestPRDv2SecurityArchitecture(unittest.TestCase):
         set_user_password("admin", "AdminValidPass2026!")
         set_user_password("拉科", "LakeValidPass2026!")
 
+    @classmethod
+    def tearDownClass(cls):
+        # Restore user passwords so testing doesn't break production accounts
+        set_user_password("拉科", "lake123")
+
     def setUp(self):
         self.client = app.test_client()
 

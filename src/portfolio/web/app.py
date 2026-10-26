@@ -134,13 +134,21 @@ def authenticate_and_authorize_request():
         )
         return jsonify({"status": "error", "message": csrf_err, "code": "CSRF_ERROR"}), 403
 
+    # 5. Ensure a consistent CSRF token exists for template rendering and response cookie
+    g.csrf_token = request.cookies.get(CSRF_COOKIE_NAME)
+    if not g.csrf_token:
+        g.csrf_token = generate_csrf_token()
+        g.needs_csrf_cookie = True
+    else:
+        g.needs_csrf_cookie = False
+
 
 @app.after_request
 def inject_security_headers_and_csrf(response):
     """Set CSRF cookie and standard security response headers."""
-    # Ensure client has fresh CSRF cookie if not present
-    if CSRF_COOKIE_NAME not in request.cookies:
-        token = generate_csrf_token()
+    # Ensure client has fresh CSRF cookie matching g.csrf_token if not already in request cookies
+    if getattr(g, "needs_csrf_cookie", False) or CSRF_COOKIE_NAME not in request.cookies:
+        token = getattr(g, "csrf_token", None) or generate_csrf_token()
         is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
         response.set_cookie(
             CSRF_COOKIE_NAME,
@@ -458,7 +466,7 @@ def index():
     ctx: AuthContext = getattr(g, "auth_context", None)
     user_data = ctx.to_dict() if ctx else get_current_user()
 
-    csrf_token = request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token()
+    csrf_token = getattr(g, "csrf_token", None) or request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token()
 
     return render_template(
         "mobile.html",
@@ -481,8 +489,9 @@ def index():
 
 @app.route("/api/auth/csrf", methods=["GET"])
 def api_auth_csrf():
-    """Return fresh CSRF token."""
-    token = request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token()
+    """Return fresh CSRF token, supporting force refresh."""
+    force_refresh = request.args.get("refresh") in ("1", "true")
+    token = generate_csrf_token() if force_refresh else (request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token())
     is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
     resp = jsonify({"status": "ok", "csrf_token": token})
     resp.set_cookie(CSRF_COOKIE_NAME, token, httponly=False, samesite="Lax", secure=is_secure, path="/")
@@ -1360,7 +1369,7 @@ def api_ai_stock_chat():
     try:
         data = request.get_json(silent=True) or {}
         symbol = data.get("symbol", "").strip().upper()
-        prompt = data.get("prompt", "").strip()
+        prompt = (data.get("prompt") or data.get("message") or "").strip()
 
         if not symbol or not prompt:
             return jsonify({"status": "error", "message": "股票代码与提问内容均不能为空"}), 400
@@ -1412,7 +1421,7 @@ def api_ai_chat():
     """Ask Codex AI investment advisor with portfolio context injection (Requires CAP_AI_CHAT + CSRF)."""
     try:
         data = request.get_json(silent=True) or {}
-        prompt = data.get("prompt", "").strip()
+        prompt = (data.get("prompt") or data.get("message") or "").strip()
         if not prompt:
             return jsonify({"status": "error", "message": "问题内容不能为空"}), 400
 

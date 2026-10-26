@@ -103,6 +103,7 @@ class CodexAIService:
         max_positions: int = 15,
         person_name: str | None = None,
         channel_names: tuple[str, ...] | None = None,
+        channel: str | None = None,
         symbol: str | None = None,
     ) -> str:
         """
@@ -111,6 +112,9 @@ class CodexAIService:
         """
         if not analytics or not getattr(analytics, "reports", None):
             return "【暂无持仓或数据库未加载】"
+
+        if channel and not channel_names:
+            channel_names = (channel,)
 
         lines = ["=== 用户当前投资账本分析上下文 ==="]
 
