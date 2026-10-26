@@ -206,7 +206,7 @@ class StockCellWidget(QWidget):
         self.setStyleSheet("background: transparent;")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 4, 4)
+        layout.setContentsMargins(4, 3, 2, 3)
         layout.setSpacing(1)
 
         # 1. Hyperlink Row
@@ -234,6 +234,7 @@ class StockCellWidget(QWidget):
         # 2. Source Subtitle Row
         self.sub_lbl = QLabel(f"来自 {source_label}")
         self.sub_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+        self.sub_lbl.setToolTip(f"标的持仓来源: {source_label}")
         # Pass clicks through to container widget so clicking subtitle selects row
         self.sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.sub_lbl)
@@ -399,15 +400,15 @@ class MonitoringPage(QWidget):
 
         self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels([
-            "分析标的 / 持仓来源",
-            "最新价 / 涨跌幅",
+            "标的 / 来源",
+            "现价 / 涨跌",
             "MA20",
             "MA50",
             "MA200",
             "MA250",
             "距MA200",
-            "短 / 中 / 长",
-            "已启用规则",
+            "短/中/长",
+            "规则",
             "操作",
         ])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -417,12 +418,19 @@ class MonitoringPage(QWidget):
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setMinimumSectionSize(36)
-        col_widths = (120, 90, 70, 70, 70, 70, 78, 80, 75, 42)
+        self.table.horizontalHeader().setMinimumSectionSize(30)
+        # 优化各列宽度：大幅缩小名字列与规则/操作列，释放充足空间确保全部均线价格 100% 完整显示无省略号
+        col_widths = (82, 76, 74, 74, 76, 76, 76, 70, 42, 36)
         for col_idx, width in enumerate(col_widths):
             self.table.setColumnWidth(col_idx, width)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setMinimumWidth(580)
+        # 禁止末尾操作列自动拉伸，防止操作列变成巨大空白并压缩前列
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.setMinimumWidth(680)
+        self.table.setStyleSheet(
+            "QTableWidget { font-size: 12px; }"
+            "QTableWidget::item { padding-left: 2px; padding-right: 2px; }"
+            "QHeaderView::section { font-size: 12px; font-weight: bold; padding: 2px 2px; }"
+        )
         col.addWidget(self.table)
 
         table_actions = QHBoxLayout()
@@ -1014,7 +1022,8 @@ class MonitoringPage(QWidget):
                 source_label = "已不再持有（保留配置）"
 
             act_rules = rule_counts.get(symbol, 0)
-            rules_badge = f"{act_rules} 条启用" if act_rules > 0 else "无启用"
+            rules_badge = f"{act_rules}条" if act_rules > 0 else "无"
+            action_icon = "✏️" if act_rules > 0 else "➕"
 
             values = [
                 symbol,
@@ -1026,7 +1035,7 @@ class MonitoringPage(QWidget):
                     for k in ("SHORT", "MEDIUM", "LONG")
                 ),
                 rules_badge,
-                "➕",
+                action_icon,
             ]
 
             for col, value in enumerate(values):
@@ -1038,6 +1047,7 @@ class MonitoringPage(QWidget):
                 elif col in (7, 8, 9):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
+                clean_sym = symbol.removesuffix(".US")
                 if col in (1, 6):
                     number = data.get("change") if col == 1 else m.get("DEV200")
                     if number is not None:
@@ -1048,9 +1058,12 @@ class MonitoringPage(QWidget):
                         font = item.font()
                         font.setBold(True)
                         item.setFont(font)
+                        item.setToolTip(f"【{clean_sym}】已启用 {act_rules} 条监控预警规则，点击管理")
+                    else:
+                        item.setForeground(QColor("#94A3B8"))
+                        item.setToolTip(f"【{clean_sym}】暂未启用监控规则，点击新建")
                 elif col == 9:
-                    clean_sym = symbol.removesuffix(".US")
-                    item.setToolTip(f"点击为【{clean_sym}】新建/编辑监控预警规则")
+                    item.setToolTip(f"点击为【{clean_sym}】{'管理/编辑' if act_rules > 0 else '新建'}监控预警规则")
                     item.setForeground(QColor("#2563EB"))
                     font = item.font()
                     font.setBold(True)
@@ -1117,7 +1130,7 @@ class MonitoringPage(QWidget):
             self.host.pages.setCurrentIndex(20)
 
     def _on_cell_clicked(self, row: int, col: int):
-        if col == 9:
+        if col in (8, 9):
             item = self.table.item(row, 0)
             sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
             if sym:
@@ -1152,7 +1165,7 @@ class MonitoringPage(QWidget):
                 dict.fromkeys(
                     s["held_symbol"].removesuffix(".US")
                     + " → "
-                    + s["analysis_symbol"].removesuffix(".US")
+                    + s.get("analysis_symbol", target.get("analysis_symbol", "")).removesuffix(".US")
                     + (
                         "（" + s["leverage_multiple"] + "×做" + s["direction"] + "）"
                         if s.get("leverage_multiple") and s.get("relation_type") != "DIRECT"

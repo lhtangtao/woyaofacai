@@ -23,7 +23,7 @@ class MonitorChart(QWidget):
         t = tokens(self)
         p.fillRect(self.rect(), QColor(t.panel))
         data = self.data
-        if not data or not data["bars"]:
+        if not data or not data.get("bars"):
             p.setPen(QColor(t.muted))
             p.drawText(
                 self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无已完成日K\n配置行情后点击刷新；缺失值不会填零"
