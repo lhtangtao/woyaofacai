@@ -1008,8 +1008,8 @@
       </p>
       
       <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px;">
-        <input type="text" id="remoteLoginUser" class="table-search" placeholder="输入用户名 (如 admin 或 拉科)" style="padding:12px;font-size:14px;border-radius:10px;">
-        <input type="password" id="remoteLoginPass" class="table-search" placeholder="输入密码" style="padding:12px;font-size:14px;border-radius:10px;">
+        <input type="text" id="remoteLoginUser" class="table-search" placeholder="输入用户名 (如 admin、拉科 或 巴小)" style="padding:12px;font-size:14px;border-radius:10px;" onkeydown="if(event.key==='Enter') submitRemoteLogin()">
+        <input type="password" id="remoteLoginPass" class="table-search" placeholder="输入密码" style="padding:12px;font-size:14px;border-radius:10px;" onkeydown="if(event.key==='Enter') submitRemoteLogin()">
       </div>
       
       <button class="page-btn" style="width:100%;padding:12px;background:var(--accent);border-color:var(--accent-light);color:#FFF;font-size:14px;font-weight:700;border-radius:10px;" onclick="submitRemoteLogin()">立即登录</button>
@@ -1054,9 +1054,13 @@
       同一物理局域网下免登录只读；登录专属用户后，系统将解锁管理权限或呈现专属于该用户的账本及 AI 会话。
     </p>
 
+    <div id="loginModalCurrentInfo" style="margin-bottom:12px;padding:8px 12px;background:rgba(255,255,255,0.05);border-radius:10px;font-size:12px;display:flex;align-items:center;gap:6px;">
+      <span id="loginCurrentUserName">当前身份: 🛜 局域网访客</span>
+    </div>
+
     <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
-      <input type="text" id="loginInputUser" class="table-search" placeholder="输入用户名 (如 拉科 或 admin)" style="padding:10px;font-size:13px;">
-      <input type="password" id="loginInputPass" class="table-search" placeholder="输入密码" style="padding:10px;font-size:13px;">
+      <input type="text" id="loginInputUser" class="table-search" placeholder="输入用户名 (如 巴小、拉科 或 admin)" style="padding:10px;font-size:13px;" onkeydown="if(event.key==='Enter') submitLogin()">
+      <input type="password" id="loginInputPass" class="table-search" placeholder="输入密码" style="padding:10px;font-size:13px;" onkeydown="if(event.key==='Enter') submitLogin()">
     </div>
 
     <div style="display:flex;gap:8px;">
@@ -3114,9 +3118,22 @@
     }
 
     function openLoginModal() {
+      const u = state.currentUser;
+      const infoEl = document.getElementById('loginCurrentUserName');
+      if (infoEl) {
+        if (u && u.is_authenticated) {
+          infoEl.innerHTML = `当前已登录：<strong style="color:var(--accent-light);">👤 ${u.person_name || u.username}</strong> (${u.role === 'admin' ? '全量管理员' : '专属受限账本'})`;
+        } else {
+          infoEl.innerHTML = `当前身份：<strong style="color:var(--profit);">🛜 局域网免登录访客 (全量只读)</strong>`;
+        }
+      }
       document.getElementById('loginModal').style.display = 'block';
       document.getElementById('loginModalOverlay').classList.add('open');
       closeDrawer();
+      setTimeout(() => {
+        const inp = document.getElementById('loginInputUser');
+        if (inp) inp.focus();
+      }, 100);
     }
 
     function closeLoginModal() {
@@ -3146,12 +3163,8 @@
         });
         const data = await res.json();
         if (data.status === 'ok') {
-          const screen = document.getElementById('remoteLoginScreen');
-          if (screen) screen.style.display = 'none';
-          updateUserBadge(data.user);
-          fetchOverview();
-          fetchKline('AAOI');
-          refreshCurrentView();
+          // Force reload to completely refresh state under authenticated user
+          window.location.reload();
         } else {
           if (errEl) {
             errEl.innerText = data.message || '登录失败，请检查账号密码';
@@ -3185,10 +3198,9 @@
         });
         const data = await res.json();
         if (data.status === 'ok') {
-          updateUserBadge(data.user);
           closeLoginModal();
-          alert(`登录成功！当前身份: 【${data.user.display_name || data.user.username}】`);
-          refreshCurrentView();
+          // Reload page to guarantee clean slate and fresh data for the newly logged-in user
+          window.location.reload();
         } else {
           alert('登录失败: ' + (data.message || '用户名或密码错误'));
         }
@@ -3202,16 +3214,8 @@
         const res = await fetch('/api/auth/logout', { method: 'POST' });
         const data = await res.json();
         if (data.status === 'ok') {
-          updateUserBadge(data.user);
           closeLoginModal();
-          if (data.is_lan) {
-            alert('已退出登录，恢复为局域网免登录只读视角');
-            refreshCurrentView();
-          } else {
-            alert('已安全退出登录');
-            const screen = document.getElementById('remoteLoginScreen');
-            if (screen) screen.style.display = 'flex';
-          }
+          window.location.reload();
         }
       } catch (err) {
         alert('退出异常: ' + err.message);

@@ -1272,7 +1272,7 @@ def api_ai_filters():
         # 1. Available persons
         persons = []
         if person_id:
-            persons.append({"id": person_id, "name": person_name or "拉科"})
+            persons.append({"id": person_id, "name": person_name or ctx.username or "个人"})
         else:
             dim_p = analytics.reports.get("人员资产")
             if dim_p and dim_p.rows:
@@ -1324,7 +1324,7 @@ def api_ai_history():
         ctx: AuthContext = getattr(g, "auth_context", None)
         # USER isolation: Force person to own name
         if ctx.principal_type == "USER":
-            person = ctx.person_name or "拉科"
+            person = ctx.person_name or ctx.username or "个人"
 
         session_key = f"{person}___{channel}___{symbol}"
         disk_sessions = load_ai_chat_sessions()
@@ -1353,7 +1353,7 @@ def api_ai_clear():
 
         ctx: AuthContext = getattr(g, "auth_context", None)
         if ctx.principal_type == "USER":
-            person = ctx.person_name or "拉科"
+            person = ctx.person_name or ctx.username or "个人"
 
         session_key = f"{person}___{channel}___{symbol}"
         disk_sessions = load_ai_chat_sessions()
@@ -1461,7 +1461,7 @@ def api_ai_chat():
         ctx: AuthContext = getattr(g, "auth_context", None)
         # USER isolation: Force person to own name
         if ctx.principal_type == "USER":
-            person = ctx.person_name or "拉科"
+            person = ctx.person_name or ctx.username or "个人"
 
         # Build portfolio financial context
         context_str = ""
