@@ -17,6 +17,11 @@ PAIR_COLUMNS = ("月份", "渠道", "Ticker", "微操序号", "模式", "配对�
 
 
 def scalping(snapshot, *, policy="EXCEL_COMPAT", cancel=None):
+    from portfolio.services.derived_engine import scalping_cached
+    return scalping_cached(snapshot, policy, cancel, _scalping)
+
+
+def _scalping(snapshot, *, policy="EXCEL_COMPAT", cancel=None):
     if policy not in ("EXCEL_COMPAT", "FIFO"):
         raise ValueError("未知微操配对策略。")
     groups = defaultdict(list)

@@ -9,8 +9,9 @@ from portfolio.domain.live_quotes import NY, UTC, LiveQuote
 
 
 class QuoteStore:
-    def __init__(self, path):
+    def __init__(self, path, *, source=None):
         self.path = Path(path).expanduser().resolve()
+        self.source = Path(source).resolve() if source else None
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +35,14 @@ class QuoteStore:
         with self.connect() as c:
             rows = c.execute('SELECT stamp,session,close FROM intraday_candles WHERE symbol=? AND day=? ORDER BY stamp', (symbol, day)).fetchall()
             fetched = c.execute('SELECT fetched_at FROM intraday_fetches WHERE symbol=? AND day=?', (symbol, day)).fetchone()
-        return [(datetime.fromisoformat(stamp), phase, Decimal(value)) for stamp, phase, value in rows], datetime.fromisoformat(fetched[0]) if fetched else None
+        result = {stamp: (datetime.fromisoformat(stamp), phase, Decimal(value)) for stamp, phase, value in rows}
+        fetched_at = datetime.fromisoformat(fetched[0]) if fetched else None
+        if self.source:
+            from portfolio.services.history_facts import HistoryFacts
+            facts, confirmed_at = HistoryFacts(self.source).bars(symbol, day)
+            for item in facts: result[item[0].isoformat()] = item
+            fetched_at = max((v for v in (fetched_at, confirmed_at) if v), default=None)
+        return sorted(result.values()), fetched_at
 
     def save_intraday_candles(self, symbol, day, rows, now):
         with self.connect() as c:
@@ -182,6 +190,11 @@ class QuoteStore:
     def supplement(self, snapshot):
         from portfolio.domain.analytics import Issue, Price
         instruments = {i['symbol']+'.US': key for key, i in snapshot.instruments.items() if i.get('market') == 'US'}
+        if self.source:
+            from portfolio.services.history_facts import HistoryFacts
+            for identifier, day, value, stamp in HistoryFacts(self.source).closes(snapshot.scope.as_of):
+                snapshot.prices = [p for p in snapshot.prices if not (p.instrument_id == identifier and p.day == day and p.kind == 'DAILY_CLOSE')]
+                snapshot.prices.append(Price(identifier, day, Decimal(value), 'DAILY_CLOSE', 'OFFICIAL_CLOSE', 0, stamp, 'RAW'))
         official = {(p.instrument_id, p.day) for p in snapshot.prices if p.kind == 'DAILY_CLOSE'}
         if self.path.exists():
             with self.connect() as c:

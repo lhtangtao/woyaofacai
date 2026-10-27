@@ -12,11 +12,19 @@ NET_COLUMNS = ("月份", "渠道", "分类", "Ticker", "月初持仓数量", "�
 
 
 def performance(snapshot, micro_profit=None, *, cancel=None):
+    from portfolio.services.derived_engine import performance_cached
+    return performance_cached(snapshot, micro_profit, cancel, _performance)
+
+
+def _performance(snapshot, micro_profit=None, *, cancel=None):
     micro_profit = micro_profit or {}
     if not snapshot.events and not snapshot.baselines:
         return {}, {}, {}, []
     first = min([e.day for e in snapshot.events] + [b["baseline_date"] for b in snapshot.baselines if b["baseline_role"] == "OPENING"], default=snapshot.scope.as_of.isoformat())
     trading_days = sorted({p.day for p in snapshot.prices if p.kind in ("DAILY_CLOSE", "ESTIMATE_CLOSE") and first <= p.day <= snapshot.scope.as_of.isoformat()})
+
+    if 'performance_price_days' in snapshot.extras:
+        trading_days = [d for d in snapshot.extras['performance_price_days'] if first <= d <= snapshot.scope.as_of.isoformat()]
 
     def roll_to_trading_day(day_str: str) -> str:
         if not trading_days or day_str in trading_days:
@@ -57,7 +65,8 @@ def performance(snapshot, micro_profit=None, *, cancel=None):
         for key, position in state.items():
             relevant_cutoffs = [value for k, value in cutoffs.items() if k[1:] == key[1:]]
             if relevant_cutoffs and max(relevant_cutoffs) == day and not changes[key]:
-                previous[key] = initial_values.get(key, (position.quantity, values[key][1]))
+                previous[key] = initial_values.get(key, (position.quantity, None))
+                values[key] = (None, previous[key][1])
                 continue
             price = daily_prices.get((key[2], day))
             if price and price.basis not in ("RAW", "UNKNOWN") and any(a["instrument_id"] == key[2] for a in snapshot.actions):

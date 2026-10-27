@@ -82,12 +82,13 @@ def opening_positions(snapshot):
 def replay(snapshot, *, capture_days=(), cancel=None):
     with localcontext() as context:
         context.prec = 50
-        return _replay(snapshot, capture_days, cancel)
+        from portfolio.services.derived_engine import replay_cached
+        return replay_cached(snapshot, capture_days, cancel, _replay)
 
 
-def _replay(snapshot, capture_days, cancel):
+def _replay(snapshot, capture_days, cancel, *, initial=None, after=""): 
     seeds, cutoffs = opening_positions(snapshot)
-    positions = {}
+    positions = initial if initial is not None else {}
     traces, daily_states = {}, {}
     blocked = grain_conflicts(snapshot)
     events = [(e.day, event_order_time(e), 1, e.sequence, e.id, "TRADE", e) for e in snapshot.events]
@@ -96,6 +97,8 @@ def _replay(snapshot, capture_days, cancel):
     events += [(day, day + " 99:99:99", 2, 0, 0, "CAPTURE", day) for day in capture_days]
     events.sort(key=lambda row: row[:5])
     for day, _, _, _, _, kind, event in events:
+        if day <= after:
+            continue
         if cancel and cancel.is_set():
             raise ValueError("计算已取消。")
         if kind == "CAPTURE":

@@ -54,14 +54,13 @@ def event_time(event):
     return event_time_utc(event)
 
 
-def rebuild_history(path, analytics, credentials_path, store, day, now, cancel=None):
+def rebuild_history(path, analytics, credentials_path, store, day, now, cancel=None, *, prepared_snapshot=None):
     with localcontext() as context:
         context.prec = 50
-        return _rebuild(path, analytics, credentials_path, store, day, now, cancel)
+        return _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepared_snapshot)
 
 
-def _rebuild(path, analytics, credentials_path, store, day, now, cancel):
-    from longbridge.openapi import AdjustType, Period, TradeSessions
+def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepared_snapshot):
     target = date.fromisoformat(day)
     start = datetime.combine(target - timedelta(days=1), time(20), NY).astimezone(UTC)
     end = datetime.combine(target, time(20), NY).astimezone(UTC)
@@ -71,13 +70,16 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel):
         return '选中日期不是美股交易日，没有当日交易时段曲线。'
     if cutoff <= start:
         return '本交易日尚未开始；曲线覆盖美东前晚20:00至当晚20:00，按接口实际返回时段展示。'
-    with readonly_connection(path, cancel=cancel) as connection:
-        snapshot = load_snapshot(connection, analytics.scope, cancel=cancel)
-    store.supplement(snapshot)
+    if prepared_snapshot is None:
+        with readonly_connection(path, cancel=cancel) as connection:
+            snapshot = load_snapshot(connection, analytics.scope, cancel=cancel)
+        store.supplement(snapshot)
+    else:
+        snapshot = prepared_snapshot
     _, days, half_days, _ = store.load(now)
     regular_start = datetime.combine(target, time(9, 30), NY).astimezone(UTC)
     regular_end = datetime.combine(target, time(13 if target in half_days else 16), NY).astimezone(UTC)
-    past = replace(snapshot, events=[e for e in snapshot.events if e.day < day],
+    past = replace(snapshot, scope=replace(snapshot.scope, as_of=target-timedelta(days=1)), events=[e for e in snapshot.events if e.day < day],
                    actions=[a for a in snapshot.actions if a['effective_date'] < day],
                    baselines=[b for b in snapshot.baselines if b['baseline_date'] < day], issues=[])
     positions, _, _ = replay(past, cancel=cancel)
@@ -141,8 +143,9 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel):
         due = (fetched is None or ((not cached or fetched < end)
                and int(now.timestamp()) // 300 > int(fetched.timestamp()) // 300)
                or (holes and now - fetched >= timedelta(seconds=60)))
-        if due:
+        if due and credentials_path:
             try:
+                from longbridge.openapi import AdjustType, Period, TradeSessions
                 if context is None:
                     context = create_context(credentials_path)
                 with _SDK_VALUES_LOCK:
@@ -225,7 +228,11 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel):
             profit = market_value - s[1] - s[2] + s[3] if market_value is not None and s[1] is not None and not s[6] else None
             channel = snapshot.accounts[group[0]]['broker_code']
             channel = {'LONGBRIDGE': '长桥', 'FIRSTRADE': '第一证券', 'SCHWAB': '嘉信'}.get(channel, channel)
-            values.append(dict(channel=channel, ticker=snapshot.instruments[group[1]]['symbol'], pnl=str(profit) if profit is not None else None))
+            values.append(dict(channel=channel, ticker=snapshot.instruments[group[1]]['symbol'],
+                               account_id=group[0], instrument_id=group[1], quantity=str(s[0]),
+                               market_value=str(market_value) if market_value is not None else None,
+                               opening_value=str(s[1]) if s[1] is not None else None,buy=str(s[2]),sell=str(s[3]),
+                               pnl=str(profit) if profit is not None else None))
         rows.append((stamp, 'History5', values))
         stamp += timedelta(minutes=5)
     if source_version(path) != version:

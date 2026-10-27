@@ -22,10 +22,13 @@ from portfolio.services.charts_service import build_charts
 
 class AnalyticsService:
     """Single-snapshot pipeline; bounded process-local cache; never writes source."""
-    def __init__(self, path, *, audit_start=AUDIT_START_DATE, fx_store=None, quote_store=None):
+    def __init__(self, path, *, audit_start=AUDIT_START_DATE, fx_store=None, quote_store=None, derived_store=None):
         self.path = Path(path).expanduser().resolve()
+        from portfolio.services.derived_store import DerivedStore
+        self.derived = derived_store or DerivedStore(self.path)
         self.audit_start = audit_start
         self.quote_store = quote_store
+        if self.quote_store: self.quote_store.source = self.path
         self.fx_store = fx_store
         self._cache, self._lock = {}, RLock()
 
@@ -52,6 +55,10 @@ class AnalyticsService:
         return PeopleBundle(aggregate, tuple(persons), broker)
 
     def calculate(self, scope, *, cancel=None, use_cache=True):
+        with self.derived.active():
+            return self._calculate(scope, cancel=cancel, use_cache=use_cache)
+
+    def _calculate(self, scope, *, cancel=None, use_cache=True):
         key = (self.identity(), scope, "decimal-engine-2", self.audit_start)
         with self._lock:
             if use_cache and key in self._cache:
