@@ -32,10 +32,9 @@ from portfolio.services.quote_store import QuoteStore
 
 
 def desktop_quote_store():
-    # GenericDataLocation is independent of whether Flask has a QApplication.
-    from PySide6.QtCore import QStandardPaths
-    root = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericDataLocation))
-    return QuoteStore(root / 'MoneyPortfolio' / 'Money Portfolio' / 'live_quotes.sqlite3')
+    from portfolio.paths import quote_cache_path
+    return QuoteStore(quote_cache_path())
+
 
 
 def exact_json(value):
@@ -56,6 +55,7 @@ class WebTodayService:
                  clock=None, network=True):
         self.path = Path(path).expanduser().resolve()
         self.store = store if store is not None else desktop_quote_store()
+        self.store.source = self.path
         self.credentials = Path(credentials_path) if credentials_path else None
         self.clock = clock or (lambda: datetime.now(UTC))
         self.network = network
@@ -176,8 +176,14 @@ class WebTodayService:
         from portfolio.ui.intraday_pnl import _resolve_effective_day
         day, target, fallback = _resolve_effective_day(analytics.scope.as_of, session, report, analytics.trading_days)
         key = scope_key(self.path, analytics.scope)
-        history = self.store.load_historical_pnl(key, day, source_version(self.path))
-        warning = self.store.load_historical_pnl_warning(key, day) if history else ''
+        from portfolio.services.derived_queries import day_history
+        from portfolio.services.derived_store import DerivedStore
+        if DerivedStore(self.path).available:
+            history, cache_state = day_history(self.path,self.store,analytics.scope,day)
+            warning = cache_state.get('message','')
+        else:
+            history = self.store.load_historical_pnl(key, day, source_version(self.path))
+            warning = '派生库未初始化；使用明确标识的旧缓存/实时观察。'
         observations = history or self.store.load_minute_pnl(key, day)
         job = self._backfill(analytics, day, history, warning, now)
         samples = {}

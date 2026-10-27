@@ -5,6 +5,7 @@ import { DashboardView } from "./views/DashboardView";
 import { TradesView } from "./views/TradesView";
 import { ReportsView } from "./views/ReportsView";
 import { MonitorView } from "./views/MonitorView";
+import { HistoricalTrendView } from "./views/HistoricalTrendView";
 import { ChartsView } from "./views/ChartsView";
 import { EntitiesView } from "./views/EntitiesView";
 import { EarningsView } from "./views/EarningsView";
@@ -284,7 +285,7 @@ export const App: React.FC = () => {
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
 
             {currentRoute === "charts" && <ChartsView mode="asset" personId={selectedPersonId} />}
-            {currentRoute === "charts:monthly" && <ChartsView mode="monthly" personId={selectedPersonId} />}
+            {currentRoute === "charts:monthly" && <HistoricalTrendView personId={selectedPersonId} />}
             {currentRoute === "charts:distribution" && <ChartsView mode="distribution" personId={selectedPersonId} />}
             {currentRoute === "charts:gallery" && <ChartsView mode="gallery" personId={selectedPersonId} />}
             {currentRoute === "top_days" && <ChartsView mode="top_days" personId={selectedPersonId} />}

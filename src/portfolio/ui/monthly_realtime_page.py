@@ -346,86 +346,6 @@ class MonthlyRealtimePnlPage(QWidget):
             if self.month_combo.currentText() == today.strftime("%Y-%m"):
                 self._load_month_data(self.month_combo.currentText())
 
-    def _history_keys(self, source_path, days, person_ids):
-        """Use the same source and filters that wrote the daily history."""
-        from portfolio.domain.models import Ledger, QueryScope
-        from portfolio.services.intraday_history import scope_key
-
-        base = self.analytics.scope if self.analytics else QueryScope(as_of=date.today())
-        start = base.start_date or date(2025, 1, 1)
-        paths = {str(source_path), str(Path(source_path).resolve())}
-        keys = set()
-        for day_text in days:
-            day = date.fromisoformat(day_text)
-            if day < start:
-                continue
-            scope = replace(base, as_of=day, start_date=start,
-                            ledger=Ledger.PERSON, person_ids=person_ids,
-                            reporting_currency="USD")
-            keys.update(scope_key(path, scope) for path in paths)
-        return keys
-
-    def _restore_missing_month_days(self, source_path, days, person_ids, loaded_days):
-        """Recalculate missing days from this Money3 ledger and cached candles."""
-        if (not days or self._rebuild_pending or not self.analytics or not self.window
-                or not hasattr(self.window, "_submit")):
-            return
-        from portfolio.services.intraday_history import source_version
-
-        start = self.analytics.scope.start_date or date(2025, 1, 1)
-        version = source_version(source_path)
-        store = self.window.quote_store
-        try:
-            with sqlite3.connect(f"file:{store.path}?mode=ro", uri=True) as cache:
-                cached_days = {row[0] for row in cache.execute(
-                    "SELECT DISTINCT day FROM intraday_candles WHERE day LIKE ?", (days[0][:7] + "%",)
-                )}
-        except (OSError, sqlite3.Error):
-            cached_days = set()
-        missing = [day for day in days if start <= date.fromisoformat(day) <= date.today()
-                   and day in cached_days and day not in loaded_days
-                   and (source_path, version, self.analytics.scope, person_ids, day) not in self._rebuild_attempted]
-        if not missing:
-            return
-        for day in missing:
-            self._rebuild_attempted.add((source_path, version, self.analytics.scope, person_ids, day))
-        self._rebuild_pending = True
-        self.status_label.setText(self.status_label.text() + " · 正从当前 Money3 账本与已缓存 K 线补算缺失日期…")
-        base = self.analytics.scope
-        credentials = getattr(self.window.live_panel, "path", None)
-
-        def task(cancel):
-            from portfolio.domain.models import Ledger
-            from portfolio.services.analytics_service import AnalyticsService
-            from portfolio.services.intraday_history import rebuild_history, scope_key
-
-            service = AnalyticsService(source_path, quote_store=store)
-            restored = []
-            for day in missing:
-                if cancel.is_set():
-                    break
-                scope = replace(base, as_of=date.fromisoformat(day), start_date=start,
-                                ledger=Ledger.PERSON, person_ids=person_ids,
-                                reporting_currency="USD")
-                try:
-                    analytics = service.calculate(scope, cancel=cancel)
-                    rebuild_history(source_path, analytics, credentials, store, day,
-                                    datetime.now(ZoneInfo("Asia/Shanghai")), cancel=cancel)
-                    if store.load_historical_pnl(scope_key(source_path, scope), day, source_version(source_path)):
-                        restored.append(day)
-                except Exception:
-                    continue
-            return restored
-
-        def ready(restored):
-            self._rebuild_pending = False
-            if restored and self.month_combo.currentText() == missing[0][:7]:
-                self._load_month_data(self.month_combo.currentText())
-            elif not restored:
-                self.status_label.setText(self.status_label.text() + " · 缺失日期尚未补齐，请检查行情缓存或凭证。")
-
-        self.window._submit("monthly-history", task, ready)
-
     def _resolve_db_path(self):
         """Locate live_quotes.sqlite3 safely from window quote store or local application data."""
         if hasattr(self.window, "quote_store") and self.window.quote_store and self.window.quote_store.path.exists():
@@ -714,187 +634,60 @@ class MonthlyRealtimePnlPage(QWidget):
                     finally:
                         self._syncing_person = False
 
-    def _load_month_data(self, month_str):
-        if not month_str:
+    def _shared_person_ids(self):
+        selected=self.person_combo.currentData()
+        if selected == "OTHERS":
+            return tuple(p['id'] for p in self._get_persons() if p.get('name') != '个人' and p.get('enabled',True))
+        return (selected,) if selected is not None else None
+
+    def _load_shared_period(self, period, year):
+        if not period or not self.analytics or not self.window:
             return
-        conn = self._get_connection()
-        if not conn:
-            self.clear()
-            return
-
-        month_pattern = f"{month_str}%"
-        all_month_trading_days = []
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT day FROM us_calendar WHERE day LIKE ? ORDER BY day", (month_pattern,))
-            all_month_trading_days = [r[0] for r in cur.fetchall() if r[0]]
-        except Exception:
-            pass
-
-        if not all_month_trading_days:
-            try:
-                y, m = map(int, month_str.split("-"))
-                _, last_day = calendar.monthrange(y, m)
-                all_month_trading_days = [
-                    date(y, m, d).isoformat()
-                    for d in range(1, last_day + 1)
-                    if date(y, m, d).weekday() < 5
-                ]
-            except Exception:
-                all_month_trading_days = []
-
-        selected_person_val = self.person_combo.currentData()
-        all_persons = self._get_persons()
-        if selected_person_val == "OTHERS":
-            person_ids = tuple(p["id"] for p in all_persons if p.get("id") != 1 and p.get("name") != "个人" and p.get("enabled", True))
-            if not person_ids:
-                person_ids = (2, 3, 4, 5, 6, 7, 8, 9)
-        elif selected_person_val is not None:
-            person_ids = (selected_person_val,)
+        from portfolio.services.derived_queries import load_history
+        source=self._resolve_source_path()
+        if not source:return
+        if year:
+            first,last=date(int(period),1,1),date(int(period),12,31)
         else:
-            person_ids = None
-        source_path = self._resolve_source_path()
+            y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
+        scope=replace(self.analytics.scope,person_ids=self._shared_person_ids(),start_date=None,
+                      account_ids=None,instrument_ids=None,category=None,search='',as_of=min(last,date.today()))
+        if scope.as_of < first:scope=replace(scope,as_of=last)
+        self._shared_request=(period,year,scope)
+        self.summary_badge.setText('正在读取共享历史派生数据…')
+        def task(cancel):
+            result=self.window.analytics_service.calculate(scope,cancel=cancel)
+            rows,state=load_history(source,self.window.quote_store,scope,first,last)
+            return result,rows,state
+        def ready(value):
+            if self._shared_request != (period,year,scope):return
+            self._shared_analytics,self._shared_rows,self._shared_state=value
+            self._shared_period,self._shared_year=period,year
+            channels={r.values[1] for r in value[0].reports['每日持仓收益'].rows}
+            tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
+            self.channel_filter.populate(sorted(channels));self.stock_combo.populate(sorted(tickers))
+            self.update_chart()
+        self.window._submit('shared-trend',task,ready)
 
-        raw_rows = []
-        try:
-            cur = conn.cursor()
-            if source_path:
-                target_keys = self._history_keys(source_path, all_month_trading_days, person_ids)
-                if target_keys:
-                    placeholders = ",".join("?" for _ in target_keys)
-                    query = f"""
-                        SELECT day, stamp, session, payload_json
-                        FROM historical_pnl_points
-                        WHERE scope_key IN ({placeholders}) AND day LIKE ?
-                        ORDER BY stamp;
-                    """
-                    cur.execute(query, (*target_keys, month_pattern))
-                    raw_rows = cur.fetchall()
-        except Exception as e:
-            self.error.emit(f"查询 {month_str} 历史行情失败：{e}")
-        finally:
-            conn.close()
+    def _render_shared_chart(self, year):
+        if not hasattr(self,'_shared_analytics') or self._shared_year != year:return
+        from portfolio.services.derived_queries import trend
+        source=self._resolve_source_path()
+        chart,state=trend(source,self.window.quote_store,self._shared_analytics,self._shared_period,year=year,
+                          channels=self.channel_filter.selected_channels(),ticker=self.stock_combo.selected_ticker(),
+                          mode=self.mode_combo.currentData() or 'cumulative',
+                          history_data=(self._shared_rows,self._shared_state))
+        self.canvas.chart=chart;self.canvas.update()
+        self.summary_badge.setText(state.get('message',''))
+        self.notes_label.setText(chart.note)
+        valid=[(k,v) for series in chart.series for k,v in series.points if v is not None]
+        self.status_label.setText(f'有效采样 {len(valid)} · 最新 {valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
 
-        by_day = defaultdict(list)
-        channels = set()
-        tickers = set()
-        for day, stamp_str, session, payload_json in raw_rows:
-            try:
-                dt = datetime.fromisoformat(stamp_str)
-                items = json.loads(payload_json)
-                for item in items:
-                    ch = item.get("channel")
-                    if ch:
-                        channels.add(ch)
-                    tk = item.get("ticker")
-                    if tk:
-                        tickers.add(tk.upper())
-                by_day[day].append((dt, items))
-            except Exception:
-                continue
-
-        self._cached_month = month_str
-        self._cached_by_day = dict(by_day)
-        self._cached_all_trading_days = all_month_trading_days
-        self._cached_channels = sorted(channels)
-        self._cached_tickers = sorted(tickers)
-
-        self.channel_filter.populate(self._cached_channels)
-        self.stock_combo.populate(self._cached_tickers)
-
-        self.update_chart()
-        self._restore_missing_month_days(source_path, all_month_trading_days, person_ids, by_day)
+    def _load_month_data(self, month_str):
+        return self._load_shared_period(month_str, False)
 
     def _load_year_data(self, year_str):
-        if not year_str:
-            return
-        conn = self._get_connection()
-        if not conn:
-            self.clear()
-            return
-
-        year_pattern = f"{year_str}%"
-        all_year_trading_days = []
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT day FROM us_calendar WHERE day LIKE ? ORDER BY day", (year_pattern,))
-            all_year_trading_days = [r[0] for r in cur.fetchall() if r[0]]
-        except Exception:
-            pass
-
-        if not all_year_trading_days:
-            try:
-                y = int(year_str)
-                start_d = date(y, 1, 1)
-                end_d = date(y, 12, 31)
-                cur_d = start_d
-                while cur_d <= end_d:
-                    if cur_d.weekday() < 5:
-                        all_year_trading_days.append(cur_d.isoformat())
-                    cur_d += timedelta(days=1)
-            except Exception:
-                all_year_trading_days = []
-
-        selected_person_val = self.person_combo.currentData()
-        all_persons = self._get_persons()
-        if selected_person_val == "OTHERS":
-            person_ids = tuple(p["id"] for p in all_persons if p.get("id") != 1 and p.get("name") != "个人" and p.get("enabled", True))
-            if not person_ids:
-                person_ids = (2, 3, 4, 5, 6, 7, 8, 9)
-        elif selected_person_val is not None:
-            person_ids = (selected_person_val,)
-        else:
-            person_ids = None
-        source_path = self._resolve_source_path()
-
-        raw_rows = []
-        try:
-            cur = conn.cursor()
-            if source_path:
-                target_keys = self._history_keys(source_path, all_year_trading_days, person_ids)
-                if target_keys:
-                    placeholders = ",".join("?" for _ in target_keys)
-                    query = f"""
-                        SELECT day, stamp, session, payload_json
-                        FROM historical_pnl_points
-                        WHERE scope_key IN ({placeholders}) AND day LIKE ?
-                        ORDER BY stamp;
-                    """
-                    cur.execute(query, (*target_keys, year_pattern))
-                    raw_rows = cur.fetchall()
-        except Exception as e:
-            self.error.emit(f"查询 {year_str} 年度历史行情失败：{e}")
-        finally:
-            conn.close()
-
-        by_day = defaultdict(list)
-        channels = set()
-        tickers = set()
-        for day, stamp_str, session, payload_json in raw_rows:
-            try:
-                dt = datetime.fromisoformat(stamp_str)
-                items = json.loads(payload_json)
-                for item in items:
-                    ch = item.get("channel")
-                    if ch:
-                        channels.add(ch)
-                    tk = item.get("ticker")
-                    if tk:
-                        tickers.add(tk.upper())
-                by_day[day].append((dt, items))
-            except Exception:
-                continue
-
-        self._cached_year = year_str
-        self._cached_year_by_day = dict(by_day)
-        self._cached_year_all_trading_days = all_year_trading_days
-        self._cached_year_channels = sorted(channels)
-        self._cached_year_tickers = sorted(tickers)
-
-        self.channel_filter.populate(self._cached_year_channels)
-        self.stock_combo.populate(self._cached_year_tickers)
-
-        self.update_chart()
+        return self._load_shared_period(year_str, True)
 
     def _on_filter_changed(self, *_):
         self.update_chart()
@@ -906,450 +699,10 @@ class MonthlyRealtimePnlPage(QWidget):
             self._render_month_chart()
 
     def _render_month_chart(self):
-        all_trading_days = self._cached_all_trading_days
-        if not all_trading_days and not self._cached_by_day:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText(f"{self._cached_month} 暂无可用交易日或高频行情。")
-            return
-
-        if not all_trading_days:
-            all_trading_days = sorted(self._cached_by_day.keys())
-
-        mode = self.mode_combo.currentData() or "cumulative"
-        selected_person_name = self.person_combo.currentText()
-        selected_channels = self.channel_filter.selected_channels()
-        selected_ticker = self.stock_combo.selected_ticker()
-
-        if not self._cached_by_day:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText(f"{self._cached_month} 期间【{selected_person_name}】暂无高频持仓与交易记录。")
-            return
-
-        # 提取官方权威已核算日收益（来自资产总览每日持仓收益，确保日结数据100%严密对齐）
-        official_pnl_by_day = {}
-        if self.analytics:
-            report = self.analytics.reports.get("每日持仓收益")
-            if report and report.rows:
-                ch_map = {
-                    "LONGBRIDGE": "长桥", "长桥": "长桥",
-                    "FIRSTRADE": "第一证券", "第一证券": "第一证券",
-                    "SCHWAB": "嘉信", "嘉信": "嘉信",
-                    "BBAE": "BBAE",
-                }
-                for r in report.rows:
-                    d = r.values[0]
-                    ch = ch_map.get(r.values[1], r.values[1])
-                    tk = (r.values[3] or "").strip().upper()
-                    if (selected_channels is None or ch in selected_channels) and (selected_ticker is None or tk == selected_ticker):
-                        pnl = r.values[19]
-                        if pnl is not None:
-                            official_pnl_by_day[d] = official_pnl_by_day.get(d, Decimal(0)) + pnl
-
-        zone = ZoneInfo("Asia/Shanghai")
-        points = []
-        vertical_lines = []
-        ticks = []
-        labels = {}
-        day_start_stamps = []
-        running_cum = Decimal(0)
-        past_days_count = 0
-        total_month_days = len(all_trading_days)
-
-        # 遍历当月整月的全部交易日，构建完整连续时间轴（30分钟采样）
-        for day in all_trading_days:
-            target = date.fromisoformat(day)
-            t_night = datetime.combine(target - timedelta(days=1), time(20, 0), NY).astimezone(UTC)
-            t_pre = datetime.combine(target, time(4, 0), NY).astimezone(UTC)
-            t_intra = datetime.combine(target, time(9, 30), NY).astimezone(UTC)
-            t_post = datetime.combine(target, time(16, 0), NY).astimezone(UTC)
-            t_end = datetime.combine(target, time(20, 0), NY).astimezone(UTC)
-            day_start_stamps.append(t_night.isoformat())
-
-            # 分割线：每日夜盘、盘前、盘中、盘后
-            vertical_lines.append((t_night.isoformat(), "", "dash"))
-            vertical_lines.append((t_pre.isoformat(), "", "dot"))
-            vertical_lines.append((t_intra.isoformat(), "", "dot"))
-            vertical_lines.append((t_post.isoformat(), "", "dot"))
-
-            ticks.append(t_night.isoformat())
-            labels[t_night.isoformat()] = t_night.astimezone(zone).strftime("%m-%d\n%H:%M")
-            ticks.append(t_pre.isoformat())
-            labels[t_pre.isoformat()] = ""
-            ticks.append(t_intra.isoformat())
-            labels[t_intra.isoformat()] = ""
-            ticks.append(t_post.isoformat())
-            labels[t_post.isoformat()] = ""
-
-            day_entries = self._cached_by_day.get(day)
-            day_baseline = running_cum if mode == "cumulative" else Decimal(0)
-            is_last_day = (day == all_trading_days[-1])
-
-            if not day_entries:
-                cur_stamp = t_night
-                while (cur_stamp <= t_end if is_last_day else cur_stamp < t_end):
-                    points.append((cur_stamp.isoformat(), None))
-                    cur_stamp += timedelta(minutes=30)
-                continue
-
-            past_days_count += 1
-            max_observed_stamp = max(dt for dt, _ in day_entries)
-            last_known_val = Decimal(0)
-            close_known_val = None
-            day_official_gain = official_pnl_by_day.get(day)
-
-            # 预先获取当天 16:00 收盘点的高频收益
-            past_at_close = [e for e in day_entries if e[0] <= t_post]
-            if past_at_close:
-                _, c_items = past_at_close[-1]
-                c_matched = [
-                    r for r in c_items
-                    if (selected_channels is None or r.get("channel") in selected_channels)
-                    and (selected_ticker is None or r.get("ticker", "").upper() == selected_ticker)
-                ]
-                with localcontext() as ctx:
-                    ctx.prec = 50
-                    if c_matched and any(r.get("pnl") is not None for r in c_matched):
-                        close_known_val = sum((Decimal(r["pnl"]) for r in c_matched if r.get("pnl") is not None), Decimal(0))
-
-            cur_stamp = t_night
-            while (cur_stamp <= t_end if is_last_day else cur_stamp < t_end):
-                k = cur_stamp.isoformat()
-                if cur_stamp > max_observed_stamp:
-                    points.append((k, None))
-                else:
-                    past_samples = [e for e in day_entries if e[0] <= cur_stamp]
-                    if past_samples:
-                        _, items = past_samples[-1]
-                        matched = [
-                            r for r in items
-                            if (selected_channels is None or r.get("channel") in selected_channels)
-                            and (selected_ticker is None or r.get("ticker", "").upper() == selected_ticker)
-                        ]
-                        with localcontext() as ctx:
-                            ctx.prec = 50
-                            if matched and any(r.get("pnl") is not None for r in matched):
-                                val = sum((Decimal(r["pnl"]) for r in matched if r.get("pnl") is not None), Decimal(0))
-                            else:
-                                val = Decimal(0)
-                        last_known_val = val if val is not None else last_known_val
-
-                        # 官方权威基线锚定：采用纯加法线性渐进平滑模型（杜绝乘除比率导致的除零爆炸与波幅压缩）
-                        # 1. 盘中阶段（夜盘 08:00 至收盘 16:00）：日内真实波幅 1:1 展现，日结微差均匀平滑分摊，收盘 100% 严密对齐官方日结；
-                        # 2. 盘后阶段（16:00 之后）：以官方日结收益为基底，叠加盘后真实最新变动。
-                        if day_official_gain is not None:
-                            if cur_stamp > t_post:
-                                adj_val = day_official_gain + (val - (close_known_val if close_known_val is not None else val))
-                            else:
-                                c_val = close_known_val if close_known_val is not None else last_known_val
-                                total_sec = (t_post - t_night).total_seconds()
-                                progress = min(max(Decimal(str((cur_stamp - t_night).total_seconds() / total_sec)), Decimal(0)), Decimal(1)) if total_sec > 0 else Decimal(1)
-                                adj_val = val + progress * (day_official_gain - c_val)
-                        else:
-                            adj_val = val
-
-                        points.append((k, (day_baseline + adj_val) if adj_val is not None else None))
-                    elif cur_stamp == t_night:
-                        val = Decimal(0)
-                        points.append((k, day_baseline + val))
-                    else:
-                        points.append((k, None))
-                cur_stamp += timedelta(minutes=30)
-
-            # 跨日基准衔接：优先使用官方已确认收盘盈亏，确保与资产总览财务数据100%一致
-            settled_gain = day_official_gain if day_official_gain is not None else (close_known_val if (max_observed_stamp >= t_post and close_known_val is not None) else last_known_val)
-            running_cum = day_baseline + (settled_gain or Decimal(0))
-
-        valid_points = [(k, v) for k, v in points if v is not None]
-        if not valid_points:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText("当前筛选条件（人员/渠道/特定股票）下未匹配到有效收益点。")
-            return
-
-        min_pt = min(valid_points, key=lambda p: p[1])
-        max_pt = max(valid_points, key=lambda p: p[1])
-        last_pt = valid_points[-1]
-
-        mode_name = "当月累计盈亏走势" if mode == "cumulative" else "每日日内盈亏走势"
-        channel_desc = self.channel_filter.text()
-        ticker_desc = f" · 标的：{selected_ticker}" if selected_ticker else " · 全部股票"
-        person_desc = f" · {selected_person_name}"
-        chart_title = f"{self._cached_month} {mode_name}（USD）{person_desc} · {channel_desc}{ticker_desc}"
-
-        now_ny = datetime.now(NY)
-        reached_day = (now_ny + timedelta(days=1) if now_ny.hour >= 20 else now_ny).date()
-        reached_days = sum(date.fromisoformat(day) <= reached_day for day in all_trading_days)
-        missing_days = max(0, reached_days - past_days_count)
-        future_days = total_month_days - reached_days
-        chart_note = (
-            f"北京时间 · 整月全量 {total_month_days} 个美股交易日时间轴（半小时采样，已有曲线 {past_days_count} 个、已过日期缺点 {missing_days} 个、未来 {future_days} 个） · "
-            f"细虚线按每日夜盘、盘前、盘中、盘后精确划分时段；高亮显示全月最高与最低收益。"
-        )
-
-        series_name = "月度累计盈亏" if mode == "cumulative" else "当日盈亏"
-        self.canvas.chart = Chart(
-            id=-101,
-            title=chart_title,
-            kind="line",
-            series=(Series(series_name, tuple(points)),),
-            note=chart_note,
-            x_labels=labels,
-            x_ticks=tuple(ticks),
-            show_points=False,
-            vertical_lines=tuple(vertical_lines),
-            highlight_extremes=True,
-            break_keys=tuple(day_start_stamps) if mode == "intraday" else (),
-        )
-        self.canvas.update()
-
-        currency = "USD"
-        last_val_str = f"{last_pt[1]:+,.2f} {currency}"
-        self.summary_badge.setText(
-            f"全月 {total_month_days} 个交易日（已有曲线 {past_days_count} 个，已过日期缺点 {missing_days} 个，未来 {future_days} 个） · "
-            f"最新盈亏：{last_val_str}"
-        )
-
-        dt_max_bj = datetime.fromisoformat(max_pt[0]).astimezone(zone).strftime("%m-%d %H:%M")
-        dt_min_bj = datetime.fromisoformat(min_pt[0]).astimezone(zone).strftime("%m-%d %H:%M")
-        max_val_str = f"{max_pt[1]:+,.2f} {currency} ({dt_max_bj})"
-        min_val_str = f"{min_pt[1]:+,.2f} {currency} ({dt_min_bj})"
-        self.status_label.setText(
-            f"📈 {mode_name}（{selected_person_name} · {channel_desc}{ticker_desc}）：当前最新 {last_val_str} · "
-            f"最高点：{max_val_str} · "
-            f"最低点：{min_val_str} · "
-            f"波动跨度：{max_pt[1] - min_pt[1]:,.2f} {currency}"
-        )
-        self.notes_label.setText(
-            "数据说明：展示所选整月全部美股交易日时间轴（夏令时北京时间每日夜盘 08:00 至次日 08:00 盘后）；"
-            "实盘曲线绘制截至当前时点，未来时段或缺少历史点的日期均留白；"
-            "垂直虚线按每日夜盘（08:00）、盘前（16:00）、盘中（21:30）、盘后（04:00）精确划分各时段；"
-            "横坐标清晰标注各交易日日期与开盘时间；两端高亮圆点与防遮挡金额胶囊标注全月最高与最低收益极值。"
-        )
+        return self._render_shared_chart(False)
 
     def _render_year_chart(self):
-        all_trading_days = self._cached_year_all_trading_days
-        if not all_trading_days and not self._cached_year_by_day:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText(f"{self._cached_year} 暂无可用交易日或高频行情。")
-            return
-
-        if not all_trading_days:
-            all_trading_days = sorted(self._cached_year_by_day.keys())
-
-        mode = self.mode_combo.currentData() or "cumulative"
-        selected_person_name = self.person_combo.currentText()
-        selected_channels = self.channel_filter.selected_channels()
-        selected_ticker = self.stock_combo.selected_ticker()
-
-        if not self._cached_year_by_day:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText(f"{self._cached_year} 年期间【{selected_person_name}】暂无高频持仓与交易记录。")
-            return
-
-        # 提取官方权威已核算日收益（来自资产总览每日持仓收益，确保日结数据100%严密对齐）
-        official_pnl_by_day = {}
-        if self.analytics:
-            report = self.analytics.reports.get("每日持仓收益")
-            if report and report.rows:
-                ch_map = {
-                    "LONGBRIDGE": "长桥", "长桥": "长桥",
-                    "FIRSTRADE": "第一证券", "第一证券": "第一证券",
-                    "SCHWAB": "嘉信", "嘉信": "嘉信",
-                    "BBAE": "BBAE",
-                }
-                for r in report.rows:
-                    d = r.values[0]
-                    ch = ch_map.get(r.values[1], r.values[1])
-                    tk = (r.values[3] or "").strip().upper()
-                    if (selected_channels is None or ch in selected_channels) and (selected_ticker is None or tk == selected_ticker):
-                        pnl = r.values[19]
-                        if pnl is not None:
-                            official_pnl_by_day[d] = official_pnl_by_day.get(d, Decimal(0)) + pnl
-
-        zone = ZoneInfo("Asia/Shanghai")
-        points = []
-        vertical_lines = []
-        ticks = []
-        labels = {}
-        day_start_stamps = []
-        running_cum = Decimal(0)
-        past_days_count = 0
-        total_year_days = len(all_trading_days)
-        seen_months = set()
-
-        # 遍历整年交易日，按【每 2 个小时一个点】的密度取样
-        for day in all_trading_days:
-            target = date.fromisoformat(day)
-            m_str = day[:7]
-            t_night = datetime.combine(target - timedelta(days=1), time(20, 0), NY).astimezone(UTC)
-            t_post = datetime.combine(target, time(16, 0), NY).astimezone(UTC)
-            t_end = datetime.combine(target, time(20, 0), NY).astimezone(UTC)
-            day_start_stamps.append(t_night.isoformat())
-
-            # 每个月首个交易日起始点绘制主虚线与月度标签
-            if m_str not in seen_months:
-                seen_months.add(m_str)
-                vertical_lines.append((t_night.isoformat(), "", "dash"))
-                ticks.append(t_night.isoformat())
-                month_num = int(m_str.split("-")[1])
-                labels[t_night.isoformat()] = f"{month_num:02d}月"
-
-            day_entries = self._cached_year_by_day.get(day)
-            day_baseline = running_cum if mode == "cumulative" else Decimal(0)
-            is_last_day = (day == all_trading_days[-1])
-
-            if not day_entries:
-                # 当年未来的交易日：整日留空，数值设为 None
-                cur_stamp = t_night
-                while (cur_stamp <= t_end if is_last_day else cur_stamp < t_end):
-                    points.append((cur_stamp.isoformat(), None))
-                    cur_stamp += timedelta(hours=2)
-                continue
-
-            past_days_count += 1
-            max_observed_stamp = max(dt for dt, _ in day_entries)
-            last_known_val = Decimal(0)
-            close_known_val = None
-            day_official_gain = official_pnl_by_day.get(day)
-
-            # 预先获取当天 16:00 收盘点的高频收益
-            past_at_close = [e for e in day_entries if e[0] <= t_post]
-            if past_at_close:
-                _, c_items = past_at_close[-1]
-                c_matched = [
-                    r for r in c_items
-                    if (selected_channels is None or r.get("channel") in selected_channels)
-                    and (selected_ticker is None or r.get("ticker", "").upper() == selected_ticker)
-                ]
-                with localcontext() as ctx:
-                    ctx.prec = 50
-                    if c_matched and any(r.get("pnl") is not None for r in c_matched):
-                        close_known_val = sum((Decimal(r["pnl"]) for r in c_matched if r.get("pnl") is not None), Decimal(0))
-
-            cur_stamp = t_night
-            while (cur_stamp <= t_end if is_last_day else cur_stamp < t_end):
-                k = cur_stamp.isoformat()
-                if cur_stamp > max_observed_stamp:
-                    points.append((k, None))
-                else:
-                    past_samples = [e for e in day_entries if e[0] <= cur_stamp]
-                    if past_samples:
-                        _, items = past_samples[-1]
-                        matched = [
-                            r for r in items
-                            if (selected_channels is None or r.get("channel") in selected_channels)
-                            and (selected_ticker is None or r.get("ticker", "").upper() == selected_ticker)
-                        ]
-                        with localcontext() as ctx:
-                            ctx.prec = 50
-                            if matched and any(r.get("pnl") is not None for r in matched):
-                                val = sum((Decimal(r["pnl"]) for r in matched if r.get("pnl") is not None), Decimal(0))
-                            else:
-                                val = Decimal(0)
-                        last_known_val = val if val is not None else last_known_val
-
-                        # 官方权威基线锚定：采用纯加法线性渐进平滑模型（杜绝乘除比率导致的除零爆炸与波幅压缩）
-                        # 1. 盘中阶段（夜盘 08:00 至收盘 16:00）：日内真实波幅 1:1 展现，日结微差均匀平滑分摊，收盘 100% 严密对齐官方日结；
-                        # 2. 盘后阶段（16:00 之后）：以官方日结收益为基底，叠加盘后真实最新变动。
-                        if day_official_gain is not None:
-                            if cur_stamp > t_post:
-                                adj_val = day_official_gain + (val - (close_known_val if close_known_val is not None else val))
-                            else:
-                                c_val = close_known_val if close_known_val is not None else last_known_val
-                                total_sec = (t_post - t_night).total_seconds()
-                                progress = min(max(Decimal(str((cur_stamp - t_night).total_seconds() / total_sec)), Decimal(0)), Decimal(1)) if total_sec > 0 else Decimal(1)
-                                adj_val = val + progress * (day_official_gain - c_val)
-                        else:
-                            adj_val = val
-
-                        points.append((k, (day_baseline + adj_val) if adj_val is not None else None))
-                    elif cur_stamp == t_night:
-                        val = Decimal(0)
-                        points.append((k, day_baseline + val))
-                    else:
-                        points.append((k, None))
-                cur_stamp += timedelta(hours=2)
-
-            # 跨日基准衔接：优先使用官方已确认收盘盈亏，确保与资产总览财务数据100%一致
-            settled_gain = day_official_gain if day_official_gain is not None else (close_known_val if (max_observed_stamp >= t_post and close_known_val is not None) else last_known_val)
-            running_cum = day_baseline + (settled_gain or Decimal(0))
-
-        valid_points = [(k, v) for k, v in points if v is not None]
-        if not valid_points:
-            self.canvas.chart = None
-            self.canvas.update()
-            self.summary_badge.setText("")
-            self.status_label.setText("当前筛选条件（人员/渠道/特定股票）下未匹配到有效收益点。")
-            return
-
-        min_pt = min(valid_points, key=lambda p: p[1])
-        max_pt = max(valid_points, key=lambda p: p[1])
-        last_pt = valid_points[-1]
-
-        mode_name = "当年累计盈亏走势" if mode == "cumulative" else "每日日内盈亏走势"
-        channel_desc = self.channel_filter.text()
-        ticker_desc = f" · 标的：{selected_ticker}" if selected_ticker else " · 全部股票"
-        person_desc = f" · {selected_person_name}"
-        chart_title = f"{self._cached_year}年 {mode_name}（USD）{person_desc} · {channel_desc}{ticker_desc}"
-
-        now_ny = datetime.now(NY)
-        reached_day = (now_ny + timedelta(days=1) if now_ny.hour >= 20 else now_ny).date()
-        reached_days = sum(date.fromisoformat(day) <= reached_day for day in all_trading_days)
-        missing_days = max(0, reached_days - past_days_count)
-        future_days = total_year_days - reached_days
-        chart_note = (
-            f"北京时间 · 整年全量 {total_year_days} 个美股交易日时间轴（已有曲线 {past_days_count} 个、已过日期缺点 {missing_days} 个、未来 {future_days} 个） · "
-            f"细虚线按月份（每月初首个交易日）划分；高亮显示全年度最高与最低收益。"
-        )
-
-        series_name = "年度累计盈亏" if mode == "cumulative" else "当日盈亏"
-        self.canvas.chart = Chart(
-            id=-102,
-            title=chart_title,
-            kind="line",
-            series=(Series(series_name, tuple(points)),),
-            note=chart_note,
-            x_labels=labels,
-            x_ticks=tuple(ticks),
-            show_points=False,
-            vertical_lines=tuple(vertical_lines),
-            highlight_extremes=True,
-            break_keys=tuple(day_start_stamps) if mode == "intraday" else (),
-        )
-        self.canvas.update()
-
-        currency = "USD"
-        last_val_str = f"{last_pt[1]:+,.2f} {currency}"
-        self.summary_badge.setText(
-            f"全年 {total_year_days} 个交易日（已有曲线 {past_days_count} 个，已过日期缺点 {missing_days} 个，未来 {future_days} 个） · "
-            f"最新盈亏：{last_val_str}"
-        )
-
-        dt_max_bj = datetime.fromisoformat(max_pt[0]).astimezone(zone).strftime("%m-%d %H:%M")
-        dt_min_bj = datetime.fromisoformat(min_pt[0]).astimezone(zone).strftime("%m-%d %H:%M")
-        max_val_str = f"{max_pt[1]:+,.2f} {currency} ({dt_max_bj})"
-        min_val_str = f"{min_pt[1]:+,.2f} {currency} ({dt_min_bj})"
-        self.status_label.setText(
-            f"📈 {mode_name}（{selected_person_name} · {channel_desc}{ticker_desc}）：当前最新 {last_val_str} · "
-            f"最高点：{max_val_str} · "
-            f"最低点：{min_val_str} · "
-            f"波动跨度：{max_pt[1] - min_pt[1]:,.2f} {currency}"
-        )
-        self.notes_label.setText(
-            "数据说明：展示所选整年全部美股交易日时间轴（按每 2 个小时一个点的密度精细采样）；"
-            "实盘曲线绘制截至当前时点，未来时段或缺少历史点的日期均留白；"
-            "垂直虚线按月份（每月初首个交易日）精确划分；"
-            "横坐标清晰标注各月份刻度；两端高亮圆点与防遮挡金额胶囊标注全年度最高与最低收益极值。"
-        )
+        return self._render_shared_chart(True)
 
     def export(self):
         """Export the realtime chart to high-resolution PNG."""

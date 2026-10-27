@@ -177,6 +177,13 @@ export const api = {
   },
 
   // Charts
+  historicalTrend: (filters: { kind: string; period: string; mode: string; channels: string[]; ticker: string; personId: number | null }) => {
+    const query = new URLSearchParams({ kind: filters.kind, period: filters.period, mode: filters.mode });
+    if (filters.personId != null) query.set("person_id", String(filters.personId));
+    if (filters.ticker) query.set("ticker", filters.ticker);
+    filters.channels.forEach(channel => query.append("channel", channel));
+    return requestApi(`/api/v1/charts/history?${query.toString()}`);
+  },
   charts: (personId?: number | null) => {
     const query = new URLSearchParams();
     if (personId != null) query.set("person_id", String(personId));

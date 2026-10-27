@@ -57,6 +57,11 @@ def event_time(event):
 
 
 def rebuild_history(path, analytics, credentials_path, store, day, now, cancel=None, *, prepared_snapshot=None):
+    if prepared_snapshot is None:
+        from portfolio.services.derived_store import DerivedStore
+        if DerivedStore(path).available:
+            from portfolio.services.derived_builder import rebuild_scope_day
+            return rebuild_scope_day(path,analytics,credentials_path,store,day,now,cancel)
     with localcontext() as context:
         context.prec = 50
         return _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepared_snapshot)

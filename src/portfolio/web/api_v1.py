@@ -1975,3 +1975,44 @@ def api_export_trades_csv():
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@api_v1.route('/charts/history',methods=['GET'])
+@require_capability(CAP_VIEW_ASSETS)
+def api_shared_history():
+    """Same derived service as the native month/year page, scoped before SQL."""
+    try:
+        import calendar
+        from portfolio.services.derived_queries import trend,load_history
+        from portfolio.services.web_today import desktop_quote_store,exact_json
+        kind=request.args.get('kind','month');year=kind=='year'
+        if kind not in ('month','year'):raise ValueError('走势范围必须是month或year。')
+        period=request.args.get('period',date.today().strftime('%Y' if year else '%Y-%m'))
+        if year:first,last=date(int(period),1,1),date(int(period),12,31)
+        else:
+            y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
+        scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
+        scope=replace(scope,start_date=None)
+        quotes=desktop_quote_store();quotes.source=DATABASE_PATH
+        analytics=get_analytics_service().calculate(scope)
+        rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
+        channels=request.args.getlist('channel') or None
+        ticker=request.args.get('ticker') or None
+        mode=request.args.get('mode','cumulative')
+        if mode not in ('cumulative','intraday'):raise ValueError('未知走势模式。')
+        chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+        daily=analytics.reports['每日持仓收益'].rows
+        return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':[{'name':s.name,'points':s.points} for s in chart.series],
+                     'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks},'cache':state,
+                     'channels':sorted({r.values[1] for r in daily}),'tickers':sorted({r.values[3] for r in daily})}))
+    except (ValueError,TypeError) as exc:return jsonify({'status':'error','message':str(exc)}),400
+    except Exception:
+        logger.exception('Shared historical trend failed')
+        return jsonify({'status':'error','message':'历史派生数据读取失败，请检查初始化、缓存状态及服务器日志。'}),500
+
+
+@api_v1.route('/system/derived',methods=['GET'])
+@require_capability(CAP_MANAGE_USERS)
+def api_derived_status():
+    from portfolio.services.derived_store import DerivedStore
+    return jsonify({'status':'ok','derived':DerivedStore(DATABASE_PATH).status()})

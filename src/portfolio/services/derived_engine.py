@@ -30,7 +30,9 @@ def unit_snapshot(snapshot,key):
     person,account,instrument=key
     events=[replace(e,metadata={k:v for k,v in e.metadata.items() if k!='cost_diff'}) for e in snapshot.events if e.key==key]
     # Order conflicts can involve another security; retain orders sharing this account.
-    brokers=[r for r in snapshot.extras.get('broker_trades',[]) if r['account_id']==account]
+    all_brokers=[r for r in snapshot.extras.get('broker_trades',[]) if r['account_id']==account]
+    orders={r['broker_order_id'] for r in all_brokers if r['instrument_id']==instrument and r.get('broker_order_id')}
+    brokers=[r for r in all_brokers if r['instrument_id']==instrument or r.get('broker_order_id') in orders]
     extras={'broker_trades':brokers,'trading_days':snapshot.extras.get('trading_days',()),
             'performance_price_days':sorted({p.day for p in snapshot.prices if p.kind in ('DAILY_CLOSE','ESTIMATE_CLOSE')})}
     return replace(snapshot,scope=replace(snapshot.scope,person_ids=(person,) if person is not None else None,

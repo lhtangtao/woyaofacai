@@ -55,12 +55,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         from PySide6.QtCore import QStandardPaths
         self.fx_store = FxStore(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "fx.sqlite3") if settings else None
         from portfolio.services.quote_store import QuoteStore
-        store_path = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / 'live_quotes.sqlite3'
-        if not store_path.exists():
-            alt_path = Path.home() / "Library/Application Support/MoneyPortfolio/Money Portfolio/live_quotes.sqlite3"
-            if alt_path.exists():
-                store_path = alt_path
-        self.quote_store = QuoteStore(store_path)
+        from portfolio.paths import quote_cache_path
+        self.quote_store = QuoteStore(quote_cache_path())
         self._fx_busy = False
         self._fx_attempt = None
         self.fx_timer = QTimer(self)

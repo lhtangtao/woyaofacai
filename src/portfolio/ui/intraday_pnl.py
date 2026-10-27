@@ -96,7 +96,13 @@ class IntradayPnlChart(QWidget):
                         for r in report.rows]
                 store.save_minute_pnl(key, self.day, now, session.name, rows)
             self.snapshots = store.load_minute_pnl(key, self.day)
-            self.history = store.load_historical_pnl(key, self.day, source_version(source_path))
+            from portfolio.services.derived_store import DerivedStore
+            if DerivedStore(source_path).available:
+                from portfolio.services.derived_queries import day_history
+                self.history, cache_state = day_history(source_path,store,scope,self.day)
+                self.history_warning = cache_state.get('message','')
+            else:
+                self.history = store.load_historical_pnl(key, self.day, source_version(source_path))
             if self.history:
                 stored_warning = store.load_historical_pnl_warning(key, self.day)
                 if stored_warning:

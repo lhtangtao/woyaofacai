@@ -94,3 +94,35 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
                     writer.save_historical_pnl('',day,[], '',warning)
                 progress(f'{ledger.value} person={person} {day}: {warning or "saved"}')
     return {'people':len(targets)-1,'days':len(trading_days)}
+
+
+def rebuild_scope_day(source,analytics,credentials,quotes,day,now,cancel=None):
+    """Canonical owner partitions; one shared quote fetch, no filter-key copies."""
+    from portfolio.services.derived_store import DerivedStore
+    from portfolio.services.derived_dependencies import partition_dependency
+    from portfolio.services.derived_queries import allowed_people
+    from portfolio.services.intraday_history import _rebuild
+    from decimal import localcontext
+    derived=DerivedStore(source)
+    people=allowed_people(source,analytics.scope)
+    warnings=[]
+    with exclusive(str(derived.path)+'.build',wait=False),derived.active(),localcontext() as ctx:
+        ctx.prec=50
+        for person in people:
+            scope=replace(analytics.scope,as_of=date.fromisoformat(day),person_ids=(person,) if person else None,
+                          include_disabled=True,account_ids=None,instrument_ids=None,category=None,search='',start_date=None,reporting_currency='USD')
+            with readonly_connection(source,cancel=cancel) as c:snapshot=load_snapshot(c,scope,cancel=cancel)
+            quotes.supplement(snapshot)
+            # Downloading missing shared prices happens inside the original
+            # calculator; fingerprint AFTER it has stored the new completed bars.
+            class PendingWriter(PartitionWriter):
+                def save_historical_pnl(self,key,day,rows,version,warning=''):
+                    self.dependency=partition_dependency(source,quotes,scope,day)
+                    super().save_historical_pnl(key,day,rows,version,warning)
+            writer=PendingWriter(quotes,derived,scope,'')
+            message=_rebuild(source,SimpleNamespace(scope=scope,trading_days=analytics.trading_days),credentials,writer,day,now,cancel,snapshot)
+            if not writer.saved:
+                writer.dependency=partition_dependency(source,quotes,scope,day)
+                writer.save_historical_pnl('',day,[],'',message)
+            if message:warnings.append(message)
+    return '；'.join(dict.fromkeys(warnings))

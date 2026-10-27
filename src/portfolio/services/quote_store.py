@@ -29,7 +29,24 @@ class QuoteStore:
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_versions (scope_key TEXT NOT NULL, day TEXT NOT NULL, source_version TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_warnings (scope_key TEXT NOT NULL, day TEXT NOT NULL, warning TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS channel_cash_snapshots (channel TEXT PRIMARY KEY, amount TEXT NOT NULL, currency TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS quote_day_revisions(day TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
+        for operation in ('INSERT','UPDATE','DELETE'):
+            ref='OLD' if operation=='DELETE' else 'NEW'
+            c.execute(f"CREATE TRIGGER IF NOT EXISTS quote_revision_{operation.lower()} AFTER {operation} ON intraday_candles BEGIN INSERT INTO quote_day_revisions VALUES ({ref}.day,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1; END")
         return c
+
+    def day_revision(self, day):
+        from contextlib import closing
+        with closing(self.connect()) as c:
+            row=c.execute('SELECT revision FROM quote_day_revisions WHERE day=?',(day,)).fetchone()
+        facts=''
+        if self.source:
+            from portfolio.services.history_facts import readonly
+            from portfolio.services.derived_store import digest
+            with closing(readonly(self.source)) as c:
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+                    facts=digest([tuple(r) for r in c.execute('SELECT * FROM history_prices WHERE trade_date=? ORDER BY instrument_id,stamp_utc,provider',(day,))])
+        return (row[0] if row else 0,facts)
 
     def intraday_candles(self, symbol, day):
         with self.connect() as c:
