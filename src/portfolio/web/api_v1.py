@@ -174,12 +174,15 @@ def api_bootstrap():
         except Exception:
             pass
 
+    # Avoid a foreground financial replay while the first background generation runs.
+    from portfolio.services.derived_store import DerivedStore
+    cache_ready=DerivedStore(DATABASE_PATH).readiness()["ready"]
     # Standard report list
     reports_meta = []
     try:
         svc = get_analytics_service()
-        res = svc.calculate(get_user_query_scope())
-        for name, rep in res.reports.items():
+        res = svc.calculate(get_user_query_scope()) if cache_ready else None
+        for name, rep in (res.reports.items() if res else ()):
             reports_meta.append({
                 "name": name,
                 "group": "核心报表" if name in ("当前持仓", "今日盈亏", "股票汇总", "人员资产", "渠道汇总") else "明细与审计",
@@ -1995,6 +1998,11 @@ def api_shared_history():
         scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
         scope=replace(scope,start_date=None)
         quotes=desktop_quote_store();quotes.source=DATABASE_PATH
+        from portfolio.services.derived_store import DerivedStore
+        if not DerivedStore(DATABASE_PATH).readiness()['ready']:
+            rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
+            return jsonify({'status':'ok','chart':{'title':period+' 历史走势','series':[],'note':'历史数据正在后台初始化，完成后自动刷新。','boundaries':[]},
+                            'cache':state,'channels':[],'tickers':[]})
         analytics=get_analytics_service().calculate(scope)
         rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
         channels=request.args.getlist('channel') or None
@@ -2017,3 +2025,13 @@ def api_shared_history():
 def api_derived_status():
     from portfolio.services.derived_store import DerivedStore
     return jsonify({'status':'ok','derived':DerivedStore(DATABASE_PATH).status()})
+
+
+@api_v1.route('/system/derived-progress',methods=['GET'])
+@require_capability(CAP_VIEW_ASSETS)
+def api_derived_progress():
+    # Only generic task counters/status; no owner names, IDs or asset values.
+    from portfolio.services.derived_maintenance import maintenance_status,schedule_changed
+    status=maintenance_status(DATABASE_PATH)
+    if not status['ready'] and not status['running']:schedule_changed(DATABASE_PATH)
+    return jsonify({'status':'ok',**status})

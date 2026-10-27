@@ -183,7 +183,7 @@ if [[ -n "$DERIVED_MODE" ]]; then
     DERIVED_ARGS+=("--mode" "$DERIVED_MODE")
     "$APP_DIR/.venv/bin/python" -m portfolio.derived rebuild "${DERIVED_ARGS[@]}"
 else
-    "$APP_DIR/.venv/bin/python" -m portfolio.derived check
+    print "ℹ️ 两端将在后台自动检查并初始化历史缓存。"
 fi
 
 # ------------------------------------------------------------------------------

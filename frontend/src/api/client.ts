@@ -177,6 +177,7 @@ export const api = {
   },
 
   // Charts
+  derivedProgress: () => requestApi("/api/v1/system/derived-progress"),
   historicalTrend: (filters: { kind: string; period: string; mode: string; channels: string[]; ticker: string; personId: number | null }) => {
     const query = new URLSearchParams({ kind: filters.kind, period: filters.period, mode: filters.mode });
     if (filters.personId != null) query.set("person_id", String(filters.personId));

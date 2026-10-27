@@ -334,6 +334,30 @@ class MonthlyRealtimePnlPage(QWidget):
         self.refresh_timer.setInterval(60000)
         self.refresh_timer.timeout.connect(self._refresh_active_period)
         self.refresh_timer.start()
+        self._derived_generation=None
+        self.maintenance_timer=QTimer(self)
+        self.maintenance_timer.setInterval(2000)
+        self.maintenance_timer.timeout.connect(self._poll_derived_progress)
+        self.maintenance_timer.start()
+
+    def _poll_derived_progress(self):
+        if not self.isVisible():return
+        source=self._resolve_source_path()
+        if not source:return
+        from portfolio.services.derived_maintenance import maintenance_status,schedule_changed
+        status=maintenance_status(source);progress=status['progress']
+        if not status['ready'] and not status['running']:schedule_changed(source)
+        if status['running'] or not status['ready']:
+            text=progress.get('message','正在后台计算全部历史人员。')
+            if progress.get('total_units'):
+                text+=f" {progress.get('completed_units',0)}/{progress['total_units']}（{progress.get('percent',0)}%）"
+            self.summary_badge.setText(text)
+        if status['ready'] and status.get('generation')!=self._derived_generation:
+            self._derived_generation=status['generation']
+            if not self.month_combo.count():self._init_available_months()
+            if not self.year_combo.count():self._init_available_years()
+            if self.tab_bar.currentIndex()==1:self._load_year_data(self.year_combo.currentText())
+            else:self._load_month_data(self.month_combo.currentText())
 
     def _refresh_active_period(self):
         if not self.analytics or not self.isVisible():
@@ -492,69 +516,30 @@ class MonthlyRealtimePnlPage(QWidget):
                 self._syncing_person = False
 
     def _init_available_months(self):
-        """Populate the month dropdown with available months from live_quotes.sqlite3."""
-        conn = self._get_connection()
-        if not conn:
-            self.status_label.setText("行情缓存数据库不存在或尚未初始化。")
-            return
-        months = []
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT substr(day, 1, 7) FROM us_calendar ORDER BY 1 DESC")
-            months = [r[0] for r in cur.fetchall() if r[0]]
-        except Exception as e:
-            self.error.emit(f"读取行情月份列表失败：{e}")
-        finally:
-            conn.close()
-
+        conn=self._get_connection();months=[]
+        if conn:
+            try:months=[r[0] for r in conn.execute("SELECT DISTINCT substr(day,1,7) FROM us_calendar ORDER BY 1 DESC") if r[0]]
+            finally:conn.close()
         if not months:
-            months = [date.today().strftime("%Y-%m")]
-
-        curr_month = self.month_combo.currentText()
-        self.month_combo.blockSignals(True)
-        self.month_combo.clear()
-        for m in months:
-            self.month_combo.addItem(m, m)
-        if curr_month in months:
-            self.month_combo.setCurrentText(curr_month)
-        else:
-            self.month_combo.setCurrentIndex(0)
+            today=date.today()
+            months=[f"{year}-{month:02d}" for year in range(2026,today.year+1) for month in range(1,(today.month if year==today.year else 12)+1)][::-1]
+        current=self.month_combo.currentText()
+        self.month_combo.blockSignals(True);self.month_combo.clear();self.month_combo.addItems(months)
+        if current in months:self.month_combo.setCurrentText(current)
         self.month_combo.blockSignals(False)
-
-        if self.tab_bar.currentIndex() == 0:
-            self._load_month_data(self.month_combo.currentText())
+        if self.tab_bar.currentIndex()==0:self._load_month_data(self.month_combo.currentText())
 
     def _init_available_years(self):
-        """Populate the year dropdown with available years from live_quotes.sqlite3."""
-        conn = self._get_connection()
-        if not conn:
-            return
-        years = []
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT DISTINCT substr(day, 1, 4) FROM us_calendar ORDER BY 1 DESC")
-            years = [r[0] for r in cur.fetchall() if r[0]]
-        except Exception as e:
-            self.error.emit(f"读取行情年份列表失败：{e}")
-        finally:
-            conn.close()
-
-        if not years:
-            years = [str(date.today().year)]
-
-        curr_year = self.year_combo.currentText()
-        self.year_combo.blockSignals(True)
-        self.year_combo.clear()
-        for y in years:
-            self.year_combo.addItem(y, y)
-        if curr_year in years:
-            self.year_combo.setCurrentText(curr_year)
-        else:
-            self.year_combo.setCurrentIndex(0)
+        conn=self._get_connection();years=[]
+        if conn:
+            try:years=[r[0] for r in conn.execute("SELECT DISTINCT substr(day,1,4) FROM us_calendar ORDER BY 1 DESC") if r[0]]
+            finally:conn.close()
+        if not years:years=[str(year) for year in range(date.today().year,2025,-1)]
+        current=self.year_combo.currentText()
+        self.year_combo.blockSignals(True);self.year_combo.clear();self.year_combo.addItems(years)
+        if current in years:self.year_combo.setCurrentText(current)
         self.year_combo.blockSignals(False)
-
-        if self.tab_bar.currentIndex() == 1:
-            self._load_year_data(self.year_combo.currentText())
+        if self.tab_bar.currentIndex()==1:self._load_year_data(self.year_combo.currentText())
 
     def _on_tab_changed(self, index):
         is_year = (index == 1)
@@ -648,6 +633,10 @@ class MonthlyRealtimePnlPage(QWidget):
         self._shared_request=(period,year,scope)
         self.summary_badge.setText('正在读取共享历史派生数据…')
         def task(cancel):
+            from portfolio.services.derived_store import DerivedStore
+            if not DerivedStore(source).readiness()['ready']:
+                rows,state=load_history(source,self.window.quote_store,scope,first,last)
+                return None,rows,state
             result=self.window.analytics_service.calculate(scope,cancel=cancel)
             rows,state=load_history(source,self.window.quote_store,scope,first,last)
             return result,rows,state
@@ -657,6 +646,10 @@ class MonthlyRealtimePnlPage(QWidget):
             self._shared_period,self._shared_year=period,year
             if year:self._cached_year=period
             else:self._cached_month=period
+            if value[0] is None:
+                self.canvas.chart=None;self.canvas.update()
+                self.status_label.setText(value[2].get('message','正在后台生成全部历史人员。'))
+                return
             channels={r.values[1] for r in value[0].reports['每日持仓收益'].rows}
             tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
             self.channel_filter.populate(sorted(channels));self.stock_combo.populate(sorted(tickers))
@@ -664,7 +657,7 @@ class MonthlyRealtimePnlPage(QWidget):
         self.window._submit('shared-trend',task,ready)
 
     def _render_shared_chart(self, year):
-        if not hasattr(self,'_shared_analytics') or self._shared_year != year:return
+        if not getattr(self,'_shared_analytics',None) or self._shared_year != year:return
         from portfolio.services.derived_queries import trend
         source=self._resolve_source_path()
         chart,state=trend(source,self.window.quote_store,self._shared_analytics,self._shared_period,year=year,

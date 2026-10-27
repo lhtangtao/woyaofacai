@@ -1,5 +1,5 @@
 """Published derived SQLite objects with dependency validation and atomic writes."""
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
@@ -33,6 +33,10 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+class BuildBusyError(ValueError):
+    pass
+
+
 @contextmanager
 def exclusive(path, *, wait=True):
     """OS releases the lock on crash; shared by CLI and both application processes."""
@@ -42,7 +46,7 @@ def exclusive(path, *, wait=True):
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         except BlockingIOError as exc:
-            raise ValueError('派生数据正在由另一进程生成，请稍后重试。') from exc
+            raise BuildBusyError('派生数据正在由另一进程生成，请稍后重试。') from exc
         try: yield
         finally: fcntl.flock(handle, fcntl.LOCK_UN)
 
@@ -66,15 +70,43 @@ class DerivedStore:
         if not self.available: raise ValueError('派生库未初始化，请先执行 derived init。')
         c = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'), uri=True, timeout=60,factory=ClosingConnection)
         c.execute('PRAGMA busy_timeout=60000')
-        source = c.execute("SELECT value FROM metadata WHERE key='source'").fetchone()
+        try:source = c.execute("SELECT value FROM metadata WHERE key='source'").fetchone()
+        except BaseException:
+            c.close();raise
         if not source or source[0] != str(self.source):
             c.close(); raise ValueError('派生库的数据源不匹配，拒绝读取。')
         return c
 
+    def readiness(self):
+        """Cheap read-only readiness probe; safe for UI/WSGI startup."""
+        if not self.available:return {'ready':False,'state':'NOT_INITIALIZED','generation':None}
+        try:
+            with closing(sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True,timeout=.05)) as c:
+                meta=dict(c.execute('SELECT key,value FROM metadata'))
+                if meta.get('source')!=str(self.source):return {'ready':False,'state':'UNINITIALIZED','generation':None}
+                generation=meta.get('generation')
+                published=c.execute("SELECT 1 FROM jobs WHERE id=? AND state='PUBLISHED'",(generation,)).fetchone() if generation else None
+                valid=c.execute("SELECT 1 FROM partitions WHERE algorithm=? AND status NOT IN ('INVALID','ERROR') LIMIT 1",(ALGORITHM,)).fetchone()
+                ready=bool(published and valid and meta.get('algorithm')==ALGORITHM)
+                return {'ready':ready,'state':'AVAILABLE' if ready else 'INITIAL_GENERATION_REQUIRED',
+                        'generation':generation,'initialized':True}
+        except (sqlite3.DatabaseError,ValueError):
+            return {'ready':False,'state':'UNINITIALIZED','generation':None}
+
     def initialize(self):
         if self.path.exists():
-            with self.connect(): pass
-            return
+            try:
+                with closing(self.connect(write=True)) as c:
+                    c.executescript(files('portfolio').joinpath('resources/derived_schema.sql').read_text())
+                return
+            except (sqlite3.DatabaseError,ValueError):
+                # Only rebuildable derived files are quarantined. Preserve their
+                # WAL/SHM as well; source trades and prices are never touched.
+                import uuid
+                suffix='.uninitialized-'+uuid.uuid4().hex
+                for extra in ('','-wal','-shm'):
+                    original=Path(str(self.path)+extra)
+                    if original.exists():os.replace(original,Path(str(self.path)+suffix+extra))
         if not self.source.is_file():raise ValueError('原始事实库不存在，未创建派生库。')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         import uuid

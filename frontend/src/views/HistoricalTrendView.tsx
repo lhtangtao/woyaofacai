@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api/client";
 
@@ -11,6 +11,22 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [maintenance, setMaintenance] = useState<any>(null);
+  const generation = useRef<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    const poll = () => api.derivedProgress().then((result: any) => {
+      if (!active) return;
+      setMaintenance(result);
+      if (result.ready && result.generation && result.generation !== generation.current) {
+        generation.current = result.generation;
+        setRefresh(value => value + 1);
+      }
+    }).catch(() => { if (active) setMaintenance({ progress: { state: "UNAVAILABLE", message: "计算进度暂时读取失败，正在重试。" } }); });
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   useEffect(() => {
     let active = true;
     const load = () => api.historicalTrend({ kind, period, mode, channels, ticker, personId })
@@ -46,6 +62,13 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
       <input aria-label="Ticker筛选" list="history-tickers" placeholder="全部股票" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /><datalist id="history-tickers">{(data?.tickers || []).map((t: string) => <option key={t} value={t} />)}</datalist>
       <button onClick={() => setRefresh(v => v + 1)}>刷新</button>
     </div>
+    {maintenance?.progress && <div role="status">
+      {maintenance.progress.message}
+      {maintenance.running && maintenance.progress.total_units > 0 && <>
+        <progress max={maintenance.progress.total_units} value={maintenance.progress.completed_units || 0} />
+        {maintenance.progress.completed_units || 0}/{maintenance.progress.total_units}（{maintenance.progress.percent}%）
+      </>}
+    </div>}
     {error ? <div role="alert" className="card-panel">{error}</div> : !data ? <div>正在读取共享历史派生数据…</div> : <>
       <div role="status">{data.cache?.message}</div>
       <div className="card-panel"><ReactECharts option={option} notMerge style={{ height: 520 }} /></div>

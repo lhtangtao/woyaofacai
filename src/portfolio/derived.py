@@ -12,49 +12,55 @@ from portfolio.paths import DATABASE_PATH, quote_cache_path
 from portfolio.services.derived_store import DerivedStore, exclusive, utcnow
 
 
-def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=None):
-    from portfolio.services.derived_builder import build_all
-    from portfolio.services.derived_dependencies import check_changes, source_identity
+def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=None, automatic=False):
+    from portfolio.services.derived_builder import build_all,validate_generation,historical_people
+    from portfolio.services.derived_dependencies import check_changes,source_identity
+    from portfolio.services.derived_maintenance import write_progress,needs_rebuild
     from portfolio.services.quote_store import QuoteStore
     source=Path(source).resolve();published=DerivedStore(source)
-    # One build across processes. Publication lock is held only at the final swap;
-    # readers continue using dependency-validated published generation meanwhile.
     with exclusive(str(published.path)+'.build',wait=False):
-        if not published.available:raise ValueError('请先执行 python -m portfolio.derived init。')
-        check_changes(source,published)
-        before=source_identity(source,financial_only=True)
-        def historical_prices_revision():
-            from portfolio.services.history_facts import readonly
-            from portfolio.services.derived_store import digest
-            from portfolio.domain.live_quotes import NY
-            cutoff=datetime.now(NY).date().isoformat()
-            result=[]
-            with closing(readonly(source)) as c:
-                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone():
-                    result.extend(tuple(r) for r in c.execute('SELECT day,revision FROM history_fact_revisions WHERE day<? ORDER BY day',(cutoff,)))
-            cache=Path(legacy or quote_cache_path())
-            if cache.is_file():
-                with closing(readonly(cache)) as c:
-                    if c.execute("SELECT 1 FROM sqlite_master WHERE name='quote_day_revisions'").fetchone():
-                        result.extend(tuple(r) for r in c.execute('SELECT day,revision FROM quote_day_revisions WHERE day<? ORDER BY day',(cutoff,)))
-            return digest(result)
-        historical_before=historical_prices_revision()
-        token=uuid.uuid4().hex
-        staging=published.path.with_name(published.path.name+'.building-'+token)
-        target=DerivedStore(source,staging)
-        if mode=='changed':
-            with closing(published.connect()) as original,closing(sqlite3.connect(staging)) as copy:original.backup(copy)
-            from importlib.resources import files
-            with closing(sqlite3.connect(staging)) as c:c.executescript(files('portfolio').joinpath('resources/derived_schema.sql').read_text())
-        else:target.initialize()
-        started=utcnow()
-        with closing(target.connect(write=True)) as c:
-            c.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?)',(token,mode,'RUNNING',started,None,'all historical owners'));c.commit()
+        token=uuid.uuid4().hex;target=None
+        def notify(**values):write_progress(source,job_id=token,**values)
         try:
-            result=build_all(source,target,QuoteStore(legacy or quote_cache_path(),source=source),start=start,end=end,force=mode=='all')
-            from portfolio.services.derived_builder import validate_generation,historical_people
+            notify(state='INITIALIZING',message='正在后台初始化共享历史派生库。',completed_units=0,total_units=0)
+            with exclusive(published.path):published.initialize()
+            notify(state='CHECKING',message='正在检查原始数据及已有缓存依赖。')
+            check_changes(source,published)
+            quotes=QuoteStore(legacy or quote_cache_path(),source=source)
+            if automatic and not needs_rebuild(source,published,quotes,start):
+                generation=published.readiness()['generation']
+                notify(state='PUBLISHED',message='历史缓存有效，直接读取已有计算代。',generation=generation)
+                return {'state':'UNCHANGED','generation':generation}
+            before=source_identity(source,financial_only=True)
+            def historical_prices_revision():
+                from portfolio.services.history_facts import readonly
+                from portfolio.services.derived_store import digest
+                from portfolio.domain.live_quotes import NY
+                cutoff=datetime.now(NY).date().isoformat();result=[]
+                with closing(readonly(source)) as c:
+                    if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone():
+                        result.extend(tuple(r) for r in c.execute('SELECT day,revision FROM history_fact_revisions WHERE day<? ORDER BY day',(cutoff,)))
+                if quotes.path.is_file():
+                    with closing(readonly(quotes.path)) as c:
+                        if c.execute("SELECT 1 FROM sqlite_master WHERE name='quote_day_revisions'").fetchone():
+                            result.extend(tuple(r) for r in c.execute('SELECT day,revision FROM quote_day_revisions WHERE day<? ORDER BY day',(cutoff,)))
+                return digest(result)
+            historical_before=historical_prices_revision()
+            staging=published.path.with_name(published.path.name+'.building-'+token)
+            target=DerivedStore(source,staging)
+            if mode=='changed':
+                with closing(published.connect()) as original,closing(sqlite3.connect(staging)) as copy:original.backup(copy)
+                from importlib.resources import files
+                with closing(sqlite3.connect(staging)) as c:c.executescript(files('portfolio').joinpath('resources/derived_schema.sql').read_text())
+            else:target.initialize()
+            with closing(target.connect(write=True)) as c:
+                c.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?)',(token,mode,'RUNNING',utcnow(),None,'all historical owners'));c.commit()
+            result=build_all(source,target,quotes,start=start,end=end,force=mode=='all',retry_errors=not automatic,
+                             progress=(lambda message:None) if automatic else print,on_progress=lambda values:notify(**values))
+            notify(state='VALIDATING',message='正在核对历史计算结果与数据库完整性。')
             result['validation']=validate_generation(target,historical_people(source))
-            if source_identity(source,financial_only=True)!=before or historical_prices_revision()!=historical_before:raise ValueError('原始账本在生成期间变化，本代未发布；请重试增量重算。')
+            if source_identity(source,financial_only=True)!=before or historical_prices_revision()!=historical_before:
+                raise ValueError('原始数据在生成期间变化，本代未发布，将自动重试。')
             with closing(target.connect(write=True)) as c:
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('新派生库完整性校验失败。')
                 if c.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('新派生库外键校验失败。')
@@ -62,7 +68,7 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
                 c.execute("INSERT OR REPLACE INTO metadata VALUES ('generation',?)",(token,))
                 from portfolio.services.derived_store import ALGORITHM
                 c.execute("INSERT OR REPLACE INTO metadata VALUES ('algorithm',?)",(ALGORITHM,));c.commit()
-            # Keep a recoverable SQLite-consistent previous generation.
+            notify(state='PUBLISHING',message='正在发布已核对的历史计算代。')
             with exclusive(published.path):
                 backup=published.path.with_name(published.path.name+'.previous-'+token)
                 with closing(published.connect()) as old,closing(sqlite3.connect(backup)) as copy:old.backup(copy)
@@ -72,28 +78,29 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
                 directory=os.open(str(published.path.parent),os.O_RDONLY)
                 try:os.fsync(directory)
                 finally:os.close(directory)
+            gaps=result.get('errors',0)+result.get('partial',0)+result.get('report_errors',0)
+            notify(state='PUBLISHED',generation=token,errors=result.get('errors',0),partial=result.get('partial',0),report_errors=result.get('report_errors',0),calendar_warnings=result.get('calendar_warnings',[]),
+                   message=f"历史预计算已发布；失败分区 {result.get('errors',0)}，缺失/提示 {result.get('partial',0)}，报表失败 {result.get('report_errors',0)}；有效日期可正常查看。" if gaps else '全部历史人员预计算已完成，走势图已可读取。')
             return {'state':'PUBLISHED','generation':token,'previous':str(backup),**result}
         except BaseException as exc:
-            # Keep failed generation for diagnosis; never publish it or overwrite facts.
-            with closing(target.connect(write=True)) as c:
-                c.execute('UPDATE jobs SET state=?,finished_at=?,detail=? WHERE id=?',('FAILED',utcnow(),type(exc).__name__,token));c.commit()
+            if target is not None and target.available:
+                with closing(target.connect(write=True)) as c:
+                    c.execute('UPDATE jobs SET state=?,finished_at=?,detail=? WHERE id=?',('FAILED',utcnow(),type(exc).__name__,token));c.commit()
+            notify(state='FAILED',error_type=type(exc).__name__,message='历史生成未完成，原有效代保留；后台将稍后重试，请查看本机日志。')
             raise
 
 
 def prepare_startup(source=DATABASE_PATH,mode=None,*,background=False):
-    from portfolio.services.derived_dependencies import check_changes
     source=Path(source).resolve()
     if not source.is_file():return {'state':'SOURCE_MISSING'}
-    store=DerivedStore(source)
     if mode:return rebuild(source,mode=mode)
-    result=check_changes(source,store)
-    pending=False
-    if store.available:
-        with closing(store.connect()) as c:pending=bool(c.execute("SELECT 1 FROM partitions WHERE status='INVALID' LIMIT 1").fetchone())
-    if background and (result.get('changed') or pending):
+    if background:
         from portfolio.services.derived_maintenance import schedule_changed
-        result["maintenance"]=schedule_changed(source)
-    return result
+        return {'state':'CHECKING','maintenance':schedule_changed(source)}
+    from portfolio.services.derived_dependencies import check_changes
+    store=DerivedStore(source)
+    if not store.readiness().get('initialized'):return {'state':'NOT_INITIALIZED'}
+    return check_changes(source,store)
 
 
 def main(argv=None):

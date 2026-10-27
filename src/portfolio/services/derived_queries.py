@@ -28,7 +28,14 @@ def allowed_people(source,scope):
 
 def load_history(source,quotes,scope,start,end):
     store=DerivedStore(source)
-    if not store.available:return {},{'state':'NOT_INITIALIZED','message':'历史派生库尚未初始化，请执行初始化及全人员生成。'}
+    from portfolio.services.derived_maintenance import schedule_changed,maintenance_status
+    ready=store.readiness()
+    if not ready['ready']:
+        schedule_changed(source,start=date.fromisoformat(str(start)))
+        status=maintenance_status(source)
+        return {},{'state':'BUILDING' if status['running'] else status['state'],
+                   'progress':status['progress'],'generation':status.get('generation'),
+                   'message':status['progress'].get('message','正在后台生成全部历史人员的数据。')}
     check_changes(source,store)
     people=allowed_people(source,scope)
     if not people:return {},{'state':'EMPTY_AUTHORIZED_SCOPE','message':'当前授权范围没有人员。'}
@@ -99,17 +106,22 @@ def load_history(source,quotes,scope,start,end):
         if any((p,day) not in valid for p in people):continue
         output[day]=[(datetime.fromisoformat(stamp),items) for stamp,items in sorted(stamps.items())]
     invalid=sum(v['state']=='INVALID' for v in states.values())
+    errors=sum(v['state']=='ERROR' for v in states.values())
+    partial=sum(v['state']=='PARTIAL' for v in states.values())
     now=datetime.now(UTC)
     _,calendar,_,_=quotes.load(now)
     expected={d.isoformat() for d in calendar if str(start)<=d.isoformat()<=str(end) and datetime.combine(d-timedelta(days=1),time(20),NY)<=now}
     missing_days={d for d in expected if any((p,d) not in states for p in people)}
-    overall='INVALID' if invalid else 'PARTIAL' if missing_days else 'AVAILABLE' if partitions else 'NOT_GENERATED'
+    overall='INVALID' if invalid else 'PARTIAL' if missing_days or errors or partial else 'AVAILABLE' if partitions else 'NOT_GENERATED'
     maintenance=None
     if invalid or missing_days:
         from portfolio.services.derived_maintenance import schedule_changed
         maintenance=schedule_changed(source,start=date.fromisoformat(str(start)))
-    return output,{'state':overall,'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
-                   'message':('历史派生分区已失效，请执行增量重算。' if invalid else '历史派生数据尚未生成，请执行全人员预计算。' if not partitions else '使用共享历史派生数据；缺失区段留空，未确认价格保留原口径状态。')}
+    status=maintenance_status(source)
+    return output,{'state':overall,'progress':status['progress'],'generation':status.get('generation'),
+                   'error_partitions':errors,'partial_partitions':partial,
+                   'trading_days':sorted({d.isoformat() for d in calendar}|{d for _,d in states}),'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
+                   'message':('受影响分区正在后台增量生成，其他有效日期正常展示。' if invalid or missing_days else f'有效历史数据已加载；计算失败分区 {errors}，缺失/提示分区 {partial}，对应区段留空。')}
 
 
 def day_history(source,quotes,scope,day):
@@ -128,7 +140,8 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         y,m=map(int,period.split('-'));first=date(y,m,1);last=date(y,m,calendar.monthrange(y,m)[1]);step=timedelta(minutes=30)
     by_day,state=history_data if history_data is not None else load_history(source,quotes,analytics.scope,first,last)
     _,days,halves,_=quotes.load(now)
-    calendar_days=sorted(d for d in days if first<=d<=last)
+    observed={date.fromisoformat(d) for d in state.get('trading_days',())}
+    calendar_days=sorted(d for d in days|observed if first<=d<=last)
     if not calendar_days:return Chart(0,'历史走势','line',(Series('累计盈亏',()),),'缺少真实交易所日历，未猜测交易日。'),state
     daily=defaultdict(list)
     for row in analytics.reports['每日持仓收益'].rows:
@@ -165,6 +178,7 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 running=running+gain if running is not None and gain is not None else None
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')
     note='五分钟共享明细；月度30分钟/年度2小时采样。正式/原口径日收益参与跨日累计；缺失日内数据留空，不平滑、不补零。'
+    if state.get('progress',{}).get('calendar_warnings'):note+=' 日历覆盖元数据不足，使用已保存实际日期，未猜测缺失交易日。'
     if missing:note+=' 缺失或未生成：'+', '.join(missing[:12])+('…' if len(missing)>12 else '')
     chart=Chart(0,f'{period} '+('累计盈亏走势' if mode=='cumulative' else '每日日内盈亏走势'),'line',
                 (Series('累计盈亏' if mode=='cumulative' else '当日盈亏',tuple(points)),),note,
