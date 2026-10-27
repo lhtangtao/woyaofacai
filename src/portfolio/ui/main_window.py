@@ -558,6 +558,8 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.top_days_page.clear()
             if hasattr(self, "monthly_realtime_page"):
                 self.monthly_realtime_page.clear()
+            if hasattr(self, "asset_trend"):
+                self.asset_trend.clear()
             self.stock_detail.clear()
             for page in self.report_pages:
                 page.clear()
@@ -632,6 +634,9 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             QTimer.singleShot(0, lambda: self.monthly_realtime_page.set_analytics(analytics) if hasattr(self, "monthly_realtime_page") else None)
+        if hasattr(self, "asset_trend") and self.asset_trend.isVisible():
+            self.asset_trend.sync_person_from_main(self.person.currentData())
+            QTimer.singleShot(0, lambda: self.asset_trend.set_analytics(analytics))
         if hasattr(self, "earnings_page"):
             self.earnings_page.activate()
         self.preload_people_bundle()

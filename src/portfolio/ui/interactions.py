@@ -272,6 +272,8 @@ class InteractionMixin:
             )
         )
         self.asset_reset_button.setVisible(is_asset)
+        if hasattr(self.live_panel, 'trend_tabs'):
+            self.live_panel.trend_tabs.setVisible(self.today_snapshot())
         self.filters_widget.setVisible(page in range(2, 11) or page in (0, 14, 17))
         if page == 0 and self.current_page:
             self.banner.setText(getattr(self, "_trade_notice", ""))

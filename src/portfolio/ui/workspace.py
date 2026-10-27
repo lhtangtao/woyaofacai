@@ -347,6 +347,32 @@ def build_workspace(self):
     self.pages.addWidget(self.monthly_realtime_page)
     self.monthly_realtime_page.drill.connect(self.drill_chart)
     self.monthly_realtime_page.error.connect(self.banner.setText)
+    # 今日盈亏页内嵌当月/当年走势（复用月度走势详情组件，计算口径一致）
+    self.asset_trend = MonthlyRealtimePnlPage(self)
+    self.asset_trend.tab_bar.hide()
+    self.asset_trend.setMinimumHeight(680)
+    self.asset_trend.hide()
+    self.asset_trend.drill.connect(self.drill_chart)
+    self.asset_trend.error.connect(self.banner.setText)
+    chart_layout = self.asset_page.intraday_chart.parentWidget().layout()
+    chart_layout.insertWidget(chart_layout.indexOf(self.asset_page.intraday_chart) + 1, self.asset_trend)
+    self.asset_page.trend_widget = self.asset_trend
+    self.asset_page.trend_mode = 0
+
+    def on_today_trend_changed(index):
+        self.asset_page.trend_mode = index
+        is_today = self.today_snapshot()
+        self.asset_page.intraday_chart.setVisible(is_today and index == 0)
+        self.asset_trend.setVisible(is_today and index > 0)
+        if index > 0:
+            if self.asset_trend.tab_bar.currentIndex() != index - 1:
+                self.asset_trend.tab_bar.setCurrentIndex(index - 1)
+            self.asset_trend.sync_person_from_main(self.person.currentData())
+            if self.analytics:
+                self.asset_trend.set_analytics(self.analytics)
+    self.live_panel.trend_tabs.currentChanged.connect(on_today_trend_changed)
+    self.person.currentIndexChanged.connect(
+        lambda *_: self.asset_trend.sync_person_from_main(self.person.currentData()) if self.asset_trend.isVisible() else None)
     from portfolio.ui.ai_assistant_page import AIAssistantPage
     self.ai_assistant_page = AIAssistantPage(self)
     self.pages.addWidget(self.ai_assistant_page)

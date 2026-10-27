@@ -42,6 +42,17 @@ class LiveQuotesPanel(QWidget):
         row.addSpacing(12)
         row.addWidget(self.refresh_time)
         row.addStretch(1)
+        # 今日盈亏走势周期切换：当日走势（默认）/ 当月 / 当年
+        from PySide6.QtWidgets import QTabBar
+        self.trend_tabs = QTabBar(self)
+        self.trend_tabs.setDrawBase(False)
+        self.trend_tabs.setExpanding(True)
+        self.trend_tabs.setMinimumWidth(420)
+        for text in ('当日走势', '当月', '当年'):
+            self.trend_tabs.addTab(text)
+        self.trend_tabs.setToolTip('切换今日盈亏页的走势图：当日五分钟走势、当月累计走势、当年累计走势')
+        self.trend_tabs.hide()
+        row.addWidget(self.trend_tabs, 2)
         layout.addLayout(row)
         self.summary = QLabel('实时估值尚未启用')
         self.summary.setWordWrap(True)

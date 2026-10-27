@@ -232,6 +232,8 @@ class ReportPage(QWidget):
         self.channel_overview.hide()
         self.intraday_chart.hide()
         self.intraday_chart.key = None
+        if getattr(self, 'trend_widget', None) is not None:
+            self.trend_widget.hide()
         self.today_sort.hide()
         self.status.setText(message)
 
@@ -282,7 +284,10 @@ class ReportPage(QWidget):
         is_today = bool(self.report and name == '今日盈亏')
         self.details.setVisible(not is_today)
         self.today_overview.setVisible(is_today)
-        self.intraday_chart.setVisible(is_today and '$' in self.report.columns[6])
+        trend_mode = getattr(self, 'trend_mode', 0)
+        self.intraday_chart.setVisible(is_today and '$' in self.report.columns[6] and trend_mode == 0)
+        if getattr(self, 'trend_widget', None) is not None:
+            self.trend_widget.setVisible(is_today and trend_mode > 0)
         self.channel_overview.setVisible(is_today)
         self.today_sort.setVisible(is_today)
         if is_today:
