@@ -12,6 +12,7 @@ from threading import RLock
 from portfolio.db.connection import readonly_connection
 from portfolio.db.repositories.analytics import load_snapshot
 from portfolio.services.derived_store import ALGORITHM,digest,exclusive,utcnow
+from portfolio.services.derived_codec import dumps
 
 _TRACKERS={}
 _LOCK=RLock()
@@ -96,6 +97,9 @@ def check_changes(source,derived):
         trade_refs={};operation_refs={}
         for name in names:
             if name not in existing:continue
+            primary_key=tuple(r['name'] for r in sorted(c.execute('PRAGMA table_info('+name+')'),key=lambda r:r['pk']) if r['pk'])
+            if not primary_key:
+                raise ValueError(f'缓存依赖表 {name} 缺少稳定主键，已停止检查；原始数据未改动。')
             for r in c.execute('SELECT * FROM '+name):
                 row=dict(r)
                 day=next((row.get(k) for k in ('business_date','baseline_date','effective_date','effective_from','trade_date','rate_date') if row.get(k)),None)
@@ -106,7 +110,11 @@ def check_changes(source,derived):
                 if name=='person_operations':operation_refs[row['id']]=detail
                 if name in ('broker_fee_records','person_trade_fees'):
                     detail=operation_refs.get(row.get('person_operation_id') or row.get('operation_id')) or trade_refs.get(row.get('broker_trade_id')) or detail
-                current[name,str(row['id'])]=(digest(row),*detail)
+                # Fee tables use broker_trade_id/operation_id rather than id.
+                # Preserve existing single-column identities and encode every
+                # component of a composite key; never merge rows by a fallback.
+                row_key=str(row[primary_key[0]]) if len(primary_key)==1 else dumps(tuple((column,row[column]) for column in primary_key))
+                current[name,row_key]=(digest(row),*detail)
                 if row.get('source_record_id'):raw_dependencies.setdefault(row['source_record_id'],[]).append(detail)
         for r in c.execute('SELECT * FROM raw_records'):
             row=dict(r);refs=raw_dependencies.get(row['id'],[])
