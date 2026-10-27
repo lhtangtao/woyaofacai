@@ -21,7 +21,7 @@ def test_window_without_database_never_creates_one(qtbot):
     widget = window(qtbot)
     assert widget.current_page is None and not widget.filters_widget.isEnabled()
     assert "未连接" in widget.source_label.text()
-    assert widget.table.model().columnCount() == 19
+    assert widget.table.model().columnCount() == 21
     widget.close()
 
 

@@ -22,10 +22,52 @@ def attach_post_trade_positions(connection, page, *, cancel=None):
                                         if r['business_date'] <= scope.as_of.isoformat()]
     positions, traces, _ = replay(snapshot, cancel=cancel)
     cost_diffs = snapshot.extras.get("cost_diffs", {})
+
+    # Resolve latest market/cached quote for each symbol in page.rows
+    symbols = tuple(sorted({r.metadata['symbol'] for r in page.rows if r.metadata.get('symbol')}))
+    current_prices = {}
+    if symbols:
+        try:
+            from datetime import datetime
+            from decimal import Decimal
+            from portfolio.domain.live_quotes import UTC
+            from portfolio.services.web_today import desktop_quote_store
+            store = desktop_quote_store()
+            now = datetime.now(UTC)
+            quotes = store.load(now)[0] if store and store.path.exists() else {}
+        except Exception:
+            quotes = {}
+
+        db_prices = {}
+        try:
+            placeholders = ','.join('?' for _ in symbols)
+            query = f"""
+                SELECT symbol, price_e8 FROM market_prices 
+                WHERE (symbol IN ({placeholders}) OR symbol IN ({','.join('?' for _ in symbols)}))
+                  AND price_type IN ('LATEST', 'DAILY_CLOSE')
+                ORDER BY trade_date ASC
+            """
+            params = list(symbols) + [f"{s}.US" for s in symbols]
+            for sym, p_e8 in connection.execute(query, params).fetchall():
+                clean_sym = sym.removesuffix('.US')
+                db_prices[clean_sym] = Decimal(p_e8) / Decimal(100_000_000)
+        except Exception:
+            pass
+
+        for s in symbols:
+            cands = [q for (sym, _), q in quotes.items() if sym in (s, f'{s}.US') and q.price.is_finite() and q.price > 0]
+            if cands:
+                current_prices[s] = max(cands, key=lambda q: q.timestamp).price
+            elif s in db_prices:
+                current_prices[s] = db_prices[s]
+            else:
+                current_prices[s] = None
+
     rows = []
     for row in page.rows:
         quantity, net, cost = traces.get(row.record_id, (None, None, None))
         cost_diff = cost_diffs.get(row.record_id)
+        current_price = current_prices.get(row.metadata.get('symbol'))
         key = (row.metadata['person_id'] if scope.ledger == Ledger.PERSON else None,
                row.metadata['account_id'], row.metadata['instrument_id'])
         if key in positions and '成交粒度冲突' in positions[key].warnings:
@@ -61,5 +103,5 @@ def attach_post_trade_positions(connection, page, *, cancel=None):
         rows.append(replace(row, values=tuple(values), metadata={**row.metadata,
                             'post_quantity': quantity, 'post_quantity_status': state, 'post_quantity_note': note,
                             'post_net': net, 'post_cost': cost, 'post_cost_note': cost_note,
-                            'cost_diff': cost_diff}))
+                            'cost_diff': cost_diff, 'current_price': current_price}))
     return replace(page, rows=tuple(rows))

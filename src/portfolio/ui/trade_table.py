@@ -8,7 +8,7 @@ from portfolio.domain.models import TRADE_COLUMNS, exact_text, from_e8
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.theme import numeric_font, tokens
 
-COLUMNS = (*TRADE_COLUMNS, "券商账户", "归属人员", "手续费", "成本变化")
+COLUMNS = (*TRADE_COLUMNS, "券商账户", "归属人员", "手续费", "成本变化", "当前价($)")
 
 
 class TradeModel(FinanceModel):
@@ -26,6 +26,8 @@ class TradeModel(FinanceModel):
             return from_e8(row.metadata.get("fees_e8"))
         if column == 19:
             return row.metadata.get("cost_diff")
+        if column == 20:
+            return row.metadata.get("current_price")
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -36,12 +38,16 @@ class TradeModel(FinanceModel):
                 return "净投入成本价＝（累计买入金额－累计卖出金额）÷操作后持仓数量。清仓或数据不完整时显示—，负成本保留。"
             if section == 19:
                 return "本次交易导致持仓成本的变化量（本次操作后成本－上一次操作后成本）。首笔建仓或清仓显示—。"
+            if section == 20:
+                return "标的当前最新市场价（实时行情或收盘价）；放在成交价前方便对比买卖决策优劣。"
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
                 if section == 11:
                     return "操作后成本($)"
                 if section == 19:
                     return "成本变化($)"
+                if section == 20:
+                    return "当前价($)"
                 return COLUMNS[section]
             return str(section + 1)
         return None
@@ -57,6 +63,8 @@ class TradeModel(FinanceModel):
                     return f"{value:,.8f}".rstrip('0')
                 if column == 19:
                     return f"{value:+,.2f}" if value != 0 else "0.00"
+                if column == 20:
+                    return f"{value:,.2f}"
                 return f"{value:,.2f}"
             if column == 18 and value is None:
                 return '待核对' if row.metadata.get('fee_status') in {'UNMATCHED_ORDER','ORDER_QUANTITY_MISMATCH','ALLOCATION_MISMATCH'} else '待获取'
@@ -75,9 +83,21 @@ class TradeModel(FinanceModel):
             if column == 19 and isinstance(value, Decimal):
                 direction = "增加" if value > 0 else "降低摊薄" if value < 0 else "未变化"
                 return f"持仓成本{direction} {abs(value):,.2f} 美元"
+            if column == 20 and isinstance(value, Decimal):
+                trade_price = row.values[6]
+                if isinstance(trade_price, Decimal) and trade_price > 0:
+                    diff = value - trade_price
+                    diff_pct = diff / trade_price
+                    is_buy = row.metadata.get("side") in ("BUY", "TRANSFER_IN")
+                    if is_buy:
+                        eval_text = "买入后上涨（做对）" if diff > 0 else "买入后下跌（做错）" if diff < 0 else "持平"
+                    else:
+                        eval_text = "卖出后下跌（卖得好）" if diff < 0 else "卖出后继续上涨（卖早了）" if diff > 0 else "持平"
+                    return f"当前价: ${value:,.2f}\n成交价: ${trade_price:,.2f}\n价差: {diff:+,.2f} ({diff_pct:+,.2%})\n交易评估: {eval_text}"
+                return f"当前价: ${value:,.2f}"
             return exact_text(value)
-        if role == Qt.ItemDataRole.FontRole and (isinstance(value, Decimal) or column == 3):
-            return numeric_font(bold=column == 3)
+        if role == Qt.ItemDataRole.FontRole and (isinstance(value, Decimal) or column in (3, 20)):
+            return numeric_font(bold=column in (3, 20))
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignRight if isinstance(value, Decimal) else Qt.AlignmentFlag.AlignLeft))
         if role == Qt.ItemDataRole.ForegroundRole and value in (None, ""):
@@ -89,6 +109,15 @@ class TradeModel(FinanceModel):
                 return QColor(tokens(self.parent()).loss)
             if value < 0:
                 return QColor(tokens(self.parent()).profit)
+            return QColor(tokens(self.parent()).muted)
+        if role == Qt.ItemDataRole.ForegroundRole and column == 20 and isinstance(value, Decimal):
+            trade_price = row.values[6]
+            if isinstance(trade_price, Decimal) and trade_price > 0:
+                is_buy = row.metadata.get("side") in ("BUY", "TRANSFER_IN")
+                if is_buy:
+                    return QColor(tokens(self.parent()).profit if value > trade_price else tokens(self.parent()).loss if value < trade_price else tokens(self.parent()).muted)
+                else:
+                    return QColor(tokens(self.parent()).profit if value < trade_price else tokens(self.parent()).loss if value > trade_price else tokens(self.parent()).muted)
             return QColor(tokens(self.parent()).muted)
         return None
 
@@ -164,10 +193,10 @@ class TradeTable(FinanceTable):
         for h in (header, self.frozen.horizontalHeader()):
             h.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             h.customContextMenuRequested.connect(lambda pos, hdr=h: self.column_menu().exec(hdr.mapToGlobal(pos)))
-        visible = (0, 1, 17, 3, 2, 4, 6, 5, 9, 11, 19, 7, 18)
+        visible = (0, 1, 17, 3, 2, 4, 20, 6, 5, 9, 11, 19, 7, 18)
         for position, column in enumerate(visible):
             header.moveSection(header.visualIndex(column), position)
-        widths = {0: 148, 1: 100, 17: 76, 3: 68, 2: 60, 4: 62, 5: 80, 9: 96, 11: 112, 19: 96, 6: 86, 7: 104, 18: 66}
+        widths = {0: 148, 1: 100, 17: 76, 3: 68, 2: 60, 4: 62, 20: 82, 6: 86, 5: 80, 9: 96, 11: 112, 19: 96, 7: 104, 18: 66}
         for column in range(len(COLUMNS)):
             self.setColumnHidden(column, column not in visible)
             self.setColumnWidth(column, widths.get(column, 140))

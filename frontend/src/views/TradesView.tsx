@@ -17,7 +17,7 @@ export const TradesView: React.FC<TradesViewProps> = ({
 }) => {
   const [trades, setTrades] = useState<TradeItem[]>([]);
   const [columns, setColumns] = useState<string[]>([
-    "时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额",
+    "时间", "券商", "分类", "标的", "方向", "当前价", "价格", "数量", "金额",
     "标记", "持仓", "净投入", "成本", "操作类型", "对手方", "订单号", "来源"
   ]);
   const [total, setTotal] = useState(0);
@@ -290,13 +290,54 @@ export const TradesView: React.FC<TradesViewProps> = ({
                           {t.side}
                         </span>
                       </td>
-                      {/* 数量 */}
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {t.quantity?.toLocaleString()}
+                      {/* 当前价 */}
+                      <td
+                        className="font-mono"
+                        style={{
+                          textAlign: "right",
+                          fontWeight: 600,
+                          color:
+                            t.current_price != null && t.price != null
+                              ? isBuy
+                                ? t.current_price > t.price
+                                  ? "var(--profit-color, #16a34a)"
+                                  : t.current_price < t.price
+                                  ? "var(--loss-color, #dc2626)"
+                                  : "inherit"
+                                : t.current_price < t.price
+                                ? "var(--profit-color, #16a34a)"
+                                : t.current_price > t.price
+                                ? "var(--loss-color, #dc2626)"
+                                : "inherit"
+                              : "inherit",
+                        }}
+                        title={
+                          t.current_price != null && t.price != null
+                            ? `当前价: $${t.current_price.toFixed(2)} | 成交均价: $${t.price.toFixed(4)} | 决策评估: ${
+                                isBuy
+                                  ? t.current_price > t.price
+                                    ? "买入后上涨（做对）"
+                                    : t.current_price < t.price
+                                    ? "买入后下跌（做错）"
+                                    : "持平"
+                                  : t.current_price < t.price
+                                  ? "卖出后下跌（卖得好）"
+                                  : t.current_price > t.price
+                                  ? "卖出后继续上涨（卖早了）"
+                                  : "持平"
+                              }`
+                            : undefined
+                        }
+                      >
+                        {t.current_price != null ? `$${t.current_price.toFixed(2)}` : "—"}
                       </td>
                       {/* 价格 */}
                       <td className="font-mono" style={{ textAlign: "right" }}>
                         ${t.price?.toFixed(4)}
+                      </td>
+                      {/* 数量 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {t.quantity?.toLocaleString()}
                       </td>
                       {/* 金额 */}
                       <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>

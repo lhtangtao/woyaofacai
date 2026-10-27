@@ -70,6 +70,7 @@ export interface TradeItem {
   category: string;
   symbol: string;
   side: string;
+  current_price?: number | null;
   quantity: number;
   price: number;
   amount: number;
@@ -88,6 +89,7 @@ export interface TradeProvenance {
   trade_date: string;
   symbol: string;
   side: string;
+  current_price?: number | null;
   quantity: number;
   price: number;
   amount: number;

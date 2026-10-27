@@ -133,6 +133,12 @@ export const TradeDrawer: React.FC<TradeDrawerProps> = ({ trade, onClose }) => {
               </div>
             </div>
             <div>
+              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当前市场价</div>
+              <div className="font-mono" style={{ fontSize: "13px", fontWeight: 600, marginTop: "2px", color: "var(--text-heading)" }}>
+                {trade.current_price != null ? `$${trade.current_price.toFixed(2)}` : "—"}
+              </div>
+            </div>
+            <div>
               <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>成交单价</div>
               <div className="font-mono" style={{ fontSize: "13px", fontWeight: 600, marginTop: "2px" }}>
                 ${trade.price?.toFixed(4)}

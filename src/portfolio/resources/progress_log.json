@@ -1,5 +1,18 @@
 [
   {
+    "time": "2026-10-27 18:45",
+    "title": "交易明细加入「当前价」列（紧邻成交均价前，双端对齐决策评估）",
+    "tag": "已完成",
+    "author": "Antigravity",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "根据用户需求在「交易明细」中加入当前价，放置在成交均价前，用于实时评估买卖交易决策的盈亏优劣：",
+      "Mac 桌面端：src/portfolio/services/post_trade_positions.py 解析涉及标的最新实时行情（或收盘价兜底）附加至 row.metadata['current_price']；TradeTable 与 TradeModel 新增「当前价($)」列并排在第 6 位（成交均价前）；支持买卖决策智能着色与详细评估悬停浮窗（价差与浮盈/浮亏状态）；",
+      "Web 浏览器端：/api/v1/trades 接口输出 current_price 字段；TradesView.tsx 在价格前增加当前价列并对齐决策着色；TradeDrawer 侧边抽屉同步呈现当前市场价；",
+      "测试验证：新增 tests/test_trade_current_price.py，全套 36 项回归测试全绿；原生桌面 Smoke Test 通过。"
+    ]
+  },
+  {
     "time": "2026-10-27 17:20",
     "title": "双数据库重构·阶段3：全历史人员与细粒度计算持久化",
     "tag": "代码已修改，未执行测试，待用户验收",

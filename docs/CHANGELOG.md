@@ -15,6 +15,23 @@
 
 # 变更日志
 
+## 2026-10-27 18:45 · 交易明细加入「当前价」列（紧邻成交均价前，双端对齐决策评估）[Antigravity]
+
+- 修改者：Antigravity（代码修改）。满足用户需求「在交易明细中加入当前价，放在成交价前面，便于对比交易决策是否正确」：
+  - **1. Mac 原生 PySide6 桌面端**：
+    - `src/portfolio/services/post_trade_positions.py`：批量解析交易明细涉及标的的最新行情（优先使用最新 Longbridge 实时缓存报价，缺失时兜底读取 `market_prices` 数据库收盘价），挂载至每笔记录 `row.metadata["current_price"]`；
+    - `src/portfolio/ui/trade_table.py`：
+      - `COLUMNS` 扩充增加 `当前价($)` 列（索引 20）；
+      - 视图默认排序列更新为 `(0, 1, 17, 3, 2, 4, 20, 6, 5, 9, 11, 19, 7, 18)`，使 `当前价($)` 紧邻放置在 `成交均价($)` 正前方；
+      - 智能决策色彩：买入交易若当前价 > 成交价标绿（浮盈做对）、当前价 < 成交价标红（浮亏做错）；卖出交易若当前价 < 成交价标绿（高位止盈做对）、当前价 > 成交价标红（过早卖飞）；
+      - 丰富 Tooltip 浮窗：悬停展示当前价、成交均价、价差、涨跌幅及「交易评估」辅助决策；
+    - `src/portfolio/ui/trade_drawer.py`：侧边抽屉「基本信息」同步加入「当前市场价」；
+  - **2. Web 浏览器端**：
+    - `src/portfolio/web/api_v1.py`：`/api/v1/trades` 接口同步输出 `current_price` 字段与 `当前价` 列元数据；
+    - `frontend/src/views/TradesView.tsx` & `frontend/src/components/TradeDrawer.tsx`：交易明细表格在「成交均价」前插入「当前价」列，具备一致的红绿决策着色与评估提示；重新编译打包 Vite 生产产物；
+  - **3. 自动化测试验证**：
+    - 新增 `tests/test_trade_current_price.py`，全量测试 100% 通过；PySide6 桌面端 Smoke Test 零异常。
+
 ## 2026-10-27 16:50 · 软件名称变更为「我要发财」& 资产管理全标签页支持重置为「个人-全部渠道-全部股票」[Antigravity]
 
 - 修改者：Antigravity（代码修改）。严格按照用户最新两项指令要求：

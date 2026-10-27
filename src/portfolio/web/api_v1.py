@@ -670,8 +670,9 @@ def api_trades_list():
                 "category": vals[2] if len(vals) > 2 else meta.get("category"),
                 "symbol": vals[3] if len(vals) > 3 else meta.get("symbol"),
                 "side": vals[4] if len(vals) > 4 else meta.get("side"),
-                "quantity": serialize_val(vals[5]) if len(vals) > 5 else None,
+                "current_price": serialize_val(meta.get("current_price")),
                 "price": serialize_val(vals[6]) if len(vals) > 6 else None,
+                "quantity": serialize_val(vals[5]) if len(vals) > 5 else None,
                 "amount": serialize_val(vals[7]) if len(vals) > 7 else None,
                 "tag": vals[8] if len(vals) > 8 else None,
                 "post_quantity": serialize_val(vals[9]) if len(vals) > 9 else None,
@@ -692,7 +693,7 @@ def api_trades_list():
             "trades": normalized_items,
             "items": normalized_items,
             "columns": [
-                "时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额",
+                "时间", "券商", "分类", "标的", "方向", "当前价", "价格", "数量", "金额",
                 "标记", "持仓", "净投入", "成本", "操作类型", "对手方", "订单号", "来源"
             ],
             "total": total_rows,

@@ -271,8 +271,8 @@ class LiveQuotesPanel(QWidget):
         return True
 
     def update_closed_prices(self, quotes=None, session=None):
-        page = self.window.performance_page
-        if page.selector.currentText() != '清仓收益' or '清仓收益' not in page.reports:
+        page = getattr(self.window, 'performance_page', None)
+        if not page or page.selector.currentText() != '清仓收益' or '清仓收益' not in page.reports:
             return
         from portfolio.services.closed_quotes import closed_current_prices
         now = datetime.now(UTC)

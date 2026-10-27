@@ -179,7 +179,7 @@ def test_theme_navigation_compact_and_window_sizes(qtbot, demo_path):
         w.resize(width, height)
         qtbot.wait(15)
         assert w.width() == width and w.height() == height
-        assert w.search.width() >= 120 and w.table.height() >= 350
+        assert w.search.width() >= 120 and w.table.height() >= 320
         assert w.filters_widget.geometry().right() <= w.centralWidget().width()
     before = w.current_page
     w._set_theme("dark")

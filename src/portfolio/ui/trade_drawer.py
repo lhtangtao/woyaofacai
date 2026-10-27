@@ -96,10 +96,13 @@ class TradeDrawer(QWidget):
         status = {'KNOWN': '已确认', 'UNKNOWN': '待获取', 'UNMATCHED_ORDER': '订单待匹配',
                   'ORDER_QUANTITY_MISMATCH': '订单数量待核对', 'ALLOCATION_MISMATCH': '归属数量待核对',
                   'NOT_COLLECTED': '尚未采集'}.get(data.get('fee_status'), '待获取')
+        curr_p = data.get("current_price")
+        curr_text = f"${curr_p:,.2f}" if isinstance(curr_p, Decimal) else "—"
         basic = (
             ("成交时间", data["book_time"]), ("证券代码", data["symbol"]),
             ("证券名称", data.get("instrument_name")),
             ("归属人员", data.get("person_name") or "券商真实账本"), ("交易方向", row.values[4]),
+            ("当前市场价", curr_text),
             ("成交数量", row.values[5]), ("操作后持仓（股）", row.values[9]), ("成交价格", row.values[6]), ("成交金额", row.values[7]),
             ("操作后成本（每股）", row.values[11]), ("操作后累计净投入", row.values[10]),
             ("币种", data["currency"]), ("手续费", fees),
