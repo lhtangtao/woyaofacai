@@ -235,7 +235,7 @@ class LiveQuotesPanel(QWidget):
             return
         chart = self.window.asset_page.intraday_chart
         key = chart.key
-        if chart.history and not chart.history_warning:
+        if chart.history:
             from datetime import date, time
             from portfolio.domain.live_quotes import NY
             end = datetime.combine(date.fromisoformat(chart.day), time(20), NY)
@@ -269,7 +269,8 @@ class LiveQuotesPanel(QWidget):
         if not self.window.quote_store or getattr(self.window, 'info', None) is None or self.analytics is None or getattr(self, 'is_demo', True):
             return False
         local_day = QDate.currentDate().toString('yyyy-MM-dd')
-        signature = (local_day, self.window.quote_store.history_identity())
+        from portfolio.services.derived_dependencies import source_identity
+        signature = (local_day,self.window.quote_store.history_identity(),source_identity(self.source_path,financial_only=True))
         prior, self.history_signature = self.history_signature, signature
         if prior is None or prior == signature:
             return False

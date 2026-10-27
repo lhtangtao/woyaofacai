@@ -29,10 +29,10 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
       animation: false, title: { text: data?.chart?.title || "历史走势", textStyle: { fontSize: 14 } },
       grid: { left: 85, right: 55, top: 70, bottom: 85 },
       tooltip: { trigger: "axis", valueFormatter: (v: any) => v == null ? "—" : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-      xAxis: { type: "category", data: points.map((p: any) => p[0]), axisLabel: { formatter: (v: string) => new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) } },
+      xAxis: { type: "time", min: points[0]?.[0], max: points[points.length - 1]?.[0], axisLabel: { formatter: (v: string) => new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) } },
       yAxis: { type: "value", scale: true }, dataZoom: [{ type: "inside" }, { type: "slider" }],
       series: [{ name: data?.chart?.series?.[0]?.name || "盈亏", type: "line", showSymbol: false, connectNulls: false,
-        data: points.map((p: any) => p[1] === null ? null : Number(p[1])),
+        data: points.map((p: any) => [p[0], p[1] === null ? null : Number(p[1])]),
         markPoint: { data: [high && { name: "最高", coord: high, value: high[1].toFixed(2), itemStyle: { color: "#16a34a" } }, low && { name: "最低", coord: low, value: low[1].toFixed(2), itemStyle: { color: "#dc2626" } }].filter(Boolean) },
         markLine: { symbol: "none", silent: true, data: (data?.chart?.boundaries || []).map((b: any) => ({ name: b[1], xAxis: b[0], label: { formatter: b[1], fontSize: 9 }, lineStyle: { color: "#dbe3ef", type: "dotted" } })) } }],
     };

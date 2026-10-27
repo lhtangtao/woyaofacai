@@ -18,7 +18,12 @@ class FxStore:
         self.path = Path(path).expanduser().resolve()
 
     def identity(self):
-        return (str(self.path), self.path.stat().st_mtime_ns, self.path.stat().st_size) if self.path.exists() else None
+        if not self.path.exists():return None
+        from contextlib import closing
+        with closing(sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True)) as c:
+            rows=c.execute('SELECT * FROM fx_rates ORDER BY rate_date').fetchall()
+            imports=c.execute('SELECT requested_start,requested_end,payload_sha256 FROM imports ORDER BY id').fetchall()
+        return (str(self.path),hashlib.sha256(repr((rows,imports)).encode()).hexdigest())
 
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)

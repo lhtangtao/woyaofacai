@@ -24,7 +24,7 @@ def scope_key(path, scope):
 def source_version(path):
     from portfolio.services.derived_dependencies import source_identity
     from portfolio.services.derived_store import ALGORITHM
-    return ALGORITHM + ':' + source_identity(path)
+    return ALGORITHM + ':' + source_identity(path,financial_only=True)
 
 
 
@@ -88,7 +88,8 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     regular_end = datetime.combine(target, time(13 if target in half_days else 16), NY).astimezone(UTC)
     past = replace(snapshot, scope=replace(snapshot.scope, as_of=target-timedelta(days=1)), events=[e for e in snapshot.events if e.day < day],
                    actions=[a for a in snapshot.actions if a['effective_date'] < day],
-                   baselines=[b for b in snapshot.baselines if b['baseline_date'] < day], issues=[])
+                   baselines=[b for b in snapshot.baselines if b['baseline_date'] < day],
+                   extras={**snapshot.extras,'_positions_only':True}, issues=[])
     positions, _, _ = replay(past, cancel=cancel)
     events = [e for e in snapshot.events if e.day == day]
     keys = {k for k, p in positions.items() if p.quantity >= Decimal('0.5') or p.quantity < 0}
@@ -184,6 +185,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                 fetch_failures.add(instrument)
         prices[instrument] = cached
         covered_until[instrument] = min(fetched, cutoff) if fetched else start
+    input_revision = store.day_revision(day)
     # Quantity is advanced chronologically; cash flows enter only AFTER their
     # actual execution, including ownership transfers. Split ratios change
     # quantity, never the previous close market-value baseline.
@@ -249,5 +251,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                         + ('，接口补取失败' if i in fetch_failures else '') for i, stamps in sorted(missing_regular.items())]
         notices.insert(0, '盘中行情缺失（北京时间；对应区段已断线，不沿用旧价）：\n'+'\n'.join(descriptions))
     warning = '；'.join(dict.fromkeys(notices))
-    store.save_historical_pnl(scope_key(path, analytics.scope), day, rows, version, warning)
+    if store.day_revision(day) != input_revision:
+        raise ValueError('五分钟行情在计算期间变化，本次结果未保存。')
+    store.save_historical_pnl(scope_key(path, analytics.scope), day, rows, version, warning,input_revision=input_revision)
     return warning

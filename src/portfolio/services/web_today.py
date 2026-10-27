@@ -142,7 +142,7 @@ class WebTodayService:
 
     def _backfill(self, analytics, day, history, warning, now):
         end = datetime.combine(date.fromisoformat(day), time(20), NY)
-        complete = (history and not warning and history[-1][0] >= end
+        complete = (history and history[-1][0] >= end
                     and all(r['pnl'] is not None for _, _, rows in history for r in rows))
         if complete or not self.network:
             return {'pending': False, 'message': ''}
@@ -184,7 +184,9 @@ class WebTodayService:
         else:
             history = self.store.load_historical_pnl(key, day, source_version(self.path))
             warning = '派生库未初始化；使用明确标识的旧缓存/实时观察。'
-        observations = history or self.store.load_minute_pnl(key, day)
+        observations = history
+        if not observations and session is not None and session.start<=now<session.end:
+            observations=tuple(v for v in self.store.load_minute_pnl(key,day) if now-timedelta(minutes=3)<=v[0]<=now)
         job = self._backfill(analytics, day, history, warning, now)
         samples = {}
         with localcontext() as context:

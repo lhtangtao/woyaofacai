@@ -1683,5 +1683,5 @@ if __name__ == "__main__":
     parser.add_argument('--host',default='0.0.0.0')
     parser.add_argument('--port',type=int,default=8888)
     options = parser.parse_args()
-    prepare_startup(DATABASE_PATH,options.rebuild_derived)
+    prepare_startup(DATABASE_PATH,options.rebuild_derived,background=True)
     run_mobile_server(options.host,options.port)

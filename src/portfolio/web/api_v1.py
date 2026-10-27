@@ -99,6 +99,8 @@ def get_earnings_service() -> EarningsService:
 def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD", person_id: Optional[int] = None) -> QueryScope:
     from portfolio.domain.models import Ledger
     ctx: AuthContext = getattr(g, "auth_context", None)
+    if person_id is None:
+        person_id=request.args.get("person_id",type=int)
     target_person_ids = None
 
     if ctx and not ctx.is_lan_viewer() and not ctx.is_admin():
@@ -186,16 +188,14 @@ def api_bootstrap():
     except Exception:
         pass
 
-    # Accounts list
-    accounts = []
-    try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT DISTINCT broker FROM trades WHERE broker IS NOT NULL AND broker != '' ORDER BY broker")
-        accounts = [r[0] for r in cur.fetchall()]
-        conn.close()
-    except Exception:
-        pass
+    # Catalog reads stay read-only and use the actual Money3 schema.
+    accounts=[]
+    if db_exists:
+        from portfolio.db.connection import readonly_connection
+        with readonly_connection(DATABASE_PATH) as conn:
+            accounts=[r[0] for r in conn.execute('SELECT DISTINCT broker_code FROM broker_accounts ORDER BY broker_code')]
+    from portfolio.services.derived_store import DerivedStore
+    cache_initialized=DerivedStore(DATABASE_PATH).available
 
     return jsonify({
         "status": "ok",
@@ -217,6 +217,7 @@ def api_bootstrap():
             "exists": db_exists,
             "size_bytes": db_size,
             "record_count": record_count,
+            "derived_initialized": cache_initialized,
             "as_of": date.today().isoformat(),
         },
         "system": {

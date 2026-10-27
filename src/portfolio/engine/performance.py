@@ -26,6 +26,9 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
     if 'performance_price_days' in snapshot.extras:
         trading_days = [d for d in snapshot.extras['performance_price_days'] if first <= d <= snapshot.scope.as_of.isoformat()]
 
+    if 'performance_roll_days' in snapshot.extras:
+        trading_days = snapshot.extras['performance_roll_days']
+
     def roll_to_trading_day(day_str: str) -> str:
         if not trading_days or day_str in trading_days:
             return day_str
@@ -37,6 +40,8 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
         for e in snapshot.events
     )
     days = sorted(set(trading_days) | {e.day for e in effective_events})
+    if 'performance_selected_days' in snapshot.extras:
+        days = snapshot.extras['performance_selected_days']
     # Missing price rows cannot move trades or corporate actions in the ledger.
     # Only the daily cash-flow display rolls to the next available valuation day;
     # captures include the original chronological events through that date.
@@ -52,6 +57,8 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
         underlying = [b for b in snapshot.baselines if b["baseline_role"] == "OPENING" and b["account_id"] == key[1] and b["instrument_id"] == key[2]]
         from portfolio.domain.models import from_e8
         initial_values[key] = (position.quantity, strict_sum(from_e8(b["market_value_e8"]) for b in underlying))
+    previous.update(snapshot.extras.get('performance_previous',{}))
+    previous_quotes.update(snapshot.extras.get('performance_previous_quotes',{}))
     rows = []
     for day in days:
         if cancel and cancel.is_set():
@@ -132,6 +139,8 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
         direct = last[11] - f[15] - buy + sell if all(v is not None for v in (last[11], f[15], buy, sell)) else None
         if gain is not None and direct is not None and abs(gain - direct) > Decimal("0.00000001"):
             snapshot.issues.append(Issue("DQ018", "WARN", "每日收益合计与月初/月末公式不一致，需核对开账/缺日。", month, account_id=account, instrument_id=instrument))
+    snapshot.extras['performance_ending_previous'] = previous
+    snapshot.extras['performance_ending_quotes'] = previous_quotes
     return positions, traces, {"每日持仓收益": Report("每日持仓收益", DAILY_COLUMNS, tuple(rows)),
                                 "每月持仓收益": Report("每月持仓收益", MONTHLY_COLUMNS, tuple(monthly)),
                                 "月度净投入明细": Report("月度净投入明细", NET_COLUMNS, tuple(net)),

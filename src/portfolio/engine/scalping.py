@@ -44,6 +44,7 @@ def _scalping(snapshot, *, policy="EXCEL_COMPAT", cancel=None):
                 holdings = holdings * Decimal(obj["ratio_numerator"]) / Decimal(obj["ratio_denominator"])
             else:
                 holdings += obj.quantity if obj.incoming else -obj.quantity
+    month_opening.update(snapshot.extras.get('micro_opening', {}))
     pairs, tags, summary, profit_map = [], defaultdict(list), [], defaultdict(lambda: ZERO)
     for (key, month), trades in sorted(groups.items(), key=lambda item: (item[0][1], str(item[0][0]))):
         if cancel and cancel.is_set():

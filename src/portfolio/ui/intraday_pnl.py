@@ -95,7 +95,8 @@ class IntradayPnlChart(QWidget):
                              pnl=str(r.values[6]) if r.values[6] is not None and r.metadata.get('live_fresh') else None)
                         for r in report.rows]
                 store.save_minute_pnl(key, self.day, now, session.name, rows)
-            self.snapshots = store.load_minute_pnl(key, self.day)
+            self.snapshots = tuple(v for v in store.load_minute_pnl(key,self.day)
+                                   if session is not None and session.start<=now<session.end and now-timedelta(minutes=3)<=v[0]<=now)
             from portfolio.services.derived_store import DerivedStore
             if DerivedStore(source_path).available:
                 from portfolio.services.derived_queries import day_history

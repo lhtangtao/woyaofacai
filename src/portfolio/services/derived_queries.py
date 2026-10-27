@@ -12,6 +12,7 @@ from portfolio.domain.analytics import strict_sum
 from portfolio.domain.live_quotes import NY,UTC
 from portfolio.domain.models import Ledger
 from portfolio.services.derived_store import ALGORITHM,DerivedStore
+from portfolio.services.derived_codec import dumps
 from portfolio.services.derived_dependencies import check_changes,partition_dependency,source_identity
 
 _VALIDATED={}
@@ -21,7 +22,7 @@ _LOCK=RLock()
 def allowed_people(source,scope):
     if scope.ledger==Ledger.BROKER:return (0,)
     with readonly_connection(source) as c:
-        ids=tuple(r[0] for r in c.execute('SELECT id FROM persons'+('' if scope.include_disabled else ' WHERE enabled=1')))
+        ids=tuple(r[0] for r in c.execute('SELECT id FROM persons WHERE id IN (SELECT person_id FROM person_operations UNION SELECT person_id FROM historical_baselines UNION SELECT person_id FROM cash_events UNION SELECT person_id FROM asset_adjustments)'+('' if scope.include_disabled else ' AND enabled=1')))
     return tuple(p for p in ids if scope.person_ids is None or p in scope.person_ids)
 
 
@@ -34,6 +35,8 @@ def load_history(source,quotes,scope,start,end):
     ledger=scope.ledger.value
     placeholders=','.join('?' for _ in people)
     with closing(store.connect()) as c:
+        has_inputs=bool(c.execute("SELECT 1 FROM sqlite_master WHERE name='partition_inputs'").fetchone())
+        inputs={(p,d):revision for p,d,revision in c.execute(f'SELECT person_id,day,quote_revision FROM partition_inputs WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?',(ledger,*people,str(start),str(end)))} if has_inputs else {}
         partitions=c.execute(f'SELECT person_id,day,dependency,algorithm,status,warning FROM partitions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ? ORDER BY day',
                              (ledger,*people,str(start),str(end))).fetchall()
     valid=set();states={};source_revision=source_identity(source)
@@ -41,10 +44,17 @@ def load_history(source,quotes,scope,start,end):
     snapshots={}
     for person,day,dependency,algorithm,status,warning in partitions:
         states[person,day]={'state':status,'warning':warning}
-        if algorithm!=ALGORITHM or status in ('INVALID','ERROR'):continue
+        if algorithm!=ALGORITHM:
+            states[person,day]={'state':'INVALID','warning':'财务算法版本变化，需重算。'}
+            continue
+        if status in ('INVALID','ERROR'):continue
         canonical=replace(scope,as_of=date.fromisoformat(day),person_ids=(person,) if person else None,
                           account_ids=None,instrument_ids=None,category=None,search='',start_date=None,include_disabled=True,reporting_currency='USD')
         revision=quotes.day_revision(day)
+        if (person,day) in inputs:
+            if inputs[person,day]==dumps(revision):valid.add((person,day))
+            else:states[person,day]={'state':'INVALID','warning':'历史行情或交易日历依赖变化，需增量重算。'}
+            continue
         cache_key=(str(store.source),person,ledger,day,dependency,source_revision,revision,ALGORITHM)
         with _LOCK:known=_VALIDATED.get(cache_key)
         if known is None:
@@ -73,13 +83,33 @@ def load_history(source,quotes,scope,start,end):
         for person,day,stamp,channel,ticker,pnl,account,instrument in c.execute(sql+' ORDER BY day,stamp',args):
             if (person,day) not in valid:continue
             by_day[day][stamp].append({'person_id':person,'channel':channel,'ticker':ticker,'pnl':pnl,'account_id':account,'instrument_id':instrument})
+    # Category/search are key filters in the original repository; use the same
+    # key selection before reading contributions, including all opening history.
+    if scope.category or scope.search:
+        from portfolio.services.derived_engine import units
+        with readonly_connection(source) as c:filtered=load_snapshot(c,replace(scope,as_of=date.fromisoformat(str(end))))
+        permitted=set(units(filtered))
+        for day,stamps in by_day.items():
+            for stamp,items in stamps.items():
+                stamps[stamp]=[r for r in items if ((r['person_id'] or None),r['account_id'],r['instrument_id']) in permitted]
     # A missing owner partition invalidates the aggregate, never silently omit it.
+    valid_days={d for _,d in valid if all((p,d) in valid for p in people)}
     output={}
     for day,stamps in by_day.items():
         if any((p,day) not in valid for p in people):continue
         output[day]=[(datetime.fromisoformat(stamp),items) for stamp,items in sorted(stamps.items())]
-    return output,{'state':'AVAILABLE','partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
-                   'message':'使用共享历史派生数据；缺失/失效分区不参与有效汇总。'}
+    invalid=sum(v['state']=='INVALID' for v in states.values())
+    now=datetime.now(UTC)
+    _,calendar,_,_=quotes.load(now)
+    expected={d.isoformat() for d in calendar if str(start)<=d.isoformat()<=str(end) and datetime.combine(d-timedelta(days=1),time(20),NY)<=now}
+    missing_days={d for d in expected if any((p,d) not in states for p in people)}
+    overall='INVALID' if invalid else 'PARTIAL' if missing_days else 'AVAILABLE' if partitions else 'NOT_GENERATED'
+    maintenance=None
+    if invalid or missing_days:
+        from portfolio.services.derived_maintenance import schedule_changed
+        maintenance=schedule_changed(source,start=date.fromisoformat(str(start)))
+    return output,{'state':overall,'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
+                   'message':('历史派生分区已失效，请执行增量重算。' if invalid else '历史派生数据尚未生成，请执行全人员预计算。' if not partitions else '使用共享历史派生数据；缺失区段留空，未确认价格保留原口径状态。')}
 
 
 def day_history(source,quotes,scope,day):
@@ -128,7 +158,9 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             # Daily financial rows still advance the annual baseline when 5-min
             # prices are missing; an unknown daily gain breaks later cumulative data.
             if close<now:
-                gain=strict_sum(daily[day]) if day in daily else None
+                filtered_exposure=any((channels is None or x['channel'] in channels) and (not ticker or x['ticker'].upper()==ticker.upper()) for _,items in samples for x in items)
+                verified_no_exposure=day in state.get('valid_days',()) and not filtered_exposure
+                gain=strict_sum(daily[day]) if day in daily else Decimal(0) if verified_no_exposure else None
                 if gain is None:missing.append(day)
                 running=running+gain if running is not None and gain is not None else None
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')

@@ -11,19 +11,22 @@ from threading import RLock
 
 from portfolio.db.connection import readonly_connection
 from portfolio.db.repositories.analytics import load_snapshot
-from portfolio.services.derived_store import digest,exclusive,utcnow
+from portfolio.services.derived_store import ALGORITHM,digest,exclusive,utcnow
 
 _TRACKERS={}
 _LOCK=RLock()
 
 
-def source_identity(source):
+def source_identity(source, *, financial_only=False):
     path=Path(source).resolve()
     with _LOCK:
-        record=_TRACKERS.get(str(path))
+        record=_TRACKERS.get((str(path),financial_only))
+        inode=(path.stat().st_dev,path.stat().st_ino)
+        if record is not None and record[3]!=inode:
+            record[0].close();record=None
         if record is None:
             c=sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,check_same_thread=False)
-            record=[c,None,None];_TRACKERS[str(path)]=record
+            record=[c,None,None,inode];_TRACKERS[str(path),financial_only]=record
         c=record[0];version=c.execute('PRAGMA data_version').fetchone()[0]
         if version!=record[1]:
             c.execute('BEGIN')
@@ -35,11 +38,12 @@ def source_identity(source):
                     h.update(table.encode())
                     quoted='"'+table.replace('"','""')+'"'
                     for row in c.execute('SELECT * FROM '+quoted+' ORDER BY rowid'):h.update(repr(tuple(row)).encode())
-                # Confirmed daily history influences reports; intraday bars only
-                # influence their own partition dependencies, not all reports.
-                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
-                    for r in c.execute("SELECT * FROM history_prices WHERE price_type='DAILY_CLOSE' ORDER BY instrument_id,trade_date,stamp_utc"):h.update(repr(tuple(r)).encode())
-                record[1:]=[version,h.hexdigest()]
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone():
+                    if financial_only:
+                        for r in c.execute("SELECT * FROM history_prices WHERE price_type='DAILY_CLOSE' ORDER BY instrument_id,trade_date,stamp_utc"):h.update(repr(tuple(r)).encode())
+                    else:
+                        for r in c.execute('SELECT day,revision FROM history_fact_revisions ORDER BY day'):h.update(repr(tuple(r)).encode())
+                record[1:3]=[version,h.hexdigest()]
             finally:c.rollback()
         return record[2]
 
@@ -56,12 +60,15 @@ def partition_dependency(source,quotes,scope,day,*,snapshot=None):
         if instrument['market']=='US':
             rows,_=quotes.intraday_candles(instrument['symbol']+'.US',day)
             bars.append((i,rows))
+    with closing(quotes.connect()) as c:
+        half=c.execute('SELECT half_day FROM us_calendar WHERE day=?',(day,)).fetchone()
     # Include exact event metadata/fees and baselines; never drop pre-2026 costs.
     prices=[p for p in snapshot.prices if p.kind in ('DAILY_CLOSE','ESTIMATE_CLOSE') and p.day<day]
-    return digest((scope.ledger,scope.person_ids,snapshot.events,snapshot.actions,snapshot.baselines,
-                   snapshot.accounts,snapshot.instruments,prices,bars,
+    return digest((scope.ledger,scope.person_ids,
+                   [replace(e,metadata={k:v for k,v in e.metadata.items() if k!='cost_diff'}) for e in snapshot.events],snapshot.actions,snapshot.baselines,
+                   snapshot.accounts,snapshot.instruments,prices,bars,tuple(half) if half else None,
                    [r for r in snapshot.extras.get('broker_trades',[]) if r['business_date']<=day],
-                   snapshot.extras.get('trading_days',())))
+                   tuple(d for d in snapshot.extras.get('trading_days',()) if str(d)<=day)))
 
 
 def check_changes(source,derived):
@@ -71,20 +78,44 @@ def check_changes(source,derived):
     Fine grained engine object hashes still reuse unaffected atomic units.
     """
     if not derived.available:return {'state':'NOT_INITIALIZED','changed':0}
+    with closing(derived.connect()) as c:
+        version=c.execute("SELECT value FROM metadata WHERE key='checked_algorithm'").fetchone()
+    if not version or version[0]!=ALGORITHM:
+        with exclusive(derived.path),closing(derived.connect(write=True)) as c:
+            c.execute("UPDATE partitions SET status='INVALID' WHERE algorithm<>?",(ALGORITHM,))
+            c.execute("INSERT OR REPLACE INTO metadata VALUES ('checked_algorithm',?)",(ALGORITHM,));c.commit()
     identity=source_identity(source)
     with closing(derived.connect()) as c:
         previous=c.execute("SELECT value FROM metadata WHERE key='checked_source'").fetchone()
         if previous and previous[0]==identity:return {'state':'UNCHANGED','changed':0}
         old={(r[0],r[1]):tuple(r[2:]) for r in c.execute('SELECT * FROM source_manifest')}
-    current={}
-    names=('broker_trades','person_operations','historical_baselines','corporate_actions','asset_adjustments','cash_events','market_prices','fx_rates','persons','broker_accounts','instruments','instrument_aliases','broker_fee_records','person_trade_fees','raw_records')
+    current={};raw_dependencies={}
+    names=('broker_trades','person_operations','historical_baselines','corporate_actions','asset_adjustments','cash_events','market_prices','fx_rates','persons','broker_accounts','instruments','instrument_aliases','broker_fee_records','person_trade_fees')
     with readonly_connection(source) as c:
         existing={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        trade_refs={};operation_refs={}
         for name in names:
             if name not in existing:continue
             for r in c.execute('SELECT * FROM '+name):
-                row=dict(r);day=next((row.get(k) for k in ('business_date','baseline_date','effective_date','effective_from','trade_date','rate_date') if row.get(k)),None)
-                current[name,str(row['id'])]=(digest(row),day,row.get('person_id'),row.get('account_id'),row.get('instrument_id'))
+                row=dict(r)
+                day=next((row.get(k) for k in ('business_date','baseline_date','effective_date','effective_from','trade_date','rate_date') if row.get(k)),None)
+                if name=='market_prices' and not day:
+                    day=(str(row.get('period_key'))[:7]+'-01') if row.get('price_type')=='MONTH_CLOSE' else '~LIVE'
+                detail=(day,row.get('person_id'),row.get('account_id'),row.get('instrument_id'))
+                if name=='broker_trades':trade_refs[row['id']]=detail
+                if name=='person_operations':operation_refs[row['id']]=detail
+                if name in ('broker_fee_records','person_trade_fees'):
+                    detail=operation_refs.get(row.get('person_operation_id') or row.get('operation_id')) or trade_refs.get(row.get('broker_trade_id')) or detail
+                current[name,str(row['id'])]=(digest(row),*detail)
+                if row.get('source_record_id'):raw_dependencies.setdefault(row['source_record_id'],[]).append(detail)
+        for r in c.execute('SELECT * FROM raw_records'):
+            row=dict(r);refs=raw_dependencies.get(row['id'],[])
+            days=[x[0] for x in refs if x[0]]
+            detail=(min(days),None,None,None) if days else ('~AUDIT_ONLY',None,None,None)
+            current['raw_records',str(row['id'])]=(digest(row),*detail)
+        if 'history_fact_revisions' in existing:
+            for r in c.execute('SELECT day,revision FROM history_fact_revisions'):
+                current['history_prices',r['day']]=(digest(tuple(r)),r['day'],None,None,None)
     changes=[]
     for key in old.keys()|current.keys():
         if old.get(key)==current.get(key):continue
@@ -96,6 +127,7 @@ def check_changes(source,derived):
             c.execute('INSERT INTO invalidations(detected_at,table_name,day,person_id,account_id,instrument_id,reason) VALUES (?,?,?,?,?,?,?)',(utcnow(),table,day,person,account,instrument,reason))
             # Broker/order/price metadata can affect ownership reconciliation.
             # Widen when ownership mapping is not provable.
+            if day and day.startswith('~'):continue
             if table=='person_operations' and person is not None and day:
                 c.execute("UPDATE partitions SET status='INVALID' WHERE ledger='PERSON' AND person_id=? AND day>=?",(person,day))
             elif day:c.execute("UPDATE partitions SET status='INVALID' WHERE day>=?",(day,))

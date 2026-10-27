@@ -350,18 +350,8 @@ class MonthlyRealtimePnlPage(QWidget):
         """Locate live_quotes.sqlite3 safely from window quote store or local application data."""
         if hasattr(self.window, "quote_store") and self.window.quote_store and self.window.quote_store.path.exists():
             return self.window.quote_store.path
-        candidates = [
-            Path.home() / "Library/Application Support/MoneyPortfolio/Money Portfolio/live_quotes.sqlite3",
-            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "live_quotes.sqlite3",
-            Path("live_quotes.sqlite3"),
-        ]
-        for p in candidates:
-            if p.exists() and p.stat().st_size > 10000000:
-                return p
-        for p in candidates:
-            if p.exists():
-                return p
-        return candidates[0]
+        from portfolio.paths import quote_cache_path
+        return quote_cache_path()
 
     def _resolve_source_path(self):
         """Locate the main money.sqlite3 database path."""
@@ -385,6 +375,8 @@ class MonthlyRealtimePnlPage(QWidget):
 
     def clear(self):
         self.analytics = None
+        self._shared_request=None
+        if hasattr(self,'_shared_analytics'):del self._shared_analytics
         self._rendered_cache_key = None
         self._cached_month = ""
         self._cached_by_day.clear()
@@ -508,7 +500,7 @@ class MonthlyRealtimePnlPage(QWidget):
         months = []
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT substr(day, 1, 7) FROM historical_pnl_points ORDER BY 1 DESC")
+            cur.execute("SELECT DISTINCT substr(day, 1, 7) FROM us_calendar ORDER BY 1 DESC")
             months = [r[0] for r in cur.fetchall() if r[0]]
         except Exception as e:
             self.error.emit(f"读取行情月份列表失败：{e}")
@@ -516,7 +508,7 @@ class MonthlyRealtimePnlPage(QWidget):
             conn.close()
 
         if not months:
-            months = ["2026-10"]
+            months = [date.today().strftime("%Y-%m")]
 
         curr_month = self.month_combo.currentText()
         self.month_combo.blockSignals(True)
@@ -540,7 +532,7 @@ class MonthlyRealtimePnlPage(QWidget):
         years = []
         try:
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT substr(day, 1, 4) FROM historical_pnl_points ORDER BY 1 DESC")
+            cur.execute("SELECT DISTINCT substr(day, 1, 4) FROM us_calendar ORDER BY 1 DESC")
             years = [r[0] for r in cur.fetchall() if r[0]]
         except Exception as e:
             self.error.emit(f"读取行情年份列表失败：{e}")
@@ -548,7 +540,7 @@ class MonthlyRealtimePnlPage(QWidget):
             conn.close()
 
         if not years:
-            years = ["2026"]
+            years = [str(date.today().year)]
 
         curr_year = self.year_combo.currentText()
         self.year_combo.blockSignals(True)
@@ -663,6 +655,8 @@ class MonthlyRealtimePnlPage(QWidget):
             if self._shared_request != (period,year,scope):return
             self._shared_analytics,self._shared_rows,self._shared_state=value
             self._shared_period,self._shared_year=period,year
+            if year:self._cached_year=period
+            else:self._cached_month=period
             channels={r.values[1] for r in value[0].reports['每日持仓收益'].rows}
             tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
             self.channel_filter.populate(sorted(channels));self.stock_combo.populate(sorted(tickers))

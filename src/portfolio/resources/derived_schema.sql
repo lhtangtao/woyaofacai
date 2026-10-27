@@ -33,3 +33,6 @@ CREATE TABLE IF NOT EXISTS source_manifest(table_name TEXT NOT NULL,row_key TEXT
 CREATE TABLE IF NOT EXISTS invalidations(id INTEGER PRIMARY KEY,detected_at TEXT NOT NULL,
  table_name TEXT NOT NULL,day TEXT,person_id INTEGER,account_id INTEGER,instrument_id INTEGER,
  reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS partition_inputs(
+ ledger TEXT NOT NULL,person_id INTEGER NOT NULL,day TEXT NOT NULL,quote_revision TEXT NOT NULL,
+ PRIMARY KEY(ledger,person_id,day));

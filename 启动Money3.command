@@ -108,6 +108,32 @@ if [[ "$STOP_ALL" == "1" ]]; then
     exit 0
 fi
 
+# Stop this project's prior Web process before synchronization or reconstruction.
+if [[ "$START_MOBILE" == "1" ]]; then
+    EXISTING_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
+    if [[ -n "$EXISTING_PID" ]]; then
+        if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app" &&
+            lsof -a -p "$EXISTING_PID" -d cwd -Fn 2>/dev/null | grep -Fxq "n$APP_DIR"; then
+            print "♻️ 正在重启本项目 Web 服务以载入最新代码…"
+            kill "$EXISTING_PID"
+            for i in {1..25}; do
+                if ! kill -0 "$EXISTING_PID" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.2
+            done
+            if kill -0 "$EXISTING_PID" 2>/dev/null; then
+                print "❌ 旧 Web 服务未能退出，请关闭后重新启动。"
+                exit 1
+            fi
+        else
+            print "❌ 8888 端口被其他进程占用；请释放端口后重新启动 Money3。"
+            exit 1
+        fi
+    fi
+
+fi
+
 # ------------------------------------------------------------------------------
 # 4. 执行前置数据同步 (可选)
 # ------------------------------------------------------------------------------
@@ -187,27 +213,6 @@ PY
         fi
         print "🔧 正在生成最新 Web 页面（不运行测试）…"
         npm --prefix "$APP_DIR/frontend" run build
-    fi
-    EXISTING_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
-    if [[ -n "$EXISTING_PID" ]]; then
-        if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app" &&
-            lsof -a -p "$EXISTING_PID" -d cwd -Fn 2>/dev/null | grep -Fxq "n$APP_DIR"; then
-            print "♻️ 正在重启本项目 Web 服务以载入最新代码…"
-            kill "$EXISTING_PID"
-            for i in {1..25}; do
-                if ! kill -0 "$EXISTING_PID" 2>/dev/null; then
-                    break
-                fi
-                sleep 0.2
-            done
-            if kill -0 "$EXISTING_PID" 2>/dev/null; then
-                print "❌ 旧 Web 服务未能退出，请关闭后重新启动。"
-                exit 1
-            fi
-        else
-            print "❌ 8888 端口被其他进程占用；请释放端口后重新启动 Money3。"
-            exit 1
-        fi
     fi
 
     if [[ "$IS_MOBILE_RUNNING" == "0" ]]; then

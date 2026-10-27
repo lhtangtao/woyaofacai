@@ -53,7 +53,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.pool.setMaxThreadCount(3)
         self.settings = QSettings("MoneyPortfolio", "Desktop") if settings else None
         from PySide6.QtCore import QStandardPaths
-        self.fx_store = FxStore(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "fx.sqlite3") if settings else None
+        from portfolio.paths import quote_cache_path
+        self.fx_store = FxStore(quote_cache_path().with_name("fx.sqlite3")) if settings else None
         from portfolio.services.quote_store import QuoteStore
         from portfolio.paths import quote_cache_path
         self.quote_store = QuoteStore(quote_cache_path())
@@ -242,7 +243,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.restore_state = restore
         self.filters_widget.setEnabled(False)
         self.source_label.setText("正在只读连接…")
-        self.source_label.setToolTip(str(self.service.path))
+        from portfolio.paths import derived_path
+        self.source_label.setToolTip(f"事实库：{self.service.path}\n派生库：{derived_path(self.service.path)}")
         self.banner.show_status("正在校验结构并读取筛选维度…", "loading")
         self.source_details.setPlainText("正在检查新选择的数据源；旧数据源信息已清除。")
         service = self.service
@@ -643,6 +645,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         if self.pages.currentIndex() != 0:
             if self.info.is_demo:
                 self.banner.show_status("合成演示数据", "normal")
+            elif not self.analytics_service.derived.available:
+                self.banner.show_status("历史派生库尚未初始化，当前使用原财务引擎；请按双数据库操作文档完成首次生成。", "normal")
             else:
                 self.banner.hide()
 

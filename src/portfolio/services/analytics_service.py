@@ -26,9 +26,18 @@ class AnalyticsService:
         self.path = Path(path).expanduser().resolve()
         from portfolio.services.derived_store import DerivedStore
         self.derived = derived_store or DerivedStore(self.path)
+        if self.derived.available and quote_store is None:
+            from portfolio.paths import quote_cache_path
+            from portfolio.services.quote_store import QuoteStore
+            quote_store = QuoteStore(quote_cache_path(),source=self.path)
         self.audit_start = audit_start
         self.quote_store = quote_store
         if self.quote_store: self.quote_store.source = self.path
+        from portfolio.paths import DATABASE_PATH
+        if fx_store is None and (self.path==DATABASE_PATH or self.derived.available):
+            from portfolio.paths import quote_cache_path
+            from portfolio.services.fx_service import FxStore
+            fx_store=FxStore(quote_cache_path().with_name("fx.sqlite3"))
         self.fx_store = fx_store
         self._cache, self._lock = {}, RLock()
 
@@ -57,7 +66,10 @@ class AnalyticsService:
 
     def calculate(self, scope, *, cancel=None, use_cache=True):
         from portfolio.services.derived_dependencies import check_changes
-        check_changes(self.path,self.derived)
+        changes=check_changes(self.path,self.derived)
+        if changes.get('changed') and self.derived.path.name == self.path.stem+'_derived.sqlite3':
+            from portfolio.services.derived_maintenance import schedule_changed
+            schedule_changed(self.path)
         with self.derived.active():
             return self._calculate(scope, cancel=cancel, use_cache=use_cache)
 
@@ -164,6 +176,8 @@ class AnalyticsService:
                     cutoff = scope.start_date.isoformat()[:7] if name != "每日持仓收益" and name != "交易回放" else scope.start_date.isoformat()
                     reports[name] = replace(report, rows=tuple(r for r in report.rows if str(r.values[0])[:len(cutoff)] >= cutoff))
             result.charts = build_charts(result)
+            if self.identity() != key[0]:
+                raise ValueError("原始数据或参考行情在计算期间变化，请刷新重试；未发布本次结果。")
             with self._lock:
                 if len(self._cache) >= 4:
                     self._cache.pop(next(iter(self._cache)))

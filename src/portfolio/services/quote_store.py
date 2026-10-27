@@ -15,7 +15,8 @@ class QuoteStore:
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        c = sqlite3.connect(self.path, timeout=2)
+        from portfolio.services.derived_store import ClosingConnection
+        c = sqlite3.connect(self.path, timeout=30,factory=ClosingConnection)
         c.execute('CREATE TABLE IF NOT EXISTS latest_quotes (symbol TEXT NOT NULL, session TEXT NOT NULL, price TEXT NOT NULL, quoted_at TEXT NOT NULL, saved_at TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(symbol,session))')
         c.execute('CREATE TABLE IF NOT EXISTS us_calendar (day TEXT PRIMARY KEY, half_day INTEGER NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS coverage (id INTEGER PRIMARY KEY CHECK(id=1), first_day TEXT NOT NULL, last_day TEXT NOT NULL)')
@@ -29,6 +30,12 @@ class QuoteStore:
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_versions (scope_key TEXT NOT NULL, day TEXT NOT NULL, source_version TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_warnings (scope_key TEXT NOT NULL, day TEXT NOT NULL, warning TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS channel_cash_snapshots (channel TEXT PRIMARY KEY, amount TEXT NOT NULL, currency TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS quote_close_revisions(day TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
+        for table in ('official_daily_closes','daily_quote_snapshots'):
+            for operation in ('INSERT','UPDATE','DELETE'):
+                ref='OLD' if operation=='DELETE' else 'NEW'
+                c.execute(f"CREATE TRIGGER IF NOT EXISTS close_revision_{table}_{operation.lower()} AFTER {operation} ON {table} BEGIN INSERT INTO quote_close_revisions VALUES ({ref}.day,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1; END")
+        c.execute('CREATE TABLE IF NOT EXISTS calendar_ranges(first_day TEXT NOT NULL,last_day TEXT NOT NULL,PRIMARY KEY(first_day,last_day))')
         c.execute('CREATE TABLE IF NOT EXISTS quote_day_revisions(day TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
         for operation in ('INSERT','UPDATE','DELETE'):
             ref='OLD' if operation=='DELETE' else 'NEW'
@@ -39,14 +46,18 @@ class QuoteStore:
         from contextlib import closing
         with closing(self.connect()) as c:
             row=c.execute('SELECT revision FROM quote_day_revisions WHERE day=?',(day,)).fetchone()
+            from portfolio.services.derived_store import digest
+            calendar=digest(c.execute('SELECT day,half_day FROM us_calendar WHERE day<=? ORDER BY day',(day,)).fetchall())
+            closes=digest(c.execute('SELECT day,revision FROM quote_close_revisions WHERE day<? ORDER BY day',(day,)).fetchall())
         facts=''
         if self.source:
             from portfolio.services.history_facts import readonly
             from portfolio.services.derived_store import digest
             with closing(readonly(self.source)) as c:
-                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
-                    facts=digest([tuple(r) for r in c.execute('SELECT * FROM history_prices WHERE trade_date=? ORDER BY instrument_id,stamp_utc,provider',(day,))])
-        return (row[0] if row else 0,facts)
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone():
+                    revision=c.execute('SELECT revision FROM history_fact_revisions WHERE day=?',(day,)).fetchone()
+                    facts=revision[0] if revision else 0
+        return (row[0] if row else 0,facts,calendar,closes)
 
     def intraday_candles(self, symbol, day):
         with self.connect() as c:
@@ -62,12 +73,18 @@ class QuoteStore:
         return sorted(result.values()), fetched_at
 
     def save_intraday_candles(self, symbol, day, rows, now):
+        rows=list(rows)
+        archived=False
+        if self.source:
+            from portfolio.services.history_facts import append_completed
+            archived=append_completed(self.source,symbol,day,rows)
         with self.connect() as c:
-            c.executemany('INSERT OR REPLACE INTO intraday_candles VALUES (?,?,?,?,?)',
-                          [(symbol, day, stamp.astimezone(UTC).isoformat(), phase, str(value)) for stamp, phase, value in rows])
-            c.execute('INSERT OR REPLACE INTO intraday_fetches VALUES (?,?,?)', (symbol, day, now.astimezone(UTC).isoformat()))
+            if not archived:
+                c.executemany('INSERT OR REPLACE INTO intraday_candles VALUES (?,?,?,?,?)',
+                              [(symbol,day,stamp.astimezone(UTC).isoformat(),phase,str(value)) for stamp,phase,value in rows])
+            c.execute('INSERT OR REPLACE INTO intraday_fetches VALUES (?,?,?)',(symbol,day,now.astimezone(UTC).isoformat()))
 
-    def save_historical_pnl(self, key, day, rows, source_version, warning=''):
+    def save_historical_pnl(self, key, day, rows, source_version, warning='', *, input_revision=None):
         with self.connect() as c:
             c.execute('DELETE FROM historical_pnl_points WHERE scope_key=? AND day=?', (key, day))
             c.executemany('INSERT INTO historical_pnl_points VALUES (?,?,?,?,?)',
@@ -138,6 +155,7 @@ class QuoteStore:
             c.execute('DELETE FROM us_calendar WHERE day>=? AND day<=?', tuple(d.isoformat() for d in covered))
             c.executemany('INSERT OR REPLACE INTO us_calendar VALUES (?,?)', [(d.isoformat(), int(d in halves)) for d in days])
             c.execute('INSERT INTO coverage VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET first_day=excluded.first_day,last_day=excluded.last_day', tuple(d.isoformat() for d in covered))
+            c.execute('INSERT OR IGNORE INTO calendar_ranges VALUES (?,?)',tuple(d.isoformat() for d in covered))
 
     @staticmethod
     def _archive(connection, rows):
@@ -232,7 +250,15 @@ class QuoteStore:
 
     def saved_close_days(self, symbol):
         with self.connect() as c:
-            return {date.fromisoformat(r[0]) for r in c.execute('SELECT day FROM official_daily_closes WHERE symbol=?', (symbol,))}
+            result={date.fromisoformat(r[0]) for r in c.execute('SELECT day FROM official_daily_closes WHERE symbol=?',(symbol,))}
+        if self.source:
+            from portfolio.services.history_facts import HistoryFacts,readonly
+            from contextlib import closing
+            with closing(readonly(self.source)) as c:
+                identifier=c.execute("SELECT id FROM instruments WHERE symbol||'.'||market=?",(symbol,)).fetchone()
+            if identifier:
+                result.update(date.fromisoformat(day) for i,day,_,_ in HistoryFacts(self.source).closes(date.today()) if i==identifier[0])
+        return result
 
     def pending_close_days(self, symbol, target, *, required_days=()):
         saved = self.saved_close_days(symbol)
@@ -245,11 +271,13 @@ class QuoteStore:
 
     def save_official_close(self, symbol, day, price, candle_time, now):
         """Only the daily regular-session history endpoint may call this path."""
-        if not price.is_finite() or price <= 0 or day > now.astimezone(NY).date():
-            raise ValueError('无效日K收盘数据')
+        if not price.is_finite() or price<=0 or day>now.astimezone(NY).date():raise ValueError('无效日K收盘数据')
+        if self.source:
+            from portfolio.services.history_facts import append_completed
+            if append_completed(self.source,symbol,day,[(candle_time,'Intraday',price)],kind='DAILY_CLOSE',confirmation='CONFIRMED'):return
         with self.connect() as c:
             c.execute('INSERT INTO official_daily_closes VALUES (?,?,?,?,?) ON CONFLICT(symbol,day) DO UPDATE SET price=excluded.price,candle_time=excluded.candle_time,fetched_at=excluded.fetched_at',
-                      (symbol, day.isoformat(), str(price), candle_time.isoformat(), now.astimezone(UTC).isoformat()))
+                      (symbol,day.isoformat(),str(price),candle_time.isoformat(),now.astimezone(UTC).isoformat()))
 
     def load_earnings(self, key, max_age_seconds=86400):
         if not self.path.exists():

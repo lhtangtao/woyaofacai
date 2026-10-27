@@ -1,4 +1,8 @@
 """Sync all historical_pnl_points, versions, warnings from money_2 scope_keys to money3 scope_keys."""
+
+if __name__ == "__main__":
+    raise SystemExit("跨项目盈亏缓存重贴标签已停用。请运行 python -m portfolio.derived rebuild --mode changed，从Money3事实重新计算。")
+
 from datetime import date
 from pathlib import Path
 import sqlite3
@@ -17,6 +21,7 @@ STORE_PATH = "/Users/tangtao/Library/Application Support/MoneyPortfolio/Money Po
 
 
 def sync_keys():
+    raise RuntimeError("跨项目盈亏重贴标签已停用；请通过portfolio.derived从当前Money3事实重算。")
     con = sqlite3.connect(STORE_PATH)
     cur = con.cursor()
 

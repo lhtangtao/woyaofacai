@@ -15,9 +15,10 @@ from portfolio.services.derived_codec import dumps, loads
 
 def _algorithm_version():
     root=files('portfolio')
-    paths=('engine/replay.py','engine/performance.py','engine/scalping.py','engine/holdings.py',
-           'domain/trade_time.py','services/intraday_history.py','services/derived_engine.py')
-    return 'money3-derived-v1:' + hashlib.sha256(b''.join(root.joinpath(p).read_bytes() for p in paths)).hexdigest()[:20]
+    paths=tuple('engine/'+p.name for p in root.joinpath('engine').iterdir() if p.name.endswith('.py')) + (
+           'domain/trade_time.py','domain/analytics.py','domain/models.py',
+           'services/intraday_history.py','services/derived_engine.py')
+    return 'money3-derived-v1:' + hashlib.sha256(b''.join(root.joinpath(p).read_bytes() for p in sorted(paths))).hexdigest()[:20]
 
 
 ALGORITHM = _algorithm_version()
@@ -46,6 +47,12 @@ def exclusive(path, *, wait=True):
         finally: fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self,*args):
+        try:return super().__exit__(*args)
+        finally:self.close()
+
+
 class DerivedStore:
     def __init__(self, source, path=None):
         self.source = Path(source).expanduser().resolve()
@@ -57,7 +64,7 @@ class DerivedStore:
 
     def connect(self, *, write=False):
         if not self.available: raise ValueError('派生库未初始化，请先执行 derived init。')
-        c = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'), uri=True, timeout=60)
+        c = sqlite3.connect(self.path.as_uri() + ('?mode=rw' if write else '?mode=ro'), uri=True, timeout=60,factory=ClosingConnection)
         c.execute('PRAGMA busy_timeout=60000')
         source = c.execute("SELECT value FROM metadata WHERE key='source'").fetchone()
         if not source or source[0] != str(self.source):
@@ -68,16 +75,19 @@ class DerivedStore:
         if self.path.exists():
             with self.connect(): pass
             return
+        if not self.source.is_file():raise ValueError('原始事实库不存在，未创建派生库。')
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Callers hold exclusive publication lock. SQLite rollback journal avoids
-        # replacing a file with an attached live WAL at generation publication.
-        c = sqlite3.connect(self.path)
+        import uuid
+        temporary=self.path.with_name(self.path.name+'.init-'+uuid.uuid4().hex)
+        c = sqlite3.connect(temporary)
         try:
             c.executescript(files('portfolio').joinpath('resources/derived_schema.sql').read_text())
             c.executemany('INSERT INTO metadata VALUES (?,?)', [('source', str(self.source)),('algorithm', ALGORITHM),('created_at', utcnow())])
             c.commit()
         finally: c.close()
-        os.chmod(self.path, 0o600)
+        os.chmod(temporary, 0o600)
+        with temporary.open('rb') as handle:os.fsync(handle.fileno())
+        os.replace(temporary,self.path)
 
     def get(self, kind, key, dependency):
         if not self.available: return None
@@ -107,6 +117,17 @@ class DerivedStore:
         if not self.available: return {'state':'NOT_INITIALIZED'}
         with self.connect() as c:
             return {'state':'AVAILABLE','algorithm':ALGORITHM,
+                    'published_algorithm':dict(c.execute('SELECT key,value FROM metadata')).get('algorithm'),
                     'objects':c.execute('SELECT count(*) FROM objects').fetchone()[0],
                     'partitions':c.execute('SELECT status,count(*) FROM partitions GROUP BY status').fetchall(),
                     'jobs':c.execute('SELECT mode,state,started_at,finished_at,detail FROM jobs ORDER BY started_at DESC LIMIT 3').fetchall()}
+
+    def put_many(self, entries):
+        """Batch immutable computation units in a single SQLite transaction."""
+        if not self.available:return
+        rows=[]
+        for kind,key,dependency,value in entries:
+            data=zlib.compress(dumps(value).encode())
+            rows.append((kind,key,dependency,ALGORITHM,data,hashlib.sha256(data).hexdigest(),utcnow()))
+        with exclusive(self.path),self.connect(write=True) as c:
+            c.executemany('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',rows)

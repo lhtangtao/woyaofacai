@@ -26,7 +26,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.demo:
         from portfolio.derived import prepare_startup
-        prepare_startup(args.db or DATABASE_PATH,args.rebuild_derived)
+        prepare_startup(args.db or DATABASE_PATH,args.rebuild_derived,background=True)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("我要发财")
     app.setApplicationDisplayName("我要发财")
