@@ -323,11 +323,11 @@ class MainWindow(InteractionMixin, QMainWindow):
         if not is_drill and saved_end.isValid() and state.get('start_enabled'):
             self.as_of.setDate(min(saved_end, QDate.currentDate()))
             self.start.setDate(saved_start if saved_start.isValid() else QDate(2025, 1, 1))
-            self.start_enabled.setChecked(state.get('start_enabled', False))
+            self.start_enabled.setChecked(True)
         else:
             self.as_of.setDate(QDate.currentDate())
             self.start.setDate(QDate(2025, 1, 1))
-            self.start_enabled.setChecked(False)
+            self.start_enabled.setChecked(True)
         self.as_of.blockSignals(False)
         self.apply_extra_state(state)
         self._filter_batch = False

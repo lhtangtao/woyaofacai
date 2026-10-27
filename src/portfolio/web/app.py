@@ -281,6 +281,7 @@ def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD") ->
         reporting_currency=currency,
         ledger=Ledger.PERSON,
         person_ids=person_ids,
+        start_date=min(date(2025, 1, 1), as_of or date.today()),
     )
 
 

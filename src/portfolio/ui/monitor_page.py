@@ -805,6 +805,7 @@ class MonitoringPage(QWidget):
             ledger=Ledger.PERSON,
             person_ids=own if self.owner.currentIndex() == 0 else None,
             account_ids=self.accounts.selected_ids(),
+            start_date=date(2025, 1, 1),
         )
 
         source = Path(path)

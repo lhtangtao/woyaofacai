@@ -1,6 +1,7 @@
 """High-frequency PnL trend across month (30-min sampling) and year (2-hour sampling)."""
 import calendar
 from collections import defaultdict
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, localcontext
 import json
@@ -327,6 +328,41 @@ class MonthlyRealtimePnlPage(QWidget):
         self.scroll.setWidget(self.container)
         layout.addWidget(self.scroll, 1)
 
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setInterval(60000)
+        self.refresh_timer.timeout.connect(self._refresh_active_period)
+        self.refresh_timer.start()
+
+    def _refresh_active_period(self):
+        if not self.analytics or not self.isVisible():
+            return
+        today = date.today()
+        if self.tab_bar.currentIndex() == 1:
+            if self.year_combo.currentText() == str(today.year):
+                self._load_year_data(self.year_combo.currentText())
+        else:
+            if self.month_combo.currentText() == today.strftime("%Y-%m"):
+                self._load_month_data(self.month_combo.currentText())
+
+    def _history_keys(self, source_path, days, person_ids):
+        """Use the same source and filters that wrote the daily history."""
+        from portfolio.domain.models import Ledger, QueryScope
+        from portfolio.services.intraday_history import scope_key
+
+        base = self.analytics.scope if self.analytics else QueryScope(as_of=date.today())
+        start = base.start_date or date(2025, 1, 1)
+        paths = {str(source_path), str(Path(source_path).resolve())}
+        keys = set()
+        for day_text in days:
+            day = date.fromisoformat(day_text)
+            if day < start:
+                continue
+            scope = replace(base, as_of=day, start_date=start,
+                            ledger=Ledger.PERSON, person_ids=person_ids,
+                            reporting_currency="USD")
+            keys.update(scope_key(path, scope) for path in paths)
+        return keys
+
     def _resolve_db_path(self):
         """Locate live_quotes.sqlite3 safely from window quote store or local application data."""
         if hasattr(self.window, "quote_store") and self.window.quote_store and self.window.quote_store.path.exists():
@@ -383,6 +419,7 @@ class MonthlyRealtimePnlPage(QWidget):
         cache_key = (
             getattr(analytics, "calculated_at", None),
             getattr(analytics, "source_identity", None),
+            getattr(analytics, "scope", None),
             person_val,
         )
         if not force and getattr(self, "_rendered_cache_key", None) == cache_key:
@@ -394,6 +431,7 @@ class MonthlyRealtimePnlPage(QWidget):
         self._rendered_cache_key = (
             getattr(analytics, "calculated_at", None),
             getattr(analytics, "source_identity", None),
+            getattr(analytics, "scope", None),
             self.person_combo.currentData() if hasattr(self, "person_combo") else None,
         )
 
@@ -657,30 +695,7 @@ class MonthlyRealtimePnlPage(QWidget):
         try:
             cur = conn.cursor()
             if source_path:
-                from portfolio.domain.models import Ledger, QueryScope
-                from portfolio.services.intraday_history import scope_key
-                candidate_paths = {str(Path(source_path).resolve()), str(source_path)}
-                if "money3" in source_path:
-                    candidate_paths.add(source_path.replace("money3", "money_2"))
-                elif "money_2" in source_path:
-                    candidate_paths.add(source_path.replace("money_2", "money3"))
-                candidate_paths.add("/Users/tangtao/money/money_2/数据库/money.sqlite3")
-                candidate_paths.add("/Users/tangtao/money/money3/数据库/money.sqlite3")
-
-                target_keys = set()
-                for p in candidate_paths:
-                    for d in all_month_trading_days:
-                        target_keys.add(
-                            scope_key(
-                                p,
-                                QueryScope(
-                                    as_of=date.fromisoformat(d),
-                                    reporting_currency="USD",
-                                    ledger=Ledger.PERSON,
-                                    person_ids=person_ids,
-                                ),
-                            )
-                        )
+                target_keys = self._history_keys(source_path, all_month_trading_days, person_ids)
                 if target_keys:
                     placeholders = ",".join("?" for _ in target_keys)
                     query = f"""
@@ -771,30 +786,7 @@ class MonthlyRealtimePnlPage(QWidget):
         try:
             cur = conn.cursor()
             if source_path:
-                from portfolio.domain.models import Ledger, QueryScope
-                from portfolio.services.intraday_history import scope_key
-                candidate_paths = {str(Path(source_path).resolve()), str(source_path)}
-                if "money3" in source_path:
-                    candidate_paths.add(source_path.replace("money3", "money_2"))
-                elif "money_2" in source_path:
-                    candidate_paths.add(source_path.replace("money_2", "money3"))
-                candidate_paths.add("/Users/tangtao/money/money_2/数据库/money.sqlite3")
-                candidate_paths.add("/Users/tangtao/money/money3/数据库/money.sqlite3")
-
-                target_keys = set()
-                for p in candidate_paths:
-                    for d in all_year_trading_days:
-                        target_keys.add(
-                            scope_key(
-                                p,
-                                QueryScope(
-                                    as_of=date.fromisoformat(d),
-                                    reporting_currency="USD",
-                                    ledger=Ledger.PERSON,
-                                    person_ids=person_ids,
-                                ),
-                            )
-                        )
+                target_keys = self._history_keys(source_path, all_year_trading_days, person_ids)
                 if target_keys:
                     placeholders = ",".join("?" for _ in target_keys)
                     query = f"""

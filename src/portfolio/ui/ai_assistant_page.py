@@ -77,7 +77,8 @@ class AskCodexWorker(QThread):
                 try:
                     from datetime import date
                     from portfolio.domain.models import Ledger, QueryScope
-                    scope = QueryScope(as_of=date.today(), ledger=Ledger.PERSON)
+                    scope = QueryScope(as_of=date.today(), ledger=Ledger.PERSON,
+                                       start_date=date(2025, 1, 1))
                     fresh_analytics = self.analytics_service.calculate(scope)
                     self.context = CodexAIService.build_portfolio_context(
                         fresh_analytics,

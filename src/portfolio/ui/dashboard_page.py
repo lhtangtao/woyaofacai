@@ -89,6 +89,8 @@ class DashboardPage(QWidget):
         self.calendar_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.calendar_table.verticalHeader().hide()
         self.calendar_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.calendar_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.calendar_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.calendar_table.setFixedHeight(336)
         self.calendar_table.setStyleSheet('QTableView::item { padding:0 4px; } QHeaderView::section { padding:0 4px; }')
         self.calendar_table.cellClicked.connect(self.calendar_clicked)
@@ -231,7 +233,7 @@ class DashboardPage(QWidget):
             days[row.values[0]].append(row.values[19])
         weeks = calendar.Calendar().monthdatescalendar(y, m)
         self.calendar_table.setRowCount(len(weeks))
-        row_height = max(52, 332 // len(weeks))
+        row_height = max(64, self.calendar_table.fontMetrics().lineSpacing() * 3 + 12, 332 // len(weeks))
         for week_index, week in enumerate(weeks):
             totals = []
             week_days = []
@@ -267,6 +269,14 @@ class DashboardPage(QWidget):
                 week_item.setForeground(QColor(tokens(self).profit if total > 0 else tokens(self).loss if total < 0 else tokens(self).muted))
             self.calendar_table.setItem(week_index, 5, week_item)
             self.calendar_table.setRowHeight(week_index, row_height)
+        # Include the header and frame as well as every week. Hiding the inner
+        # scrollbar alone would otherwise leave the first/last dates clipped.
+        height = (self.calendar_table.horizontalHeader().height()
+                  + sum(self.calendar_table.rowHeight(i) for i in range(len(weeks)))
+                  + self.calendar_table.frameWidth() * 2)
+        self.calendar_table.setFixedHeight(height)
+        self.calendar_table.scrollToTop()
+        self.monthly_table.setFixedHeight(max(336, height))
 
     def annual_year_changed(self, text):
         if self.analytics and text:
