@@ -33,9 +33,10 @@ class AnalyticsService:
         self._cache, self._lock = {}, RLock()
 
     def identity(self):
-        # WAL changes must invalidate the cache even when the main file mtime is stable.
-        files = (self.path, Path(str(self.path) + "-wal"))
-        return tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in files if p.exists()) + ((self.fx_store.identity(),) if self.fx_store else ()) + ((self.quote_store.history_identity(),) if self.quote_store else ())
+        from portfolio.services.derived_dependencies import source_identity
+        return (str(self.path),source_identity(self.path),
+                self.fx_store.identity() if self.fx_store else None,
+                self.quote_store.history_identity() if self.quote_store else None)
 
     def calculate_people(self, scope, *, cancel=None):
         from portfolio.engine.people_pnl import PeopleBundle
@@ -55,6 +56,8 @@ class AnalyticsService:
         return PeopleBundle(aggregate, tuple(persons), broker)
 
     def calculate(self, scope, *, cancel=None, use_cache=True):
+        from portfolio.services.derived_dependencies import check_changes
+        check_changes(self.path,self.derived)
         with self.derived.active():
             return self._calculate(scope, cancel=cancel, use_cache=use_cache)
 

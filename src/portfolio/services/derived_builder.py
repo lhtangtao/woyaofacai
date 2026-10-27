@@ -35,7 +35,7 @@ class PartitionWriter:
                 records.append((ledger,person,v['account_id'],v['instrument_id'],day,stamp.astimezone(UTC).isoformat(),
                                 v['channel'],v['ticker'],v['quantity'],v['market_value'],v['opening_value'],v['buy'],v['sell'],v['pnl'],
                                 'MISSING_PRICE_OR_LEDGER' if v['pnl'] is None else 'OBSERVED'))
-        state='PARTIAL' if warning or any(r[-2] is None for r in records) else 'COMPLETE'
+        state='PARTIAL' if warning or any(r[-2] is None for r in records) else 'HISTORICAL_OBSERVED'
         if datetime.combine(date.fromisoformat(day),time(20),NY)>datetime.now(UTC):state='PROVISIONAL'
         with exclusive(self.derived.path), closing(self.derived.connect(write=True)) as c:
             c.execute('BEGIN IMMEDIATE')

@@ -352,7 +352,8 @@ _monitor_store: Optional[MonitorStore] = None
 def get_analytics_service() -> AnalyticsService:
     global _analytics_svc
     if _analytics_svc is None:
-        _analytics_svc = AnalyticsService(DATABASE_PATH)
+        from portfolio.services.web_today import desktop_quote_store
+        _analytics_svc = AnalyticsService(DATABASE_PATH,quote_store=desktop_quote_store())
     return _analytics_svc
 
 
@@ -1675,4 +1676,12 @@ def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = Fal
 
 
 if __name__ == "__main__":
-    run_mobile_server()
+    import argparse
+    from portfolio.derived import prepare_startup
+    parser = argparse.ArgumentParser(description="Money3 Web")
+    parser.add_argument('--rebuild-derived',choices=('changed','all'))
+    parser.add_argument('--host',default='0.0.0.0')
+    parser.add_argument('--port',type=int,default=8888)
+    options = parser.parse_args()
+    prepare_startup(DATABASE_PATH,options.rebuild_derived)
+    run_mobile_server(options.host,options.port)

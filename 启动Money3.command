@@ -29,10 +29,14 @@ START_MOBILE=1
 START_PUBLIC=1
 START_DESKTOP=1
 STOP_ALL=0
+DERIVED_MODE=""
 
 APP_ARGS=()
 for arg in "$@"; do
     case "$arg" in
+        --rebuild-derived=changed|--rebuild-derived=all)
+            DERIVED_MODE="${arg#*=}"
+            ;;
         --api|--sync)
             SYNC_API=1
             SYNC_EXCEL_ONLY=0
@@ -74,6 +78,7 @@ for arg in "$@"; do
             print "  --api, --sync    启动前强制调用券商API完整同步数据"
             print "  --excel          启动前强制仅同步本地交易流水.xlsx"
             print "  --no-sync        跳过任何同步，直接极速启动"
+            print "  --rebuild-derived=changed|all  启动服务前安全重建全部历史人员派生数据"
             exit 0
             ;;
         *)
@@ -101,6 +106,58 @@ if [[ "$STOP_ALL" == "1" ]]; then
         print "ℹ️ 公网隧道当前未在运行。"
     fi
     exit 0
+fi
+
+# ------------------------------------------------------------------------------
+# 4. 执行前置数据同步 (可选)
+# ------------------------------------------------------------------------------
+DO_SYNC=0
+SYNC_FLAGS=()
+
+if [[ "$SYNC_API" == "1" ]]; then
+    DO_SYNC=1
+    print "\n=================================================="
+    print " 🔄 正在执行完整数据同步 (长桥/嘉信 API -> 流水.xlsx -> 数据库)..."
+    print "=================================================="
+elif [[ "$SYNC_EXCEL_ONLY" == "1" ]]; then
+    DO_SYNC=1
+    SYNC_FLAGS+=("--no-api")
+    print "\n=================================================="
+    print " 🔄 正在执行本地数据同步 (交易流水.xlsx 5个Sheet -> 数据库)..."
+    print "=================================================="
+fi
+
+if [[ "$DO_SYNC" == "1" ]]; then
+    SYNC_PYTHON=""
+    if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+        SYNC_PYTHON="$APP_DIR/.venv/bin/python"
+    fi
+
+    if [[ -z "$SYNC_PYTHON" ]]; then
+        print "[错误] 未找到可执行数据同步的 Python 环境（需要 .venv）。"
+        exit 1
+    else
+        if "$SYNC_PYTHON" "$APP_DIR/scripts/sync_data.py" "${SYNC_FLAGS[@]}"; then
+            print "[OK] 数据同步成功！正在启动应用...\n"
+        else
+            print "\n[警告] 数据同步未完全成功（详见上方日志）。"
+            read -r "?是否仍然继续启动 Money3？(y/N): " choice
+            if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
+                print "启动已取消。"
+                exit 1
+            fi
+            print "继续启动应用...\n"
+        fi
+    fi
+fi
+
+# Synchronize/check/rebuild before either client starts serving data.
+DERIVED_ARGS=()
+if [[ -n "$DERIVED_MODE" ]]; then
+    DERIVED_ARGS+=("--mode" "$DERIVED_MODE")
+    "$APP_DIR/.venv/bin/python" -m portfolio.derived rebuild "${DERIVED_ARGS[@]}"
+else
+    "$APP_DIR/.venv/bin/python" -m portfolio.derived check
 fi
 
 # ------------------------------------------------------------------------------
@@ -278,49 +335,6 @@ print "     • 用户名: 拉科     密码: lake123     (绑定拉科个人账
 print "     • 用户名: 巴小     密码: baxiao321   (绑定巴小个人账本)"
 print "     (注: 手机浏览器直接打开网址，登录后即可查看专属持仓与盈亏)"
 print "=================================================================="
-
-# ------------------------------------------------------------------------------
-# 4. 执行前置数据同步 (可选)
-# ------------------------------------------------------------------------------
-DO_SYNC=1
-SYNC_FLAGS=()
-
-if [[ "$SYNC_API" == "1" ]]; then
-    DO_SYNC=1
-    print "\n=================================================="
-    print " 🔄 正在执行完整数据同步 (长桥/嘉信 API -> 流水.xlsx -> 数据库)..."
-    print "=================================================="
-elif [[ "$SYNC_EXCEL_ONLY" == "1" ]]; then
-    DO_SYNC=1
-    SYNC_FLAGS+=("--no-api")
-    print "\n=================================================="
-    print " 🔄 正在执行本地数据同步 (交易流水.xlsx 5个Sheet -> 数据库)..."
-    print "=================================================="
-fi
-
-if [[ "$DO_SYNC" == "1" ]]; then
-    SYNC_PYTHON=""
-    if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
-        SYNC_PYTHON="$APP_DIR/.venv/bin/python"
-    fi
-
-    if [[ -z "$SYNC_PYTHON" ]]; then
-        print "[错误] 未找到可执行数据同步的 Python 环境（需要 .venv）。"
-        exit 1
-    else
-        if "$SYNC_PYTHON" "$APP_DIR/scripts/sync_data.py" "${SYNC_FLAGS[@]}"; then
-            print "[OK] 数据同步成功！正在启动应用...\n"
-        else
-            print "\n[警告] 数据同步未完全成功（详见上方日志）。"
-            read -r "?是否仍然继续启动 Money3？(y/N): " choice
-            if [[ "$choice" != "y" && "$choice" != "Y" ]]; then
-                print "启动已取消。"
-                exit 1
-            fi
-            print "继续启动应用...\n"
-        fi
-    fi
-fi
 
 # ------------------------------------------------------------------------------
 # 5. 启动桌面端应用 (PySide6) 或保持手机独立后台服务

@@ -22,7 +22,11 @@ def main(argv=None):
     parser.add_argument("--smoke-page", type=int, default=2, help=argparse.SUPPRESS)
     parser.add_argument("--smoke-report", help=argparse.SUPPRESS)
     parser.add_argument("--smoke-export", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--rebuild-derived", choices=("changed", "all"), help="启动前安全生成全部历史人员派生数据")
     args = parser.parse_args(argv)
+    if not args.demo:
+        from portfolio.derived import prepare_startup
+        prepare_startup(args.db or DATABASE_PATH,args.rebuild_derived)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("我要发财")
     app.setApplicationDisplayName("我要发财")

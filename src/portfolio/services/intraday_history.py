@@ -22,8 +22,10 @@ def scope_key(path, scope):
 
 
 def source_version(path):
-    files = (Path(path), Path(str(path)+'-wal'))
-    return json.dumps(('intraday-channel-timezones-v4', [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in files if p.exists()]))
+    from portfolio.services.derived_dependencies import source_identity
+    from portfolio.services.derived_store import ALGORITHM
+    return ALGORITHM + ':' + source_identity(path)
+
 
 
 def regular_gaps(candles, first, last, cutoff):

@@ -13,7 +13,14 @@ import zlib
 from portfolio.paths import derived_path
 from portfolio.services.derived_codec import dumps, loads
 
-ALGORITHM = 'money3-derived-v1'
+def _algorithm_version():
+    root=files('portfolio')
+    paths=('engine/replay.py','engine/performance.py','engine/scalping.py','engine/holdings.py',
+           'domain/trade_time.py','services/intraday_history.py','services/derived_engine.py')
+    return 'money3-derived-v1:' + hashlib.sha256(b''.join(root.joinpath(p).read_bytes() for p in paths)).hexdigest()[:20]
+
+
+ALGORITHM = _algorithm_version()
 ACTIVE_STORE = ContextVar('money3_derived_store', default=None)
 
 

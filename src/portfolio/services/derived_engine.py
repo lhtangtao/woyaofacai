@@ -69,7 +69,8 @@ def replay_cached(snapshot,capture_days,cancel,raw):
             days=[]
             while cursor.isoformat()<=last:days.append(cursor.isoformat());cursor+=timedelta(days=1)
             prefix=replace(atom,scope=replace(atom.scope,as_of=date.fromisoformat(last)),events=[e for e in atom.events if e.day<=last],
-                           actions=[a for a in atom.actions if a['effective_date']<=last],issues=[])
+                           actions=[a for a in atom.actions if a['effective_date']<=last],
+                           baselines=[b for b in atom.baselines if b['baseline_date']<=last],issues=[])
             prefix.extras={**atom.extras,'broker_trades':[r for r in atom.extras['broker_trades'] if r['business_date']<=last]}
             dep=digest((input_value(prefix,prices=False),state,previous,days))
             cache_key=digest((snapshot.scope.ledger,key,month,last,snapshot.scope.reporting_currency))
