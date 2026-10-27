@@ -300,14 +300,14 @@ export const TradesView: React.FC<TradesViewProps> = ({
                             t.current_price != null && t.price != null
                               ? isBuy
                                 ? t.current_price > t.price
-                                  ? "var(--profit-color, #16a34a)"
+                                  ? "#16A34A"
                                   : t.current_price < t.price
-                                  ? "var(--loss-color, #dc2626)"
+                                  ? "#DC2626"
                                   : "inherit"
                                 : t.current_price < t.price
-                                ? "var(--profit-color, #16a34a)"
+                                ? "#16A34A"
                                 : t.current_price > t.price
-                                ? "var(--loss-color, #dc2626)"
+                                ? "#DC2626"
                                 : "inherit"
                               : "inherit",
                         }}

@@ -114,11 +114,17 @@ class TradeModel(FinanceModel):
             trade_price = row.values[6]
             if isinstance(trade_price, Decimal) and trade_price > 0:
                 is_buy = row.metadata.get("side") in ("BUY", "TRANSFER_IN")
+                # 明确色彩规则（赚了为绿 #16A34A，亏了为红 #DC2626）：
+                # 1. 买入：当前价 > 成交价（赚了 -> 绿）；当前价 < 成交价（亏了 -> 红）
+                # 2. 卖出：当前价 < 成交价（赚了/高抛逃顶 -> 绿）；当前价 > 成交价（亏了/卖早了 -> 红）
+                GREEN = QColor("#16A34A")
+                RED = QColor("#DC2626")
+                MUTED = QColor("#64748B")
                 if is_buy:
-                    return QColor(tokens(self.parent()).profit if value > trade_price else tokens(self.parent()).loss if value < trade_price else tokens(self.parent()).muted)
+                    return GREEN if value > trade_price else RED if value < trade_price else MUTED
                 else:
-                    return QColor(tokens(self.parent()).profit if value < trade_price else tokens(self.parent()).loss if value > trade_price else tokens(self.parent()).muted)
-            return QColor(tokens(self.parent()).muted)
+                    return GREEN if value < trade_price else RED if value > trade_price else MUTED
+            return QColor("#64748B")
         return None
 
 
