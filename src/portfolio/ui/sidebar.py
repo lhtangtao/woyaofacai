@@ -45,7 +45,7 @@ class Sidebar(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 24, 0, 16)
         layout.setSpacing(4)
-        self.brand = QLabel("Money Portfolio")
+        self.brand = QLabel("我要发财")
         self.brand.setObjectName("brand")
         self.brand.setContentsMargins(20, 0, 0, 0)
         self.subtitle = QLabel("投资资产管理")
@@ -126,7 +126,7 @@ class Sidebar(QWidget):
     def toggle(self):
         self.collapsed = not self.collapsed
         self.setFixedWidth(64 if self.collapsed else 212)
-        self.brand.setText("M" if self.collapsed else "Money Portfolio")
+        self.brand.setText("发" if self.collapsed else "我要发财")
         self.subtitle.setVisible(not self.collapsed)
         self.footer.setVisible(not self.collapsed)
         for item in self.groups:

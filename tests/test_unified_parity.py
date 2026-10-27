@@ -50,6 +50,10 @@ class TestUnifiedParity(unittest.TestCase):
         app.testing = True
         cls.client = app.test_client()
 
+        # Ensure temporary test DB path is active even when running multi-suite
+        os.environ["MONEY_SECURITY_DB_PATH"] = str(_TEST_DB_PATH)
+        set_security_db_path(_TEST_DB_PATH)
+
         # Snapshot real production database baseline to verify zero modification
         cls._real_db_path = get_default_security_db_path()
         cls._real_db_exists = cls._real_db_path.is_file()

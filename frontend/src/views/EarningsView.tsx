@@ -9,14 +9,16 @@ export const EarningsView: React.FC = () => {
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const fetchCalendar = (y: number, m: number) => {
+  const fetchCalendar = (y: number, m: number, dir = sortDir) => {
     setLoading(true);
     api
-      .earningsCalendar(y, m)
-      .then((res) => {
+      .earningsCalendar(y, m, dir)
+      .then((res: any) => {
         if (res.status === "ok") {
           setData(res);
+          if (res.sort_dir) setSortDir(res.sort_dir as "asc" | "desc");
         }
       })
       .catch((err) => console.error("Failed to load earnings calendar:", err))
@@ -24,8 +26,14 @@ export const EarningsView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchCalendar(year, month);
+    fetchCalendar(year, month, sortDir);
   }, [year, month]);
+
+  const handleToggleSort = () => {
+    const newDir = sortDir === "desc" ? "asc" : "desc";
+    setSortDir(newDir);
+    fetchCalendar(year, month, newDir);
+  };
 
   const handlePrevMonth = () => {
     if (month === 1) {
@@ -102,7 +110,18 @@ export const EarningsView: React.FC = () => {
                 <tr>
                   <th>标的代码</th>
                   <th>公司名称</th>
-                  <th>披露日期</th>
+                  <th
+                    onClick={handleToggleSort}
+                    style={{ cursor: "pointer", userSelect: "none" }}
+                    title="点击切换披露日期排序"
+                  >
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                      <span>披露日期</span>
+                      <span style={{ fontSize: "12px", color: "var(--brand, #2563eb)", fontWeight: 700 }}>
+                        {sortDir === "desc" ? "↓" : "↑"}
+                      </span>
+                    </span>
+                  </th>
                   <th>发布时段</th>
                   <th style={{ textAlign: "right" }}>EPS 预期值</th>
                   <th style={{ textAlign: "right" }}>EPS 实际值</th>

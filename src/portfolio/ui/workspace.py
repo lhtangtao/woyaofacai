@@ -71,6 +71,11 @@ def build_workspace(self):
     titles.addWidget(self.heading)
     titles.addWidget(self.description)
     top.addLayout(titles, 1)
+    self.asset_reset_button = QPushButton("重置筛选")
+    self.asset_reset_button.setToolTip("恢复个人 · 全部渠道 · 全部股票及默认日期")
+    self.asset_reset_button.clicked.connect(self.reset_asset_filters)
+    self.asset_reset_button.hide()
+    top.addWidget(self.asset_reset_button)
     self.refresh_button = QPushButton("刷新")
     self.refresh_button.setIcon(icon("refresh", self))
     self.refresh_button.setToolTip("刷新当前数据源 · ⌘R")
@@ -357,6 +362,13 @@ def build_workspace(self):
     self.performance_page.selector.currentTextChanged.connect(self.sync_date_granularity)
     self.asset_page.selector.currentTextChanged.connect(self.sync_date_granularity)
     self.asset_page.selector.currentTextChanged.connect(lambda *_: self.ensure_analytics())
+    self.asset_page.selector.currentTextChanged.connect(lambda text: self.asset_reset_button.setVisible(
+        self.pages.currentIndex() in (2, 14) or (
+            self.pages.currentIndex() == 3 and text in (
+                '今日盈亏', '当前持仓', '实时持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总', '股票归属'
+            )
+        )
+    ))
     if self.asset_page.broker_page:
         def on_broker_mode_changed(mode_text):
             if self.pages.currentIndex() != 3:
@@ -371,7 +383,11 @@ def build_workspace(self):
     self.table.selectionModel().currentRowChanged.connect(lambda *_: self.load_provenance())
     self.table.clicked.connect(lambda *_: self.load_provenance() if self.drawer.isHidden() else None)
     self.table.frozen.clicked.connect(lambda *_: self.load_provenance() if self.drawer.isHidden() else None)
-    self.table.horizontalHeader().sectionClicked.connect(self.sort)
+    for header in (self.table.horizontalHeader(), self.table.frozen.horizontalHeader()):
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+        header.sectionClicked.connect(self.sort)
     for combo in (self.person, self.stock, self.category, self.currency, self.side, self.link_status):
         combo.currentIndexChanged.connect(self.filters_changed)
     self.ledger.currentIndexChanged.connect(self.ledger_changed)

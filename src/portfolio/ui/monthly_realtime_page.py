@@ -196,6 +196,8 @@ class MonthlyRealtimePnlPage(QWidget):
         self._cached_all_trading_days = []
         self._cached_channels = []
         self._cached_tickers = []
+        self._rebuild_pending = False
+        self._rebuild_attempted = set()
 
         # 年度高频数据缓存
         self._cached_year = ""
@@ -316,7 +318,7 @@ class MonthlyRealtimePnlPage(QWidget):
 
         self.notes_label = QLabel(
             "数据说明：展示所选整月全部美股交易日时间轴（夏令时北京时间每日夜盘 08:00 至次日 08:00 盘后）；"
-            "实盘曲线绘制截至当前时点，后续空白区域代表当月未来的交易时间；"
+            "实盘曲线绘制截至当前时点，未来时段或缺少历史点的日期均留白；"
             "垂直虚线按每日夜盘（08:00）、盘前（16:00）、盘中（21:30）、盘后（04:00）精确划分各时段；"
             "横坐标清晰标注各交易日日期与开盘时间；两端高亮圆点与防遮挡金额胶囊标注全月最高与最低收益极值。"
         )
@@ -362,6 +364,67 @@ class MonthlyRealtimePnlPage(QWidget):
                             reporting_currency="USD")
             keys.update(scope_key(path, scope) for path in paths)
         return keys
+
+    def _restore_missing_month_days(self, source_path, days, person_ids, loaded_days):
+        """Recalculate missing days from this Money3 ledger and cached candles."""
+        if (not days or self._rebuild_pending or not self.analytics or not self.window
+                or not hasattr(self.window, "_submit")):
+            return
+        from portfolio.services.intraday_history import source_version
+
+        start = self.analytics.scope.start_date or date(2025, 1, 1)
+        version = source_version(source_path)
+        store = self.window.quote_store
+        try:
+            with sqlite3.connect(f"file:{store.path}?mode=ro", uri=True) as cache:
+                cached_days = {row[0] for row in cache.execute(
+                    "SELECT DISTINCT day FROM intraday_candles WHERE day LIKE ?", (days[0][:7] + "%",)
+                )}
+        except (OSError, sqlite3.Error):
+            cached_days = set()
+        missing = [day for day in days if start <= date.fromisoformat(day) <= date.today()
+                   and day in cached_days and day not in loaded_days
+                   and (source_path, version, self.analytics.scope, person_ids, day) not in self._rebuild_attempted]
+        if not missing:
+            return
+        for day in missing:
+            self._rebuild_attempted.add((source_path, version, self.analytics.scope, person_ids, day))
+        self._rebuild_pending = True
+        self.status_label.setText(self.status_label.text() + " · 正从当前 Money3 账本与已缓存 K 线补算缺失日期…")
+        base = self.analytics.scope
+        credentials = getattr(self.window.live_panel, "path", None)
+
+        def task(cancel):
+            from portfolio.domain.models import Ledger
+            from portfolio.services.analytics_service import AnalyticsService
+            from portfolio.services.intraday_history import rebuild_history, scope_key
+
+            service = AnalyticsService(source_path, quote_store=store)
+            restored = []
+            for day in missing:
+                if cancel.is_set():
+                    break
+                scope = replace(base, as_of=date.fromisoformat(day), start_date=start,
+                                ledger=Ledger.PERSON, person_ids=person_ids,
+                                reporting_currency="USD")
+                try:
+                    analytics = service.calculate(scope, cancel=cancel)
+                    rebuild_history(source_path, analytics, credentials, store, day,
+                                    datetime.now(ZoneInfo("Asia/Shanghai")), cancel=cancel)
+                    if store.load_historical_pnl(scope_key(source_path, scope), day, source_version(source_path)):
+                        restored.append(day)
+                except Exception:
+                    continue
+            return restored
+
+        def ready(restored):
+            self._rebuild_pending = False
+            if restored and self.month_combo.currentText() == missing[0][:7]:
+                self._load_month_data(self.month_combo.currentText())
+            elif not restored:
+                self.status_label.setText(self.status_label.text() + " · 缺失日期尚未补齐，请检查行情缓存或凭证。")
+
+        self.window._submit("monthly-history", task, ready)
 
     def _resolve_db_path(self):
         """Locate live_quotes.sqlite3 safely from window quote store or local application data."""
@@ -409,6 +472,7 @@ class MonthlyRealtimePnlPage(QWidget):
         self._cached_year = ""
         self._cached_year_by_day.clear()
         self._cached_year_all_trading_days.clear()
+        self._rebuild_attempted.clear()
         self.canvas.chart = None
         self.canvas.update()
         self.summary_badge.setText("")
@@ -739,6 +803,7 @@ class MonthlyRealtimePnlPage(QWidget):
         self.stock_combo.populate(self._cached_tickers)
 
         self.update_chart()
+        self._restore_missing_month_days(source_path, all_month_trading_days, person_ids, by_day)
 
     def _load_year_data(self, year_str):
         if not year_str:
@@ -1016,8 +1081,13 @@ class MonthlyRealtimePnlPage(QWidget):
         person_desc = f" · {selected_person_name}"
         chart_title = f"{self._cached_month} {mode_name}（USD）{person_desc} · {channel_desc}{ticker_desc}"
 
+        now_ny = datetime.now(NY)
+        reached_day = (now_ny + timedelta(days=1) if now_ny.hour >= 20 else now_ny).date()
+        reached_days = sum(date.fromisoformat(day) <= reached_day for day in all_trading_days)
+        missing_days = max(0, reached_days - past_days_count)
+        future_days = total_month_days - reached_days
         chart_note = (
-            f"北京时间 · 整月全量 {total_month_days} 个美股交易日时间轴（半小时采样，已发生 {past_days_count} 个，后续空白为未来时间） · "
+            f"北京时间 · 整月全量 {total_month_days} 个美股交易日时间轴（半小时采样，已有曲线 {past_days_count} 个、已过日期缺点 {missing_days} 个、未来 {future_days} 个） · "
             f"细虚线按每日夜盘、盘前、盘中、盘后精确划分时段；高亮显示全月最高与最低收益。"
         )
 
@@ -1039,9 +1109,8 @@ class MonthlyRealtimePnlPage(QWidget):
 
         currency = "USD"
         last_val_str = f"{last_pt[1]:+,.2f} {currency}"
-        future_days = total_month_days - past_days_count
         self.summary_badge.setText(
-            f"全月 {total_month_days} 个交易日（已发生 {past_days_count} 个，未来 {future_days} 个留白） · "
+            f"全月 {total_month_days} 个交易日（已有曲线 {past_days_count} 个，已过日期缺点 {missing_days} 个，未来 {future_days} 个） · "
             f"最新盈亏：{last_val_str}"
         )
 
@@ -1057,7 +1126,7 @@ class MonthlyRealtimePnlPage(QWidget):
         )
         self.notes_label.setText(
             "数据说明：展示所选整月全部美股交易日时间轴（夏令时北京时间每日夜盘 08:00 至次日 08:00 盘后）；"
-            "实盘曲线绘制截至当前时点，后续空白区域代表当月未来的交易时间；"
+            "实盘曲线绘制截至当前时点，未来时段或缺少历史点的日期均留白；"
             "垂直虚线按每日夜盘（08:00）、盘前（16:00）、盘中（21:30）、盘后（04:00）精确划分各时段；"
             "横坐标清晰标注各交易日日期与开盘时间；两端高亮圆点与防遮挡金额胶囊标注全月最高与最低收益极值。"
         )
@@ -1232,8 +1301,13 @@ class MonthlyRealtimePnlPage(QWidget):
         person_desc = f" · {selected_person_name}"
         chart_title = f"{self._cached_year}年 {mode_name}（USD）{person_desc} · {channel_desc}{ticker_desc}"
 
+        now_ny = datetime.now(NY)
+        reached_day = (now_ny + timedelta(days=1) if now_ny.hour >= 20 else now_ny).date()
+        reached_days = sum(date.fromisoformat(day) <= reached_day for day in all_trading_days)
+        missing_days = max(0, reached_days - past_days_count)
+        future_days = total_year_days - reached_days
         chart_note = (
-            f"北京时间 · 整年全量 {total_year_days} 个美股交易日时间轴（按每 2 个小时一个点精细采样，已发生 {past_days_count} 个，后续空白为未来时间） · "
+            f"北京时间 · 整年全量 {total_year_days} 个美股交易日时间轴（已有曲线 {past_days_count} 个、已过日期缺点 {missing_days} 个、未来 {future_days} 个） · "
             f"细虚线按月份（每月初首个交易日）划分；高亮显示全年度最高与最低收益。"
         )
 
@@ -1255,9 +1329,8 @@ class MonthlyRealtimePnlPage(QWidget):
 
         currency = "USD"
         last_val_str = f"{last_pt[1]:+,.2f} {currency}"
-        future_days = total_year_days - past_days_count
         self.summary_badge.setText(
-            f"全年 {total_year_days} 个交易日（已发生 {past_days_count} 个，未来 {future_days} 个留白） · "
+            f"全年 {total_year_days} 个交易日（已有曲线 {past_days_count} 个，已过日期缺点 {missing_days} 个，未来 {future_days} 个） · "
             f"最新盈亏：{last_val_str}"
         )
 
@@ -1273,7 +1346,7 @@ class MonthlyRealtimePnlPage(QWidget):
         )
         self.notes_label.setText(
             "数据说明：展示所选整年全部美股交易日时间轴（按每 2 个小时一个点的密度精细采样）；"
-            "实盘曲线绘制截至当前时点，后续空白区域代表当年未来的交易时间；"
+            "实盘曲线绘制截至当前时点，未来时段或缺少历史点的日期均留白；"
             "垂直虚线按月份（每月初首个交易日）精确划分；"
             "横坐标清晰标注各月份刻度；两端高亮圆点与防遮挡金额胶囊标注全年度最高与最低收益极值。"
         )

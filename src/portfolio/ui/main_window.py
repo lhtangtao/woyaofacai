@@ -27,7 +27,9 @@ from portfolio.ui.workers import Worker
 class MainWindow(InteractionMixin, QMainWindow):
     def __init__(self, *, settings=True):
         super().__init__()
-        self.setWindowTitle("Money Portfolio · 投资账本")
+        self.setWindowTitle("我要发财 · 投资账本")
+        from portfolio.ui.icons import app_icon
+        self.setWindowIcon(app_icon())
         self.resize(1440, 900)
         self.setMinimumSize(1100, 700)
         self.service = None
@@ -334,8 +336,16 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.search_timer.stop()
         self.filters_widget.setEnabled(True)
         self.page_number = state.get("page_number", 0)
-        self.sort_column = state.get("sort_column", 0)
-        self.descending = state.get("descending", True)
+        if self.restore_state:
+            self.sort_column = state.get("sort_column", 0)
+            self.descending = state.get("descending", True)
+        else:
+            self.sort_column = 0
+            self.descending = True
+        order = Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder
+        for header in (self.table.horizontalHeader(), self.table.frozen.horizontalHeader()):
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(self.sort_column, order)
         self._pending_scroll = (state.get("scroll", 0), state.get("horizontal_scroll", 0))
         self._analytics_scope = None
         self.refresh()
@@ -571,8 +581,15 @@ class MainWindow(InteractionMixin, QMainWindow):
             except Exception:
                 return None
         def ready(bundle):
-            if bundle and hasattr(self, "asset_page") and getattr(self.asset_page, "broker_page", None):
+            if not bundle or not hasattr(self, "asset_page") or not getattr(self, "asset_page", None) or not self.asset_page.broker_page:
+                return
+            if self.broker_people_view():
+                if bundle.aggregate.scope == self.make_scope():
+                    self._people_ready(bundle)
+                return
+            if self.asset_page.broker_page.bundle is None and bundle.aggregate.scope.as_of == self.make_scope().as_of:
                 self.asset_page.broker_page.bundle = bundle
+                self._analytics_ready(bundle.aggregate) if self.analytics is None else None
         self._submit("preload_people", task, ready)
 
     def _people_ready(self, bundle):
@@ -728,10 +745,15 @@ class MainWindow(InteractionMixin, QMainWindow):
         if column not in SORT_FIELDS:
             self.banner.setText("此列属于回放计算结果；请在收益报表的交易回放中查看和排序。")
             return
-        self.descending = not self.descending if column == self.sort_column else False
+        if column == self.sort_column:
+            self.descending = not self.descending
+        else:
+            self.descending = True if column == 0 else False
         self.sort_column = column
-        self.table.horizontalHeader().setSortIndicatorShown(True)
-        self.table.horizontalHeader().setSortIndicator(column, Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder)
+        order = Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder
+        for header in (self.table.horizontalHeader(), self.table.frozen.horizontalHeader()):
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(column, order)
         self.page_number = 0
         self.refresh()
 

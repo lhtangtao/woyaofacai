@@ -17,9 +17,11 @@ def main():
     spec = root / "pysidedeploy.spec"
     config.read(spec)
     config["app"]["exec_directory"] = "dist"
+    config["app"]["icon"] = str(root / "src/portfolio/resources/app_icon.icns")
     config["qt"]["plugins"] = "platforms,styles,imageformats,iconengines"
     config["nuitka"]["extra_args"] = ("--quiet --noinclude-qt-translations --include-package=portfolio --include-package=longbridge "
         "--include-data-dir=src/portfolio/resources=portfolio/resources "
+        f"--macos-app-icon={root / 'src/portfolio/resources/app_icon.icns'} "
         "--disable-cache=ccache "
         "--macos-app-name=Money3 --macos-app-version=0.3.0")
     with spec.open("w") as stream:

@@ -117,8 +117,12 @@ function convertToEchartsOption(chart: any) {
 export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [bestDateSort, setBestDateSort] = useState<"desc" | "asc" | null>(null);
+  const [worstDateSort, setWorstDateSort] = useState<"desc" | "asc" | null>(null);
 
   useEffect(() => {
+    setBestDateSort(null);
+    setWorstDateSort(null);
     setLoading(true);
     let promise: Promise<any>;
     if (mode === "top_days") {
@@ -152,8 +156,26 @@ export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
   // Top Days or Top Months Side-by-Side View
   if (mode === "top_days" || mode === "top_months") {
     const isDay = mode === "top_days";
-    const bestItems = (data?.best || data?.best_days || data?.best_months || data?.top_gainers || []).slice(0, 20);
-    const worstItems = (data?.worst || data?.worst_days || data?.worst_months || data?.top_losers || []).slice(0, 20);
+    const rawBest = (data?.best || data?.best_days || data?.best_months || data?.top_gainers || []).slice(0, 20);
+    const rawWorst = (data?.worst || data?.worst_days || data?.worst_months || data?.top_losers || []).slice(0, 20);
+
+    const getDateStr = (item: any) => String(item.date || item.day || item.month || "");
+
+    const bestItems = bestDateSort
+      ? [...rawBest].sort((a, b) =>
+          bestDateSort === "desc"
+            ? getDateStr(b).localeCompare(getDateStr(a))
+            : getDateStr(a).localeCompare(getDateStr(b))
+        )
+      : rawBest;
+
+    const worstItems = worstDateSort
+      ? [...rawWorst].sort((a, b) =>
+          worstDateSort === "desc"
+            ? getDateStr(b).localeCompare(getDateStr(a))
+            : getDateStr(a).localeCompare(getDateStr(b))
+        )
+      : rawWorst;
 
     return (
       <ErrorBoundary fallbackTitle={isDay ? "Top日汇总渲染异常" : "Top月汇总渲染异常"}>
@@ -175,8 +197,27 @@ export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
                   <thead>
                     <tr>
                       <th>排名</th>
-                      <th>{isDay ? "交易日期" : "月份"}</th>
-                      <th style={{ textAlign: "right" }}>当日盈利 (USD)</th>
+                      <th
+                        onClick={() => setBestDateSort((prev) => (prev === "desc" ? "asc" : "desc"))}
+                        style={{ cursor: "pointer", userSelect: "none" }}
+                        title="点击切换日期排序"
+                      >
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <span>{isDay ? "交易日期" : "月份"}</span>
+                          {bestDateSort && (
+                            <span style={{ fontSize: "12px", color: "var(--brand, #2563eb)", fontWeight: 700 }}>
+                              {bestDateSort === "desc" ? "↓" : "↑"}
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                      <th
+                        onClick={() => setBestDateSort(null)}
+                        style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }}
+                        title="点击恢复按盈利金额排序"
+                      >
+                        当日盈利 (USD)
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -214,8 +255,27 @@ export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
                   <thead>
                     <tr>
                       <th>排名</th>
-                      <th>{isDay ? "交易日期" : "月份"}</th>
-                      <th style={{ textAlign: "right" }}>当日亏损 (USD)</th>
+                      <th
+                        onClick={() => setWorstDateSort((prev) => (prev === "desc" ? "asc" : "desc"))}
+                        style={{ cursor: "pointer", userSelect: "none" }}
+                        title="点击切换日期排序"
+                      >
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <span>{isDay ? "交易日期" : "月份"}</span>
+                          {worstDateSort && (
+                            <span style={{ fontSize: "12px", color: "var(--brand, #2563eb)", fontWeight: 700 }}>
+                              {worstDateSort === "desc" ? "↓" : "↑"}
+                            </span>
+                          )}
+                        </span>
+                      </th>
+                      <th
+                        onClick={() => setWorstDateSort(null)}
+                        style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }}
+                        title="点击恢复按亏损金额排序"
+                      >
+                        当日亏损 (USD)
+                      </th>
                     </tr>
                   </thead>
                   <tbody>

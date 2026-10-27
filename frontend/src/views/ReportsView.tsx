@@ -26,24 +26,32 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [sortCol, setSortCol] = useState<string | undefined>(undefined);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     if (initialReportName) {
       setCurrentReport(initialReportName);
       setPage(1);
+      setSortCol(undefined);
+      setSortDir("desc");
     }
   }, [initialReportName]);
 
-  const loadReport = (targetPage = page) => {
+  const loadReport = (targetPage = page, targetCol = sortCol, targetDir = sortDir) => {
     if (currentReport === "今日盈亏") return;
     setLoading(true);
     setError(null);
     api
-      .reportDetail(currentReport, personId, search, targetPage, pageSize, sortCol, sortDir)
-      .then((res) => {
+      .reportDetail(currentReport, personId, search, targetPage, pageSize, targetCol, targetDir)
+      .then((res: any) => {
         if (res.status === "ok") {
           setReportData(res);
+          if (res.sort_col && !targetCol) {
+            setSortCol(res.sort_col);
+          }
+          if (res.sort_dir && !targetCol) {
+            setSortDir(res.sort_dir as "asc" | "desc");
+          }
         } else {
           setError(res.message || "未能加载报表数据");
         }
@@ -55,34 +63,49 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   };
 
   useEffect(() => {
-    loadReport(1);
-  }, [currentReport, personId, pageSize, sortCol, sortDir]);
+    setSortCol(undefined);
+    setSortDir("desc");
+    setPage(1);
+    loadReport(1, undefined, "desc");
+  }, [currentReport]);
+
+  useEffect(() => {
+    loadReport(page, sortCol, sortDir);
+  }, [personId, pageSize, sortCol, sortDir]);
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setPage(1);
-    loadReport(1);
+    loadReport(1, sortCol, sortDir);
   };
 
+  const isTimeColumn = (colName: string) =>
+    /日期|月份|时间|effective_from|effective_to|business_date|imported_at_utc|报价UTC|rate_date/i.test(colName);
+
   const handleSort = (colName: string) => {
+    let newDir: "asc" | "desc" = "asc";
     if (sortCol === colName) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
+      newDir = sortDir === "desc" ? "asc" : "desc";
     } else {
-      setSortCol(colName);
-      setSortDir("asc");
+      newDir = isTimeColumn(colName) ? "desc" : "asc";
     }
+    setSortCol(colName);
+    setSortDir(newDir);
     setPage(1);
+    loadReport(1, colName, newDir);
   };
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage);
-    loadReport(newPage);
+    loadReport(newPage, sortCol, sortDir);
   };
 
   const handleExportCsv = () => {
     const params = new URLSearchParams();
     if (personId != null) params.set("person_id", String(personId));
     if (search.trim()) params.set("search", search.trim());
+    if (sortCol) params.set("sort_col", sortCol);
+    if (sortDir) params.set("sort_dir", sortDir);
     window.open(`/api/v1/export/report/${encodeURIComponent(currentReport)}?${params.toString()}`, "_blank");
   };
 
@@ -211,10 +234,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       >
                         <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
                           <span>{c}</span>
-                          {isSorted ? (
-                            sortDir === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />
-                          ) : (
-                            <ArrowUpDown size={11} style={{ opacity: 0.3 }} />
+                          {isSorted && (
+                            <span style={{ fontSize: "12px", color: "var(--brand, #2563eb)", fontWeight: 700 }}>
+                              {sortDir === "desc" ? "↓" : "↑"}
+                            </span>
                           )}
                         </div>
                       </th>

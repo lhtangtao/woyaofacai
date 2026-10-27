@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from PySide6.QtCore import QModelIndex, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QLabel, QMenu, QPushButton, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHeaderView, QLabel, QMenu, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionHeader, QVBoxLayout, QWidget
 
 from portfolio.domain.models import TRADE_COLUMNS, exact_text, from_e8
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
@@ -115,9 +115,44 @@ class TradeDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class TradeHeader(QHeaderView):
+    def __init__(self, parent):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setFixedHeight(42)
+        self.setSectionsClickable(True)
+
+    def paintSection(self, painter, rect, logical):
+        if not rect.isValid():
+            return
+        painter.save()
+        option = QStyleOptionHeader()
+        self.initStyleOptionForIndex(option, logical)
+        option.rect = rect
+        text = option.text
+        option.text = ""
+        option.sortIndicator = QStyleOptionHeader.SortIndicator.None_
+        self.style().drawControl(QStyle.ControlElement.CE_Header, option, painter, self)
+        active = self.isSortIndicatorShown() and self.sortIndicatorSection() == logical
+        t = tokens(self)
+        painter.setPen(QColor(t.brand if active else t.muted))
+        font = self.font()
+        if active:
+            font.setBold(True)
+            arrow = " ↑" if self.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder else " ↓"
+            text = f"{text}{arrow}"
+        painter.setFont(font)
+        painter.drawText(rect.adjusted(6, 2, -6, -2), Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+
 class TradeTable(FinanceTable):
     def __init__(self):
         super().__init__()
+        self.setHorizontalHeader(TradeHeader(self))
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.horizontalHeader().sectionResized.connect(lambda *_: self._frozen_geometry())
+        self.frozen.setHorizontalHeader(TradeHeader(self.frozen))
+        self.frozen.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.finance_model = TradeModel(self)
         self.setModel(self.finance_model)
         self.frozen.setModel(self.finance_model)
@@ -126,8 +161,9 @@ class TradeTable(FinanceTable):
         header = self.horizontalHeader()
         header.setSectionsMovable(True)
         header.setFirstSectionMovable(False)
-        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        header.customContextMenuRequested.connect(lambda pos: self.column_menu().exec(header.mapToGlobal(pos)))
+        for h in (header, self.frozen.horizontalHeader()):
+            h.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            h.customContextMenuRequested.connect(lambda pos, hdr=h: self.column_menu().exec(hdr.mapToGlobal(pos)))
         visible = (0, 1, 17, 3, 2, 4, 6, 5, 9, 11, 19, 7, 18)
         for position, column in enumerate(visible):
             header.moveSection(header.visualIndex(column), position)

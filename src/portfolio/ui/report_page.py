@@ -287,6 +287,12 @@ class ReportPage(QWidget):
         self.today_sort.setVisible(is_today)
         if is_today:
             self.sort_orders.setdefault(name, (self.report.columns[6], True))
+        elif self.report and name not in self.sort_orders:
+            date_col = next((c for c in ("交易时间", "日期", "月份", "最终清仓时间", "首次买入时间", "折算日期", "rate_date", "business_date", "effective_from", "imported_at_utc") if c in self.report.columns), None)
+            if not date_col:
+                date_col = next((c for c in self.report.columns if any(k in c for k in ("日期", "月份", "时间", "effective_from", "effective_to", "business_date", "imported_at_utc", "报价UTC", "rate_date"))), None)
+            if date_col:
+                self.sort_orders[name] = (date_col, True)
         self.page = 0
         self.sorted_rows = self.report.rows if self.report else ()
         model = self.table.finance_model
@@ -448,14 +454,18 @@ class ReportPage(QWidget):
     def open_sort_menu(self, column, header=None):
         if not self.report or not 0 <= column < len(self.report.columns):
             return
+        col_name = self.report.columns[column]
+        if any(k in col_name for k in ("日期", "月份", "时间", "effective_from", "effective_to", "business_date", "imported_at_utc", "报价UTC", "rate_date")):
+            self.sort_column(column)
+            return
         header = header or self.table.horizontalHeader()
         self.sort_menu.clear()
-        self.sort_menu.addSection(self.report.columns[column])
+        self.sort_menu.addSection(col_name)
         saved = self.sort_orders.get(self.report.name)
         for label, descending in (('正序（从小到大）', False), ('倒序（从大到小）', True)):
             action = self.sort_menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(saved == (self.report.columns[column], descending))
+            action.setChecked(saved == (col_name, descending))
             action.triggered.connect(lambda checked=False, column=column, descending=descending: self.sort_column(column, descending))
         from PySide6.QtCore import QPoint
         self.sort_menu.popup(header.mapToGlobal(QPoint(header.sectionViewportPosition(column), header.height())))
@@ -463,9 +473,17 @@ class ReportPage(QWidget):
     def sort_column(self, column, descending=None):
         if not self.report or not 0 <= column < len(self.report.columns):
             return
+        col_name = self.report.columns[column]
         saved = self.sort_orders.get(self.report.name)
-        self.descending = (not saved[1] if saved and saved[0] == self.report.columns[column] else True) if descending is None else descending
-        self.sort_orders[self.report.name] = (self.report.columns[column], self.descending)
+        if descending is None:
+            if saved and saved[0] == col_name:
+                self.descending = not saved[1]
+            else:
+                self.descending = True if any(k in col_name for k in ("日期", "月份", "时间", "effective_from", "effective_to", "business_date", "imported_at_utc", "报价UTC", "rate_date")) else False
+        else:
+            self.descending = descending
+        self.sort_orders[self.report.name] = (col_name, self.descending)
+        self.page = 0
         self.apply_local_filter()
 
     def apply_saved_sort(self):

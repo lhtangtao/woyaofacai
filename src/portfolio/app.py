@@ -24,8 +24,11 @@ def main(argv=None):
     parser.add_argument("--smoke-export", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("Money Portfolio")
+    app.setApplicationName("我要发财")
+    app.setApplicationDisplayName("我要发财")
     app.setOrganizationName("MoneyPortfolio")
+    from portfolio.ui.icons import app_icon
+    app.setWindowIcon(app_icon())
     if not args.no_settings:
         from portfolio.logging_config import configure_logging
         configure_logging(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "logs")

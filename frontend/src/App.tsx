@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, NAV_GROUPS } from "./components/Sidebar";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { DashboardView } from "./views/DashboardView";
 import { TradesView } from "./views/TradesView";
@@ -26,6 +26,7 @@ export const App: React.FC = () => {
 
   // Person Filter State
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
+  const [assetResetKey, setAssetResetKey] = useState(0);
 
   // Layout & Theme State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -116,6 +117,14 @@ export const App: React.FC = () => {
 
   const handleRefresh = () => {
     setRefreshKey((k) => k + 1);
+  };
+
+  const assetRoute = NAV_GROUPS[0].entries.some((entry) => entry.id === currentRoute);
+  const resetAssetFilters = () => {
+    const isolatedId = bootstrap?.user?.role === "user" ? bootstrap.user.person_id : null;
+    const personalId = bootstrap?.persons?.find((person) => person.name === "个人")?.id ?? null;
+    setSelectedPersonId(isolatedId ?? personalId);
+    setAssetResetKey((key) => key + 1);
   };
 
   // Keyboard Shortcuts
@@ -231,6 +240,7 @@ export const App: React.FC = () => {
           onGoBack={goBack}
           onGoForward={goForward}
           onRefresh={handleRefresh}
+          onResetFilters={assetRoute ? resetAssetFilters : undefined}
           dbName={bootstrap?.database?.name || "money.sqlite3"}
           user={bootstrap?.user || null}
           persons={bootstrap?.persons || []}
@@ -243,7 +253,7 @@ export const App: React.FC = () => {
         {/* Dynamic Route Body */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
           <ErrorBoundary fallbackTitle="页面视图渲染异常">
-            {currentRoute === "overview" && <DashboardView personId={selectedPersonId} />}
+            {currentRoute === "overview" && <DashboardView key={assetResetKey} personId={selectedPersonId} />}
 
             {currentRoute === "trades" && (
               <TradesView
@@ -255,7 +265,7 @@ export const App: React.FC = () => {
 
             {currentRoute.startsWith("reports:") && (
               <ReportsView
-                key={currentRoute}
+                key={`${currentRoute}:${assetResetKey}`}
                 initialReportName={currentRoute.replace("reports:", "")}
                 personId={selectedPersonId}
                 reportsList={bootstrap?.reports || []}
@@ -264,11 +274,11 @@ export const App: React.FC = () => {
 
             {currentRoute === "monitor" && <MonitorView />}
 
-            {currentRoute === "people" && <EntitiesView type="people" personId={selectedPersonId} />}
-            {currentRoute === "brokers" && <EntitiesView type="brokers" personId={selectedPersonId} />}
-            {currentRoute === "ownership" && <EntitiesView type="ownership" personId={selectedPersonId} />}
+            {currentRoute === "people" && <EntitiesView key={`people:${assetResetKey}`} type="people" personId={selectedPersonId} />}
+            {currentRoute === "brokers" && <EntitiesView key={`brokers:${assetResetKey}`} type="brokers" personId={selectedPersonId} />}
+            {currentRoute === "ownership" && <EntitiesView key={`ownership:${assetResetKey}`} type="ownership" personId={selectedPersonId} />}
 
-            {currentRoute === "earnings" && <EarningsView />}
+            {currentRoute === "earnings" && <EarningsView key={assetResetKey} />}
 
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}

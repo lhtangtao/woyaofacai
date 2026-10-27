@@ -142,7 +142,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             letterSpacing: "-0.3px",
           }}
         >
-          {collapsed ? "MP" : "Money Portfolio"}
+          {collapsed ? "发" : "我要发财"}
         </div>
         {!collapsed && (
           <div

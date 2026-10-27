@@ -147,3 +147,13 @@ class LineIcon(QIconEngine):
 
 def icon(kind, widget=None):
     return QIcon(LineIcon(kind, widget))
+
+
+def app_icon():
+    from pathlib import Path
+    res_dir = Path(__file__).resolve().parents[1] / "resources"
+    for name in ("app_icon.icns", "app_icon.png"):
+        path = res_dir / name
+        if path.is_file():
+            return QIcon(str(path))
+    return QIcon()

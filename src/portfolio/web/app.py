@@ -1659,7 +1659,7 @@ def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = Fal
     """Start the mobile web server using production WSGI server."""
     net = get_network_info()
     print("==================================================================")
-    print("  🚀 Money Portfolio 移动端安全工作站已就绪！")
+    print("  🚀 我要发财 移动端安全工作站已就绪！")
     print(f"  • 本机访问:  http://127.0.0.1:{port}")
     print(f"  • 家中同WiFi (免登录只读): http://{net['lan_ip']}:{port}")
     if net["tailscale_ip"]:

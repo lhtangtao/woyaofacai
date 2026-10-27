@@ -105,9 +105,13 @@ class EarningsCalendarPage(QWidget):
         self.calendar.viewport().installEventFilter(self)
         layout.addWidget(self.calendar)
         layout.addWidget(QLabel('持仓关联公司逐项核查（所选月起3个月，日期按市场当地时间）'))
+        self.coverage_sort = None
+        self.details_sort = None
         self.coverage = QTableWidget(0, 8)
         self.coverage.setHorizontalHeaderLabels(('关联公司', '对应持仓', '财报日期', '发布时段', '北京时间', '发布状态', '时段涨跌幅', '日期来源'))
         self.coverage.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.coverage.horizontalHeader().setSectionsClickable(True)
+        self.coverage.horizontalHeader().sectionClicked.connect(self.sort_coverage)
         self.coverage.verticalHeader().hide()
         self.coverage.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.coverage.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -119,6 +123,8 @@ class EarningsCalendarPage(QWidget):
         self.details.setHorizontalHeaderLabels(('日期（当地）', '公司/宏观事件', '代码/盯盘标的', '发布时段（当地）', '北京时间', '持仓/关注', '发布状态', '时段涨跌幅', '市场预期与核心看点'))
         self.details.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.details.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
+        self.details.horizontalHeader().setSectionsClickable(True)
+        self.details.horizontalHeader().sectionClicked.connect(self.sort_details)
         self.details.setColumnWidth(0, 85)
         self.details.setColumnWidth(1, 135)
         self.details.setColumnWidth(2, 125)
@@ -384,6 +390,15 @@ class EarningsCalendarPage(QWidget):
                 values = (event.name+' '+symbol, self.linked_holdings(symbol), event.day.isoformat(), event.time_label, event.beijing,
                           release_status(event), self.change_label(event), source)
             rows.append((values, event))
+        cov_headers = ['关联公司', '对应持仓', '财报日期', '发布时段', '北京时间', '发布状态', '时段涨跌幅', '日期来源']
+        if self.coverage_sort is not None:
+            col, desc = self.coverage_sort
+            cov_headers[col] = f"{cov_headers[col]} {'↓' if desc else '↑'}"
+            known = [r for r in rows if r[1] is not None]
+            unknown_rows = [r for r in rows if r[1] is None]
+            known.sort(key=lambda r: (r[1].day.isoformat(), r[0][4] or '', r[0][0]), reverse=desc)
+            rows = known + unknown_rows
+        self.coverage.setHorizontalHeaderLabels(cov_headers)
         self.coverage.setRowCount(len(rows))
         for r, (values, event) in enumerate(rows):
             for c, value in enumerate(values):
@@ -512,6 +527,12 @@ class EarningsCalendarPage(QWidget):
         self.calendar.setFixedHeight(self.calendar.horizontalHeader().height()+sum(self.calendar.rowHeight(r) for r in range(len(weeks)))+4)
 
         selected = [e for e in events if self.selected_day is None or e.day == self.selected_day]
+        det_headers = ['日期（当地）', '公司/宏观事件', '代码/盯盘标的', '发布时段（当地）', '北京时间', '持仓/关注', '发布状态', '时段涨跌幅', '市场预期与核心看点']
+        if self.details_sort is not None:
+            col, desc = self.details_sort
+            det_headers[col] = f"{det_headers[col]} {'↓' if desc else '↑'}"
+            selected.sort(key=lambda e: (e.day.isoformat(), e.beijing if e.beijing != '—' else '', e.symbol), reverse=desc)
+        self.details.setHorizontalHeaderLabels(det_headers)
         self.details.setRowCount(len(selected))
         for r, event in enumerate(selected):
             change_text = self.change_label(event)
@@ -557,6 +578,24 @@ class EarningsCalendarPage(QWidget):
             day = date(self.month.date().year(), self.month.date().month(), number)
             self.selected_day = None if day == self.selected_day else day
             self.draw()
+
+    def sort_coverage(self, column):
+        if column not in (2, 4):
+            return
+        if self.coverage_sort and self.coverage_sort[0] == column:
+            self.coverage_sort = (column, not self.coverage_sort[1])
+        else:
+            self.coverage_sort = (column, True)
+        self.draw()
+
+    def sort_details(self, column):
+        if column not in (0, 4):
+            return
+        if self.details_sort and self.details_sort[0] == column:
+            self.details_sort = (column, not self.details_sort[1])
+        else:
+            self.details_sort = (column, True)
+        self.draw()
 
     def edit_links(self):
         dialog = QDialog(self)

@@ -411,6 +411,54 @@ def api_reports_list():
     return jsonify({"status": "ok", "reports": report_groups, "count": len(report_groups)})
 
 
+def find_primary_time_column(columns: list[str]) -> str | None:
+    for priority_col in (
+        "时间", "交易时间", "日期", "月份", "触发时间", "披露日期", "折算日期", "rate_date",
+        "最终清仓时间", "首次买入时间", "有效自", "effective_from", "business_date", "imported_at_utc"
+    ):
+        if priority_col in columns:
+            return priority_col
+    for col in columns:
+        if any(k in col for k in ("时间", "日期", "月份", "date", "time", "UTC", "utc", "effective_")):
+            return col
+    return None
+
+
+def parse_sort_key(val, is_desc: bool, row=None, orig_idx: int = 0):
+    is_missing = val is None or val == "" or val == "—" or val == "-" or str(val).strip().lower() in ("none", "null")
+    missing_group = (0 if is_desc else 1) if is_missing else (1 if is_desc else 0)
+    if is_missing:
+        return (missing_group, 0, 0.0, "", orig_idx)
+
+    sec_id = 0
+    if row is not None and hasattr(row, "metadata") and isinstance(row.metadata, dict):
+        sec_id = row.metadata.get("id") or row.metadata.get("record_id") or 0
+        if not sec_id and "source_record_ids" in row.metadata:
+            s_ids = row.metadata["source_record_ids"]
+            if s_ids:
+                sec_id = s_ids[0]
+
+    if isinstance(val, (datetime, date)):
+        return (missing_group, 2, 0.0, val.isoformat(), sec_id or orig_idx)
+
+    if isinstance(val, (int, float, Decimal)):
+        return (missing_group, 1, float(val), "", sec_id or orig_idx)
+
+    if isinstance(val, str):
+        v = val.strip()
+        clean = v.replace("$", "").replace(",", "").replace("%", "").strip()
+        if clean.startswith("(") and clean.endswith(")"):
+            clean = "-" + clean[1:-1].strip()
+        try:
+            num = float(clean)
+            return (missing_group, 1, num, "", sec_id or orig_idx)
+        except ValueError:
+            pass
+        return (missing_group, 2, 0.0, v.lower(), sec_id or orig_idx)
+
+    return (missing_group, 2, 0.0, str(val).lower(), sec_id or orig_idx)
+
+
 @api_v1.route("/reports/<report_name>", methods=["GET"])
 @require_capability(CAP_VIEW_ASSETS)
 def api_reports_detail(report_name: str):
@@ -451,19 +499,28 @@ def api_reports_detail(report_name: str):
 
         # Sort
         sort_col = request.args.get("sort_col")
-        sort_dir = request.args.get("sort_dir", "asc").lower()
+        sort_dir = request.args.get("sort_dir")
+        if not sort_col:
+            time_col = find_primary_time_column(columns)
+            if time_col:
+                sort_col = time_col
+                sort_dir = sort_dir or "desc"
+        if not sort_dir:
+            sort_dir = "desc" if (sort_col and any(k in sort_col for k in ("时间", "日期", "月份", "effective_from", "business_date", "imported_at_utc"))) else "asc"
+        sort_dir = sort_dir.lower()
+
         if sort_col and sort_col in columns:
             col_idx = columns.index(sort_col)
+            is_desc = (sort_dir == "desc")
             try:
                 filtered_rows.sort(
-                    key=lambda row: (
-                        row.values[col_idx] is None,
-                        row.values[col_idx],
+                    key=lambda r, idx=col_idx, desc=is_desc: parse_sort_key(
+                        r.values[idx] if idx < len(r.values) else None, desc, r, 0
                     ),
-                    reverse=(sort_dir == "desc"),
+                    reverse=is_desc,
                 )
-            except Exception:
-                pass
+            except Exception as sort_err:
+                logger.warning(f"Sort failed for {sort_col}: {sort_err}")
 
         total_rows = len(filtered_rows)
         page = max(1, request.args.get("page", 1, type=int))
@@ -510,6 +567,8 @@ def api_reports_detail(report_name: str):
             "total_pages": total_pages,
             "summary_row": summary_row,
             "totals": totals,
+            "sort_col": sort_col,
+            "sort_dir": sort_dir,
             "note": getattr(report, "note", ""),
             "snapshot_id": datetime.now().isoformat(),
         })
@@ -570,11 +629,32 @@ def api_trades_list():
             db_side = side_map.get(side, side)
             trade_filters = TradeFilters(side=db_side)
 
+        # Sort mapping
+        trades_sort_map = {
+            "时间": 0, "book_time": 0, "trade_date": 0,
+            "券商": 1, "broker_code": 1, "broker": 1,
+            "分类": 2, "category": 2,
+            "标的": 3, "symbol": 3,
+            "方向": 4, "side": 4,
+            "数量": 5, "quantity_e8": 5, "quantity": 5,
+            "价格": 6, "price_e8": 6, "price": 6,
+            "金额": 7, "amount_e8": 7, "amount": 7,
+            "操作类型": 12, "kind": 12,
+            "对手方": 13, "counterparty": 13,
+            "订单号": 14, "order_id": 14,
+        }
+        sort_col = request.args.get("sort_col") or "时间"
+        sort_dir = (request.args.get("sort_dir") or "desc").lower()
+        sort_column_idx = trades_sort_map.get(sort_col, 0)
+        descending = (sort_dir != "asc")
+
         page_0 = max(0, page - 1)
         page_obj = svc.get_trades(
             scope,
             page=page_0,
             size=page_size,
+            sort_column=sort_column_idx,
+            descending=descending,
             filters=trade_filters,
         )
 
@@ -619,6 +699,8 @@ def api_trades_list():
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
+            "sort_col": sort_col,
+            "sort_dir": "desc" if descending else "asc",
             "pagination": {
                 "page": page,
                 "page_size": page_size,
@@ -872,6 +954,11 @@ def api_earnings_calendar():
             logger.warning(f"Earnings cache query warning: {e}")
 
         # Real data only: no fake EPS data generation
+        sort_col = request.args.get("sort_col") or "披露日期"
+        sort_dir = (request.args.get("sort_dir") or "desc").lower()
+        is_desc = (sort_dir != "asc")
+        events_data.sort(key=lambda ev: ev.get("date") or "", reverse=is_desc)
+
         return jsonify({
             "status": "ok",
             "year": year,
@@ -880,6 +967,8 @@ def api_earnings_calendar():
             "calendar": events_data,
             "items": events_data,
             "count": len(events_data),
+            "sort_col": sort_col,
+            "sort_dir": "desc" if is_desc else "asc",
         })
     except Exception as e:
         logger.exception("Earnings calendar error")
@@ -1250,7 +1339,12 @@ def api_monitoring_alerts_list():
     if not store:
         return jsonify({"status": "error", "message": "监控数据库未配置"}), 404
 
-    events = store.get_alert_events(limit=100)
+    events = store.get_alert_events(limit=500)
+    sort_col = request.args.get("sort_col") or "触发时间"
+    sort_dir = (request.args.get("sort_dir") or "desc").lower()
+    is_desc = (sort_dir != "asc")
+    events.sort(key=lambda e: getattr(e, "detected_at", "") or getattr(e, "created_at", "") or "", reverse=is_desc)
+
     serialized = []
     for e in events:
         serialized.append({
@@ -1263,8 +1357,15 @@ def api_monitoring_alerts_list():
             "channel": getattr(e, "channel", "in_app"),
             "status": getattr(e, "status", "unread"),
             "created_at": serialize_val(getattr(e, "created_at", None)),
+            "detected_at": serialize_val(getattr(e, "detected_at", None)),
         })
-    return jsonify({"status": "ok", "items": serialized, "count": len(serialized)})
+    return jsonify({
+        "status": "ok",
+        "items": serialized,
+        "count": len(serialized),
+        "sort_col": sort_col,
+        "sort_dir": "desc" if is_desc else "asc",
+    })
 
 
 @api_v1.route("/monitoring/alerts/read", methods=["POST"])
@@ -1731,14 +1832,43 @@ def api_export_report_csv(report_name: str):
             return jsonify({"status": "error", "message": f"未找到报表: {report_name}"}), 404
 
         search = (request.args.get("search") or "").strip().lower()
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(report.columns)
+        filtered_rows = []
         for r in report.rows:
             if search:
                 row_str = " ".join(str(v or "") for v in r.values).lower()
                 if search not in row_str:
                     continue
+            filtered_rows.append(r)
+
+        # Sort
+        sort_col = request.args.get("sort_col")
+        sort_dir = request.args.get("sort_dir")
+        if not sort_col:
+            time_col = find_primary_time_column(list(report.columns))
+            if time_col:
+                sort_col = time_col
+                sort_dir = sort_dir or "desc"
+        if not sort_dir:
+            sort_dir = "desc" if (sort_col and any(k in sort_col for k in ("时间", "日期", "月份", "effective_from", "business_date", "imported_at_utc"))) else "asc"
+        sort_dir = sort_dir.lower()
+
+        if sort_col and sort_col in report.columns:
+            col_idx = list(report.columns).index(sort_col)
+            is_desc = (sort_dir == "desc")
+            try:
+                filtered_rows.sort(
+                    key=lambda r, idx=col_idx, desc=is_desc: parse_sort_key(
+                        r.values[idx] if idx < len(r.values) else None, desc, r, 0
+                    ),
+                    reverse=is_desc,
+                )
+            except Exception as sort_err:
+                logger.warning(f"CSV Export sort failed for {sort_col}: {sort_err}")
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(report.columns)
+        for r in filtered_rows:
             writer.writerow([serialize_val(v) for v in r.values])
 
         csv_data = output.getvalue().encode("utf-8-sig")
@@ -1764,13 +1894,75 @@ def api_export_trades_csv():
         if person_id is None and req_person_id is not None:
             person_id = req_person_id
 
+        symbol = (request.args.get("symbol") or "").strip().upper() or None
+        channel = (request.args.get("broker") or request.args.get("channel") or "").strip() or None
+        side = (request.args.get("side") or "").strip().upper() or None
+        search = (request.args.get("search") or "").strip() or None
+
         scope = get_user_query_scope(person_id=person_id)
-        page_obj = svc.get_trades(scope, page=0, size=100000)
+        if search:
+            scope = replace(scope, search=search)
+
+        if symbol:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                sym_rows = conn.execute("SELECT id FROM instruments WHERE symbol = ? OR symbol LIKE ?", (symbol, f"{symbol}.%")).fetchall()
+                if sym_rows:
+                    scope = replace(scope, instrument_ids=tuple(r[0] for r in sym_rows))
+                else:
+                    scope = replace(scope, instrument_ids=(-99999,))
+
+        if channel:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                acc_rows = conn.execute("SELECT id FROM broker_accounts WHERE broker_code = ? OR display_name = ?", (channel, channel)).fetchall()
+                if acc_rows:
+                    scope = replace(scope, account_ids=tuple(r[0] for r in acc_rows))
+                else:
+                    scope = replace(scope, account_ids=(-99999,))
+
+        trade_filters = None
+        if side:
+            side_map = {"买入": "BUY", "卖出": "SELL", "BUY": "BUY", "SELL": "SELL", "转入": "TRANSFER_IN", "转出": "TRANSFER_OUT"}
+            db_side = side_map.get(side, side)
+            trade_filters = TradeFilters(side=db_side)
+
+        trades_sort_map = {
+            "时间": 0, "book_time": 0, "trade_date": 0,
+            "券商": 1, "broker_code": 1, "broker": 1,
+            "分类": 2, "category": 2,
+            "标的": 3, "symbol": 3,
+            "方向": 4, "side": 4,
+            "数量": 5, "quantity_e8": 5, "quantity": 5,
+            "价格": 6, "price_e8": 6, "price": 6,
+            "金额": 7, "amount_e8": 7, "amount": 7,
+            "操作类型": 12, "kind": 12,
+            "对手方": 13, "counterparty": 13,
+            "订单号": 14, "order_id": 14,
+        }
+        sort_col = request.args.get("sort_col") or "时间"
+        sort_dir = (request.args.get("sort_dir") or "desc").lower()
+        sort_column_idx = trades_sort_map.get(sort_col, 0)
+        descending = (sort_dir != "asc")
+
+        all_rows = []
+        page_idx = 0
+        while True:
+            page_obj = svc.get_trades(
+                scope,
+                page=page_idx,
+                size=1000,
+                sort_column=sort_column_idx,
+                descending=descending,
+                filters=trade_filters,
+            )
+            all_rows.extend(page_obj.rows)
+            if not page_obj.rows or len(all_rows) >= page_obj.total or len(page_obj.rows) < 1000:
+                break
+            page_idx += 1
 
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额", "标记", "持仓", "净投入", "成本", "操作类型", "对手方", "订单号", "来源"])
-        for r in page_obj.rows:
+        for r in all_rows:
             vals = r.values if hasattr(r, "values") else ()
             writer.writerow([serialize_val(v) for v in vals])
 

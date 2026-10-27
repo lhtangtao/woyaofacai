@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   RefreshCw,
+  RotateCcw,
   Download,
   Database,
   User,
@@ -19,6 +20,7 @@ interface WorkspaceHeaderProps {
   onGoBack: () => void;
   onGoForward: () => void;
   onRefresh: () => void;
+  onResetFilters?: () => void;
   onExport?: () => void;
   dbName: string;
   user: UserProfile | null;
@@ -37,6 +39,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onGoBack,
   onGoForward,
   onRefresh,
+  onResetFilters,
   onExport,
   dbName,
   user,
@@ -157,6 +160,14 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
               })}
             </select>
           </div>
+
+          {onResetFilters && (
+            <button onClick={onResetFilters} className="btn"
+              title="恢复个人 · 全部渠道 · 全部股票及默认日期" style={{ height: "32px" }}>
+              <RotateCcw size={14} />
+              <span>重置筛选</span>
+            </button>
+          )}
 
           {/* Theme Switcher */}
           <button

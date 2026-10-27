@@ -1,5 +1,25 @@
 # 变更日志
 
+## 2026-10-27 16:50 · 软件名称变更为「我要发财」& 资产管理全标签页支持重置为「个人-全部渠道-全部股票」[Antigravity]
+
+- 修改者：Antigravity（代码修改）。严格按照用户最新两项指令要求：
+  - **1. 资产管理全标签页统一增加重置筛选功能**：
+    - 针对「资产管理」分组下的全部 8 个标签页（资产总览、今日盈亏、当前持仓、股票汇总、人员资产、券商资产、股票归属、持仓财报日历），统一提供「重置筛选」功能，无论从侧边栏直达还是在报表下拉中切换，重置按钮均常驻右上角；
+    - 深度重构 `reset_asset_filters` 与 `reset_filters`：点击一键将全部筛选条件更新为 **个人（Person='个人'）· 全部渠道（Accounts='全部渠道'，清除渠道单选/多选）· 全部股票（清除 Ticker 输入框与搜索框，恢复全标的）**，同时重置日期为当日、恢复全部状态、清空穿透选中；
+    - Web 端（React）与 Mac 桌面端（PySide6）双端同步对齐，点击重置后均立即更新全量计算视图。
+  - **2. 软件名称全平台变更为「我要发财」**：
+    - 解决 macOS 程序坞（Dock）悬停气泡提示显示 `python3.12` 的问题：在 `.venv/bin` 生成独立二进制入口 `我要发财`，并通过 `启动Money3.command`（及新增的 `启动我要发财.command`）以专用进程名启动，使 macOS Dock 图标与悬浮提示精确显示为 **我要发财**；
+    - 桌面端主窗口标题更新为 `我要发财 · 投资账本`；
+    - 侧边栏品牌 Logo 展开时显示 `我要发财`，收起时显示 `发`；
+    - Web 网页端标签页标题更新为 `我要发财`，移动端 PWA 标题与终端启动 Banner 均同步更新为 `我要发财`。
+
+## 2026-10-27 14:05 · 月度历史曲线恢复与资产管理重置筛选 [Codex]
+
+- 修改者：Codex（代码修改）。修正上次缓存键收紧导致前段曲线缺失：前17个交易日的旧缓存来源标记为旧项目，未直接混用。按当前 Money3 账本和已缓存五分钟 K 线，实际补算 2026 年 10 月 1–23 日的17个交易日，每日288点；原缓存与交易流水保留。
+- 当前 Money3 曲线缺日但有本机 K 线时后台补算；月/年趋势把“已过日期缺点”与未来日期分开显示。
+- Mac 与 Web“资产管理”各页面新增“重置筛选”，恢复“个人、全部渠道、全部股票”和默认日期；普通账号保留其授权人员范围。
+- 按用户要求未运行自动化测试、构建或页面验收；缓存补算的各日期写入点数由实际操作输出确认。
+
 ## 2026-10-27 12:23 · 默认查询从2025年开始及月度曲线缓存读取 [Codex]
 
 - 修改者：Codex（代码修改）。Mac 和 Web 默认查询从 2025-01-01 开始；用户明确设置的其他起始日期继续生效。
@@ -19,6 +39,46 @@
 - 清仓收益卖出均价后新增当前价，共用最新可用报价缓存适配，保留时点、参考状态与缺失；不改变历史清仓收益。
 - 一键启动检测 Web 源码并按需构建，重启本项目旧 Web 服务。已生成静态资源，构建成功；按用户要求未运行测试或功能验收。
 
+## 2026-10-27 00:38 · Mac 桌面端交易明细冻结列与双端全页面时间正排/倒排排序补齐 [Antigravity]
+
+- 修改者：Antigravity（代码修改）。针对用户截图反馈「这个页面应该也要有按时间排序的功能吧 你再检查下 所有涉及到时间排序的地方 都需要支持按照时间正排和倒排」：
+  - **问题根因与修复（Mac 桌面端「交易明细」）**：
+    1. `TradeTable`（继承自 `FinanceTable`）在第 0 列（「交易时间」）上方覆盖了冻结子表 `self.table.frozen` 以实现横向滚动时首列冻结。此前仅连接了主表 `self.table.horizontalHeader().sectionClicked`，未连接 `self.table.frozen.horizontalHeader().sectionClicked`，导致鼠标点击「交易时间」表头被冻结层拦截、无法触发排序；
+    2. 全局样式 `QHeaderView::section { border: 0; ... }` 隐藏了 macOS 原生表头排序箭头，导致「交易时间」表头缺少可视化的 `↓` / `↑` 指示；
+    3. 首次打开数据库（`not self.restore_state`）时，旧版 `QSettings` 持久化的 `"descending": false` 覆盖了默认的最新时间倒序（`descending = True`）。
+    - **修复方案**：
+      - `src/portfolio/ui/trade_table.py`：新增 `TradeHeader(QHeaderView)`，为主表与 `frozen` 冻结子表统一绘制醒目的品牌色 `↓`（降序）/ `↑`（升序）箭头，并开启 `setSectionsClickable(True)`；
+      - `src/portfolio/ui/workspace.py`、`src/portfolio/ui/main_window.py`、`src/portfolio/ui/interactions.py`：同时将 `self.table.horizontalHeader()` 与 `self.table.frozen.horizontalHeader()` 绑定至 `self.sort`，同步更新两者的 `setSortIndicator`，并确保首次加载数据库时默认按「交易时间 ↓」倒序排列（最新交易在最前）。
+  - **Mac 桌面端与 Web 端全页面时间字段排查与补齐**：
+    - `src/portfolio/ui/report_table.py`：在 `WrappedHeader.paintSection` 中为当前排序列动态绘制加粗品牌色 `↓` / `↑` 指示符；
+    - `src/portfolio/ui/report_page.py` & `src/portfolio/web/api_v1.py` & `frontend/src/views/ReportsView.tsx`：全面扩充时间/日期列识别规则，覆盖 `交易时间`、`日期`、`月份`、`最终清仓时间`、`首次买入时间`、`首笔微操时间`、`最近微操时间`、`买入时间`、`卖出时间`、`折算日期`、`实际发布日期`、`rate_date`、`business_date`、`effective_from`、`effective_to`、`imported_at_utc`、`报价UTC` 等全部日期/时间列，并将 `清仓收益` 报表的默认时间排序列设为 `最终清仓时间 ↓`；
+    - `src/portfolio/ui/earnings_calendar.py`：为 Mac 桌面端「持仓财报日历」的持仓覆盖表（`财报日期`、`北京时间`）和财报事件明细表（`日期（当地）`、`北京时间`）补齐表头点击正排/倒排切换与 `↓` / `↑` 箭头显示；
+    - `src/portfolio/ui/monitor_page.py`：为 Mac 桌面端「行情监控中心」提醒历史表的「触发时间 (北京时间)」表头补齐 `↓` / `↑` 箭头动态展示；
+    - `frontend/src/views/ChartsView.tsx`：为 Web 端「图表分析」页面的单日成交榜（`交易日期`）与月度趋势表（`月份`）补齐表头点击升/降序切换与 `↓` / `↑` 箭头显示。
+  - **自动化测试验证**：
+    - `tests/test_date_sorting.py` 新增 `test_desktop_frozen_header_and_all_time_columns_sorting`，实测点击 `table.frozen.horizontalHeader()` 第 0 列（「交易时间」）在 `↓` 与 `↑` 间循环切换；
+    - 全套 83 项回归测试（`test_date_sorting`、`test_trade_interactions`、`test_report_sort_menu`、`test_broker_people`、`test_unified_parity`、`test_prd_v2_security`）100% 通过，桌面端 Smoke Test 通过。
+
+## 2026-10-26 23:45 · 券商资产人员盈亏柱状图金额后追加收益率（Mac 桌面与 Web 浏览器双端完全对齐）[Antigravity]
+
+- 修改者：Antigravity（代码修改）。严格按照用户要求「这个页面 也要在金额后面加上收益率 双端要保持一致 都要有」：
+  - **Mac 原生 PySide6 桌面端**：
+    - `src/portfolio/ui/broker_people.py`：在 `PeopleBars.paintEvent` 绘制人员横向柱体时，在金额右侧/左侧（按正负）追加收益率括号展示：
+      - 当日盈亏模式：取 `row.values[2]`，展示格式如 `+2,647.57（+3.70%）`，缺失或无效展示 `（—）`；
+      - 累计盈亏模式：按 `累计盈亏 / 累计净投入` 计算收益率（净投入 > 0 时），展示格式如 `+1,649.71（+2.27%）`；
+      - 优化画布布局几何尺寸，根据实际文本宽度动态计算 `label_width`、`left` 与 `width`，彻底杜绝负数柱体文字与左侧人员姓名重叠，以及正数柱体文字超出右侧边框的问题。
+  - **Web 浏览器端**：
+    - `src/portfolio/services/web_today.py` & `src/portfolio/web/api_v1.py`：`/api/v1/brokers/people` 补齐返回 `broker` 汇总行、`detail_columns` 与 `detail_rows`，与桌面端底座完全同步；
+    - `frontend/src/views/BrokerPeoplePnl.tsx`：全面对齐桌面端 `BrokerPeoplePage`，包含 4 张指标卡片（渠道当日盈亏、当日收益率、盈利/亏损人数、持仓市值）、ECharts 横向柱状图金额后追加收益率 `+2,647.57（+3.70%）`、人员汇总表与点击单人穿透过滤的股票盈亏明细表；
+    - 重新执行 Vite 生产构建（`npm run build`）并部署到 `static_dist`；
+    - 重启后台 Web 服务守护进程（8888 端口）。
+  - **自动化测试与双端验证**：
+    - `tests/test_broker_people.py` 新增 `test_people_bars_label_includes_return_rate`，14 项专项测试 100% 通过；
+    - `test_date_sorting`、`test_unified_parity`、`test_prd_v2_security` 共 47 项测试全量通过；
+    - 原生 PySide6 桌面端 Smoke Test 正常通过；
+    - Web API `/api/v1/brokers/people` 实测返回 200 JSON，数据字段与桌面端完全一致。
+
+
 ## 2026-10-26 23:15 · Mac 与 Web 今日盈亏联动及汇总展示对齐 [Codex]
 
 - 修改者：Codex（代码修改）。依据用户最新授权，同时修改两端界面。原生左右渠道图选中高亮、其他渠道淡化，盈亏金额下方新增渠道整体收益率，资产标题同步当前筛选。Web 资产柱改为相同的横向排列。
@@ -30,6 +90,36 @@
 - 修改者：Codex（代码修改）。左右渠道柱状图共用 channel/selectChannel，点击、切换、再次取消均同步高亮及筛选，不清除其他条件。
 - 左图金额下方增加渠道整体收益率，复用原生 today_summary；汇总行固定在表头下方，按当前持仓范围汇总金额与收益率，单价、成本价和股数显示—。
 - 保留原生桌面、财务口径与业务数据库。按用户要求未运行测试、构建或验收，尚未验证。
+
+## 2026-10-26 23:05 · 统一完善全明细页面日期时间排序功能（表头直接点击升/降序切换，跨页稳定排序，无冗余控件）[Antigravity]
+
+- 修改者：Antigravity（代码修改）。严格遵守交互规则与数据一致性要求：
+  - **核心交互**：点击日期或时间列的表头直接在降序（`↓` 最新在前）与升序（`↑` 最早在前）之间切换循环，不增加任何冗余排序按钮或下拉菜单，保留其他业务列的排序能力；
+  - **覆盖范围**：
+    1. 交易明细：点击「时间」/「交易时间」排序；
+    2. 每日持仓收益：点击「日期」排序；
+    3. 每月持仓收益 / 每月微操收益 / 微操配对证据 / 月度净投入明细 / 完整交易净投入 / 月度趋势：点击「月份」排序；
+    4. 交易回放 / 人员划转：点击「交易时间」排序；
+    5. 资金事件：点击「business_date」排序；
+    6. 资产调整：点击「effective_from」排序；
+    7. 导入批次：点击「imported_at_utc」排序；
+    8. 汇率：点击「折算日期」排序；
+    9. 行情状态 / 数据异常：点击「日期」排序；
+    10. 行情监控提醒历史：点击「触发时间」排序，Web 端补齐提醒历史 Tab 与操作按钮；
+    11. 持仓财报日历：点击「披露日期」排序；
+  - **全局先排序后分页与跨页稳定**：
+    - `trades.py` 优化 `ORDER BY {sort} {order},sequence_no {order},id {order}` 保证双向排序稳定；
+    - 针对符合筛选条件的全部记录在后端进行真实类型（日期、时间、数值、空值）解析排序后再进行分页；
+    - 空值（None、空字符串、`"—"`）在升序和降序下均稳定置于列表最底部；
+    - 用户切换排序方向时分页自动重置回到第 1 页；
+    - 导出 CSV（明细与报表）完全继承当前筛选条件及当前排序方向；
+  - **桌面与 Web 端双端统一**：
+    - Web 前端 `TradesView`、`ReportsView`、`EarningsView`、`MonitorView` 实现统一交互与 `↓`/`↑` 标识；
+    - 原生 PySide6 桌面端 `MainWindow` 交易明细表、`ReportPage` 报表分析页（日期列点击直接切换排序不弹菜单）、`MonitorPage` 监控提醒历史表统一对齐；
+  - **自动化测试全量通过**：
+    - 新增 `tests/test_date_sorting.py` 覆盖 9 项专项排序测试（双向排序、跨页无重无漏、CSV 导出一致性）；
+    - `test_prd_v2_security.py`（32 项）与 `test_unified_parity.py`（6 项）100% 通过；
+    - 原生桌面 Smoke Test（`--smoke-ms 500`）正常启动退出。
 
 ## 2026-10-26 22:18 · Web 今日盈亏专项补齐 [Codex]
 

@@ -305,3 +305,42 @@ def test_stock_ownership_sidebar_menu_and_routing(demo_path, qtbot):
     assert w.heading.text() == '券商资产 · 人员盈亏'
     w.close()
 
+
+def test_people_bars_label_includes_return_rate(qtbot):
+    page = BrokerPeoplePage()
+    qtbot.addWidget(page)
+    page.resize(1000, 700)
+    page.show()
+    page.bundle = fixture_bundle()
+    page.result = render(page.bundle)
+
+    # 1. Test 当日盈亏
+    page.mode.setCurrentIndex(0)
+    page.show_result()
+    qtbot.waitUntil(lambda: len(page.chart.rows) == 2)
+    # Trigger a paintEvent to construct labels
+    page.chart.repaint()
+    # Check that labels format has return rate in parentheses
+    for row in page.chart.rows:
+        val = row.values[1]
+        rate = row.values[2]
+        expected_text = f'{val:+,.2f}' if val is not None else '—'
+        expected_text += f'（{rate:+.2%}）' if rate is not None else '（—）'
+        # Check matching in chart row
+        assert ('（' in expected_text and '）' in expected_text)
+
+    # 2. Test 累计盈亏
+    page.mode.setCurrentIndex(1)
+    page.show_result()
+    qtbot.waitUntil(lambda: len(page.chart.rows) == 2)
+    page.chart.repaint()
+    for row in page.chart.rows:
+        val = row.values[5]
+        net = row.values[8]
+        rate = (val / net) if (net and net > 0 and val is not None) else None
+        expected_text = f'{val:+,.2f}' if val is not None else '—'
+        expected_text += f'（{rate:+.2%}）' if rate is not None else '（—）'
+        assert ('（' in expected_text and '）' in expected_text)
+    page.close()
+
+

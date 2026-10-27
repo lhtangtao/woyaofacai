@@ -115,6 +115,8 @@ export const api = {
     broker?: string;
     side?: string;
     search?: string;
+    sort_col?: string;
+    sort_dir?: string;
   }) => {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
@@ -124,12 +126,16 @@ export const api = {
     if (params.broker) query.set("broker", params.broker);
     if (params.side) query.set("side", params.side);
     if (params.search) query.set("search", params.search);
+    if (params.sort_col) query.set("sort_col", params.sort_col);
+    if (params.sort_dir) query.set("sort_dir", params.sort_dir);
     return requestApi<{
       status: string;
       trades: TradeItem[];
       items?: TradeItem[];
       columns: string[];
       total?: number;
+      sort_col?: string;
+      sort_dir?: string;
       pagination: { page: number; size: number; total: number; total_pages: number };
     }>(`/api/v1/trades?${query.toString()}`);
   },
@@ -162,10 +168,11 @@ export const api = {
   people: () => requestApi("/api/v1/people"),
   brokers: () => requestApi("/api/v1/brokers"),
   ownership: () => requestApi("/api/v1/ownership"),
-  earningsCalendar: (year?: number, month?: number) => {
+  earningsCalendar: (year?: number, month?: number, sortDir?: string) => {
     const query = new URLSearchParams();
     if (year != null) query.set("year", String(year));
     if (month != null) query.set("month", String(month));
+    if (sortDir) query.set("sort_dir", sortDir);
     return requestApi(`/api/v1/earnings-calendar?${query.toString()}`);
   },
 
@@ -215,7 +222,24 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }),
     }),
-  monitoringAlerts: () => requestApi("/api/v1/monitoring/alerts"),
+  monitoringAlerts: (params?: { sort_col?: string; sort_dir?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.sort_col) query.set("sort_col", params.sort_col);
+    if (params?.sort_dir) query.set("sort_dir", params.sort_dir);
+    return requestApi<{ status: string; items: any[]; count: number; sort_col?: string; sort_dir?: string }>(
+      `/api/v1/monitoring/alerts?${query.toString()}`
+    );
+  },
+  monitoringAlertsRead: (eventIds?: string[]) =>
+    requestApi("/api/v1/monitoring/alerts/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_ids: eventIds }),
+    }),
+  monitoringAlertsClear: () =>
+    requestApi("/api/v1/monitoring/alerts/clear", {
+      method: "POST",
+    }),
   monitoringKline: (symbol: string) =>
     requestApi(`/api/v1/monitoring/kline?symbol=${encodeURIComponent(symbol)}`),
 

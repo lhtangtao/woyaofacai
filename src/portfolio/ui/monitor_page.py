@@ -277,6 +277,7 @@ class MonitoringPage(QWidget):
         self.worker: Optional[Worker] = None
         self.generation: int = 0
         self.account_source: Optional[str] = None
+        self._history_sort_desc: bool = True
 
         self._init_ui()
 
@@ -726,7 +727,7 @@ class MonitoringPage(QWidget):
         # History Table
         self.history_table = QTableWidget(0, 8)
         self.history_table.setHorizontalHeaderLabels([
-            "触发时间 (北京时间)",
+            "触发时间 (北京时间) ↓",
             "标的代码",
             "规则名称",
             "触发详情 / 条件",
@@ -741,7 +742,16 @@ class MonitoringPage(QWidget):
         self.history_table.setAlternatingRowColors(True)
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.history_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.history_table.horizontalHeader().setSectionsClickable(True)
+        self.history_table.horizontalHeader().setSortIndicatorShown(True)
+        self.history_table.horizontalHeader().setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+        self.history_table.horizontalHeader().sectionClicked.connect(self._on_history_header_clicked)
         layout.addWidget(self.history_table)
+
+    def _on_history_header_clicked(self, column: int):
+        if column == 0:
+            self._history_sort_desc = not getattr(self, "_history_sort_desc", True)
+            self._load_history_table()
 
     # --- PAGE CONTROLS & ACTIVATION ---
     def clear(self):
@@ -1473,9 +1483,24 @@ class MonitoringPage(QWidget):
             return
         unread_only = self.unread_only_check.isChecked()
         events = self.store.get_alert_events(limit=200, unread_only=unread_only)
+        is_desc = getattr(self, "_history_sort_desc", True)
+        events.sort(key=lambda e: getattr(e, "detected_at", "") or "", reverse=is_desc)
         self.alert_events = events
 
         self.history_table.blockSignals(True)
+        self.history_table.setHorizontalHeaderLabels([
+            f"触发时间 (北京时间) {'↓' if is_desc else '↑'}",
+            "标的代码",
+            "规则名称",
+            "触发详情 / 条件",
+            "现价 / 阈值",
+            "交易时段",
+            "状态",
+            "操作",
+        ])
+        self.history_table.horizontalHeader().setSortIndicator(
+            0, Qt.SortOrder.DescendingOrder if is_desc else Qt.SortOrder.AscendingOrder
+        )
         self.history_table.setRowCount(len(events))
 
         for row, evt in enumerate(events):

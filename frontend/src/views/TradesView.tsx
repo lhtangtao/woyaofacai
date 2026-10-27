@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Search, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, RotateCcw, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { api } from "../api/client";
 import { TradeDrawer } from "../components/TradeDrawer";
 import { PersonItem, TradeItem } from "../types";
@@ -26,13 +26,21 @@ export const TradesView: React.FC<TradesViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<TradeItem | null>(null);
 
+  // Sorting
+  const [sortCol, setSortCol] = useState<string>("时间");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   // Filters
   const [filterBroker, setFilterBroker] = useState("");
   const [filterSide, setFilterSide] = useState("");
   const [filterSymbol, setFilterSymbol] = useState("");
   const [filterSearch, setFilterSearch] = useState("");
 
-  const fetchTrades = (targetPage = page) => {
+  const fetchTrades = (
+    targetPage = page,
+    targetSortCol = sortCol,
+    targetSortDir = sortDir
+  ) => {
     setLoading(true);
     api
       .trades({
@@ -43,6 +51,8 @@ export const TradesView: React.FC<TradesViewProps> = ({
         side: filterSide || undefined,
         symbol: filterSymbol || undefined,
         search: filterSearch || undefined,
+        sort_col: targetSortCol,
+        sort_dir: targetSortDir,
       })
       .then((res) => {
         if (res.status === "ok") {
@@ -50,6 +60,8 @@ export const TradesView: React.FC<TradesViewProps> = ({
           if (res.columns) setColumns(res.columns);
           setTotal(res.pagination?.total || res.total || 0);
           setPage(res.pagination?.page || targetPage);
+          if (res.sort_col) setSortCol(res.sort_col);
+          if (res.sort_dir) setSortDir(res.sort_dir as "asc" | "desc");
         }
       })
       .catch((err) => {
@@ -59,7 +71,7 @@ export const TradesView: React.FC<TradesViewProps> = ({
   };
 
   useEffect(() => {
-    fetchTrades(1);
+    fetchTrades(1, sortCol, sortDir);
   }, [personId, filterBroker, filterSide, filterSymbol]);
 
   const handleResetFilters = () => {
@@ -71,8 +83,40 @@ export const TradesView: React.FC<TradesViewProps> = ({
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
-      fetchTrades(1);
+      fetchTrades(1, sortCol, sortDir);
     }
+  };
+
+  const handleHeaderClick = (col: string) => {
+    const sortableCols = [
+      "时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额",
+      "操作类型", "对手方", "订单号"
+    ];
+    if (!sortableCols.includes(col)) return;
+
+    let newDir: "asc" | "desc" = "asc";
+    if (sortCol === col) {
+      newDir = sortDir === "desc" ? "asc" : "desc";
+    } else {
+      newDir = col === "时间" ? "desc" : "asc";
+    }
+
+    setSortCol(col);
+    setSortDir(newDir);
+    setPage(1);
+    fetchTrades(1, col, newDir);
+  };
+
+  const handleExportTradesCsv = () => {
+    const params = new URLSearchParams();
+    if (personId != null) params.set("person_id", String(personId));
+    if (filterBroker) params.set("broker", filterBroker);
+    if (filterSide) params.set("side", filterSide);
+    if (filterSymbol) params.set("symbol", filterSymbol);
+    if (filterSearch) params.set("search", filterSearch);
+    if (sortCol) params.set("sort_col", sortCol);
+    if (sortDir) params.set("sort_dir", sortDir);
+    window.open(`/api/v1/export/trades?${params.toString()}`, "_blank");
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -148,7 +192,7 @@ export const TradesView: React.FC<TradesViewProps> = ({
         </div>
 
         {/* Query button */}
-        <button onClick={() => fetchTrades(1)} className="btn btn-primary" style={{ padding: "6px 14px" }}>
+        <button onClick={() => fetchTrades(1, sortCol, sortDir)} className="btn btn-primary" style={{ padding: "6px 14px" }}>
           查询
         </button>
 
@@ -156,6 +200,12 @@ export const TradesView: React.FC<TradesViewProps> = ({
         <button onClick={handleResetFilters} className="btn" title="重置全部筛选">
           <RotateCcw size={14} />
           <span>重置</span>
+        </button>
+
+        {/* Export CSV button */}
+        <button onClick={handleExportTradesCsv} className="btn" title="导出当前筛选和排序的交易明细 CSV">
+          <Download size={14} />
+          <span>导出 CSV</span>
         </button>
       </div>
 
@@ -166,9 +216,33 @@ export const TradesView: React.FC<TradesViewProps> = ({
           <table className="finance-table">
             <thead>
               <tr>
-                {columns.map((col) => (
-                  <th key={col}>{col}</th>
-                ))}
+                {columns.map((col) => {
+                  const isSortable = [
+                    "时间", "券商", "分类", "标的", "方向", "数量", "价格", "金额",
+                    "操作类型", "对手方", "订单号"
+                  ].includes(col);
+                  const isSorted = sortCol === col;
+                  return (
+                    <th
+                      key={col}
+                      onClick={() => isSortable && handleHeaderClick(col)}
+                      style={{
+                        cursor: isSortable ? "pointer" : "default",
+                        userSelect: "none",
+                      }}
+                      title={isSortable ? `点击切换${col}排序` : undefined}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                        <span>{col}</span>
+                        {isSorted && (
+                          <span style={{ fontSize: "12px", color: "var(--brand, #2563eb)", fontWeight: 700 }}>
+                            {sortDir === "desc" ? "↓" : "↑"}
+                          </span>
+                        )}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>

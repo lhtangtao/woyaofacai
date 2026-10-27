@@ -141,7 +141,7 @@ def query_trades(connection, scope: QueryScope, *, page=0, size=200, sort_column
     sort = SORT_FIELDS[sort_column]
     order = "DESC" if descending else "ASC"
     rows = connection.execute(
-        f"SELECT * FROM ({query}) ORDER BY {sort} {order},business_date,book_time,sequence_no,id LIMIT ? OFFSET ?",
+        f"SELECT * FROM ({query}) ORDER BY {sort} {order},sequence_no {order},id {order} LIMIT ? OFFSET ?",
         [*values, size, page * size],
     ).fetchall()
     results = []

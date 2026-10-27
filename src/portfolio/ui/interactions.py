@@ -1,7 +1,7 @@
 """Navigation and UI filter state, independent of financial calculations."""
 from functools import wraps
 
-from PySide6.QtCore import QDate, QTimer
+from PySide6.QtCore import QDate, Qt, QTimer
 
 from portfolio.domain.models import TradeFilters
 
@@ -108,17 +108,61 @@ class InteractionMixin:
         self._filter_batch = True
         for name in COMBOS:
             getattr(self, name).setCurrentIndex(0)
+        personal = -1
+        for i in range(self.person.count()):
+            text = self.person.itemText(i)
+            if text == "个人" or text.startswith("个人"):
+                personal = i
+                break
+        if personal >= 0:
+            self.person.setCurrentIndex(personal)
         for name in CHECKS:
             getattr(self, name).setChecked(False)
         self.search.clear()
+        if hasattr(self, "stock"):
+            self.stock.setCurrentIndex(0)
+            if hasattr(self.stock, "lineEdit") and self.stock.lineEdit():
+                self.stock.lineEdit().clear()
         self.source_file.clear()
         self.accounts.reset()
         self.start.setDate(QDate(2025, 1, 1))
         self.as_of.setDate(QDate.currentDate())
         self.holding_date.setDate(QDate.currentDate())
+        self.start_enabled.setChecked(True)
         self._filter_batch = False
         self.search_timer.stop()
         self.filters_changed()
+
+    def reset_asset_filters(self):
+        if hasattr(self, "dashboard"):
+            month = self.dashboard.month.findText(QDate.currentDate().toString("yyyy-MM"))
+            year = self.dashboard.year.findText(QDate.currentDate().toString("yyyy"))
+            if month >= 0:
+                self.dashboard.month.setCurrentIndex(month)
+            if year >= 0:
+                self.dashboard.year.setCurrentIndex(year)
+        if hasattr(self, "asset_page"):
+            if hasattr(self.asset_page, "local_search"):
+                self.asset_page.local_search.clear()
+            if hasattr(self.asset_page, "channel_overview"):
+                self.asset_page.channel_overview.selected_channel = None
+                self.asset_page.channel_overview.update()
+            if hasattr(self.asset_page, "stock_status_filter"):
+                self.asset_page.stock_status_filter.setCurrentIndex(0)
+            if getattr(self.asset_page, "broker_page", None):
+                broker = self.asset_page.broker_page
+                if broker.stock.count():
+                    broker.stock.setCurrentIndex(0)
+                broker.chart.person = None
+                if hasattr(broker, "summary"):
+                    broker.summary.clearSelection()
+                if hasattr(broker, "detail"):
+                    broker.detail.clearSelection()
+            self.asset_page.apply_local_filter()
+        if hasattr(self, "earnings_page"):
+            self.earnings_page.month.setDate(QDate.currentDate())
+        self.reset_filters()
+        self.ensure_analytics()
 
     def capture_state(self):
         state = {name: getattr(self, name).currentData() for name in COMBOS}
@@ -158,6 +202,10 @@ class InteractionMixin:
         self.page_number = state.get("page_number", 0)
         self.sort_column = state.get("sort_column", 0)
         self.descending = state.get("descending", True)
+        order = Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder
+        for header in (self.table.horizontalHeader(), self.table.frozen.horizontalHeader()):
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(self.sort_column, order)
         for page, report in zip((self.asset_page, self.performance_page), state.get("reports", ())):
             page.selector.setCurrentText(report)
         self._filter_batch = False
@@ -217,6 +265,13 @@ class InteractionMixin:
         self.stat_widget.setVisible(page == 0)
         self.side.setVisible(page == 0)
         self.export_button.setVisible(page == 0)
+        is_asset = page == 2 or page == 14 or (
+            page == 3 and (
+                target in ('今日盈亏', '当前持仓', '实时持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总', '股票归属') or
+                self.asset_page.selector.currentText() in ('今日盈亏', '当前持仓', '实时持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总', '股票归属')
+            )
+        )
+        self.asset_reset_button.setVisible(is_asset)
         self.filters_widget.setVisible(page in range(2, 11) or page in (0, 14, 17))
         if page == 0 and self.current_page:
             self.banner.setText(getattr(self, "_trade_notice", ""))
@@ -281,11 +336,14 @@ class InteractionMixin:
         if self.broker_people_view():
             bundle = self.asset_page.broker_page.bundle
             if bundle is not None and bundle.aggregate.scope == scope:
-                if self.analytics is not bundle.aggregate:
+                if self.analytics is not bundle.aggregate or self.asset_page.broker_page.result is None:
                     self._analytics_ready(bundle.aggregate)
+                else:
+                    self.asset_page.broker_page.show_result()
                 return
             if getattr(self, '_people_scope', None) == scope:
                 return
+            self.asset_page.broker_page.clear()
             self._people_scope = scope
             self.banner.show_status('正在按人员回放持仓与收益…', 'loading')
             self._submit('people', lambda cancel: self.analytics_service.calculate_people(scope, cancel=cancel), self._people_ready)

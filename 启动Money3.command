@@ -5,7 +5,7 @@ cd "$APP_DIR"
 export MONEY3_HOME="$APP_DIR"
 
 # ==============================================================================
-# Money Portfolio 全功能一键联合启动器 (Desktop GUI + Mobile Web + 公网访问)
+# 我要发财 全功能一键联合启动器 (Desktop GUI + Mobile Web + 公网访问)
 # ==============================================================================
 # 功能说明：
 # - 默认行为：双击一键启动全部组件：
@@ -242,7 +242,7 @@ if [[ -z "$TAILSCALE_IP" ]] && which tailscale &>/dev/null; then
 fi
 
 print "\n=================================================================="
-print "  🚀 Money Portfolio 全功能一键联合启动器"
+print "  🚀 我要发财 全功能一键联合启动器"
 print "=================================================================="
 if [[ "$IS_MOBILE_RUNNING" == "1" ]]; then
     print "  ✅ 1. 手机端 Web 核心服务已就绪 (端口: 8888, PID: $MOBILE_PID)"
@@ -282,7 +282,7 @@ print "=================================================================="
 # ------------------------------------------------------------------------------
 # 4. 执行前置数据同步 (可选)
 # ------------------------------------------------------------------------------
-DO_SYNC=0
+DO_SYNC=1
 SYNC_FLAGS=()
 
 if [[ "$SYNC_API" == "1" ]]; then
@@ -326,10 +326,14 @@ fi
 # 5. 启动桌面端应用 (PySide6) 或保持手机独立后台服务
 # ------------------------------------------------------------------------------
 if [[ "$START_DESKTOP" == "1" ]]; then
-    if [[ -x "$APP_DIR/.venv/bin/python" ]]; then
+    DESKTOP_BIN="$APP_DIR/.venv/bin/我要发财"
+    if [[ ! -x "$DESKTOP_BIN" ]]; then
+        cp -L "$APP_DIR/.venv/bin/python3.12" "$DESKTOP_BIN" 2>/dev/null || cp -L "$APP_DIR/.venv/bin/python" "$DESKTOP_BIN" 2>/dev/null || DESKTOP_BIN="$APP_DIR/.venv/bin/python"
+    fi
+    if [[ -x "$DESKTOP_BIN" ]]; then
         print "  🖥️ 桌面端主窗口已启动..."
         print -- "------------------------------------------------------------------\n"
-        "$APP_DIR/.venv/bin/python" -m portfolio "${APP_ARGS[@]}"
+        "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
         DESKTOP_EXIT=$?
 
         print "\n=================================================================="
