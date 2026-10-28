@@ -15,7 +15,6 @@ BOOK_CLOCK_ZONES = {'LONGBRIDGE': 'UTC', 'BBAE': 'UTC', 'SCHWAB': 'America/New_Y
 def assumes_open(event):
     stamp = datetime.fromisoformat(event.time)
     return (not event.metadata.get('executed_at_utc')
-            and event.metadata.get('broker_code') == 'FIRSTRADE'
             and stamp.tzinfo is None and stamp.time() == time(0))
 
 
@@ -29,10 +28,8 @@ def event_time_utc(event):
     stamp = datetime.fromisoformat(event.time)
     if stamp.tzinfo is not None:
         return stamp.astimezone(UTC)
-    if assumes_open(event):
+    if assumes_open(event) or stamp.time() == time(0):
         return datetime.combine(date.fromisoformat(event.day), time(9, 30), NY).astimezone(UTC)
-    if stamp.time() == time(0):
-        raise ValueError('流水只有日期，缺少成交时间')
     # book_timezone defines the ledger cutoff, NOT the already shifted clock.
     # A documented per-record override can identify legacy/manual NY clocks.
     zone = event.metadata.get('trade_clock_timezone') or BOOK_CLOCK_ZONES.get(event.metadata.get('broker_code'))

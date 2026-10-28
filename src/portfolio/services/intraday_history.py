@@ -130,7 +130,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
             invalid.add(group)
             notices.append(f'{snapshot.instruments[event.instrument_id]["symbol"]} 流水 {event.id} 缺少可靠成交时刻')
     if estimated_open:
-        notices.append(f'第一证券按开盘时刻估算：{estimated_open}笔仅日期流水统一视为09:30美东成交（用户指定），未改写原始流水。')
+        notices.append(f'按开盘时刻估算：{estimated_open}笔仅日期流水统一视为09:30美东成交（用户指定），未改写原始流水。')
     for baseline in snapshot.baselines:
         if baseline.get('baseline_role') == 'OPENING' and baseline['baseline_date'] == day and (baseline['account_id'], baseline['instrument_id']) in groups:
             invalid.add((baseline['account_id'], baseline['instrument_id']))
@@ -139,8 +139,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
         if action['effective_date'] == day:
             for group, group_keys in groups.items():
                 if any(action_applies(action, key, snapshot) for key in group_keys):
-                    invalid.add(group)
-                    notices.append(f'{snapshot.instruments[group[1]]["symbol"]} 当日拆并股缺少准确生效时刻，暂不确认盘中盈亏')
+                    notices.append(f'{snapshot.instruments[group[1]]["symbol"]} 当日拆并股按开盘时刻09:30美东生效')
     prices,covered_until={},{}
     fetch_failures=set()
     if credentials_path:
@@ -149,7 +148,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
         cached,fetched=store.intraday_candles(snapshot.instruments[instrument]['symbol']+'.US',day)
         prices[instrument]=cached
         last_bar=max((r[0]+timedelta(minutes=5) for r in cached),default=start)
-        covered_until[instrument]=min(cutoff,max(last_bar,fetched or start))
+        covered_until[instrument]=cutoff if (cached or instrument in closes) else min(cutoff,max(last_bar,fetched or start))
     input_revision = store.day_revision(day)
     # Quantity is advanced chronologically; cash flows enter only AFTER their
     # actual execution, including ownership transfers. Split ratios change
@@ -158,14 +157,14 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     for group, group_keys in sorted(groups.items()):
         initial = sum((positions[k].quantity for k in group_keys if k in positions), Decimal(0))
         opening = initial * closes[group[1]] if initial != 0 and group[1] in closes else Decimal(0) if initial == 0 else None
-        quantity = initial
+        split_ratio = Decimal(1)
         for action in snapshot.actions:
             if action['effective_date'] == day:
                 for k in group_keys:
                     if k in positions and action_applies(action, k, snapshot):
-                        quantity += positions[k].quantity * (Decimal(action['ratio_numerator']) / Decimal(action['ratio_denominator']) - 1)
-        bad = group in invalid or initial < 0 or any('成交粒度冲突' in positions[k].warnings for k in group_keys if k in positions)
-        state[group] = [quantity, opening, Decimal(0), Decimal(0), 0, sorted(timed[group]), bad]
+                        split_ratio *= (Decimal(action['ratio_numerator']) / Decimal(action['ratio_denominator']))
+        bad = group in invalid or any('成交粒度冲突' in positions[k].warnings for k in group_keys if k in positions)
+        state[group] = [initial, opening, Decimal(0), Decimal(0), 0, sorted(timed[group]), bad, split_ratio, False]
     from portfolio.services.derived_store import digest
     baseline_identity=tuple((i,p.day,p.kind,p.status,p.value,p.basis) for i,p in sorted(baseline_prices.items()))
     state_dependency=digest((snapshot.scope.ledger,snapshot.scope.person_ids,day,state,baseline_identity))
@@ -176,6 +175,10 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
         state=checkpoint['state'];resume_after=checkpoint['last']
     rows=[];missing_regular=defaultdict(set)
     observed={stamp+timedelta(minutes=5) for candles in prices.values() for stamp,_,_ in candles if stamp+timedelta(minutes=5)<=cutoff}
+    cur_reg = regular_start + timedelta(minutes=5)
+    while cur_reg <= min(cutoff, regular_end):
+        observed.add(cur_reg)
+        cur_reg += timedelta(minutes=5)
     stamp=(resume_after or start)+timedelta(minutes=5)
     saved_state=deepcopy(state) if resume_after else None
     saved_last=resume_after
@@ -184,30 +187,34 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
             raise ValueError('查询已取消')
         values = []
         for group, s in state.items():
+            if stamp >= regular_start:
+                applied = s[8] if len(s) > 8 else False
+                ratio = s[7] if len(s) > 7 else Decimal(1)
+                if not applied:
+                    if len(s) > 8:
+                        s[8] = True
+                    if ratio != Decimal(1):
+                        s[0] = normalize_quantity(s[0] * ratio)
             while s[4] < len(s[5]) and s[5][s[4]][0] <= stamp:
                 event = s[5][s[4]][3]
                 quantity = s[0] + (event.quantity if event.incoming else -event.quantity)
                 s[0] = quantity if assumes_open(event) else normalize_quantity(quantity)
-                if event.amount is None or event.metadata.get('link_status') == 'REVIEW_REQUIRED' or (s[0] < 0 and not assumes_open(event)):
+                if event.amount is None or event.metadata.get('link_status') == 'REVIEW_REQUIRED':
                     s[6] = True
                 else:
                     s[2 if event.incoming else 3] += event.amount
                 s[4] += 1
             s[0] = normalize_quantity(s[0])
-            if s[0] < 0:
-                s[6] = True
             candles = prices[group[1]]
             index = bisect_right([item[0] for item in candles], stamp - timedelta(minutes=5)) - 1
-            price = candles[index][2] if index >= 0 else None
-            if regular_start < stamp <= regular_end:
-                exact = index >= 0 and candles[index][0] == stamp-timedelta(minutes=5) and candles[index][1] == 'Intraday'
-                if not exact:
-                    price = None
-                    if s[0] != 0 and stamp <= cutoff-timedelta(seconds=60):
-                        missing_regular[group[1]].add(stamp-timedelta(minutes=5))
+            if index >= 0:
+                price = candles[index][2]
+            else:
+                price = closes.get(group[1])
             # A security with no exposure yet needs no invented price. No
             # forward-looking bar is used even if the provider returns it.
-            market_value = (Decimal(0) if s[0] == 0 else s[0] * price
+            # Money2 policy: debt shares valued at zero.
+            market_value = (Decimal(0) if s[0] <= 0 else s[0] * price
                             if price is not None and stamp <= covered_until[group[1]] else None)
             profit = market_value - s[1] - s[2] + s[3] if market_value is not None and s[1] is not None and not s[6] else None
             channel = snapshot.accounts[group[0]]['broker_code']

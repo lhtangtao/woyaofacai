@@ -142,8 +142,8 @@ def _read_points(store,source,scope,ready,aggregate,channels,ticker):
         SELECT c.*,r.required,CASE WHEN {matches} THEN 1 ELSE 0 END matched
         FROM ready r JOIN partitions p ON p.ledger=? AND p.person_id=r.person_id AND p.day=r.day
         JOIN intraday_contributions c INDEXED BY ix_intraday_person_day ON c.ledger=p.ledger AND c.person_id=p.person_id AND c.day=p.day
-        WHERE p.updated_at=r.updated_at AND p.algorithm=? AND p.status NOT IN ('INVALID','ERROR')) """
-    args=[v for row in ready for v in row]+filters+[scope.ledger.value,ALGORITHM]
+        WHERE p.updated_at=r.updated_at AND p.algorithm LIKE 'money3-derived-v1:%' AND p.status NOT IN ('INVALID','ERROR')) """
+    args=[v for row in ready for v in row]+filters+[scope.ledger.value]
     output=defaultdict(list);incomplete=0
     with closing(store.connect()) as connection:
         connection.execute('BEGIN')
