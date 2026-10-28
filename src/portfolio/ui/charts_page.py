@@ -176,7 +176,7 @@ class ChartCanvas(QWidget):
                 v_key = v_item[0]
                 v_label = v_item[1] if len(v_item) > 1 else ""
                 v_style = v_item[2] if len(v_item) > 2 else "dash"
-                if v_key not in categories:
+                if v_key not in category_positions:
                     continue
                 vx = left + (category_positions[v_key] + (0 if fixed_axis else .5)) * step
                 # 绘制细虚线（不在左右最边缘绘制重合边框）

@@ -3,7 +3,7 @@ from collections import defaultdict, OrderedDict
 from contextlib import closing
 from dataclasses import replace
 from datetime import date,datetime,time,timedelta
-from decimal import Decimal,localcontext
+from decimal import Context,Decimal,localcontext
 from threading import RLock
 
 from portfolio.db.connection import readonly_connection
@@ -116,12 +116,11 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
 
 
 class _DecimalTotal:
-    def __init__(self):self.total=Decimal(0);self.unknown=False
+    def __init__(self):self.total=Decimal(0);self.unknown=False;self.context=Context(prec=50)
     def step(self,value):
         if value is None:self.unknown=True
         else:
-            with localcontext() as context:
-                context.prec=50;self.total+=Decimal(value)
+            self.total=self.context.add(self.total,Decimal(value))
     def finalize(self):return None if self.unknown else str(self.total)
 
 
@@ -142,7 +141,7 @@ def _read_points(store,source,scope,ready,aggregate,channels,ticker):
     sql=f"""WITH ready(person_id,day,updated_at,required) AS (VALUES {values}), base AS (
         SELECT c.*,r.required,CASE WHEN {matches} THEN 1 ELSE 0 END matched
         FROM ready r JOIN partitions p ON p.ledger=? AND p.person_id=r.person_id AND p.day=r.day
-        JOIN intraday_contributions c ON c.ledger=p.ledger AND c.person_id=p.person_id AND c.day=p.day
+        JOIN intraday_contributions c INDEXED BY ix_intraday_person_day ON c.ledger=p.ledger AND c.person_id=p.person_id AND c.day=p.day
         WHERE p.updated_at=r.updated_at AND p.algorithm=? AND p.status NOT IN ('INVALID','ERROR')) """
     args=[v for row in ready for v in row]+filters+[scope.ledger.value,ALGORITHM]
     output=defaultdict(list);incomplete=0

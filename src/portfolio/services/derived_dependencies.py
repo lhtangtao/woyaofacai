@@ -144,7 +144,11 @@ def check_changes(source,derived):
             # Widen when ownership mapping is not provable.
             if day and day.startswith('~'):continue
             if table=='history_prices' and day:
-                c.execute("UPDATE partitions SET status='INVALID' WHERE day=?",(day,))
+                # Five-minute changes are validated against partition_inputs
+                # and the exact checkpoint price prefix by the shared reader.
+                # An append leaves old points valid; a correction hides them.
+                # A close correction is separately tracked as history_closes.
+                continue
             elif table=='person_operations' and person is not None and day:
                 c.execute("UPDATE partitions SET status='INVALID' WHERE ledger='PERSON' AND person_id=? AND day>=?",(person,day))
             elif day:c.execute("UPDATE partitions SET status='INVALID' WHERE day>=?",(day,))
