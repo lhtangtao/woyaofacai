@@ -344,9 +344,8 @@ class MonthlyRealtimePnlPage(QWidget):
         if not self.isVisible():return
         source=self._resolve_source_path()
         if not source:return
-        from portfolio.services.derived_maintenance import maintenance_status,schedule_changed
+        from portfolio.services.derived_maintenance import maintenance_status
         status=maintenance_status(source);progress=status['progress']
-        if not status['ready'] and not status['running']:schedule_changed(source)
         if status['running'] or not status['ready']:
             text=progress.get('message','正在后台计算全部历史人员。')
             if progress.get('total_units'):
@@ -362,7 +361,9 @@ class MonthlyRealtimePnlPage(QWidget):
     def _refresh_active_period(self):
         if not self.analytics or not self.isVisible():
             return
-        today = date.today()
+        from portfolio.domain.live_quotes import market_trade_day
+        _,days,halves,_=self.window.quote_store.load(datetime.now(UTC))
+        today=market_trade_day(datetime.now(UTC),days,halves)
         if self.tab_bar.currentIndex() == 1:
             if self.year_combo.currentText() == str(today.year):
                 self._load_year_data(self.year_combo.currentText())
@@ -523,7 +524,11 @@ class MonthlyRealtimePnlPage(QWidget):
         if not months:
             today=date.today()
             months=[f"{year}-{month:02d}" for year in range(2026,today.year+1) for month in range(1,(today.month if year==today.year else 12)+1)][::-1]
-        current=self.month_combo.currentText()
+        from portfolio.domain.live_quotes import market_trade_day
+        _,calendar,halves,_=self.window.quote_store.load(datetime.now(UTC))
+        preferred=market_trade_day(datetime.now(UTC),calendar,halves).strftime('%Y-%m')
+        if preferred not in months:months.append(preferred);months.sort(reverse=True)
+        current=self.month_combo.currentText() or preferred
         self.month_combo.blockSignals(True);self.month_combo.clear();self.month_combo.addItems(months)
         if current in months:self.month_combo.setCurrentText(current)
         self.month_combo.blockSignals(False)
@@ -535,7 +540,11 @@ class MonthlyRealtimePnlPage(QWidget):
             try:years=[r[0] for r in conn.execute("SELECT DISTINCT substr(day,1,4) FROM us_calendar ORDER BY 1 DESC") if r[0]]
             finally:conn.close()
         if not years:years=[str(year) for year in range(date.today().year,2025,-1)]
-        current=self.year_combo.currentText()
+        from portfolio.domain.live_quotes import market_trade_day
+        _,calendar,halves,_=self.window.quote_store.load(datetime.now(UTC))
+        preferred=str(market_trade_day(datetime.now(UTC),calendar,halves).year)
+        if preferred not in years:years.append(preferred);years.sort(reverse=True)
+        current=self.year_combo.currentText() or preferred
         self.year_combo.blockSignals(True);self.year_combo.clear();self.year_combo.addItems(years)
         if current in years:self.year_combo.setCurrentText(current)
         self.year_combo.blockSignals(False)
@@ -627,8 +636,9 @@ class MonthlyRealtimePnlPage(QWidget):
             first,last=date(int(period),1,1),date(int(period),12,31)
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
-        scope=replace(self.analytics.scope,person_ids=self._shared_person_ids(),start_date=None,
-                      account_ids=None,instrument_ids=None,category=None,search='',as_of=min(last,date.today()))
+        scope=replace(self.analytics.scope,person_ids=self._shared_person_ids(),start_date=None,as_of=min(last,date.today()))
+        if getattr(self,'_parent_filters',None) is None:
+            scope=replace(scope,account_ids=None,instrument_ids=None,category=None,search='')
         if scope.as_of < first:scope=replace(scope,as_of=last)
         self._shared_request=(period,year,scope)
         self.summary_badge.setText('正在读取共享历史派生数据…')
@@ -637,7 +647,8 @@ class MonthlyRealtimePnlPage(QWidget):
             if not DerivedStore(source).readiness()['ready']:
                 rows,state=load_history(source,self.window.quote_store,scope,first,last)
                 return None,rows,state
-            result=self.window.analytics_service.calculate(scope,cancel=cancel)
+            from portfolio.services.derived_queries import historical_analytics
+            result=historical_analytics(source,scope,first,last)
             rows,state=load_history(source,self.window.quote_store,scope,first,last)
             return result,rows,state
         def ready(value):
@@ -654,14 +665,27 @@ class MonthlyRealtimePnlPage(QWidget):
             tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
             self.channel_filter.populate(sorted(channels));self.stock_combo.populate(sorted(tickers))
             self.update_chart()
-        self.window._submit('shared-trend',task,ready)
+        self.window._submit(f'shared-trend-{id(self)}',task,ready)
+
+    def set_parent_filters(self,channel,ticker):
+        """Embedded Today charts share the parent channel/Ticker selection."""
+        filters=(channel,(ticker or '').strip())
+        if getattr(self,'_parent_filters',None)==filters:return
+        self._parent_filters=filters
+        for control in (self.person_combo,self.channel_filter,self.stock_combo):
+            control.setEnabled(False)
+            control.setToolTip('随今日盈亏主页面的人员、渠道和股票筛选同步更新。')
+        self.update_chart()
 
     def _render_shared_chart(self, year):
         if not getattr(self,'_shared_analytics',None) or self._shared_year != year:return
         from portfolio.services.derived_queries import trend
         source=self._resolve_source_path()
+        inherited=getattr(self,'_parent_filters',None)
+        channels=([inherited[0]] if inherited[0] else None) if inherited is not None else self.channel_filter.selected_channels()
+        ticker=inherited[1] if inherited is not None else self.stock_combo.selected_ticker()
         chart,state=trend(source,self.window.quote_store,self._shared_analytics,self._shared_period,year=year,
-                          channels=self.channel_filter.selected_channels(),ticker=self.stock_combo.selected_ticker(),
+                          channels=channels,ticker=ticker,
                           mode=self.mode_combo.currentData() or 'cumulative',
                           history_data=(self._shared_rows,self._shared_state))
         self.canvas.chart=chart;self.canvas.update()

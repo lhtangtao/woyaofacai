@@ -1658,6 +1658,8 @@ def api_network_info():
 
 def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = False):
     """Start the mobile web server using production WSGI server."""
+    from portfolio.derived import prepare_startup
+    prepare_startup(DATABASE_PATH,background=True)
     net = get_network_info()
     print("==================================================================")
     print("  🚀 我要发财 移动端安全工作站已就绪！")

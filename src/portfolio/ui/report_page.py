@@ -352,6 +352,8 @@ class ReportPage(QWidget):
         self.status.setText(f"共 {len(self.sorted_rows):,} 条" + ((f" · {channel}" if channel else " · 全部展示") if is_today else f" · 第 {self.page + 1} 页"))
         if self.report and self.report.name == '今日盈亏':
             self.intraday_chart.draw(self.local_search.text(), self.channel_overview.selected_channel)
+            if getattr(self,'trend_widget',None) is not None:
+                self.trend_widget.set_parent_filters(self.channel_overview.selected_channel,self.local_search.text())
             self.channel_overview.set_rows(self.overview_rows, 'CNY' if '¥' in self.report.columns[6] else 'USD')
             pnl, rate, up, down, flat, unknown = today_summary(self.sorted_rows)
             totals = self.cumulative_totals

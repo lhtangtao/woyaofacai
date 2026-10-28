@@ -2,22 +2,35 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api/client";
 
-export function HistoricalTrendView({ personId }: { personId: number | null }) {
-  const [kind, setKind] = useState("month");
-  const [period, setPeriod] = useState(new Date().toLocaleDateString("sv-SE").slice(0, 7));
+export function HistoricalTrendView({ personId, initialKind = "month", embedded = false, selectedChannel = "", selectedTicker = "", search = "" }: {
+  personId: number | null; initialKind?: string; embedded?: boolean; selectedChannel?: string; selectedTicker?: string; search?: string;
+}) {
+  const [kind, setKind] = useState(initialKind);
+  const [period, setPeriod] = useState(initialKind === "year" ? new Date().getFullYear().toString() : new Date().toLocaleDateString("sv-SE").slice(0, 7));
   const [mode, setMode] = useState("cumulative");
   const [channels, setChannels] = useState<string[]>([]);
   const [ticker, setTicker] = useState("");
-  const [data, setData] = useState<any>(null);
+  const [storedData, setData] = useState<any>(null);
+  const [dataKey, setDataKey] = useState("");
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [maintenance, setMaintenance] = useState<any>(null);
   const generation = useRef<string | null>(null);
+  const periodChosen = useRef(false);
+  const marketDay = useRef("");
+  const filterChannels = embedded ? (selectedChannel ? [selectedChannel] : []) : channels;
+  const filterTicker = embedded ? selectedTicker : ticker;
+  const requestKey = JSON.stringify([kind, period, mode, filterChannels, filterTicker, personId, search]);
+  const data = dataKey === requestKey ? storedData : null;
   useEffect(() => {
     let active = true;
     const poll = () => api.derivedProgress().then((result: any) => {
       if (!active) return;
       setMaintenance(result);
+      if (result.market_day) {
+        marketDay.current = result.market_day;
+        if (!periodChosen.current) setPeriod(initialKind === "year" ? result.market_day.slice(0, 4) : result.market_day.slice(0, 7));
+      }
       if (result.ready && result.generation && result.generation !== generation.current) {
         generation.current = result.generation;
         setRefresh(value => value + 1);
@@ -26,16 +39,16 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
     poll();
     const timer = window.setInterval(poll, 2000);
     return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  }, [initialKind]);
   useEffect(() => {
     let active = true;
-    const load = () => api.historicalTrend({ kind, period, mode, channels, ticker, personId })
-      .then((result: any) => { if (active) { setData(result); setError(""); } })
+    const load = () => api.historicalTrend({ kind, period, mode, channels: filterChannels, ticker: filterTicker, personId, search })
+      .then((result: any) => { if (active) { setData(result); setDataKey(requestKey); setError(""); } })
       .catch((err: any) => { if (active) { setData(null); setError(err.message || "历史数据读取失败"); } });
-    setData(null); load();
+    load();
     const timer = window.setInterval(load, 60000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [kind, period, mode, channels, ticker, personId, refresh]);
+  }, [kind, period, mode, JSON.stringify(filterChannels), filterTicker, personId, search, refresh]);
   const option = useMemo(() => {
     const points = data?.chart?.series?.[0]?.points || [];
     const valid = points.filter((p: any) => p[1] !== null).map((p: any) => [p[0], Number(p[1])]);
@@ -55,11 +68,11 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
   }, [data]);
   return <div style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
     <div className="card-panel" style={{ display: "flex", flexWrap: "wrap", gap: 12, padding: 12, alignItems: "center" }}>
-      <select aria-label="月度或年度" value={kind} onChange={e => { const next = e.target.value; setKind(next); setPeriod(next === "year" ? period.slice(0, 4) : `${period.slice(0, 4)}-${new Date().toLocaleDateString("sv-SE").slice(5, 7)}`); }}><option value="month">月度走势详情</option><option value="year">年度走势详情</option></select>
-      <input aria-label="走势期间" type={kind === "month" ? "month" : "number"} min={kind === "year" ? "2026" : "2026-01"} value={period} onChange={e => setPeriod(e.target.value)} />
+      {!embedded && <select aria-label="月度或年度" value={kind} onChange={e => { const next = e.target.value; periodChosen.current = true; setKind(next); setPeriod(next === "year" ? period.slice(0, 4) : `${period.slice(0, 4)}-${(marketDay.current || new Date().toLocaleDateString("sv-SE")).slice(5, 7)}`); }}><option value="month">月度走势详情</option><option value="year">年度走势详情</option></select>}
+      <input aria-label="走势期间" type={kind === "month" ? "month" : "number"} min={kind === "year" ? "2026" : "2026-01"} value={period} onChange={e => { periodChosen.current = true; setPeriod(e.target.value); }} />
       <select aria-label="走势模式" value={mode} onChange={e => setMode(e.target.value)}><option value="cumulative">累计盈亏走势</option><option value="intraday">每日日内盈亏</option></select>
-      <details><summary>{channels.length ? channels.join("、") : "全部渠道"}</summary><label><input type="checkbox" checked={!channels.length} onChange={() => setChannels([])} />全部渠道</label>{(data?.channels || []).map((ch: string) => <label key={ch} style={{ display: "block" }}><input type="checkbox" checked={channels.includes(ch)} onChange={() => setChannels(current => current.includes(ch) ? current.filter(v => v !== ch) : [...current, ch])} />{ch}</label>)}</details>
-      <input aria-label="Ticker筛选" list="history-tickers" placeholder="全部股票" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /><datalist id="history-tickers">{(data?.tickers || []).map((t: string) => <option key={t} value={t} />)}</datalist>
+      {!embedded && <><details><summary>{channels.length ? channels.join("、") : "全部渠道"}</summary><label><input type="checkbox" checked={!channels.length} onChange={() => setChannels([])} />全部渠道</label>{(data?.channels || []).map((ch: string) => <label key={ch} style={{ display: "block" }}><input type="checkbox" checked={channels.includes(ch)} onChange={() => setChannels(current => current.includes(ch) ? current.filter(v => v !== ch) : [...current, ch])} />{ch}</label>)}</details>
+      <input aria-label="Ticker筛选" list="history-tickers" placeholder="全部股票" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /><datalist id="history-tickers">{(data?.tickers || []).map((t: string) => <option key={t} value={t} />)}</datalist></>}
       <button onClick={() => setRefresh(v => v + 1)}>刷新</button>
     </div>
     {maintenance?.progress && <div role="status">
@@ -73,6 +86,7 @@ export function HistoricalTrendView({ personId }: { personId: number | null }) {
       <div role="status">{data.cache?.message}</div>
       <div className="card-panel"><ReactECharts option={option} notMerge style={{ height: 520 }} /></div>
       <div>{data.chart?.note}</div>
+      <div>来源：共享五分钟派生数据库；月度30分钟／年度2小时采样，缺失区段留空。</div>
     </>}
   </div>;
 }

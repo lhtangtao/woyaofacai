@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api, TodayFilters, TodaySnapshot, todayQuery } from "../api/client";
 import "./today-pnl.css";
+import { HistoricalTrendView } from "./HistoricalTrendView";
 
 const beijingDate = () => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
@@ -22,6 +23,7 @@ const signStyle = (value: string | number | null | undefined) => value == null ?
 const order = [0, 1, 2, 9, 3, 4, 12, 11, 13, 5, 6, 10, 7, 8];
 
 export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }) => {
+  const [curveKind, setCurveKind] = useState("day");
   const [day, setDay] = useState(beijingDate);
   const [ticker, setTicker] = useState("");
   const [channel, setChannel] = useState("");
@@ -154,18 +156,22 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
         <strong style={{ color: color(raw == null ? null : String(raw)) }}>{value}</strong>
       </div>)}
     </div>
-    <section className="card-panel today-curve" aria-label="当日盈亏走势图">
-      <h3>当日{curve?.historical ? "五分钟" : "分钟"}盈亏走势（USD） · 实盘交易日 {curve?.day || day}</h3>
+    <div role="tablist" aria-label="盈亏走势期间">
+      {[["day", "当日走势"], ["month", "当月"], ["year", "当年"]].map(([value, label]) =>
+        <button key={value} role="tab" aria-selected={curveKind === value} className="btn" onClick={() => setCurveKind(value)}>{label}</button>)}
+    </div>
+    {curveKind !== "day" ? <HistoricalTrendView key={curveKind} personId={personId} initialKind={curveKind} embedded selectedChannel={channel} selectedTicker={ticker} search={search} /> : <section className="card-panel today-curve" aria-label="当日盈亏走势图">
+      <h3>当日五分钟盈亏走势（USD） · 实盘交易日 {curve?.day || day}</h3>
       {curve?.fallback && <p className="today-warning">所选日期 {curve.target_day} 非美股交易日，已回溯至 {curve.day}</p>}
       {chartOptions && <ReactECharts option={chartOptions} notMerge style={{ height: 420 }} />}
-      {!curve?.complete_points && <p className="today-warning">{curve?.pending ? "正在补取历史五分钟行情…" : "当前筛选暂无有效曲线数据；未生成模拟点。"}</p>}
-      {curve && <p>{curve.complete_points} 个完整{curve.historical ? "五分钟历史" : "实时分钟"}点
+      {!curve?.complete_points && <p className="today-warning">{curve?.pending ? "后台正在采集并计算五分钟数据…" : "当前筛选暂无有效曲线数据；未生成模拟点。"}</p>}
+      {curve && <p>{curve.complete_points} 个完整五分钟历史点
         {curve.latest && ` · 最近有效盈亏 ${money(curve.latest.pnl)} USD · 截至 ${clock(curve.latest.time)} 北京时间`}</p>}
       {curve?.high && curve.low && <p>最高 {money(curve.high.pnl)}（{clock(curve.high.time)}） · 最低 {money(curve.low.pnl)}（{clock(curve.low.time)}）</p>}
       {curve?.warning && <p role="alert" className="today-warning">{curve.warning}</p>}
       {curve?.message && <p className="today-warning">{curve.message}</p>}
       <p>北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。缺失断线，未到时段留白；含当日清仓，可能与仅当前持仓的上方卡片不同。</p>
-    </section>
+    </section>}
     <section className="card-panel today-channels" aria-label="各渠道盈亏与资产汇总">
       <div><h3>各渠道当日盈亏（USD）</h3>
         <ReactECharts style={{ height: 285 }} notMerge option={{ animation: false,

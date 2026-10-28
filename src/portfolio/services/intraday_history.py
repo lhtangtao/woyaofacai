@@ -1,6 +1,7 @@
 """Reconstruct intraday equity P&L from completed bars and timed ledger events."""
 from bisect import bisect_right
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, localcontext
@@ -58,10 +59,9 @@ def event_time(event):
 
 def rebuild_history(path, analytics, credentials_path, store, day, now, cancel=None, *, prepared_snapshot=None):
     if prepared_snapshot is None:
-        from portfolio.services.derived_store import DerivedStore
-        if DerivedStore(path).available:
-            from portfolio.services.derived_builder import rebuild_scope_day
-            return rebuild_scope_day(path,analytics,credentials_path,store,day,now,cancel)
+        from portfolio.services.intraday_pipeline import start_pipeline
+        start_pipeline(path)
+        return '五分钟采集与全部人员计算由后台统一任务处理，图表只读取已保存结果。'
     with localcontext() as context:
         context.prec = 50
         return _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepared_snapshot)
@@ -84,6 +84,9 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     else:
         snapshot = prepared_snapshot
     _, days, half_days, _ = store.load(now)
+    # Prepared callers include real dates discovered in saved price tables.
+    # A shorter calendar cache must not make those dates disappear.
+    days=days|{date.fromisoformat(d) for d in analytics.trading_days}
     regular_start = datetime.combine(target, time(9, 30), NY).astimezone(UTC)
     regular_end = datetime.combine(target, time(13 if target in half_days else 16), NY).astimezone(UTC)
     past = replace(snapshot, scope=replace(snapshot.scope, as_of=target-timedelta(days=1)), events=[e for e in snapshot.events if e.day < day],
@@ -138,59 +141,21 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                 if any(action_applies(action, key, snapshot) for key in group_keys):
                     invalid.add(group)
                     notices.append(f'{snapshot.instruments[group[1]]["symbol"]} 当日拆并股缺少准确生效时刻，暂不确认盘中盈亏')
-    # Fetch only a missing tail. Confirmed completed candles never change into
-    # current quotes, and no provisional final candle enters the archive.
-    prices, covered_until, context = {}, {}, None
-    fetch_failures = set()
+    prices,covered_until={},{}
+    fetch_failures=set()
+    if credentials_path:
+        fetch_failures=collect_day_prices(snapshot,day,now,store,credentials_path,instrument_ids={k[2] for k in keys})['failed']
     for instrument in sorted({k[2] for k in keys}):
-        if cancel and cancel.is_set():
-            raise ValueError('查询已取消')
-        symbol = snapshot.instruments[instrument]['symbol'] + '.US'
-        cached, fetched = store.intraday_candles(symbol, day)
-        holes = regular_gaps(cached, regular_start, regular_end, cutoff)
-        due = (fetched is None or ((not cached or fetched < end)
-               and int(now.timestamp()) // 300 > int(fetched.timestamp()) // 300)
-               or (holes and now - fetched >= timedelta(seconds=60)))
-        if due and credentials_path:
-            try:
-                from longbridge.openapi import AdjustType, Period, TradeSessions
-                if context is None:
-                    context = create_context(credentials_path)
-                with _SDK_VALUES_LOCK:
-                    if cached:
-                        candles = context.history_candlesticks_by_offset(symbol, Period.Min_5, AdjustType.NoAdjust,
-                                                                        True, 1000, cached[-1][0].astimezone(NY).replace(tzinfo=None), TradeSessions.All)
-                    else:
-                        candles = context.history_candlesticks_by_date(symbol, Period.Min_5, AdjustType.NoAdjust,
-                                                                      target - timedelta(days=1), target, TradeSessions.All)
-                    def decode(values):
-                        result = []
-                        for candle in values:
-                            stamp = candle.timestamp.astimezone(UTC)
-                            phase = str(candle.trade_session).rsplit('.', 1)[-1]
-                            value = Decimal(str(candle.close))
-                            if start <= stamp and stamp + timedelta(minutes=5) <= cutoff and phase in ('Overnight', 'Pre', 'Intraday', 'Post') and value.is_finite() and value > 0:
-                                result.append((stamp, phase, value))
-                        return result
-                    found = decode(candles)
-                    # An empty tail is not evidence of complete coverage.
-                    # Repair older holes as well as a provider's empty offset.
-                    if cached and regular_gaps(cached + found, regular_start, regular_end, cutoff):
-                        found += decode(context.history_candlesticks_by_date(symbol, Period.Min_5, AdjustType.NoAdjust,
-                                                                            target, target, TradeSessions.All))
-                if found:
-                    store.save_intraday_candles(symbol, day, found, now)
-                cached, fetched = store.intraday_candles(symbol, day)
-            except Exception:
-                fetch_failures.add(instrument)
-        prices[instrument] = cached
-        covered_until[instrument] = min(fetched, cutoff) if fetched else start
+        cached,fetched=store.intraday_candles(snapshot.instruments[instrument]['symbol']+'.US',day)
+        prices[instrument]=cached
+        last_bar=max((r[0]+timedelta(minutes=5) for r in cached),default=start)
+        covered_until[instrument]=min(cutoff,max(last_bar,fetched or start))
     input_revision = store.day_revision(day)
     # Quantity is advanced chronologically; cash flows enter only AFTER their
     # actual execution, including ownership transfers. Split ratios change
     # quantity, never the previous close market-value baseline.
     state = {}
-    for group, group_keys in groups.items():
+    for group, group_keys in sorted(groups.items()):
         initial = sum((positions[k].quantity for k in group_keys if k in positions), Decimal(0))
         opening = initial * closes[group[1]] if initial != 0 and group[1] in closes else Decimal(0) if initial == 0 else None
         quantity = initial
@@ -201,9 +166,18 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                         quantity += positions[k].quantity * (Decimal(action['ratio_numerator']) / Decimal(action['ratio_denominator']) - 1)
         bad = group in invalid or initial < 0 or any('成交粒度冲突' in positions[k].warnings for k in group_keys if k in positions)
         state[group] = [quantity, opening, Decimal(0), Decimal(0), 0, sorted(timed[group]), bad]
-    rows = []
-    missing_regular = defaultdict(set)
-    stamp = start + timedelta(minutes=5)
+    from portfolio.services.derived_store import digest
+    state_dependency=digest((snapshot.scope.ledger,snapshot.scope.person_ids,day,state))
+    checkpoint=store.load_checkpoint(state_dependency) if hasattr(store,'load_checkpoint') else None
+    price_ids=tuple(sorted(prices))
+    resume_after=None
+    if checkpoint and checkpoint.get('price_hash')==store.prefix_identity(day,checkpoint['last'],price_ids):
+        state=checkpoint['state'];resume_after=checkpoint['last']
+    rows=[];missing_regular=defaultdict(set)
+    observed={stamp+timedelta(minutes=5) for candles in prices.values() for stamp,_,_ in candles if stamp+timedelta(minutes=5)<=cutoff}
+    stamp=(resume_after or start)+timedelta(minutes=5)
+    saved_state=deepcopy(state) if resume_after else None
+    saved_last=resume_after
     while stamp <= cutoff:
         if cancel and cancel.is_set():
             raise ValueError('查询已取消')
@@ -242,16 +216,86 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                                market_value=str(market_value) if market_value is not None else None,
                                opening_value=str(s[1]) if s[1] is not None else None,buy=str(s[2]),sell=str(s[3]),
                                pnl=str(profit) if profit is not None else None))
-        rows.append((stamp, 'History5', values))
+        if stamp in observed:
+            rows.append((stamp,'History5',values))
+            saved_state=deepcopy(state);saved_last=stamp
         stamp += timedelta(minutes=5)
     if source_version(path) != version:
-        return '源数据库在计算期间发生变化，已停止保存本次曲线，请刷新重算。'
+        raise ValueError('源数据库在计算期间发生变化，本次曲线未保存。')
     if missing_regular:
         descriptions = [gap_description(snapshot.instruments[i]['symbol']+'.US', sorted(stamps))
                         + ('，接口补取失败' if i in fetch_failures else '') for i, stamps in sorted(missing_regular.items())]
         notices.insert(0, '盘中行情缺失（北京时间；对应区段已断线，不沿用旧价）：\n'+'\n'.join(descriptions))
+    if resume_after and checkpoint.get('warning'):notices.insert(0,checkpoint['warning'])
     warning = '；'.join(dict.fromkeys(notices))
+    if not rows and not resume_after:warning=warning or '尚无已完成的真实五分钟K线；等待采集或补取，不填零。'
     if store.day_revision(day) != input_revision:
         raise ValueError('五分钟行情在计算期间变化，本次结果未保存。')
-    store.save_historical_pnl(scope_key(path, analytics.scope), day, rows, version, warning,input_revision=input_revision)
+    saved_checkpoint=None
+    if saved_last:
+        saved_checkpoint=dict(state=saved_state,last=saved_last,price_ids=price_ids,price_hash=store.prefix_identity(day,saved_last,price_ids),state_dependency=state_dependency)
+    store.save_historical_pnl(scope_key(path,analytics.scope),day,rows,version,warning,input_revision=input_revision,checkpoint=saved_checkpoint,resume_after=resume_after)
     return warning
+
+
+def collect_day_prices(snapshot,day,now,store,credentials_path,*,instrument_ids=None):
+    """One global symbol/day collection; only absent completed bars are saved."""
+    target=date.fromisoformat(day)
+    start=datetime.combine(target-timedelta(days=1),time(20),NY).astimezone(UTC)
+    end=datetime.combine(target,time(20),NY).astimezone(UTC)
+    cutoff=min(now.astimezone(UTC)-timedelta(seconds=60),end)
+    _,_,halves,_=store.load(now)
+    regular_start=datetime.combine(target,time(9,30),NY).astimezone(UTC)
+    regular_end=datetime.combine(target,time(13 if target in halves else 16),NY).astimezone(UTC)
+    context=None;saved=0;failed=set();latest=None
+    for identifier in sorted(instrument_ids or ()):
+        instrument=snapshot.instruments[identifier]
+        if instrument['market']!='US':continue
+        symbol=instrument['symbol']+'.US'
+        cached,fetched=store.intraday_candles(symbol,day)
+        # Existing local bars are copied as legacy evidence, never upgraded to
+        # confirmed provider bars and never downloaded again just for an owner.
+        if cached and store.source:
+            from portfolio.services.history_facts import append_completed
+            append_completed(store.source,symbol,day,cached,confirmation='LEGACY_COMPLETED')
+        present={stamp for stamp,_,_ in cached}
+        holes=regular_gaps(cached,regular_start,regular_end,cutoff+timedelta(seconds=60))
+        last=max(present,default=None)
+        latest_complete=datetime.fromtimestamp(int(cutoff.timestamp())//300*300,UTC)
+        complete_tail=last is not None and last+timedelta(minutes=5)>=latest_complete
+        historical_done=cutoff>=end and fetched is not None and fetched>=end
+        due=(holes or not cached or (not complete_tail and not historical_done)) and (fetched is None or now-fetched>=timedelta(seconds=60))
+        if due and credentials_path:
+            try:
+                from longbridge.openapi import AdjustType,Period,TradeSessions
+                if context is None:context=create_context(credentials_path)
+                found=[]
+                with _SDK_VALUES_LOCK:
+                    if not cached:
+                        found.extend(context.history_candlesticks_by_date(symbol,Period.Min_5,AdjustType.NoAdjust,target-timedelta(days=1),target,TradeSessions.All))
+                    else:
+                        wanted=sorted(set(holes))
+                        if last+timedelta(minutes=5)<latest_complete:wanted.append(last+timedelta(minutes=5))
+                        # Bound each request to a missing span; SDK positioning
+                        # may include one stored anchor, which is never re-saved.
+                        spans=[]
+                        for stamp in sorted(set(wanted)):
+                            if not spans or stamp>spans[-1][1]+timedelta(minutes=5):spans.append([stamp,stamp])
+                            else:spans[-1][1]=stamp
+                        for first,stop in spans:
+                            if first>last:stop=cutoff-timedelta(minutes=5)
+                            count=min(1000,max(2,int((stop-first).total_seconds()//300)+2))
+                            found.extend(context.history_candlesticks_by_offset(symbol,Period.Min_5,AdjustType.NoAdjust,True,count,(first-timedelta(minutes=5)).astimezone(NY).replace(tzinfo=None),TradeSessions.All))
+                new=[]
+                for bar in found:
+                    stamp=bar.timestamp.astimezone(UTC);phase=str(bar.trade_session).rsplit('.',1)[-1];price=Decimal(str(bar.close))
+                    if stamp not in present and start<=stamp and stamp+timedelta(minutes=5)<=cutoff and phase in ('Overnight','Pre','Intraday','Post') and price.is_finite() and price>0:
+                        new.append((stamp,phase,price));present.add(stamp)
+                store.save_intraday_candles(symbol,day,new,now)
+                saved+=len(new)
+                cached,_=store.intraday_candles(symbol,day)
+            except Exception:
+                failed.add(identifier)
+        point=max((r[0]+timedelta(minutes=5) for r in cached),default=None)
+        if point:latest=max(latest,point) if latest else point
+    return {'saved':saved,'failed':failed,'latest_price':latest}

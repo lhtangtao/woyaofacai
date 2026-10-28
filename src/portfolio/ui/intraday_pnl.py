@@ -1,4 +1,4 @@
-"""Minute observations of today's holdings P&L, scoped and persisted locally."""
+"""Read-only display of shared persisted five-minute P&L contributions."""
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, localcontext
 from zoneinfo import ZoneInfo
@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from portfolio.services.charts_service import Chart, Series
 from portfolio.domain.live_quotes import NY, UTC
-from portfolio.services.intraday_history import scope_key, source_version
+from portfolio.services.intraday_history import scope_key
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.theme import tokens
 
@@ -60,7 +60,7 @@ class IntradayPnlChart(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = ChartCanvas(card_mode=True)
         self.canvas.setFixedHeight(420)
-        self.status = QLabel('开启实时行情后开始记录，每分钟保留最新估值。')
+        self.status = QLabel('后台独立采集五分钟K线并计算，图表读取已保存明细。')
         self.status.setWordWrap(True)
         self.status.setObjectName('secondary')
         self.alert = QLabel()
@@ -83,41 +83,23 @@ class IntradayPnlChart(QWidget):
         self.snapshots = ()
         if not store or not source_path or not self.day:
             return
-        # A separate curve for every global filter and source database.
-        key = scope_key(source_path, scope)
-        if self.key != (key, self.day):
-            self.history_warning = ''
-        self.key = key, self.day
-        self.history = ()
+        key=scope_key(source_path,scope)
+        self.key=key,self.day
+        self.history=();self.snapshots=()
         try:
-            if record and session is not None and session.start <= now < session.end and report.rows:
-                rows = [dict(channel=r.values[0], ticker=r.values[1],
-                             pnl=str(r.values[6]) if r.values[6] is not None and r.metadata.get('live_fresh') else None)
-                        for r in report.rows]
-                store.save_minute_pnl(key, self.day, now, session.name, rows)
-            self.snapshots = tuple(v for v in store.load_minute_pnl(key,self.day)
-                                   if session is not None and session.start<=now<session.end and now-timedelta(minutes=3)<=v[0]<=now)
-            from portfolio.services.derived_store import DerivedStore
-            if DerivedStore(source_path).available:
-                from portfolio.services.derived_queries import day_history
-                self.history, cache_state = day_history(source_path,store,scope,self.day)
-                self.history_warning = cache_state.get('message','')
-            else:
-                self.history = store.load_historical_pnl(key, self.day, source_version(source_path))
-            if self.history:
-                stored_warning = store.load_historical_pnl_warning(key, self.day)
-                if stored_warning:
-                    self.history_warning = stored_warning
+            from portfolio.services.derived_queries import day_history
+            self.history,state=day_history(source_path,store,scope,self.day)
+            self.history_warning=state.get('message','')
         except Exception:
-            self.error = '分钟收益记录读写失败，本次曲线未更新；请检查本机行情缓存文件及权限。'
+            self.error='已保存的五分钟明细暂时读取失败，请查看后台任务状态；未使用分钟快照替代。'
 
     def draw(self, search='', channel=None):
         zone = ZoneInfo('Asia/Shanghai')
         samples = {}
         complete = 0
-        history = bool(self.history)
-        observations = self.history if history else self.snapshots
-        interval = timedelta(minutes=5 if history else 1)
+        history = True
+        observations = self.history
+        interval = timedelta(minutes=5)
         for stamp, phase, rows in observations:
             selected = [r for r in rows if (channel is None or r['channel'] == channel)
                         and search.casefold().strip() in r['ticker'].casefold()]
@@ -179,11 +161,11 @@ class IntradayPnlChart(QWidget):
         if self.error:
             self.status.setText(fallback_tag + self.error)
         elif not complete:
-            self.status.setText(fallback_tag + (self.history_warning or '正在补取长桥当日五分钟行情；首次查询需要一些时间。'))
+            self.status.setText(fallback_tag + (self.history_warning or '尚无完整有效五分钟点，请查看后台采集状态；不使用实时快照代替历史。'))
         else:
             latest_stamp, latest = next((stamp, value) for stamp, value in sorted(samples.items(), reverse=True) if value is not None)
             latest_stamp = latest_stamp.astimezone(zone).strftime('%H:%M')
             interval_text = '五分钟历史' if history else '实时分钟'
-            self.status.setText(fallback_tag + f'{complete} 个完整{interval_text}点 · 最近有效盈亏 {latest:+,.2f} USD · 截至 {latest_stamp} 北京时间。'
+            self.status.setText(fallback_tag + f'{complete} 个完整{interval_text}点 · 最近有效盈亏 {latest:+,.2f} USD · 最后有效五分钟点 {latest_stamp} 北京时间（上方卡片为独立10秒报价）。'
                                 + ('长桥行情已落库，重启后优先读库；含当日清仓，可能与仅当前持仓的上方卡片不同。' if history else '正在补取开机前的历史行情。')
                                 + (' 提示：'+self.history_warning if self.history_warning and not regular_alert else ''))

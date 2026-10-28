@@ -27,6 +27,7 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
             notify(state='CHECKING',message='正在检查原始数据及已有缓存依赖。')
             check_changes(source,published)
             quotes=QuoteStore(legacy or quote_cache_path(),source=source)
+            with closing(quotes.connect()):pass
             if automatic and not needs_rebuild(source,published,quotes,start):
                 generation=published.readiness()['generation']
                 notify(state='PUBLISHED',message='历史缓存有效，直接读取已有计算代。',generation=generation)
@@ -55,11 +56,22 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
             else:target.initialize()
             with closing(target.connect(write=True)) as c:
                 c.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?)',(token,mode,'RUNNING',utcnow(),None,'all historical owners'));c.commit()
+            from portfolio.services.intraday_history import source_version
+            expected_source=source_version(source)
+            from portfolio.services.derived_builder import publish_partition,publish_reports
+            from portfolio.services.derived_store import SourceChangedError
+            def release(ledger,person,day):
+                if source_version(source)!=expected_source:raise SourceChangedError('账本或收盘基准变化，停止旧快照，保留已校验分区。')
+                return publish_partition(target,published,quotes,ledger,person,day,expected_source)
+            def reports(ledger,person,inputs):
+                if source_version(source)!=expected_source:raise SourceChangedError('账本或收盘基准变化，正在重新准备后台任务。')
+                return publish_reports(target,published,ledger,person,expected_source,quotes,inputs)
             result=build_all(source,target,quotes,start=start,end=end,force=mode=='all',retry_errors=not automatic,
+                             on_reports=reports if automatic else None,on_partition=release if automatic else None,
                              progress=(lambda message:None) if automatic else print,on_progress=lambda values:notify(**values))
             notify(state='VALIDATING',message='正在核对历史计算结果与数据库完整性。')
             result['validation']=validate_generation(target,historical_people(source))
-            if source_identity(source,financial_only=True)!=before or historical_prices_revision()!=historical_before:
+            if source_identity(source,financial_only=True)!=before or (not automatic and historical_prices_revision()!=historical_before):
                 raise ValueError('原始数据在生成期间变化，本代未发布，将自动重试。')
             with closing(target.connect(write=True)) as c:
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('新派生库完整性校验失败。')
@@ -69,15 +81,37 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
                 from portfolio.services.derived_store import ALGORITHM
                 c.execute("INSERT OR REPLACE INTO metadata VALUES ('algorithm',?)",(ALGORITHM,));c.commit()
             notify(state='PUBLISHING',message='正在发布已核对的历史计算代。')
-            with exclusive(published.path):
-                backup=published.path.with_name(published.path.name+'.previous-'+token)
-                with closing(published.connect()) as old,closing(sqlite3.connect(backup)) as copy:old.backup(copy)
-                backup.chmod(0o600);staging.chmod(0o600)
-                with staging.open('rb') as handle:os.fsync(handle.fileno())
-                os.replace(staging,published.path)
-                directory=os.open(str(published.path.parent),os.O_RDONLY)
-                try:os.fsync(directory)
-                finally:os.close(directory)
+            if automatic:
+                # Per-date releases are already visible. Merge reusable engine
+                # units and the completion marker without replacing live rows.
+                with closing(target.connect()) as c:
+                    objects=c.execute('SELECT * FROM objects').fetchall()
+                with exclusive(published.path),closing(published.connect(write=True)) as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    for row in objects:
+                        old=c.execute('SELECT updated_at FROM objects WHERE kind=? AND object_key=?',row[:2]).fetchone()
+                        if not old or old[0]<row[6]:c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',row)
+                    c.execute('INSERT OR REPLACE INTO jobs VALUES (?,?,?,?,?,?)',(token,mode,'PUBLISHED',utcnow(),utcnow(),json.dumps(result)))
+                    c.execute("INSERT OR REPLACE INTO metadata VALUES ('generation',?)",(token,))
+                    c.execute("INSERT OR REPLACE INTO metadata VALUES ('algorithm',?)",(ALGORITHM,));c.commit()
+                staging.unlink(missing_ok=True)
+                backup=None
+            else:
+                # A manual full rebuild still swaps atomically; retain live
+                # partitions committed after the staging calculation.
+                with exclusive(str(published.path)+'.intraday',wait=True),exclusive(str(published.path)+'.price-history',wait=True):
+                    with closing(published.connect()) as c:
+                        live=c.execute('SELECT ledger,person_id,day FROM partitions WHERE algorithm=?',(ALGORITHM,)).fetchall()
+                    for ledger,person,day in live:publish_partition(published,target,quotes,ledger,person,day,expected_source)
+                    with exclusive(published.path):
+                        backup=published.path.with_name(published.path.name+'.previous-'+token)
+                        with closing(published.connect()) as old,closing(sqlite3.connect(backup)) as copy:old.backup(copy)
+                        backup.chmod(0o600);staging.chmod(0o600)
+                        with staging.open('rb') as handle:os.fsync(handle.fileno())
+                        os.replace(staging,published.path)
+                        directory=os.open(str(published.path.parent),os.O_RDONLY)
+                        try:os.fsync(directory)
+                        finally:os.close(directory)
             gaps=result.get('errors',0)+result.get('partial',0)+result.get('report_errors',0)
             notify(state='PUBLISHED',generation=token,errors=result.get('errors',0),partial=result.get('partial',0),report_errors=result.get('report_errors',0),calendar_warnings=result.get('calendar_warnings',[]),
                    message=f"历史预计算已发布；失败分区 {result.get('errors',0)}，缺失/提示 {result.get('partial',0)}，报表失败 {result.get('report_errors',0)}；有效日期可正常查看。" if gaps else '全部历史人员预计算已完成，走势图已可读取。')
@@ -93,8 +127,15 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
 def prepare_startup(source=DATABASE_PATH,mode=None,*,background=False):
     source=Path(source).resolve()
     if not source.is_file():return {'state':'SOURCE_MISSING'}
-    if mode:return rebuild(source,mode=mode)
+    if mode:
+        result=rebuild(source,mode=mode)
+        if background:
+            from portfolio.services.intraday_pipeline import start_pipeline
+            start_pipeline(source)
+        return result
     if background:
+        from portfolio.services.intraday_pipeline import start_pipeline
+        start_pipeline(source)
         from portfolio.services.derived_maintenance import schedule_changed
         return {'state':'CHECKING','maintenance':schedule_changed(source)}
     from portfolio.services.derived_dependencies import check_changes

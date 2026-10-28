@@ -33,6 +33,10 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+class SourceChangedError(ValueError):
+    pass
+
+
 class BuildBusyError(ValueError):
     pass
 
@@ -87,7 +91,9 @@ class DerivedStore:
                 generation=meta.get('generation')
                 published=c.execute("SELECT 1 FROM jobs WHERE id=? AND state='PUBLISHED'",(generation,)).fetchone() if generation else None
                 valid=c.execute("SELECT 1 FROM partitions WHERE algorithm=? AND status NOT IN ('INVALID','ERROR') LIMIT 1",(ALGORITHM,)).fetchone()
-                ready=bool(published and valid and meta.get('algorithm')==ALGORITHM)
+                incremental=meta.get('partition_generation') if meta.get('partition_algorithm')==ALGORITHM else None
+                ready=bool(valid and ((published and meta.get('algorithm')==ALGORITHM) or incremental))
+                generation=(generation or '')+':'+incremental if incremental else generation
                 return {'ready':ready,'state':'AVAILABLE' if ready else 'INITIAL_GENERATION_REQUIRED',
                         'generation':generation,'initialized':True}
         except (sqlite3.DatabaseError,ValueError):
@@ -121,11 +127,13 @@ class DerivedStore:
         with temporary.open('rb') as handle:os.fsync(handle.fileno())
         os.replace(temporary,self.path)
 
-    def get(self, kind, key, dependency):
+    def get(self, kind, key, dependency=None):
         if not self.available: return None
         with self.connect() as c:
-            row = c.execute('SELECT payload,checksum FROM objects WHERE kind=? AND object_key=? AND dependency=? AND algorithm=?',
-                            (kind,key,dependency,ALGORITHM)).fetchone()
+            sql='SELECT payload,checksum FROM objects WHERE kind=? AND object_key=? AND algorithm=?'
+            args=[kind,key,ALGORITHM]
+            if dependency is not None:sql+=' AND dependency=?';args.append(dependency)
+            row=c.execute(sql,args).fetchone()
         if not row: return None
         if hashlib.sha256(row[0]).hexdigest() != row[1]:
             raise ValueError('派生数据校验失败，拒绝展示损坏结果。')

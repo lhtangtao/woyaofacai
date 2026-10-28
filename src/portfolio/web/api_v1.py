@@ -1996,14 +1996,15 @@ def api_shared_history():
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
         scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
-        scope=replace(scope,start_date=None)
+        scope=replace(scope,start_date=None,search=request.args.get("search", ""))
         quotes=desktop_quote_store();quotes.source=DATABASE_PATH
         from portfolio.services.derived_store import DerivedStore
         if not DerivedStore(DATABASE_PATH).readiness()['ready']:
             rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
             return jsonify({'status':'ok','chart':{'title':period+' 历史走势','series':[],'note':'历史数据正在后台初始化，完成后自动刷新。','boundaries':[]},
                             'cache':state,'channels':[],'tickers':[]})
-        analytics=get_analytics_service().calculate(scope)
+        from portfolio.services.derived_queries import historical_analytics
+        analytics=historical_analytics(DATABASE_PATH,scope,first,last)
         rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
         channels=request.args.getlist('channel') or None
         ticker=request.args.get('ticker') or None
@@ -2031,7 +2032,11 @@ def api_derived_status():
 @require_capability(CAP_VIEW_ASSETS)
 def api_derived_progress():
     # Only generic task counters/status; no owner names, IDs or asset values.
-    from portfolio.services.derived_maintenance import maintenance_status,schedule_changed
+    from portfolio.services.derived_maintenance import maintenance_status
+    from portfolio.services.intraday_pipeline import pipeline_status
+    from portfolio.services.web_today import desktop_quote_store
+    from portfolio.domain.live_quotes import market_trade_day,UTC
     status=maintenance_status(DATABASE_PATH)
-    if not status['ready'] and not status['running']:schedule_changed(DATABASE_PATH)
-    return jsonify({'status':'ok',**status})
+    _,days,halves,_=desktop_quote_store().load(datetime.now(UTC))
+    return jsonify({'status':'ok',**status,'market_day':market_trade_day(datetime.now(UTC),days,halves).isoformat(),
+                    'intraday':pipeline_status(DATABASE_PATH)})

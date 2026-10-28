@@ -349,6 +349,7 @@ def build_workspace(self):
     self.monthly_realtime_page.error.connect(self.banner.setText)
     # 今日盈亏页内嵌当月/当年走势（复用月度走势详情组件，计算口径一致）
     self.asset_trend = MonthlyRealtimePnlPage(self)
+    self.asset_trend.set_parent_filters(self.asset_page.channel_overview.selected_channel,self.asset_page.local_search.text())
     self.asset_trend.tab_bar.hide()
     self.asset_trend.setMinimumHeight(680)
     self.asset_trend.hide()

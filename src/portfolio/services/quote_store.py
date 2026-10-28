@@ -42,9 +42,28 @@ class QuoteStore:
             c.execute(f"CREATE TRIGGER IF NOT EXISTS quote_revision_{operation.lower()} AFTER {operation} ON intraday_candles BEGIN INSERT INTO quote_day_revisions VALUES ({ref}.day,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1; END")
         return c
 
+    def read_connection(self):
+        from portfolio.services.derived_store import ClosingConnection
+        c=sqlite3.connect(self.path.as_uri()+'?mode=ro',uri=True,timeout=5,factory=ClosingConnection)
+        c.execute('PRAGMA query_only=ON')
+        return c
+
+    def prefix_identity(self, day, until, instrument_ids=None):
+        from portfolio.services.derived_store import digest
+        from portfolio.services.history_facts import readonly
+        from contextlib import closing
+        with closing(readonly(self.source)) as c:
+            instruments=[tuple(r) for r in c.execute("SELECT id,symbol||'.US' FROM instruments WHERE market='US' ORDER BY id")]
+        values=[]
+        for identifier,symbol in instruments:
+            if instrument_ids is not None and identifier not in instrument_ids:continue
+            rows,_=self.intraday_candles(symbol,day)
+            values.append((identifier,[(stamp,phase,price) for stamp,phase,price in rows if stamp+timedelta(minutes=5)<=until]))
+        return digest(values)
+
     def day_revision(self, day):
         from contextlib import closing
-        with closing(self.connect()) as c:
+        with closing(self.read_connection()) as c:
             row=c.execute('SELECT revision FROM quote_day_revisions WHERE day=?',(day,)).fetchone()
             from portfolio.services.derived_store import digest
             calendar=digest(c.execute('SELECT day,half_day FROM us_calendar WHERE day<=? ORDER BY day',(day,)).fetchall())
@@ -60,7 +79,10 @@ class QuoteStore:
         return (row[0] if row else 0,facts,calendar,closes)
 
     def intraday_candles(self, symbol, day):
-        with self.connect() as c:
+        if not self.path.is_file():
+            from portfolio.services.history_facts import HistoryFacts
+            return HistoryFacts(self.source).bars(symbol,day) if self.source else ([],None)
+        with self.read_connection() as c:
             rows = c.execute('SELECT stamp,session,close FROM intraday_candles WHERE symbol=? AND day=? ORDER BY stamp', (symbol, day)).fetchall()
             fetched = c.execute('SELECT fetched_at FROM intraday_fetches WHERE symbol=? AND day=?', (symbol, day)).fetchone()
         result = {stamp: (datetime.fromisoformat(stamp), phase, Decimal(value)) for stamp, phase, value in rows}
@@ -84,7 +106,7 @@ class QuoteStore:
                               [(symbol,day,stamp.astimezone(UTC).isoformat(),phase,str(value)) for stamp,phase,value in rows])
             c.execute('INSERT OR REPLACE INTO intraday_fetches VALUES (?,?,?)',(symbol,day,now.astimezone(UTC).isoformat()))
 
-    def save_historical_pnl(self, key, day, rows, source_version, warning='', *, input_revision=None):
+    def save_historical_pnl(self, key, day, rows, source_version, warning='', *, input_revision=None,checkpoint=None,resume_after=None):
         with self.connect() as c:
             c.execute('DELETE FROM historical_pnl_points WHERE scope_key=? AND day=?', (key, day))
             c.executemany('INSERT INTO historical_pnl_points VALUES (?,?,?,?,?)',
@@ -124,7 +146,7 @@ class QuoteStore:
         if not self.path.exists():
             return {}, set(), set(), None
         quotes, days, halves = {}, set(), set()
-        with self.connect() as c:
+        with self.read_connection() as c:
             for symbol, phase, value, stamp in c.execute('SELECT symbol,session,price,quoted_at FROM latest_quotes'):
                 try:
                     price, quoted = Decimal(value), datetime.fromisoformat(stamp).astimezone(UTC)
@@ -164,7 +186,7 @@ class QuoteStore:
             local = datetime.fromisoformat(stamp).astimezone(NY)
             day = local.date() + (timedelta(days=1) if phase == 'Overnight' and local.hour >= 20 else timedelta())
             values.append((symbol, day.isoformat(), phase, price, stamp))
-        connection.executemany('INSERT INTO daily_quote_snapshots VALUES (?,?,?,?,?) ON CONFLICT(symbol,day,session) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at WHERE excluded.quoted_at>=daily_quote_snapshots.quoted_at', values)
+        connection.executemany('INSERT INTO daily_quote_snapshots VALUES (?,?,?,?,?) ON CONFLICT(symbol,day,session) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at WHERE excluded.quoted_at>daily_quote_snapshots.quoted_at OR (excluded.quoted_at=daily_quote_snapshots.quoted_at AND excluded.price<>daily_quote_snapshots.price)', values)
 
     def historical_quotes(self, as_of, now=None):
         """Archive latest-cache migration; completed US days only, never official closes.

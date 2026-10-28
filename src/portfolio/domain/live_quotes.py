@@ -54,3 +54,12 @@ def quote_usable(quote, session, now):
             and session.start <= now < session.end
             and session.start <= quote.timestamp <= now + timedelta(seconds=5)
             and quote.timestamp < session.end and quote.price.is_finite() and quote.price > 0)
+
+
+def market_trade_day(now, trading_days, half_days=()):
+    """US session date, including the next trading day's overnight session."""
+    session=us_session(now,trading_days,half_days)
+    if session is not None:
+        return session.end.astimezone(NY).date() if session.name=='Overnight' else session.start.astimezone(NY).date()
+    today=now.astimezone(NY).date()
+    return max((d for d in trading_days if d<=today),default=today)

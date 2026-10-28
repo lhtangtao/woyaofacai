@@ -124,6 +124,13 @@ def check_changes(source,derived):
         if 'history_fact_revisions' in existing:
             for r in c.execute('SELECT day,revision FROM history_fact_revisions'):
                 current['history_prices',r['day']]=(digest(tuple(r)),r['day'],None,None,None)
+            # Close corrections affect cross-day cumulative baselines, while a
+            # new 5-minute price only affects its own contribution partition.
+            from collections import defaultdict
+            closes=defaultdict(list)
+            for r in c.execute("SELECT instrument_id,trade_date,stamp_utc,price,confirmation,adjustment,provider FROM history_prices WHERE price_type='DAILY_CLOSE' ORDER BY instrument_id,trade_date,stamp_utc,provider"):
+                closes[r['trade_date']].append(tuple(r))
+            for day,values in closes.items():current['history_closes',day]=(digest(values),day,None,None,None)
     changes=[]
     for key in old.keys()|current.keys():
         if old.get(key)==current.get(key):continue
@@ -136,7 +143,9 @@ def check_changes(source,derived):
             # Broker/order/price metadata can affect ownership reconciliation.
             # Widen when ownership mapping is not provable.
             if day and day.startswith('~'):continue
-            if table=='person_operations' and person is not None and day:
+            if table=='history_prices' and day:
+                c.execute("UPDATE partitions SET status='INVALID' WHERE day=? OR day=(SELECT min(day) FROM partitions WHERE day>?)",(day,day))
+            elif table=='person_operations' and person is not None and day:
                 c.execute("UPDATE partitions SET status='INVALID' WHERE ledger='PERSON' AND person_id=? AND day>=?",(person,day))
             elif day:c.execute("UPDATE partitions SET status='INVALID' WHERE day>=?",(day,))
             else:c.execute("UPDATE partitions SET status='INVALID'")

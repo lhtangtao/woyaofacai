@@ -141,52 +141,19 @@ class WebTodayService:
         return status, session, quotes
 
     def _backfill(self, analytics, day, history, warning, now):
-        end = datetime.combine(date.fromisoformat(day), time(20), NY)
-        complete = (history and history[-1][0] >= end
-                    and all(r['pnl'] is not None for _, _, rows in history for r in rows))
-        if complete or not self.network:
-            return {'pending': False, 'message': ''}
-        key = (scope_key(self.path, analytics.scope), day, source_version(self.path))
-        with self.lock:
-            previous = self.jobs.get(key)
-            if previous and (previous['pending'] or (now - previous['at']).total_seconds() < 60):
-                return {k: previous[k] for k in ('pending', 'message')}
-            if sum(j['pending'] for j in self.jobs.values()) >= 8:
-                return {'pending': False, 'message': '历史查询繁忙，请稍后刷新；已有缓存保留。'}
-            job = {'pending': True, 'at': now, 'message': '正在补取长桥五分钟行情，已有缓存优先展示。'}
-            self.jobs[key] = job
-            for old in list(self.jobs):
-                if len(self.jobs) <= 64:
-                    break
-                if not self.jobs[old]['pending']:
-                    del self.jobs[old]
-
-            def task():
-                try:
-                    message = rebuild_history(self.path, analytics, self.credentials, self.store, day, now)
-                except Exception:
-                    message = '历史盈亏补取失败，请检查网络、长桥权限和流水时间；已有缓存保留。'
-                with self.lock:
-                    job.update(pending=False, message=message)
-            self.pool.submit(task)
-            return {'pending': True, 'message': job['message']}
+        from portfolio.services.intraday_pipeline import pipeline_status
+        status=pipeline_status(self.path)
+        return {'pending':status.get('state') in ('INITIALIZING','STARTING','COLLECTING'),
+                'message':status.get('message','五分钟明细由后台统一任务生成。')}
 
     def curve(self, analytics, report, session, now, ticker='', channel=None):
         # Reuse the native non-trading-day resolution without instantiating Qt UI.
         from portfolio.ui.intraday_pnl import _resolve_effective_day
         day, target, fallback = _resolve_effective_day(analytics.scope.as_of, session, report, analytics.trading_days)
-        key = scope_key(self.path, analytics.scope)
         from portfolio.services.derived_queries import day_history
-        from portfolio.services.derived_store import DerivedStore
-        if DerivedStore(self.path).available:
-            history, cache_state = day_history(self.path,self.store,analytics.scope,day)
-            warning = cache_state.get('message','')
-        else:
-            history = self.store.load_historical_pnl(key, day, source_version(self.path))
-            warning = '派生库未初始化；使用明确标识的旧缓存/实时观察。'
-        observations = history
-        if not observations and session is not None and session.start<=now<session.end:
-            observations=tuple(v for v in self.store.load_minute_pnl(key,day) if now-timedelta(minutes=3)<=v[0]<=now)
+        history,cache_state=day_history(self.path,self.store,analytics.scope,day)
+        warning=cache_state.get('message','')
+        observations=history
         job = self._backfill(analytics, day, history, warning, now)
         samples = {}
         with localcontext() as context:
@@ -200,7 +167,7 @@ class WebTodayService:
         target_date = date.fromisoformat(day)
         start = datetime.combine(target_date - timedelta(days=1), time(20), NY).astimezone(UTC)
         end = datetime.combine(target_date, time(20), NY).astimezone(UTC)
-        interval = timedelta(minutes=5 if history else 1)
+        interval = timedelta(minutes=5)
         points, stamp = [], start
         while stamp <= end:
             value, phase = samples.get(stamp, (None, None))
@@ -212,7 +179,7 @@ class WebTodayService:
                       (datetime.combine(target_date, time(9, 30), NY).astimezone(UTC), '盘中'),
                       (datetime.combine(target_date, time(16), NY).astimezone(UTC), '盘后')]
         return exact_json(dict(day=day, target_day=target, fallback=fallback, points=points,
-                               interval_minutes=5 if history else 1, historical=bool(history),
+                               interval_minutes=5, historical=True,
                                warning=warning, **job,
                                boundaries=[{'time': t, 'label': s} for t, s in boundaries],
                                complete_points=len(valid), latest=valid[-1] if valid else None,
@@ -229,15 +196,6 @@ class WebTodayService:
         status, session, quotes = self.quote_snapshot(analytics, instruments, enabled, now)
         live, total, floating, fresh = live_holdings(analytics, instruments, quotes, session, now)
         report = today_holdings(analytics, live, session)
-        if enabled and session is not None and session.start <= now < session.end and report.rows:
-            # Same minute observations as the native panel; never mix them
-            # with the separate five-minute reconstruction.
-            self.store.save_minute_pnl(scope_key(self.path, scope),
-                                      report.rows[0].metadata['trading_day'], now, session.name,
-                                      [dict(channel=r.values[0], ticker=r.values[1],
-                                            pnl=str(r.values[6]) if r.values[6] is not None
-                                            and r.metadata.get('live_fresh') else None)
-                                       for r in report.rows])
         overview_rows = tuple(r for r in report.rows if ticker.casefold().strip() in str(r.values[1]).casefold())
         rows = [r for r in overview_rows if channel is None or r.values[0] == channel]
         # ReportPage re-bases the displayed weight after its local ticker/channel

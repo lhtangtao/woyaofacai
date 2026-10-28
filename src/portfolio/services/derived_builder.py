@@ -23,32 +23,49 @@ def historical_people(source):
 
 
 class PartitionWriter:
-    def __init__(self, quotes,derived,scope,dependency):
+    def __init__(self, quotes,derived,scope,dependency,*,incremental=False):
         self.quotes,self.derived,self.scope,self.dependency=quotes,derived,scope,dependency
         self.saved=False
+        self.incremental=incremental
     def __getattr__(self,name): return getattr(self.quotes,name)
-    def save_historical_pnl(self,key,day,rows,source_version,warning='',*,input_revision=None):
+    def checkpoint_key(self):
+        return digest((self.scope.ledger,self.scope.person_ids,self.scope.as_of))
+    def load_checkpoint(self,dependency):
+        return self.derived.get('intraday-state',self.checkpoint_key(),dependency) if self.incremental else None
+    def save_historical_pnl(self,key,day,rows,source_version,warning='',*,input_revision=None,checkpoint=None,resume_after=None):
         ledger=self.scope.ledger.value;person=self.scope.person_ids[0] if self.scope.person_ids else 0
         records=[]
         for stamp,phase,items in rows:
             for v in items:
                 records.append((ledger,person,v['account_id'],v['instrument_id'],day,stamp.astimezone(UTC).isoformat(),
                                 v['channel'],v['ticker'],v['quantity'],v['market_value'],v['opening_value'],v['buy'],v['sell'],v['pnl'],
-                                'MISSING_PRICE_OR_LEDGER' if v['pnl'] is None else 'OBSERVED'))
+                                'MISSING_PRICE_OR_LEDGER' if v['pnl'] is None else v.get('status','OBSERVED')))
         state='PARTIAL' if warning or any(r[-2] is None for r in records) else 'HISTORICAL_OBSERVED'
         if not records and warning=='当前筛选没有当日期初持仓或成交。':state='NO_EXPOSURE'
-        elif not records:raise ValueError(warning or '历史计算未返回有效结果，原分区保留。')
-        if records and datetime.combine(date.fromisoformat(day),time(20),NY)>datetime.now(UTC):state='PROVISIONAL'
+        elif not records and not resume_after:
+            if warning.startswith('尚无已完成'):state='PARTIAL'
+            else:raise ValueError(warning or '历史计算未返回有效结果，原分区保留。')
+        if (records or resume_after) and datetime.combine(date.fromisoformat(day),time(20),NY)>datetime.now(UTC):state='PROVISIONAL'
         revision=self.quotes.day_revision(day)
         if input_revision is not None and revision!=input_revision:
             raise ValueError('行情依赖在保存前变化，原有效分区保留。')
         with exclusive(self.derived.path), closing(self.derived.connect(write=True)) as c:
             c.execute('BEGIN IMMEDIATE')
-            c.execute('DELETE FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=?',(ledger,person,day))
+            if resume_after:
+                c.execute('DELETE FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=? AND stamp>?',(ledger,person,day,resume_after.isoformat()))
+            else:c.execute('DELETE FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=?',(ledger,person,day))
             c.executemany('INSERT INTO intraday_contributions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',records)
             c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',(ledger,person,day,dumps(input_revision if input_revision is not None else revision)))
             c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',
                       (ledger,person,day,self.dependency,ALGORITHM,state,warning,utcnow()))
+            if checkpoint:
+                import hashlib,zlib
+                checkpoint['warning']=warning
+                payload=zlib.compress(dumps(checkpoint).encode())
+                c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',('intraday-state',self.checkpoint_key(),checkpoint['state_dependency'],ALGORITHM,payload,hashlib.sha256(payload).hexdigest(),utcnow()))
+            elif not resume_after:
+                c.execute("DELETE FROM objects WHERE kind='intraday-state' AND object_key=?",(self.checkpoint_key(),))
+            mark_partition_publication(c)
             c.commit()
         self.saved=True
         self.status=state
@@ -76,16 +93,18 @@ def record_error(derived,quotes,ledger,person,day,dependency,error):
     """Hide only the failed partition; preserve its old rows for recovery."""
     with exclusive(derived.path),closing(derived.connect(write=True)) as c:
         c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',
-                  (ledger,person,day,dependency or 'ERROR',ALGORITHM,'ERROR',f'该日期计算失败（{type(error).__name__}）；其他日期可继续查看。',utcnow()))
+                  (ledger,person,day,dependency or 'ERROR',ALGORITHM,'ERROR',f'该日期计算失败（{type(error).__name__}）：{str(error)[:300]}；其他日期可继续查看。',utcnow()))
         c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',(ledger,person,day,dumps(quotes.day_revision(day))));c.commit()
 
 
-def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True):
+def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True,on_reports=None,on_partition=None):
     from portfolio.services.analytics_service import AnalyticsService
     from portfolio.services.derived_dependencies import partition_dependency
     import logging
+    from portfolio.services.derived_store import SourceChangedError
     end=end or datetime.now(NY).date();now=datetime.now(UTC)
     days,calendar_warnings=history_days(source,quotes,start,end)
+    days=sorted(days,reverse=True)
     days=[d for d in days if datetime.combine(d-timedelta(days=1),time(20),NY)<now]
     if not days:raise ValueError('本地没有可计算的已发生历史日期；缺失行情未伪造。')
     targets=[(Ledger.PERSON,(p,)) for p in historical_people(source)]+[(Ledger.BROKER,None)]
@@ -100,6 +119,8 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
             person=persons[0] if persons else 0
             notify('CALCULATING_REPORTS','正在计算全部历史权益人员的持仓与财务报表。')
             try:
+                with closing(quotes.read_connection()) as q:
+                    quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<?',(str(end),)))
                 result=service.calculate(scope,use_cache=False)
                 with exclusive(derived.path),closing(derived.connect(write=True)) as c:
                     c.execute('BEGIN IMMEDIATE')
@@ -110,7 +131,13 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
                         for index,row in enumerate(report.rows):
                             period=str(row.metadata.get('valuation_date') or row.metadata.get('month') or (row.values[0] if name in {'每日持仓收益','每月持仓收益','月度净投入明细','完整交易净投入','每月微操收益','微操配对证据','交易回放'} and row.values else end.isoformat()))[:10]
                             records.append((ledger.value,person,name,period,row.metadata.get('account_id') or 0,row.metadata.get('instrument_id') or 0,index,dumps(row)))
-                    c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',records);c.commit()
+                    c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',records)
+                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger.value}:{person}',utcnow()))
+                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger.value}:{person}',ALGORITHM))
+                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger.value}:{person}',json.dumps(quote_inputs)))
+                    c.commit()
+                if on_reports:on_reports(ledger.value,person,quote_inputs)
+            except SourceChangedError:raise
             except Exception:
                 report_errors+=1
                 logging.getLogger(__name__).exception('Historical report unit failed; continue independent dates')
@@ -147,8 +174,11 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
                         if not writer.saved:writer.save_historical_pnl('',day,[], '',warning)
                         if writer.status=='PARTIAL':partial+=1
                         progress(f'{ledger.value} person={person} {day}: {warning or "saved"}')
+                    if on_partition:on_partition(ledger.value,person,day)
+                except SourceChangedError:raise
                 except Exception as exc:
                     record_error(derived,quotes,ledger.value,person,day,dep,exc)
+                    if on_partition:on_partition(ledger.value,person,day)
                     errors+=1
                     logging.getLogger(__name__).exception('Historical date partition failed; continue remaining dates')
                 done+=1
@@ -179,10 +209,10 @@ def rebuild_scope_day(source,analytics,credentials,quotes,day,now,cancel=None):
             # Downloading missing shared prices happens inside the original
             # calculator; fingerprint AFTER it has stored the new completed bars.
             class PendingWriter(PartitionWriter):
-                def save_historical_pnl(self,key,day,rows,version,warning='',*,input_revision=None):
+                def save_historical_pnl(self,key,day,rows,version,warning='',*,input_revision=None,checkpoint=None,resume_after=None):
                     if source_version(source)!=expected_source:raise ValueError('原始账本变化，未保存本次日内分区。')
                     self.dependency=partition_dependency(source,quotes,scope,day)
-                    super().save_historical_pnl(key,day,rows,version,warning,input_revision=input_revision)
+                    super().save_historical_pnl(key,day,rows,version,warning,input_revision=input_revision,checkpoint=checkpoint,resume_after=resume_after)
             writer=PendingWriter(quotes,derived,scope,'')
             message=_rebuild(source,SimpleNamespace(scope=scope,trading_days=analytics.trading_days),credentials,writer,day,now,cancel,snapshot)
             if not writer.saved:
@@ -216,3 +246,67 @@ def validate_generation(derived,expected_people):
             import hashlib
             if hashlib.sha256(payload).hexdigest()!=checksum:raise ValueError('计算对象校验失败；本代未发布。')
     return {'daily_monthly_checks':checks,'incomplete_comparisons':unknown,'historical_people':len(expected_people)}
+
+
+def mark_partition_publication(connection):
+    """A commit-visible revision for read-only clients, even before a full run ends."""
+    import uuid
+    connection.execute("INSERT OR REPLACE INTO metadata VALUES ('partition_generation',?)",(uuid.uuid4().hex,))
+    connection.execute("INSERT OR REPLACE INTO metadata VALUES ('partition_algorithm',?)",(ALGORITHM,))
+
+
+def publish_reports(staging,published,ledger,person,expected_source,quotes=None,quote_inputs=None):
+    from portfolio.services.intraday_history import source_version
+    if source_version(published.source)!=expected_source:return False
+    if quotes is not None and quote_inputs is not None:
+        with closing(quotes.read_connection()) as q:current=dict(q.execute('SELECT day,revision FROM quote_close_revisions'))
+        if any(current.get(day)!=revision for day,revision in quote_inputs.items()):return False
+    with closing(staging.connect()) as c:
+        rows=c.execute('SELECT * FROM report_details WHERE ledger=? AND person_id=?',(ledger,person)).fetchall()
+    with exclusive(published.path),closing(published.connect(write=True)) as c:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('DELETE FROM report_details WHERE ledger=? AND person_id=?',(ledger,person))
+        c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',rows)
+        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger}:{person}',utcnow()))
+        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger}:{person}',ALGORITHM))
+        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger}:{person}',json.dumps(quote_inputs or {})))
+        c.commit()
+    return True
+
+
+def publish_partition(staging,published,quotes,ledger,person,day,expected_source):
+    """Validate and release one complete date, preserving newer live rows."""
+    from portfolio.services.intraday_history import source_version
+    if source_version(published.source)!=expected_source:return False
+    args=(ledger,person,day)
+    with closing(staging.connect()) as c:
+        partition=c.execute('SELECT * FROM partitions WHERE ledger=? AND person_id=? AND day=?',args).fetchone()
+        inputs=c.execute('SELECT * FROM partition_inputs WHERE ledger=? AND person_id=? AND day=?',args).fetchone()
+        if not partition or partition[4]!=ALGORITHM or partition[5]=='INVALID' or not inputs:return False
+        if inputs[3]!=dumps(quotes.day_revision(day)):return False
+        rows=c.execute('SELECT * FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=? ORDER BY stamp',args).fetchall()
+        scope=QueryScope(date.fromisoformat(day),ledger=Ledger(ledger),person_ids=(person,) if person else None,include_disabled=True)
+        key=digest((scope.ledger,scope.person_ids,scope.as_of))
+        checkpoint=c.execute("SELECT * FROM objects WHERE kind='intraday-state' AND object_key=? AND algorithm=?",(key,ALGORITHM)).fetchone()
+    with exclusive(published.path),closing(published.connect(write=True)) as c:
+        c.execute('BEGIN IMMEDIATE')
+        previous=c.execute('SELECT updated_at FROM partitions WHERE ledger=? AND person_id=? AND day=?',args).fetchone()
+        if partition[5]=='ERROR':
+            # A stale staging failure cannot conceal a newer successful live
+            # result, or a healthy result for exactly the same quote inputs.
+            healthy=c.execute('SELECT p.algorithm,p.status,i.quote_revision FROM partitions p LEFT JOIN partition_inputs i USING(ledger,person_id,day) WHERE p.ledger=? AND p.person_id=? AND p.day=?',args).fetchone()
+            if (previous and previous[0]>=partition[7]) or (healthy and healthy[0]==ALGORITHM and healthy[1] not in ('INVALID','ERROR') and healthy[2]==inputs[3]):return False
+            c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',partition)
+            c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',inputs)
+            mark_partition_publication(c);c.commit()
+            return True
+        latest=c.execute('SELECT max(stamp) FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=?',args).fetchone()[0]
+        incoming=max((r[5] for r in rows),default=None)
+        if (previous and previous[0]>=partition[7]) or (latest and incoming and latest>incoming):return False
+        c.execute('DELETE FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=?',args)
+        c.executemany('INSERT INTO intraday_contributions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',rows)
+        c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',partition)
+        c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',inputs)
+        if checkpoint:c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',checkpoint)
+        mark_partition_publication(c);c.commit()
+    return True

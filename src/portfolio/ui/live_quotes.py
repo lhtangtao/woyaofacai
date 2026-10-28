@@ -216,7 +216,6 @@ class LiveQuotesPanel(QWidget):
                                  record=self.enabled.isChecked() and not getattr(self, 'is_demo', True)
                                  and self.analytics.scope.reporting_currency == 'USD',
                                  trading_days=self.analytics.trading_days if self.analytics else ())
-        self.backfill_intraday(today, now or datetime.now(UTC))
         if page.broker_page and page.broker_page.bundle is not None and page.broker_page.bundle.aggregate.scope == self.analytics.scope:
             page.broker_page.render(self.instruments, quotes or {}, session, now or datetime.now(UTC))
         if page.selector.currentText() == '今日盈亏':
@@ -231,38 +230,9 @@ class LiveQuotesPanel(QWidget):
             page.table.verticalScrollBar().setValue(scroll)
 
     def backfill_intraday(self, today, now):
-        if self.intraday_busy or not self.window.quote_store or not self.path or getattr(self, 'is_demo', True) or self.analytics.scope.reporting_currency != 'USD':
-            return
-        chart = self.window.asset_page.intraday_chart
-        key = chart.key
-        if chart.history:
-            from datetime import date, time
-            from portfolio.domain.live_quotes import NY
-            end = datetime.combine(date.fromisoformat(chart.day), time(20), NY)
-            last_stamp, _, last_rows = chart.history[-1]
-            if last_stamp >= end and last_rows and all(r['pnl'] is not None for _, _, rows in chart.history for r in rows):
-                return
-        if key is None or (key in self.intraday_requests and (now-self.intraday_requests[key]).total_seconds() < 60):
-            return
-        self.intraday_busy = True
-        self.intraday_requests[key] = now
-        if len(self.intraday_requests) > 32:
-            self.intraday_requests.pop(next(iter(self.intraday_requests)))
-        analytics, source, credentials, store = self.analytics, self.source_path, self.path, self.window.quote_store
-        def task(cancel):
-            from portfolio.services.intraday_history import rebuild_history
-            try:
-                return rebuild_history(source, analytics, credentials, store, key[1], now, cancel)
-            except Exception:
-                return '历史盈亏补取失败，请检查长桥权限、网络及流水时间；已有缓存保留。'
-        def ready(warning):
-            self.intraday_busy = False
-            if chart.key == key:
-                chart.history_warning = warning
-                chart.bind(store, source, analytics.scope, today, None, now,
-                           trading_days=analytics.trading_days if analytics else ())
-                chart.draw(self.window.asset_page.local_search.text(), self.window.asset_page.channel_overview.selected_channel)
-        self.window._submit('intraday_history', task, ready)
+        # Kept for callers from older UI code; the application producer owns all
+        # collection and historical calculation, independently of this panel.
+        return
 
     def refresh_history(self):
         """Rebind on rollover/new completed snapshots, outside the quote loop."""

@@ -1,4 +1,4 @@
-"""Explicit, additive history import. No UI path may migrate a source database."""
+"""Additive price-save/import entries with backups; no UI-triggered migration."""
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -255,3 +255,19 @@ def fetch_missing_prices(source,legacy,start,end,credentials):
                 rows.append((stamp,phase,value));present.add(stamp)
         if rows:store.save_intraday_candles(symbol,day,rows,now);saved+=len(rows)
     return {'requested_symbol_days':requested,'saved_bars':saved,'confirmation':'PROVIDER_COMPLETED','extended_hours':'observed only; no completeness claim'}
+
+
+def ensure_history_schema(source):
+    """Authorized price-save initialization only; backup before additive DDL."""
+    source=Path(source).resolve()
+    with exclusive(source),closing(readonly(source)) as original:
+        if original.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():return
+        if original.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise ValueError('事实库完整性检查失败，未初始化价格表。')
+        backup=source.with_name(source.name+'.before-price-store-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')+'.bak')
+        with closing(sqlite3.connect(backup)) as target:original.backup(target)
+        backup.chmod(0o600)
+        with closing(sqlite3.connect(source,timeout=60)) as target:
+            try:
+                target.executescript('BEGIN IMMEDIATE;\n'+SCHEMA)
+                target.commit()
+            except BaseException:target.rollback();raise
