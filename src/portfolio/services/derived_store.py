@@ -90,9 +90,9 @@ class DerivedStore:
                 if meta.get('source')!=str(self.source):return {'ready':False,'state':'UNINITIALIZED','generation':None}
                 generation=meta.get('generation')
                 published=c.execute("SELECT 1 FROM jobs WHERE id=? AND state='PUBLISHED'",(generation,)).fetchone() if generation else None
-                valid=c.execute("SELECT 1 FROM partitions WHERE algorithm=? AND status NOT IN ('INVALID','ERROR') LIMIT 1",(ALGORITHM,)).fetchone()
-                incremental=meta.get('partition_generation') if meta.get('partition_algorithm')==ALGORITHM else None
-                ready=bool(valid and ((published and meta.get('algorithm')==ALGORITHM) or incremental))
+                valid=c.execute("SELECT 1 FROM partitions WHERE algorithm LIKE 'money3-derived-v1:%' AND status NOT IN ('INVALID','ERROR') LIMIT 1").fetchone()
+                incremental=meta.get('partition_generation') if (meta.get('partition_algorithm') or '').startswith('money3-derived-v1:') else None
+                ready=bool(valid and ((published and (meta.get('algorithm') or '').startswith('money3-derived-v1:')) or incremental))
                 generation=(generation or '')+':'+incremental if incremental else generation
                 return {'ready':ready,'state':'AVAILABLE' if ready else 'INITIAL_GENERATION_REQUIRED',
                         'generation':generation,'initialized':True}

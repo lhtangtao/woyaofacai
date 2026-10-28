@@ -83,7 +83,6 @@ def check_changes(source,derived):
         version=c.execute("SELECT value FROM metadata WHERE key='checked_algorithm'").fetchone()
     if not version or version[0]!=ALGORITHM:
         with exclusive(derived.path),closing(derived.connect(write=True)) as c:
-            c.execute("UPDATE partitions SET status='INVALID' WHERE algorithm<>?",(ALGORITHM,))
             c.execute("INSERT OR REPLACE INTO metadata VALUES ('checked_algorithm',?)",(ALGORITHM,));c.commit()
     identity=source_identity(source)
     with closing(derived.connect()) as c:

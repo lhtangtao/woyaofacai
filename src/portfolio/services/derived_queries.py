@@ -54,9 +54,9 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
     for person,day,dependency,algorithm,status,warning,updated_at in partitions:
         markers[person,day]=updated_at
         states[person,day]={'state':status,'warning':warning}
-        if algorithm!=ALGORITHM or status in ('INVALID','ERROR'):
-            states[person,day]['state']='INVALID' if algorithm!=ALGORITHM else status
-            states[person,day]['reason']='D_ALGORITHM_VERSION' if algorithm!=ALGORITHM else 'C_CALCULATION_FAILED' if status=='ERROR' else 'D_DEPENDENCY_INVALIDATED'
+        if not algorithm.startswith('money3-derived-v1:') or status in ('INVALID','ERROR'):
+            states[person,day]['state']='INVALID' if not algorithm.startswith('money3-derived-v1:') else status
+            states[person,day]['reason']='D_ALGORITHM_VERSION' if not algorithm.startswith('money3-derived-v1:') else 'C_CALCULATION_FAILED' if status=='ERROR' else 'D_DEPENDENCY_INVALIDATED'
             continue
         revision=revisions[day]
         if (person,day) in inputs and inputs[person,day]==dumps(revision):
@@ -190,7 +190,7 @@ def historical_analytics(source,scope,start,end):
             quote_row=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_quotes:{scope.ledger.value}:{person}',)).fetchone()
             recorded=__import__('json').loads(quote_row[0]) if quote_row else {}
             changed_quotes=[d for d in recorded.keys()|current_quotes.keys() if recorded.get(d)!=current_quotes.get(d)]
-            if not stamp or not algorithm or algorithm[0]!=ALGORITHM:incomplete=True
+            if not stamp or not algorithm or not algorithm[0].startswith('money3-derived-v1:'):incomplete=True
             impacts=[]
             if stamp:
                 impacts=[day for day,p in c.execute("SELECT day,person_id FROM invalidations WHERE detected_at>? AND table_name<>'history_prices'",(stamp[0],))
@@ -204,7 +204,7 @@ def historical_analytics(source,scope,start,end):
                 row=loads(payload)
                 if scope.category and row.values[2]!=scope.category:continue
                 if scope.search and scope.search.casefold() not in (str(row.values[3])+' '+str(row.values[1])).casefold():continue
-                valid=bool(stamp) and bool(algorithm) and algorithm[0]==ALGORITHM and not any(day is None or day<=row.values[0] for day in impacts) and not any(day<=row.values[0] for day in changed_quotes)
+                valid=bool(stamp) and bool(algorithm) and algorithm[0].startswith('money3-derived-v1:') and not any(day is None or day<=row.values[0] for day in impacts) and not any(day<=row.values[0] for day in changed_quotes)
                 values=row.values if valid else (*row.values[:19],None,*row.values[20:])
                 rows.append(ReportRow(values,{**row.metadata,'person_id':person,'baseline_valid':valid}))
     return SimpleNamespace(scope=scope,reports={'每日持仓收益':Report('每日持仓收益',DAILY_COLUMNS,tuple(rows))},incomplete_people=incomplete,baseline_end=None if incomplete else baseline_end)
