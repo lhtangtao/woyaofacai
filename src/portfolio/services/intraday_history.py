@@ -190,14 +190,29 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
             raise ValueError('查询已取消')
         values = []
         for group, s in state.items():
-            if stamp >= regular_start:
-                applied = s[8] if len(s) > 8 else False
-                ratio = s[7] if len(s) > 7 else Decimal(1)
-                if not applied:
+            candles = prices[group[1]]
+            index = bisect_right([item[0] for item in candles], stamp - timedelta(minutes=5)) - 1
+            if index >= 0:
+                price = candles[index][2]
+            else:
+                price = closes.get(group[1])
+            applied = s[8] if len(s) > 8 else False
+            ratio = s[7] if len(s) > 7 else Decimal(1)
+            if not applied and ratio != Decimal(1):
+                prev_close = closes.get(group[1])
+                early_post_split = (
+                    index >= 0
+                    and price is not None
+                    and prev_close is not None
+                    and prev_close > 0
+                    and abs(price - (prev_close / ratio)) < abs(price - prev_close)
+                )
+                if stamp >= regular_start or early_post_split:
                     if len(s) > 8:
                         s[8] = True
-                    if ratio != Decimal(1):
-                        s[0] = normalize_quantity(s[0] * ratio)
+                    s[0] = normalize_quantity(s[0] * ratio)
+            elif not applied and stamp >= regular_start and len(s) > 8:
+                s[8] = True
             while s[4] < len(s[5]) and s[5][s[4]][0] <= stamp:
                 event = s[5][s[4]][3]
                 quantity = s[0] + (event.quantity if event.incoming else -event.quantity)
@@ -208,12 +223,6 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                     s[2 if event.incoming else 3] += event.amount
                 s[4] += 1
             s[0] = normalize_quantity(s[0])
-            candles = prices[group[1]]
-            index = bisect_right([item[0] for item in candles], stamp - timedelta(minutes=5)) - 1
-            if index >= 0:
-                price = candles[index][2]
-            else:
-                price = closes.get(group[1])
             # A security with no exposure yet needs no invented price. No
             # forward-looking bar is used even if the provider returns it.
             # Money2 policy: debt shares valued at zero.
