@@ -362,17 +362,77 @@ class ReportPage(QWidget):
             val_time = next((r.metadata.get('valuation_time') for r in self.sorted_rows if r.metadata.get('valuation_time')), '')
             report_day = next((r.metadata.get('trading_day') for r in self.sorted_rows if r.metadata.get('trading_day')), '')
             curr_date_str = QDate.currentDate().toString('yyyy-MM-dd')
+            snap_str = self.snapshot_date or curr_date_str
             is_today = not self.snapshot_date or self.snapshot_date == curr_date_str
-            if val_time:
-                day_title = f'{"当前" if is_today else "所选日"}持仓估值（截至 {val_time}）'
-            elif report_day and report_day != (self.snapshot_date or curr_date_str):
-                day_title = f'有效收盘日 ({report_day}) 持仓盈亏'
+            trend_mode = getattr(self, 'trend_mode', 0)
+            if trend_mode in (1, 2):
+                from collections import defaultdict
+                from portfolio.domain.analytics import ratio, strict_sum
+                is_year = (trend_mode == 2)
+                period_str = snap_str[:4] if is_year else snap_str[:7]
+                period_label = '当年' if is_year else '当月'
+                search_tk = self.local_search.text().strip().upper()
+                tw = getattr(self, 'trend_widget', None)
+                daily_rep = None
+                if tw is not None and getattr(tw, '_shared_analytics', None) is not None and getattr(tw, '_shared_period', None) == period_str and getattr(tw, '_shared_year', None) == is_year:
+                    daily_rep = tw._shared_analytics.reports.get('每日持仓收益')
+                if daily_rep is None:
+                    daily_rep = self.reports.get('每日持仓收益')
+                period_daily = [
+                    r for r in (daily_rep.rows if daily_rep else ())
+                    if str(r.values[0]).startswith(period_str)
+                    and (selected is None or r.values[1] == selected)
+                    and (not search_tk or search_tk in str(r.values[3]).upper())
+                ]
+                period_pnl = None
+                if tw is not None and getattr(tw, '_shared_period', None) == period_str and getattr(tw, '_shared_year', None) == is_year and tw.canvas.chart:
+                    valid_pts = [v for s in tw.canvas.chart.series for _, v in s.points if v is not None]
+                    if valid_pts:
+                        period_pnl = valid_pts[-1]
+                if period_pnl is None and period_daily:
+                    period_pnl = strict_sum(r.values[19] for r in period_daily if r.values[19] is not None)
+                    max_day = max((str(r.values[0]) for r in period_daily), default='')
+                    if pnl is not None and report_day and report_day.startswith(period_str) and report_day > max_day:
+                        period_pnl = (period_pnl or Decimal(0)) + pnl
+                current_mv = strict_sum(
+                    r.values[11] if isinstance(r.values[11], Decimal)
+                    else (r.values[2] * r.values[4] if r.values[2] is not None and r.values[4] is not None else None)
+                    for r in self.sorted_rows
+                )
+                base_cap = (current_mv - period_pnl) if (current_mv is not None and period_pnl is not None) else None
+                if base_cap is None or base_cap <= 0:
+                    first_day = min((str(r.values[0]) for r in period_daily), default='')
+                    open_mv = sum((r.values[15] for r in period_daily if str(r.values[0]) == first_day and isinstance(r.values[15], Decimal)), Decimal(0))
+                    buy_mv = sum((r.values[16] for r in period_daily if isinstance(r.values[16], Decimal)), Decimal(0))
+                    base_cap = open_mv + buy_mv if (open_mv + buy_mv) > 0 else None
+                period_rate = ratio(period_pnl, base_cap) if (period_pnl is not None and base_cap is not None and base_cap > 0) else None
+                tk_gains = defaultdict(Decimal)
+                max_daily = max((str(r.values[0]) for r in period_daily), default='')
+                for r in period_daily:
+                    if r.values[19] is not None:
+                        tk_gains[r.values[3]] += r.values[19]
+                if report_day and report_day.startswith(period_str) and report_day > max_daily:
+                    for r in self.sorted_rows:
+                        if r.values[6] is not None:
+                            tk_gains[r.values[1]] += r.values[6]
+                p_up = sum(1 for v in tk_gains.values() if v > 0)
+                p_down = sum(1 for v in tk_gains.values() if v < 0)
+                p_flat = sum(1 for v in tk_gains.values() if v == 0)
+                values = ((f'{period_label}累计盈亏（{period_str}）', f'{period_pnl:+,.2f}' if period_pnl is not None else '— 正在计算…', period_pnl),
+                          (f'{period_label}收益率', f'{period_rate:+.2%}' if period_rate is not None else '— 正在计算…', period_rate),
+                          (f'{period_label}盈利 / 亏损标的', f'{p_up} / {p_down}　平盘 {p_flat}', None),
+                          ('累计盈亏（含已清仓）', f'{cumulative:+,.2f}' if cumulative is not None else '— 数据不完整', cumulative))
             else:
-                day_title = '当前持仓当日盈亏' if is_today else '所选日持仓盈亏'
-            values = ((day_title, f'{pnl:+,.2f}' if pnl is not None else '— 等待报价/基准', pnl),
-                      ('当日收益率', f'{rate:+.2%}' if rate is not None else '— 等待报价/基准', rate),
-                      ('上涨 / 下跌标的', f'{up} / {down}　平盘 {flat}　待报价 {unknown}', None),
-                      ('累计盈亏（含已清仓）', f'{cumulative:+,.2f}' if cumulative is not None else '— 数据不完整', cumulative))
+                if val_time:
+                    day_title = f'{"当前" if is_today else "所选日"}持仓估值（截至 {val_time}）'
+                elif report_day and report_day != snap_str:
+                    day_title = f'有效收盘日 ({report_day}) 持仓盈亏'
+                else:
+                    day_title = '当前持仓当日盈亏' if is_today else '所选日持仓盈亏'
+                values = ((day_title, f'{pnl:+,.2f}' if pnl is not None else '— 等待报价/基准', pnl),
+                          ('当日收益率', f'{rate:+.2%}' if rate is not None else '— 等待报价/基准', rate),
+                          ('上涨 / 下跌标的', f'{up} / {down}　平盘 {flat}　待报价 {unknown}', None),
+                          ('累计盈亏（含已清仓）', f'{cumulative:+,.2f}' if cumulative is not None else '— 数据不完整', cumulative))
             t = tokens(self)
             for card, (title, text, number) in zip(self.today_cards, values):
                 card.setText(title + '\n' + text)
