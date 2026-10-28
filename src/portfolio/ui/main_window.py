@@ -458,7 +458,9 @@ class MainWindow(InteractionMixin, QMainWindow):
         if ledger == Ledger.PERSON and person is not None:
             person_ids = (tuple(p['id'] for p in self.info.persons
                                 if p['name'] != '个人' and (p['enabled'] or self.disabled.isChecked()))
-                          if person == 'OTHERS' else (person,))
+                          if person == 'OTHERS'
+                          else tuple(person) if isinstance(person, (tuple, list))
+                          else (person,))
         end = self.as_of.date()
         start = self.start.date()
         if self.fixed_asset_period():

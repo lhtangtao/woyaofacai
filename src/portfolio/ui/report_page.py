@@ -386,9 +386,13 @@ class ReportPage(QWidget):
                 ]
                 period_pnl = None
                 if tw is not None and getattr(tw, '_shared_period', None) == period_str and getattr(tw, '_shared_year', None) == is_year and tw.canvas.chart:
-                    valid_pts = [v for s in tw.canvas.chart.series for _, v in s.points if v is not None]
-                    if valid_pts:
-                        period_pnl = valid_pts[-1]
+                    latest_by_series = []
+                    for s in tw.canvas.chart.series:
+                        s_pts = [v for _, v in s.points if v is not None]
+                        if s_pts:
+                            latest_by_series.append(s_pts[-1])
+                    if latest_by_series:
+                        period_pnl = strict_sum(latest_by_series)
                 if period_pnl is None and period_daily:
                     period_pnl = strict_sum(r.values[19] for r in period_daily if r.values[19] is not None)
                     max_day = max((str(r.values[0]) for r in period_daily), default='')

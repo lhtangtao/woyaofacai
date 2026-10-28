@@ -41,7 +41,7 @@ class ChartCanvas(QWidget):
 
     def paintEvent(self, event):
         t = tokens(self)
-        colors = (t.brand, t.teal, t.warning, t.violet, t.loss, t.muted)
+        colors = (t.brand, t.warning, t.teal, t.violet, "#EC4899", "#0284C7", "#EA580C", "#4F46E5", t.loss, t.muted)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.card_mode:
@@ -224,7 +224,8 @@ class ChartCanvas(QWidget):
         # 标记最高点与最低点（高亮圆点及金额标签）
         if getattr(chart, "highlight_extremes", False):
             painter.save()
-            for series in chart.series:
+            multi_series = len(chart.series) > 1
+            for s_idx, series in enumerate(chart.series):
                 valid_pts = [(k, v) for k, v in series.points if v is not None]
                 if not valid_pts:
                     continue
@@ -240,7 +241,10 @@ class ChartCanvas(QWidget):
                     ex = left + (category_positions[ekey] + (0 if fixed_axis else .5)) * step
                     ey = ys(evalue)
                     is_max = kind == "max"
-                    dot_color = QColor(t.profit if evalue >= 0 else t.loss) if is_max else QColor(t.loss if evalue < 0 else t.profit)
+                    if multi_series:
+                        dot_color = QColor(colors[s_idx % len(colors)])
+                    else:
+                        dot_color = QColor(t.profit if evalue >= 0 else t.loss) if is_max else QColor(t.loss if evalue < 0 else t.profit)
 
                     # 画端点圆点（双层高亮圈）
                     painter.setPen(QPen(dot_color, 2))
@@ -250,7 +254,8 @@ class ChartCanvas(QWidget):
                     painter.drawEllipse(QPointF(ex, ey), 2.5, 2.5)
 
                     # 标注金额文字与半透明胶囊背景
-                    text = f"最高 {evalue:+,.2f}" if is_max else f"最低 {evalue:+,.2f}"
+                    prefix = f"{series.name} " if multi_series else ""
+                    text = f"{prefix}最高 {evalue:+,.2f}" if is_max else f"{prefix}最低 {evalue:+,.2f}"
                     painter.setFont(chart_font(11, bold=True))
                     tw = painter.fontMetrics().horizontalAdvance(text) + 12
                     th = 20
@@ -324,8 +329,28 @@ class ChartCanvas(QWidget):
                     painter.drawText(QRectF(label_x, top + height + 5, lw, th), Qt.AlignmentFlag.AlignCenter, lbl)
                 else:
                     painter.drawText(QRectF(left + index * step - 20, top + height + 8, step + 40, 22), Qt.AlignmentFlag.AlignCenter, chart.x_labels.get(key, key))
-        painter.setPen(QColor(t.text))
-        painter.drawText(QRectF(left, self.height() - 83, width, 25), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "    ".join(s.name for s in chart.series))
+        painter.save()
+        painter.setFont(chart_font(12, bold=len(chart.series) > 1))
+        legend_x = float(left)
+        legend_y = float(self.height() - 83)
+        for s_idx, s in enumerate(chart.series):
+            s_color = QColor(colors[s_idx % len(colors)])
+            # 绘制图例色条与圆点
+            painter.setPen(QPen(s_color, 2.5))
+            painter.drawLine(QPointF(legend_x, legend_y + 12.5), QPointF(legend_x + 16, legend_y + 12.5))
+            painter.setBrush(s_color)
+            painter.drawEllipse(QPointF(legend_x + 8, legend_y + 12.5), 3.0, 3.0)
+            legend_x += 22
+            s_label = s.name
+            if len(chart.series) > 1:
+                s_valid = [v for _, v in s.points if v is not None]
+                if s_valid:
+                    s_label = f"{s.name} ({s_valid[-1]:+,.2f})"
+            painter.setPen(s_color if len(chart.series) > 1 else QColor(t.text))
+            tw_lbl = painter.fontMetrics().horizontalAdvance(s_label) + 4
+            painter.drawText(QRectF(legend_x, legend_y, tw_lbl, 25), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, s_label)
+            legend_x += tw_lbl + 18
+        painter.restore()
 
     def draw_zero(self, painter, start, end, label_rect, theme, *, ratio=False):
         painter.save()

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 from portfolio.domain.live_quotes import NY, UTC
 from portfolio.services.charts_service import Chart, Series
 from portfolio.ui.charts_page import ChartCanvas
+from portfolio.ui.filters import PersonFilter
 
 
 class ChannelFilter(QToolButton):
@@ -258,12 +259,10 @@ class MonthlyRealtimePnlPage(QWidget):
         self.mode_combo.currentIndexChanged.connect(self._on_filter_changed)
         top_bar.addWidget(self.mode_combo)
 
-        # 人员筛选下拉框（风格与主界面一致）
-        self.person_combo = QComboBox()
+        # 人员筛选下拉框（支持多选，风格与主界面一致）
+        self.person_combo = PersonFilter(self)
         self.person_combo.setMinimumWidth(125)
-        self.person_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.person_combo.view().setMinimumWidth(135)
-        self.person_combo.setToolTip("归属人员筛选（查看全部启用人员、他人、个人或具体某位人员的高频收益走势）")
+        self.person_combo.setToolTip("归属人员筛选（点击可单选或多选具体持有者叠加对比走势）")
         self.person_combo.addItem("全部启用人员", None)
         self.person_combo.addItem("他人", "OTHERS")
         self.person_combo.addItem("个人", 1)
@@ -627,6 +626,8 @@ class MonthlyRealtimePnlPage(QWidget):
         selected=self.person_combo.currentData()
         if selected == "OTHERS":
             return tuple(p['id'] for p in self._get_persons() if p.get('name') != '个人' and p.get('enabled',True))
+        if isinstance(selected, (tuple, list)):
+            return tuple(int(pid) for pid in selected) or None
         return (selected,) if selected is not None else None
 
     def _load_shared_period(self, period, year):
@@ -646,6 +647,7 @@ class MonthlyRealtimePnlPage(QWidget):
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
         people=self.analytics.scope.person_ids if inherited else self._shared_person_ids()
+        others_mode = (getattr(self.window.person, 'currentData', lambda: None)() == 'OTHERS') if inherited else (self.person_combo.currentData() == 'OTHERS')
         scope=replace(self.analytics.scope,person_ids=people,start_date=None,as_of=min(last,date.today()))
         if getattr(self,'_parent_filters',None) is None:
             scope=replace(scope,account_ids=None,instrument_ids=None,category=None,search='')
@@ -654,7 +656,7 @@ class MonthlyRealtimePnlPage(QWidget):
         channels=([inherited_filters[0]] if inherited_filters[0] else None) if inherited_filters is not None else self.channel_filter.selected_channels()
         ticker=inherited_filters[1] if inherited_filters is not None else self.stock_combo.selected_ticker()
         mode=self.mode_combo.currentData() or 'cumulative'
-        request=(period,year,scope,tuple(sorted(channels or ())),ticker,mode)
+        request=(period,year,scope,others_mode,tuple(sorted(channels or ())),ticker,mode)
         if getattr(self,'_shared_busy',None)==request:return
         self._shared_request=request;self._shared_busy=request
         self.summary_badge.setText('正在读取共享历史派生数据…')
@@ -663,11 +665,23 @@ class MonthlyRealtimePnlPage(QWidget):
             if not DerivedStore(source).readiness()['ready']:
                 rows,state=load_history(source,self.window.quote_store,scope,first,last)
                 return None,rows,state,None
-            from portfolio.services.derived_queries import historical_analytics
+            from portfolio.services.derived_queries import historical_analytics, trend
             result=historical_analytics(source,scope,first,last)
             rows,state=load_history(source,self.window.quote_store,scope,first,last,aggregate=True,channels=channels,ticker=ticker)
-            from portfolio.services.derived_queries import trend
             chart,state=trend(source,self.window.quote_store,result,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+            if scope.person_ids and len(scope.person_ids) > 1 and not others_mode:
+                persons_map = {p['id']: p['name'] for p in self._get_persons()}
+                person_series = []
+                for pid in scope.person_ids:
+                    pname = persons_map.get(pid, f"人员{pid}")
+                    sub_scope = replace(scope, person_ids=(pid,))
+                    sub_res = historical_analytics(source, sub_scope, first, last)
+                    sub_rows, sub_st = load_history(source, self.window.quote_store, sub_scope, first, last, aggregate=True, channels=channels, ticker=ticker)
+                    sub_chart, _ = trend(source, self.window.quote_store, sub_res, period, year=year, channels=channels, ticker=ticker, mode=mode, history_data=(sub_rows, sub_st))
+                    if sub_chart.series:
+                        person_series.append(Series(pname, sub_chart.series[0].points))
+                if person_series:
+                    chart = replace(chart, series=tuple(person_series))
             return result,rows,state,chart
         def ready(value):
             if self._shared_request != request:return
@@ -718,8 +732,23 @@ class MonthlyRealtimePnlPage(QWidget):
         self.canvas.chart=chart;self.canvas.update()
         self.summary_badge.setText(state.get('message',''))
         self.notes_label.setText(chart.note)
-        valid=[(k,v) for series in chart.series for k,v in series.points if v is not None]
-        self.status_label.setText(f'有效采样 {len(valid)} · 最新 {valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
+        if len(chart.series) > 1:
+            parts = []
+            total_latest = Decimal(0)
+            total_pts = 0
+            for s in chart.series:
+                s_valid = [v for _, v in s.points if v is not None]
+                if s_valid:
+                    total_pts = max(total_pts, len(s_valid))
+                    total_latest += s_valid[-1]
+                    parts.append(f"{s.name} {s_valid[-1]:+,.2f} USD")
+            self.status_label.setText(
+                f"有效采样 {total_pts} · 合计 {total_latest:+,.2f} USD（" + " · ".join(parts) + "）"
+                if parts else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。'
+            )
+        else:
+            valid=[(k,v) for series in chart.series for k,v in series.points if v is not None]
+            self.status_label.setText(f'有效采样 {len(valid)} · 最新 {valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
         if year:
             months=state.get('months',{})
             coverage='；'.join(f"{month[5:]}月 {info['saved_days']}日/{info['complete_points']}个完整点" for month,info in sorted(months.items()) if month[5:]<='06')

@@ -279,12 +279,12 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                         chosen=(stamp,value,current_segment)
                 if chosen:
                     stamp,value,current_segment=chosen
-                    points.append((stamp.isoformat(),value))
+                    points.append((stop.isoformat(),value))
                     last_val=value
                 elif bucket_start<now and has_day_obs and last_val is not None:
-                    points.append((min(stop,now).isoformat(),last_val))
+                    points.append((stop.isoformat(),last_val))
                 else:
-                    if points[-1][0]!=bucket_start.isoformat():points.append((bucket_start.isoformat(),None))
+                    if points[-1][0]!=stop.isoformat():points.append((stop.isoformat(),None))
                 bucket_start=stop
             if close<now:
                 filtered_exposure=any(bool(items) if state.get('aggregated') else any((channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper()) for x in items) for _,items in samples)

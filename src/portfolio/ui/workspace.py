@@ -25,7 +25,7 @@ from portfolio.ui.charts_page import ChartsPage
 from portfolio.ui.components import FilterChips, MetricCard, StatusLabel
 from portfolio.ui.dashboard_page import DashboardPage
 from portfolio.ui.date_picker import DatePicker
-from portfolio.ui.filters import AccountFilter, TickerSearch
+from portfolio.ui.filters import AccountFilter, PersonFilter, TickerSearch
 from portfolio.ui.icons import icon
 from portfolio.ui.live_quotes import LiveQuotesPanel
 from portfolio.ui.report_page import ReportPage
@@ -125,13 +125,13 @@ def build_workspace(self):
     filters.setSpacing(10)
     common = QHBoxLayout()
     common.setSpacing(8)
-    self.person = QComboBox()
+    self.person = PersonFilter()
     self.person.addItem("全部启用人员", None)
     self.accounts = AccountFilter()
     self.accounts.setMinimumWidth(124)
     self.stock = TickerSearch()
     self.stock.addItem("全部股票", None)
-    for widget, width, tip in ((self.person, 124, "归属人员"), (self.stock, 148, "输入 Ticker 自动匹配，选择后筛选；清空恢复全部股票。")):
+    for widget, width, tip in ((self.person, 136, "归属人员（支持单选或多选；折线图将自动按不同颜色叠加展示所选各人员曲线）"), (self.stock, 148, "输入 Ticker 自动匹配，选择后筛选；清空恢复全部股票。")):
         widget.setFixedWidth(width)
         widget.setToolTip(tip)
     self.as_of = DatePicker(QDate.currentDate())

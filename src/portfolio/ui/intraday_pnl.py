@@ -77,12 +77,20 @@ class IntradayPnlChart(QWidget):
 
     def bind(self, store, source_path, scope, report, session, now, *, record=False, trading_days=()):
         self.error = ''
+        self.scope = scope
+        self.person_names = {}
         self.day, self.target_day, self.is_fallback = _resolve_effective_day(
             scope.as_of, session, report, trading_days
         )
         self.snapshots = ()
         if not store or not source_path or not self.day:
             return
+        try:
+            from portfolio.db.connection import readonly_connection
+            with readonly_connection(source_path) as c:
+                self.person_names = {r[0]: r[1] for r in c.execute('SELECT id, name FROM persons')}
+        except Exception:
+            pass
         key=scope_key(source_path,scope)
         self.key=key,self.day
         self.history=();self.snapshots=()
@@ -108,12 +116,22 @@ class IntradayPnlChart(QWidget):
         history = True
         observations = self.history
         interval = timedelta(minutes=5)
+        win = self.window()
+        others_mode = getattr(getattr(win, 'person', None), '_others_mode', False) if win else False
+        scope_pids = getattr(getattr(self, 'scope', None), 'person_ids', None)
+        multi_pids = scope_pids if (scope_pids and len(scope_pids) > 1 and not others_mode) else None
+        per_person_samples = {pid: {} for pid in (multi_pids or ())}
         for stamp, phase, rows in observations:
             selected = [r for r in rows if (channel is None or r['channel'] == channel)
                         and search.casefold().strip() in r['ticker'].casefold()]
             with localcontext() as context:
                 context.prec = 50
                 value = sum((Decimal(r['pnl']) for r in selected), Decimal(0)) if selected and all(r['pnl'] is not None for r in selected) else None
+                if multi_pids:
+                    for pid in multi_pids:
+                        p_sel = [r for r in selected if r.get('person_id') == pid]
+                        p_val = sum((Decimal(r['pnl']) for r in p_sel), Decimal(0)) if p_sel and all(r['pnl'] is not None for r in p_sel) else (Decimal(0) if rows else None)
+                        per_person_samples[pid][stamp.astimezone(UTC)] = p_val
             complete += value is not None
             samples[stamp.astimezone(UTC)] = value
             from portfolio.engine.today_holdings import intraday_scope_parts
@@ -121,6 +139,7 @@ class IntradayPnlChart(QWidget):
         # Keep the entire session on screen, even before the market closes.
         # ISO keys remain unique across midnight; only tick labels omit dates.
         points, labels, ticks = [], {}, []
+        person_points = {pid: [] for pid in (multi_pids or ())}
         vertical_lines = []
         if self.day:
             target = date.fromisoformat(self.day)
@@ -128,6 +147,7 @@ class IntradayPnlChart(QWidget):
             end = datetime.combine(target, time(20), NY).astimezone(UTC)
             max_stamp = max((s for s, v in samples.items() if v is not None), default=None)
             last_val = None
+            last_p_vals = {pid: None for pid in (multi_pids or ())}
             stamp = start
             while stamp <= end:
                 key = stamp.isoformat()
@@ -137,6 +157,14 @@ class IntradayPnlChart(QWidget):
                 elif max_stamp is not None and stamp <= max_stamp and last_val is not None:
                     val = last_val
                 points.append((key, val))
+                if multi_pids:
+                    for pid in multi_pids:
+                        pv = per_person_samples[pid].get(stamp)
+                        if pv is not None:
+                            last_p_vals[pid] = pv
+                        elif max_stamp is not None and stamp <= max_stamp and last_p_vals[pid] is not None:
+                            pv = last_p_vals[pid]
+                        person_points[pid].append((key, pv))
                 labels[key] = stamp.astimezone(zone).strftime('%H:%M')
                 if (stamp-start).total_seconds() % 1800 == 0 or stamp == end:
                     ticks.append(key)
@@ -159,8 +187,15 @@ class IntradayPnlChart(QWidget):
             ]
         title = '当日全部交易盈亏五分钟走势（含当日清仓）'
         day_sub = f'{self.day}（非交易日自动回溯）' if self.is_fallback else (self.day or "—")
+        if multi_pids:
+            series_tuple = tuple(
+                Series(getattr(self, 'person_names', {}).get(pid, f'人员{pid}'), tuple(person_points[pid]))
+                for pid in multi_pids
+            )
+        else:
+            series_tuple = (Series('当日全部交易盈亏（含当日清仓）', tuple(points)),)
         self.canvas.chart = Chart(-100, f'{title}（USD） · 实盘交易日 {day_sub}', 'line',
-                                  (Series('当日全部交易盈亏（含当日清仓）', tuple(points)),),
+                                  series_tuple,
                                   '北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。未到时段留白；五分钟K线估值，含当日清仓。' if history else
                                   '北京时间；完整交易时段固定显示，未到时段留白。正在补取长桥历史五分钟行情。',
                                   x_labels=labels, x_ticks=tuple(ticks),
