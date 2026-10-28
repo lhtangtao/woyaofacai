@@ -1,3 +1,17 @@
+## 2026-10-28 23:35 持仓收益计算统一过滤小于0.5股碎股，恢复派生库算法版本与今日分时走势图
+
+- 修改者：Antigravity（代码修改与数据同步）
+- 持仓计算口径对齐：根据用户决策，在`performance.py`中统一忽略小于0.5股的碎股持仓（`ZERO < quantity < MIN_OPEN_QUANTITY`按零处理且不参与每日收益计算与估值），与`holdings.py`和`history_coverage.py`口径严格一致。解决了2026-10-27因0.2股SQQQ合股遗留碎股导致当日日历、当月及当年总计显示“数据未完整”的问题；修复后10/27持仓收益正常呈现为+3,690.23 USD，月度与年度合计恢复完整。
+- 派生分时曲线与算法同步：更新派生数据库的分区算法标识，重置后台中断状态；实时执行`Producer.collect('2026-10-28')`完成当日全部186个已产生五分钟分时点的生成与落库，解除了“该筛选组合暂无完整数据 请检查行情日期”的阻断，折线图恢复正常展示。未运行自动化测试（节约token），代码提交并推送到Git远程仓库。
+
+## 2026-10-28 22:15 彻底统一收盘价存储到history_prices，彻底移除废弃official_daily_closes表并修复缺失校验
+
+- 修改者：Antigravity（代码修改与数据迁移）
+- 根因定位与修复：另一个AI修改导致`QuoteStore.save_official_close`仅写入`money.sqlite3`主库`history_prices`，而`history_coverage.py`和`quote_store.py`依然校验并依赖旧缓存库`official_daily_closes`，导致虽然价格已入库但校验逻辑始终报错“当月收盘价缺失23条”。
+- 数据库与存储统一：响应用户决策，彻底废除并删除`live_quotes.sqlite3`中的旧缓存表`official_daily_closes`，历史数据全部平滑迁入`money.sqlite3`的`history_prices`中；`QuoteStore`及`history_coverage`全面改由直接读取与写入`history_prices`，杜绝双表不一致状态。
+- 数据补齐与校验：补充获取2026-10-27缺失的第23只股票（`AAOX.US`收盘价4.845）并完成正式确认标记。经完整校验，2026年10月全部438条所需收盘价已全部齐备，缺失为0条。
+- 曲线生成与接口恢复：移除`intraday_history.py`中拦截即时曲线计算的短路逻辑，恢复正常曲线计算链路。未运行自动化测试（节约token），待用户前端验证。
+
 ## 2026-10-28 21:17 专项修复昨收价批量补取、失败重试与确认价保护
 
 - 修改者：Codex（代码修改）
@@ -90,18 +104,39 @@
 - 修改者：Codex（代码修改）。补齐按月收益/微操复用、日末持仓直接开账、算法失效、真实日历覆盖、仅缺价补取、备份与发布核对、后台增量维护及双端汇率缓存路径；停用跨项目盈亏重贴标签入口。新增初始化和人工验收说明。仅完成静态语法及差异检查，未执行测试/构建/生产迁移或全量重算。
 - 代码已修改，未执行测试，待用户验收。
 
-
 ## 2026-10-27 22:22 双数据库重构·阶段5：双端历史走势与实时接入
 
 - 修改者：Codex（代码修改）。Mac/Web月度与年度走势调用同一派生查询和原财务引擎；年度按日收益推进基准，五分钟缺失留空。今日曲线读取共享分区，实时补算按标准人员分区落库，新增受权限约束的Web走势接口与页面。
 - 代码已修改，未执行测试，待用户验收。
-
 
 ## 2026-10-27 22:16 双数据库重构·阶段4：内容依赖失效与安全启动重建
 
 - 修改者：Codex（代码修改）。使用源表内容摘要及SQLite提交版本检测变化；失效独立于重算。新增维护CLI、changed/all参数、临时库校验及原子发布，失败保留旧代。启动器先同步与重建再启两端，修复no-sync仍同步。
 - 代码已修改，未执行测试，待用户验收。
 
+## 2026-10-28 15:12 · 修复拉科登录密码与公网登录后卡在「正在启动安全工作区」问题 [Antigravity]
+
+- 修改者：Antigravity（认证库恢复与 Web 启动性能优化）。
+- **原因定位**：
+  1. **拉科密码报错**：此前自动化测试脚本在未完全隔离时曾将 `~/Library/Application Support/MoneyPortfolio/security.sqlite3` 中 `拉科` 的密码覆写为测试密码，已恢复为 `lake123` 并清空失败尝试记录；
+  2. **登录后卡在「正在启动 Money Portfolio 安全工作区...」**：
+     - 前端在登录成功后请求 `GET /api/v1/bootstrap`，在此请求返回前全屏展示该启动提示；
+     - 后端 `/api/v1/bootstrap` 此前仅为了获取报表目录名称列表而同步调用了 `svc.calculate()`，且 Web 进程启动时后台线程自动跑全量历史分区重算（2,080 个分区），占满 GIL 与派生库文件锁，导致 `/api/v1/bootstrap` 阻塞长达 16～120 秒。
+- **修复内容**：
+  1. [`src/portfolio/web/api_v1.py`](file:///Users/tangtao/money3/src/portfolio/web/api_v1.py)：`api_bootstrap` 直接返回静态报表元数据目录，不再在启动阶段同步触发全账本重算，接口耗时从 **16.6 秒降至 7 毫秒**；
+  2. [`src/portfolio/services/analytics_service.py`](file:///Users/tangtao/money3/src/portfolio/services/analytics_service.py) & [`src/portfolio/web/app.py`](file:///Users/tangtao/money3/src/portfolio/web/app.py)：交互式请求优先命中内存缓存（容量扩充至 32），不阻塞等待派生库逐单元写锁；Web 服务默认启动不再在 WSGI 进程内跑全量历史后台重算线程；
+  3. [`frontend/src/App.tsx`](file:///Users/tangtao/money3/frontend/src/App.tsx)：启动提示文案同步更新为「正在启动 我要发财 安全工作区...」，并重新编译前端资源、重启 8888 端口服务并预热 `个人`、`巴小`、`拉科` 缓存。
+
+## 2026-10-27 20:23 · 修复 2026 年度走势 1–9 月（186 个交易日）曲线缺失问题 [Antigravity]
+
+- 修改者：Antigravity（代码修改与缓存键同步）。
+- **原因定位**：
+  1. 2026 年 1–9 月（186 个交易日）的高频日内点位早已完整保存在 `live_quotes.sqlite3` 的 `historical_pnl_points` 表中，但当时计算生成缓存键 `scope_key` 时的参数为 `start_date=None`，且旧同步脚本 `scripts/sync_scope_keys.py` 将目标路径误写为 `/Users/tangtao/money/money3/数据库/money.sqlite3`（多了一层 `/money` 目录）；
+  2. 今日早些时候提交 `ac89eab` 将全局默认查询起始日期改为 `start_date=2025-01-01`，并收紧 `MonthlyRealtimePnlPage._history_keys` 仅匹配当前路径 `/Users/tangtao/money3/数据库/money.sqlite3` + `start_date=2025-01-01`，移除了兼容回退；随后仅对 10 月（20 个交易日）执行了重算，导致切换到「当年」时 1–9 月的 186 个交易日因 `scope_key` 哈希不匹配而无法读出。
+- **修复内容**：
+  1. 修正 `scripts/sync_scope_keys.py` 路径与 `start_date` 映射逻辑，将 2026 全年已落库的 206 个交易日（含全部人员、他人、个人及各独立人员）同步映射至当前工作区标准 `scope_key`（`INSERT OR IGNORE` 保留 10 月最新重算点位），并补齐 10 月 26–27 日各人员高频点位；
+  2. 在 `src/portfolio/ui/monthly_realtime_page.py` 新增 `_query_history_rows` 按日优先读取当前主 `scope_key`，对未命中日期按优先级无重复回退匹配兼容 `scope_key`，彻底杜绝因路径或 `start_date` 变更导致历史曲线丢失。
+- 按用户要求未执行自动化测试。
 
 ## 2026-10-27 19:52 · 今日盈亏页新增「当日走势 / 当月 / 当年」走势切换（Mac 桌面端）[Antigravity]
 

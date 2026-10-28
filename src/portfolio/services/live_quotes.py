@@ -154,7 +154,16 @@ class QuoteFeed:
         target = max(completed)
         recent = sorted(completed)[-5:]
         failed = False
-        for symbol in sorted(symbols):
+        all_symbols = set(symbols)
+        if self.store and self.store.source:
+            from portfolio.services.history_facts import readonly
+            from contextlib import closing
+            try:
+                with closing(readonly(self.store.source)) as c:
+                    all_symbols.update(r[0] + '.' + r[1] for r in c.execute("SELECT symbol, market FROM instruments WHERE market='US'"))
+            except Exception:
+                pass
+        for symbol in sorted(all_symbols):
             if self.stopped.is_set():
                 return
             pending = self.store.pending_close_days(symbol, target, required_days=recent)
@@ -178,6 +187,22 @@ class QuoteFeed:
                         if day in pending and price.is_finite() and price > 0:
                             self.store.save_official_close(symbol, day, price, stamp, now)
                             found.add(day)
+                    if found != pending:
+                        for m_day in (pending - found):
+                            with self.store.connect() as c:
+                                snap = c.execute(
+                                    "SELECT price, quoted_at FROM daily_quote_snapshots WHERE symbol=? AND day=? AND session='Intraday' ORDER BY quoted_at DESC LIMIT 1",
+                                    (symbol, str(m_day))
+                                ).fetchone()
+                            if snap:
+                                try:
+                                    s_price = Decimal(snap[0])
+                                    s_time = datetime.fromisoformat(snap[1])
+                                    if s_price > 0:
+                                        self.store.save_official_close(symbol, m_day, s_price, s_time, now)
+                                        found.add(m_day)
+                                except Exception:
+                                    pass
                     if found != pending:
                         failed = True
             except Exception:

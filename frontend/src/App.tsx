@@ -182,7 +182,7 @@ export const App: React.FC = () => {
           fontWeight: 600,
         }}
       >
-        <span>正在启动 Money Portfolio 安全工作区...</span>
+        <span>正在启动 我要发财 安全工作区...</span>
       </div>
     );
   }

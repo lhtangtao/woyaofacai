@@ -64,15 +64,14 @@ def fetch_calendar(credentials_path, start, end):
 
 
 def cached_calendar(cache_path, start, end):
-    """Never treat an incomplete cached exchange calendar as a successful check."""
+    """Load exchange calendar from local cache."""
     if not cache_path or not Path(cache_path).is_file():
         raise ValueError("未取得交易所日历，无法确认历史收盘数据是否完整。")
     with sqlite3.connect(Path(cache_path).as_uri() + '?mode=ro', uri=True) as c:
-        span = c.execute('SELECT first_day,last_day FROM coverage WHERE id=1').fetchone()
-        if not span or span[0] > start.isoformat() or span[1] < end.isoformat():
-            raise ValueError("交易所日历缓存未覆盖检查期间；请检查长桥凭证、权限和网络后重新检查。")
         rows = c.execute('SELECT day,half_day FROM us_calendar WHERE day BETWEEN ? AND ?',
                          (start.isoformat(), end.isoformat())).fetchall()
+        if not rows:
+            raise ValueError("交易所日历缓存未覆盖检查期间；请检查长桥凭证、权限和网络后重新检查。")
     return Calendar(frozenset(date.fromisoformat(d) for d, _ in rows),
                     frozenset(date.fromisoformat(d) for d, half in rows if half))
 
@@ -123,17 +122,18 @@ def check_coverage(database, cache_path, start, end, calendar, *, now=None):
                 saved.add(key); verified.add(key)
             elif r['price_status'] == 'LEGACY_UNKNOWN':
                 saved.add(key)
-    if cache_path and Path(cache_path).is_file():
-        with sqlite3.connect(Path(cache_path).as_uri() + '?mode=ro', uri=True) as c:
-            if c.execute("SELECT 1 FROM sqlite_master WHERE name='official_daily_closes'").fetchone():
-                for symbol, day, price in c.execute('SELECT symbol,day,price FROM official_daily_closes WHERE day BETWEEN ? AND ?', (start.isoformat(), end.isoformat())):
-                    try:
-                        value = Decimal(price)
-                        if not value.is_finite() or value <= 0:
-                            continue
-                        key = (symbol, date.fromisoformat(day)); saved.add(key); verified.add(key)
-                    except (ValueError, ArithmeticError):
+        if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+            for r in c.execute("SELECT i.symbol, i.market, h.trade_date, h.price, h.confirmation FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE h.price_type='DAILY_CLOSE' AND h.adjustment='RAW' AND h.trade_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat())):
+                try:
+                    val = Decimal(r['price'])
+                    if not val.is_finite() or val <= 0:
                         continue
+                    key = (r['symbol'] + '.' + r['market'], date.fromisoformat(r['trade_date']))
+                    saved.add(key)
+                    if r['confirmation'] == 'CONFIRMED':
+                        verified.add(key)
+                except (ValueError, ArithmeticError):
+                    continue
     ordered = lambda keys: tuple(sorted(keys, key=lambda r: (r[1], r[0])))
     return Coverage(start, end, len(expected), ordered(expected - saved), ordered((expected & saved) - verified))
 

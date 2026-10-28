@@ -1658,8 +1658,6 @@ def api_network_info():
 
 def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = False):
     """Start the mobile web server using production WSGI server."""
-    from portfolio.derived import prepare_startup
-    prepare_startup(DATABASE_PATH,background=True)
     net = get_network_info()
     print("==================================================================")
     print("  🚀 我要发财 移动端安全工作站已就绪！")
@@ -1679,11 +1677,12 @@ def run_mobile_server(host: str = "0.0.0.0", port: int = 8888, debug: bool = Fal
 
 if __name__ == "__main__":
     import argparse
-    from portfolio.derived import prepare_startup
     parser = argparse.ArgumentParser(description="Money3 Web")
     parser.add_argument('--rebuild-derived',choices=('changed','all'))
     parser.add_argument('--host',default='0.0.0.0')
     parser.add_argument('--port',type=int,default=8888)
     options = parser.parse_args()
-    prepare_startup(DATABASE_PATH,options.rebuild_derived,background=True)
+    if options.rebuild_derived:
+        from portfolio.derived import prepare_startup
+        prepare_startup(DATABASE_PATH,options.rebuild_derived,background=False)
     run_mobile_server(options.host,options.port)

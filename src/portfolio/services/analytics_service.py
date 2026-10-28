@@ -24,6 +24,7 @@ class AnalyticsService:
     """Single-snapshot pipeline; bounded process-local cache; never writes source."""
     def __init__(self, path, *, audit_start=AUDIT_START_DATE, fx_store=None, quote_store=None, derived_store=None):
         self.path = Path(path).expanduser().resolve()
+        self._explicit_derived = derived_store is not None
         from portfolio.services.derived_store import DerivedStore
         self.derived = derived_store or DerivedStore(self.path)
         if self.derived.available and quote_store is None:
@@ -67,13 +68,19 @@ class AnalyticsService:
         return PeopleBundle(aggregate, tuple(persons), broker)
 
     def calculate(self, scope, *, cancel=None, use_cache=True):
-        from portfolio.services.derived_dependencies import check_changes
-        changes=check_changes(self.path,self.derived)
-        if changes.get('financial_changed') and self.derived.path.name == self.path.stem+'_derived.sqlite3':
-            from portfolio.services.derived_maintenance import schedule_changed
-            schedule_changed(self.path)
-        with self.derived.active():
-            return self._calculate(scope, cancel=cancel, use_cache=use_cache)
+        key = (self.identity(), scope, "decimal-engine-2", self.audit_start)
+        with self._lock:
+            if use_cache and key in self._cache:
+                return self._cache[key]
+        if self._explicit_derived:
+            from portfolio.services.derived_dependencies import check_changes
+            changes = check_changes(self.path, self.derived)
+            if changes.get('financial_changed') and self.derived.path.name == self.path.stem + '_derived.sqlite3':
+                from portfolio.services.derived_maintenance import schedule_changed
+                schedule_changed(self.path)
+            with self.derived.active():
+                return self._calculate(scope, cancel=cancel, use_cache=use_cache)
+        return self._calculate(scope, cancel=cancel, use_cache=use_cache)
 
     def _calculate(self, scope, *, cancel=None, use_cache=True):
         key = (self.identity(), scope, "decimal-engine-2", self.audit_start)
@@ -182,7 +189,7 @@ class AnalyticsService:
                 from portfolio.services.derived_store import SourceChangedError
                 raise SourceChangedError("原始数据或参考行情在计算期间变化，请刷新重试；未发布本次结果。")
             with self._lock:
-                if len(self._cache) >= 4:
+                if len(self._cache) >= 32:
                     self._cache.pop(next(iter(self._cache)))
                 self._cache[key] = result
             return result

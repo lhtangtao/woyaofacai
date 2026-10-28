@@ -78,7 +78,8 @@ def import_history(source, legacy):
         for r in before.execute('SELECT id,symbol,market FROM instruments'):
             symbols.setdefault(r['symbol']+'.'+r['market'],set()).add(r['id'])
         old.execute('BEGIN')  # one consistent legacy snapshot, including WAL
-        source_hash = hashlib.sha256((table_digest(old,'intraday_candles')+table_digest(old,'official_daily_closes')).encode()).hexdigest()
+        has_closes = bool(old.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='official_daily_closes'").fetchone())
+        source_hash = hashlib.sha256((table_digest(old,'intraday_candles') + (table_digest(old,'official_daily_closes') if has_closes else '')).encode()).hexdigest()
         with closing(sqlite3.connect(source,timeout=60)) as out:
             out.execute('PRAGMA foreign_keys=ON')
             # executescript would commit an existing transaction: begin inside it.
@@ -104,8 +105,9 @@ def import_history(source, legacy):
                         out.execute('INSERT INTO history_prices VALUES (?,?,?,?,?,?,?,?,?,?,?)',(*key,str(price),confirmation,utcnow(),source_hash));inserted+=1
                 for r in old.execute('SELECT symbol,day,stamp,session,close FROM intraday_candles'):
                     save(*r[:3],'FIVE_MINUTE',r[3],r[4],'LEGACY_COMPLETED')
-                for r in old.execute('SELECT symbol,day,price,candle_time FROM official_daily_closes'):
-                    save(r[0],r[1],r[3],'DAILY_CLOSE','Intraday',r[2],'CONFIRMED')
+                if has_closes:
+                    for r in old.execute('SELECT symbol,day,price,candle_time FROM official_daily_closes'):
+                        save(r[0],r[1],r[3],'DAILY_CLOSE','Intraday',r[2],'CONFIRMED')
                 if any(table_digest(out,n)!=v for n,v in hashes.items()): raise ValueError('原始表内容校验不一致。')
                 if out.execute('PRAGMA foreign_key_check').fetchone(): raise ValueError('外键完整性检查失败。')
                 out.execute('INSERT INTO history_price_imports VALUES (?,?,?,?,?)',(stamp,utcnow(),source_hash,inserted,str(backup)))

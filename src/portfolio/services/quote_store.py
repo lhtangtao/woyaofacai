@@ -11,6 +11,10 @@ from portfolio.domain.live_quotes import NY, UTC, LiveQuote
 class QuoteStore:
     def __init__(self, path, *, source=None):
         self.path = Path(path).expanduser().resolve()
+        if source is None:
+            from portfolio.paths import DATABASE_PATH
+            if DATABASE_PATH.is_file():
+                source = DATABASE_PATH
         self.source = Path(source).resolve() if source else None
 
     def connect(self):
@@ -21,7 +25,6 @@ class QuoteStore:
         c.execute('CREATE TABLE IF NOT EXISTS us_calendar (day TEXT PRIMARY KEY, half_day INTEGER NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS coverage (id INTEGER PRIMARY KEY CHECK(id=1), first_day TEXT NOT NULL, last_day TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS daily_quote_snapshots (symbol TEXT NOT NULL, day TEXT NOT NULL, session TEXT NOT NULL, price TEXT NOT NULL, quoted_at TEXT NOT NULL, PRIMARY KEY(symbol,day,session))')
-        c.execute('CREATE TABLE IF NOT EXISTS official_daily_closes (symbol TEXT NOT NULL, day TEXT NOT NULL, price TEXT NOT NULL, candle_time TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY(symbol,day))')
         c.execute('CREATE TABLE IF NOT EXISTS earnings_calendar_cache (cache_key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, warning TEXT NOT NULL, payload_json TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS minute_pnl_snapshots (scope_key TEXT NOT NULL, day TEXT NOT NULL, minute TEXT NOT NULL, observed_at TEXT NOT NULL, session TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(scope_key,day,minute))')
         c.execute('CREATE TABLE IF NOT EXISTS intraday_candles (symbol TEXT NOT NULL, day TEXT NOT NULL, stamp TEXT NOT NULL, session TEXT NOT NULL, close TEXT NOT NULL, PRIMARY KEY(symbol,day,stamp))')
@@ -31,7 +34,7 @@ class QuoteStore:
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_warnings (scope_key TEXT NOT NULL, day TEXT NOT NULL, warning TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS channel_cash_snapshots (channel TEXT PRIMARY KEY, amount TEXT NOT NULL, currency TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS quote_close_revisions(day TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
-        for table in ('official_daily_closes','daily_quote_snapshots'):
+        for table in ('daily_quote_snapshots',):
             for operation in ('INSERT','UPDATE','DELETE'):
                 ref='OLD' if operation=='DELETE' else 'NEW'
                 c.execute(f"CREATE TRIGGER IF NOT EXISTS close_revision_{table}_{operation.lower()} AFTER {operation} ON {table} BEGIN INSERT INTO quote_close_revisions VALUES ({ref}.day,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1; END")
@@ -195,7 +198,7 @@ class QuoteStore:
         with self.connect() as c:
             c.execute('DELETE FROM us_calendar WHERE day>=? AND day<=?', tuple(d.isoformat() for d in covered))
             c.executemany('INSERT OR REPLACE INTO us_calendar VALUES (?,?)', [(d.isoformat(), int(d in halves)) for d in days])
-            c.execute('INSERT INTO coverage VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET first_day=excluded.first_day,last_day=excluded.last_day', tuple(d.isoformat() for d in covered))
+            c.execute('INSERT INTO coverage VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET first_day=min(first_day, excluded.first_day),last_day=max(last_day, excluded.last_day)', tuple(d.isoformat() for d in covered))
             c.execute('INSERT OR IGNORE INTO calendar_ranges VALUES (?,?)',tuple(d.isoformat() for d in covered))
 
     @staticmethod
@@ -215,13 +218,13 @@ class QuoteStore:
         Earlier/extended ticks remain explicitly partial historical estimates.
         """
         from datetime import time
+        from contextlib import closing
         now = now or datetime.now(UTC)
         if not self.path.exists():
             return ()
         with (self.read_connection() if readonly else self.connect()) as c:
             if not readonly:self._archive(c, c.execute('SELECT symbol,session,price,quoted_at FROM latest_quotes').fetchall())
             halves = {row[0] for row in c.execute('SELECT day FROM us_calendar WHERE half_day=1')}
-            official = c.execute('SELECT symbol,day,price,candle_time FROM official_daily_closes WHERE day<=?', (as_of.isoformat(),)).fetchall()
             rows = c.execute('SELECT symbol,day,session,price,quoted_at FROM daily_quote_snapshots WHERE day<=? ORDER BY day,quoted_at', (as_of.isoformat(),)).fetchall()
         chosen = {}
         for symbol, day, phase, value, stamp in rows:
@@ -238,8 +241,16 @@ class QuoteStore:
                     chosen[key] = (rank, (symbol, day, price, stamp, 'CLOSE_ESTIMATE' if near_close else 'PARTIAL_ESTIMATE'))
             except (ValueError, ArithmeticError):
                 continue
-        for symbol, day, value, stamp in official:
-            chosen[(symbol, day)] = (None, (symbol, day, Decimal(value), stamp, 'OFFICIAL_CLOSE'))
+        if self.source:
+            from portfolio.services.history_facts import readonly as source_readonly
+            with closing(source_readonly(self.source)) as c:
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+                    for sym, mkt, day, val, stamp in c.execute(
+                        "SELECT i.symbol, i.market, h.trade_date, h.price, h.stamp_utc FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW' AND h.trade_date<=?",
+                        (as_of.isoformat(),)
+                    ):
+                        full_sym = f"{sym}.{mkt}"
+                        chosen[(full_sym, day)] = (None, (full_sym, day, Decimal(val), stamp, 'OFFICIAL_CLOSE'))
         return tuple(chosen[key][1] for key in sorted(chosen))
 
     def history_identity(self):
@@ -290,15 +301,25 @@ class QuoteStore:
             snapshot.issues.append(Issue('LIVE_HISTORY', 'WARN', '包含本机保存的历史行情估值，非正式收盘数据；正式收盘数据到齐后优先替换。'))
 
     def saved_close_days(self, symbol):
-        with self.connect() as c:
-            result={date.fromisoformat(r[0]) for r in c.execute('SELECT day FROM official_daily_closes WHERE symbol=?',(symbol,))}
+        result = set()
         if self.source:
-            from portfolio.services.history_facts import HistoryFacts,readonly
+            from portfolio.services.history_facts import readonly
             from contextlib import closing
             with closing(readonly(self.source)) as c:
-                identifier=c.execute("SELECT id FROM instruments WHERE symbol||'.'||market=?",(symbol,)).fetchone()
-            if identifier:
-                result.update(date.fromisoformat(day) for i,day,_,_ in HistoryFacts(self.source).closes(date.today()) if i==identifier[0])
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+                    for r in c.execute(
+                        "SELECT h.trade_date FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",
+                        (symbol,)
+                    ):
+                        result.add(date.fromisoformat(r[0]))
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='market_prices'").fetchone():
+                    raw_sym = symbol[:-3] if symbol.endswith('.US') else symbol
+                    for r in c.execute(
+                        "SELECT trade_date FROM market_prices WHERE (symbol=? OR symbol=?) AND price_type='DAILY_CLOSE' AND price_status IN ('RAW_CLOSE', 'OFFICIAL_CLOSE')",
+                        (raw_sym, symbol)
+                    ):
+                        if r[0]:
+                            result.add(date.fromisoformat(r[0]))
         return result
 
     def pending_close_days(self, symbol, target, *, required_days=()):
@@ -323,34 +344,25 @@ class QuoteStore:
             half=c.execute('SELECT half_day FROM us_calendar WHERE day=?',(str(day),)).fetchone()
         if now<datetime.combine(day,time(13 if half and half[0] else 16),NY)+timedelta(minutes=15):
             raise ValueError('交易日尚未完成收盘确认窗口')
+        if not self.source:
+            raise ValueError('未配置源数据库路径，无法保存历史收盘价')
+        from portfolio.services.history_facts import readonly,append_completed
         with exclusive(str(self.path)+'.official-close'):
             known=[]
-            with self.read_connection() as c:
-                old=c.execute('SELECT price FROM official_daily_closes WHERE symbol=? AND day=?',(symbol,str(day))).fetchone()
-                if old:known.append(Decimal(old[0]))
-            if self.source:
-                from portfolio.services.history_facts import readonly,append_completed
-                with closing(readonly(self.source)) as c:
-                    if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
-                        known.extend(Decimal(r[0]) for r in c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))))
-                if any(value!=price for value in known):raise ValueError('已确认收盘价冲突，保留原值，需显式核对')
-                if known:return False
-                if append_completed(self.source,symbol,day,[(candle_time,'Intraday',price)],kind='DAILY_CLOSE',confirmation='CONFIRMED'):
-                    with closing(readonly(self.source)) as c:
-                        archived=c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))).fetchall()
-                    if not archived or any(Decimal(r[0])!=price for r in archived):
-                        raise ValueError('归档记录尚未确认或存在冲突，保留原记录待核对')
-                    # Source facts are authoritative; notify every dependent day
-                    # without duplicating the archived price in the legacy cache.
-                    with self.connect() as c:
-                        c.execute('INSERT INTO quote_close_revisions VALUES (?,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1',(str(day),))
-                    return True
+            with closing(readonly(self.source)) as c:
+                if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+                    known.extend(Decimal(r[0]) for r in c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))))
             if any(value!=price for value in known):raise ValueError('已确认收盘价冲突，保留原值，需显式核对')
             if known:return False
-            with self.connect() as c:
-                c.execute('INSERT INTO official_daily_closes VALUES (?,?,?,?,?)',
-                          (symbol,str(day),str(price),candle_time.isoformat(),now.astimezone(UTC).isoformat()))
-            return True
+            if append_completed(self.source,symbol,day,[(candle_time,'Intraday',price)],kind='DAILY_CLOSE',confirmation='CONFIRMED'):
+                with closing(readonly(self.source)) as c:
+                    archived=c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))).fetchall()
+                if not archived or any(Decimal(r[0])!=price for r in archived):
+                    raise ValueError('归档记录尚未确认或存在冲突，保留原记录待核对')
+                with self.connect() as c:
+                    c.execute('INSERT INTO quote_close_revisions VALUES (?,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1',(str(day),))
+                return True
+        return False
 
     def load_earnings(self, key, max_age_seconds=86400):
         if not self.path.exists():

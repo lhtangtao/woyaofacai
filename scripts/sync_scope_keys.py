@@ -16,12 +16,15 @@ from portfolio.domain.models import Ledger, QueryScope
 from portfolio.services.intraday_history import scope_key
 
 P1 = "/Users/tangtao/money/money_2/数据库/money.sqlite3"
-P2 = "/Users/tangtao/money/money3/数据库/money.sqlite3"
+P2_OLD = "/Users/tangtao/money/money3/数据库/money.sqlite3"
+P3 = "/Users/tangtao/money3/数据库/money.sqlite3"
 STORE_PATH = "/Users/tangtao/Library/Application Support/MoneyPortfolio/Money Portfolio/live_quotes.sqlite3"
 
 
 def sync_keys():
     raise RuntimeError("跨项目盈亏重贴标签已停用；请通过portfolio.derived从当前Money3事实重算。")
+    from portfolio.services.intraday_history import source_version
+
     con = sqlite3.connect(STORE_PATH)
     cur = con.cursor()
 
@@ -34,8 +37,13 @@ def sync_keys():
         1, 2, 3, 4, 5, 6, 7, 8, 9,
     ]
 
+    source_paths = [P3, P2_OLD, P1]
+    start_dates = [date(2025, 1, 1), None]
+    current_ver = source_version(P3) if Path(P3).exists() else None
+
     key_map = {}
     for d in days:
+        day_obj = date.fromisoformat(d)
         for target in persons:
             if target == "OTHERS":
                 pids = (2, 3, 4, 5, 6, 7, 8, 9)
@@ -43,26 +51,50 @@ def sync_keys():
                 pids = (target,)
             else:
                 pids = None
-            s = QueryScope(as_of=date.fromisoformat(d), reporting_currency="USD", ledger=Ledger.PERSON, person_ids=pids)
-            k1 = scope_key(P1, s)
-            k2 = scope_key(P2, s)
-            key_map[(d, k1)] = k2
+            target_keys = [
+                scope_key(
+                    P3,
+                    QueryScope(
+                        as_of=day_obj,
+                        start_date=st,
+                        reporting_currency="USD",
+                        ledger=Ledger.PERSON,
+                        person_ids=pids,
+                    ),
+                )
+                for st in start_dates
+            ]
+            for sp in source_paths:
+                for st in start_dates:
+                    src_k = scope_key(
+                        sp,
+                        QueryScope(
+                            as_of=day_obj,
+                            start_date=st,
+                            reporting_currency="USD",
+                            ledger=Ledger.PERSON,
+                            person_ids=pids,
+                        ),
+                    )
+                    key_map[(d, src_k)] = target_keys
 
     t0 = time.time()
-    print("🚀 开始双向同步 scope_key (money_2 <-> money3)...")
+    print("🚀 开始同步 scope_key 至当前工作区 (money3 + start_date=2025-01-01/None)...")
 
-    # 1. points
+    # 优先读取已经存在于 P3 的点位，使用 INSERT OR IGNORE 保证不覆盖 P3 最新重算结果
     cur.execute("SELECT scope_key, day, stamp, session, payload_json FROM historical_pnl_points")
     pts = cur.fetchall()
     to_insert_pts = []
     for k, d, stamp, sess, p_json in pts:
-        target_k = key_map.get((d, k))
-        if target_k:
-            to_insert_pts.append((target_k, d, stamp, sess, p_json))
+        target_ks = key_map.get((d, k))
+        if target_ks:
+            for tk in target_ks:
+                if tk != k:
+                    to_insert_pts.append((tk, d, stamp, sess, p_json))
 
-    print(f"  准备同步 {len(to_insert_pts)} 个高频点位...")
+    print(f"  准备补齐 {len(to_insert_pts)} 个高频点位映射...")
     cur.executemany(
-        "INSERT OR REPLACE INTO historical_pnl_points (scope_key, day, stamp, session, payload_json) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO historical_pnl_points (scope_key, day, stamp, session, payload_json) VALUES (?, ?, ?, ?, ?)",
         to_insert_pts,
     )
 
@@ -71,9 +103,10 @@ def sync_keys():
     vers = cur.fetchall()
     to_insert_vers = []
     for k, d, ver in vers:
-        target_k = key_map.get((d, k))
-        if target_k:
-            to_insert_vers.append((target_k, d, ver))
+        target_ks = key_map.get((d, k))
+        if target_ks:
+            for tk in target_ks:
+                to_insert_vers.append((tk, d, current_ver or ver))
     cur.executemany(
         "INSERT OR REPLACE INTO historical_pnl_versions (scope_key, day, source_version) VALUES (?, ?, ?)",
         to_insert_vers,
@@ -84,11 +117,13 @@ def sync_keys():
     warns = cur.fetchall()
     to_insert_warns = []
     for k, d, w in warns:
-        target_k = key_map.get((d, k))
-        if target_k:
-            to_insert_warns.append((target_k, d, w))
+        target_ks = key_map.get((d, k))
+        if target_ks:
+            for tk in target_ks:
+                if tk != k:
+                    to_insert_warns.append((tk, d, w))
     cur.executemany(
-        "INSERT OR REPLACE INTO historical_pnl_warnings (scope_key, day, warning) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO historical_pnl_warnings (scope_key, day, warning) VALUES (?, ?, ?)",
         to_insert_warns,
     )
 

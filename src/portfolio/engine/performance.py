@@ -3,7 +3,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from portfolio.domain.analytics import ZERO, Issue, Report, ReportRow, ratio, strict_sum
-from portfolio.engine.holdings import grouped_positions, label
+from portfolio.engine.holdings import MIN_OPEN_QUANTITY, grouped_positions, label
 from portfolio.engine.replay import opening_positions, replay
 
 DAILY_COLUMNS = ("日期", "渠道", "分类", "Ticker", "日末状态", "期初数量", "当日买入数量", "当日卖出数量", "日末持仓数量", "成本均价($)", "日末收盘价($)", "日末市值($)", "日末市值占比", "持仓盈亏比例", "回本涨幅", "期初市值($)", "当日买入金额($)", "当日卖出金额($)", "当日操作笔数", "当日收益($)", "累计买入金额($)", "累计卖出金额($)", "累计净投入($)")
@@ -54,6 +54,8 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
     previous, initial_values = {}, {}
     previous_quotes = {}
     for key, position in grouped_positions(initial).items():
+        if ZERO < position.quantity < MIN_OPEN_QUANTITY and "成交粒度冲突" not in position.warnings:
+            position.quantity = ZERO
         underlying = [b for b in snapshot.baselines if b["baseline_role"] == "OPENING" and b["account_id"] == key[1] and b["instrument_id"] == key[2]]
         from portfolio.domain.models import from_e8
         initial_values[key] = (position.quantity, strict_sum(from_e8(b["market_value_e8"]) for b in underlying))
@@ -64,6 +66,9 @@ def _performance(snapshot, micro_profit=None, *, cancel=None):
         if cancel and cancel.is_set():
             raise ValueError("计算已取消。")
         state = grouped_positions(captures[day])
+        for key, position in state.items():
+            if ZERO < position.quantity < MIN_OPEN_QUANTITY and "成交粒度冲突" not in position.warnings:
+                position.quantity = ZERO
         changes = defaultdict(list)
         for e in events_by_day[day]:
             if e.day > cutoffs.get(e.key, ""):

@@ -58,10 +58,6 @@ def event_time(event):
 
 
 def rebuild_history(path, analytics, credentials_path, store, day, now, cancel=None, *, prepared_snapshot=None):
-    if prepared_snapshot is None:
-        from portfolio.services.intraday_pipeline import start_pipeline
-        start_pipeline(path)
-        return '五分钟采集与全部人员计算由后台统一任务处理，图表只读取已保存结果。'
     with localcontext() as context:
         context.prec = 50
         return _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepared_snapshot)

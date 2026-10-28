@@ -174,22 +174,45 @@ def api_bootstrap():
         except Exception:
             pass
 
-    # Avoid a foreground financial replay while the first background generation runs.
-    from portfolio.services.derived_store import DerivedStore
-    cache_ready=DerivedStore(DATABASE_PATH).readiness()["ready"]
-    # Standard report list
-    reports_meta = []
-    try:
-        svc = get_analytics_service()
-        res = svc.calculate(get_user_query_scope()) if cache_ready else None
-        for name, rep in (res.reports.items() if res else ()):
-            reports_meta.append({
-                "name": name,
-                "group": "核心报表" if name in ("当前持仓", "今日盈亏", "股票汇总", "人员资产", "渠道汇总") else "明细与审计",
-                "description": getattr(rep, "note", "") or name,
-            })
-    except Exception:
-        pass
+    # Avoid a foreground financial replay during bootstrap so login/page-load responds in milliseconds.
+    _DEFAULT_REPORTS = (
+        ("当前持仓", "当前持仓"),
+        ("股票汇总", "股票汇总"),
+        ("清仓收益", "清仓收益"),
+        ("每日持仓收益", "每日持仓收益"),
+        ("每月持仓收益", "每月持仓收益"),
+        ("月度净投入明细", "月度净投入明细"),
+        ("完整交易净投入", "完整交易净投入"),
+        ("每月微操收益", "每月微操收益"),
+        ("微操配对证据", "微操配对证据"),
+        ("交易回放", "此页为有效账本完整回放；审计原始页另可查看撤销/参考行。"),
+        ("人员划转", "权益在人员之间变更，不能计入券商真实成交。"),
+        ("渠道汇总", "渠道汇总"),
+        ("分类汇总", "分类汇总"),
+        ("收益日历", "收益日历"),
+        ("季度矩阵", "季度矩阵"),
+        ("数据异常", "数据异常诊断"),
+        ("资金事件", "资金收付是净变动，未经可信期初余额不能称为现金余额。"),
+        ("资产调整", "只读原始记录；不把现金/融资调整混入股票市值。"),
+        ("导入批次", "只读原始记录；不把现金/融资调整混入股票市值。"),
+        ("汇率", "优先源库当日值；ECB参考汇率保存在独立缓存库。"),
+        ("行情状态", "行情状态"),
+        ("原始记录", "按来源行只读索引；点击查看遮盖后的 JSON，不自动导出原始敏感 payload。"),
+        ("人员资产", "人员资产"),
+        ("账户资产", "账户资产"),
+        ("指标说明", "指标说明"),
+        ("取值逻辑", "原 Excel 说明只作规则证据；与新引擎差异见决策文档。"),
+        ("总览取值逻辑", "原 Excel 说明只作规则证据；与新引擎差异见决策文档。"),
+        ("月度趋势", "月度趋势"),
+    )
+    reports_meta = [
+        {
+            "name": name,
+            "group": "核心报表" if name in ("当前持仓", "今日盈亏", "股票汇总", "人员资产", "渠道汇总") else "明细与审计",
+            "description": desc,
+        }
+        for name, desc in _DEFAULT_REPORTS
+    ]
 
     # Catalog reads stay read-only and use the actual Money3 schema.
     accounts=[]
