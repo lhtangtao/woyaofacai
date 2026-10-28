@@ -371,6 +371,7 @@ def build_workspace(self):
             self.asset_trend.sync_person_from_main(self.person.currentData())
             if self.analytics:
                 self.asset_trend.set_analytics(self.analytics)
+                self.asset_trend.update_chart()
     self.live_panel.trend_tabs.currentChanged.connect(on_today_trend_changed)
     self.person.currentIndexChanged.connect(
         lambda *_: self.asset_trend.sync_person_from_main(self.person.currentData()) if self.asset_trend.isVisible() else None)

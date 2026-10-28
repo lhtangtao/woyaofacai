@@ -219,7 +219,9 @@ class MonthlyRealtimePnlPage(QWidget):
         layout.addWidget(self.tab_bar)
 
         # 顶部控制栏
-        top_bar = QHBoxLayout()
+        self.top_bar_widget = QWidget(self)
+        top_bar = QHBoxLayout(self.top_bar_widget)
+        top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.setSpacing(8)
 
         # 月份选择器（月度 Tab 显示）
@@ -289,7 +291,7 @@ class MonthlyRealtimePnlPage(QWidget):
         export_btn = QPushButton("导出 PNG…")
         export_btn.clicked.connect(self.export)
         top_bar.addWidget(export_btn)
-        layout.addLayout(top_bar)
+        layout.addWidget(self.top_bar_widget)
 
         # 滚动区域与画布容器
         self.scroll = QScrollArea(self)
@@ -628,7 +630,13 @@ class MonthlyRealtimePnlPage(QWidget):
         return (selected,) if selected is not None else None
 
     def _load_shared_period(self, period, year):
-        if not period or not self.analytics or not self.window:
+        if not self.analytics or not self.window:
+            return
+        inherited=getattr(self,'_parent_filters',None) is not None
+        if inherited and getattr(self.analytics,'scope',None) and getattr(self.analytics.scope,'as_of',None):
+            as_of=self.analytics.scope.as_of
+            period=str(as_of.year) if year else as_of.strftime('%Y-%m')
+        if not period:
             return
         from portfolio.services.derived_queries import load_history
         source=self._resolve_source_path()
@@ -637,7 +645,6 @@ class MonthlyRealtimePnlPage(QWidget):
             first,last=date(int(period),1,1),date(int(period),12,31)
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
-        inherited=getattr(self,'_parent_filters',None) is not None
         people=self.analytics.scope.person_ids if inherited else self._shared_person_ids()
         scope=replace(self.analytics.scope,person_ids=people,start_date=None,as_of=min(last,date.today()))
         if getattr(self,'_parent_filters',None) is None:
@@ -686,7 +693,11 @@ class MonthlyRealtimePnlPage(QWidget):
         self.window.jobs[lane].signals.error.connect(failed,Qt.ConnectionType.QueuedConnection)
 
     def set_parent_filters(self,channel,ticker):
-        """Embedded Today charts share the parent channel/Ticker selection."""
+        """Embedded Today charts share the parent channel/Ticker selection and hide redundant filter controls."""
+        if hasattr(self,'top_bar_widget'):
+            self.top_bar_widget.hide()
+        if self.layout():
+            self.layout().setContentsMargins(0, 4, 0, 0)
         filters=(channel,(ticker or '').strip())
         if getattr(self,'_parent_filters',None)==filters:return
         self._parent_filters=filters
@@ -696,7 +707,11 @@ class MonthlyRealtimePnlPage(QWidget):
         self.update_chart()
 
     def _render_shared_chart(self, year):
-        period=self.year_combo.currentText() if year else self.month_combo.currentText()
+        if getattr(self,'_parent_filters',None) is not None and self.analytics and getattr(self.analytics,'scope',None) and getattr(self.analytics.scope,'as_of',None):
+            as_of=self.analytics.scope.as_of
+            period=str(as_of.year) if year else as_of.strftime('%Y-%m')
+        else:
+            period=self.year_combo.currentText() if year else self.month_combo.currentText()
         self._load_shared_period(period,year)
 
     def _display_shared_chart(self,chart,state,year):

@@ -98,7 +98,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                    extras={**snapshot.extras,'_positions_only':True}, issues=[])
     positions, _, _ = replay(past, cancel=cancel)
     events = [e for e in snapshot.events if e.day == day]
-    keys = {k for k, p in positions.items() if p.quantity >= Decimal('0.5') or p.quantity < 0}
+    keys = {k for k, p in positions.items() if p.quantity >= Decimal('0.5')}
     keys.update(e.key for e in events)
     keys = {k for k in keys if snapshot.instruments[k[2]]['market'] == 'US'}
     if not keys:
@@ -123,8 +123,10 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
             if assumes_open(event):
                 estimated_open += 1
             stamp = event_time(event)
-            if not start <= stamp < end:
-                raise ValueError('成交时间与业务日期不一致')
+            if stamp < start:
+                stamp = start
+            elif stamp >= end:
+                stamp = end - timedelta(seconds=1)
             timed[group].append((stamp, event.sequence, event.id, event))
         except (ValueError, TypeError):
             invalid.add(group)
@@ -156,7 +158,7 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     state = {}
     for group, group_keys in sorted(groups.items()):
         initial = sum((positions[k].quantity for k in group_keys if k in positions), Decimal(0))
-        opening = initial * closes[group[1]] if initial != 0 and group[1] in closes else Decimal(0) if initial == 0 else None
+        opening = initial * closes[group[1]] if initial >= Decimal('0.5') and group[1] in closes else Decimal(0) if initial < Decimal('0.5') else None
         split_ratio = Decimal(1)
         for action in snapshot.actions:
             if action['effective_date'] == day:

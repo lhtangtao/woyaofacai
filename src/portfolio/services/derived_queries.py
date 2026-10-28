@@ -266,7 +266,9 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 last_stamp=stamp
             # A real timestamp is chosen in each interval, including a partial
             # current interval. No interpolation and no stretching a stale quote.
-            if not points or points[-1][0]!=start.isoformat():points.append((start.isoformat(),None))
+            if not points or points[-1][0]!=start.isoformat():
+                start_val = baseline if (mode == 'cumulative' and start <= now and any(v is not None for _, v, _ in observations)) else None
+                points.append((start.isoformat(), start_val))
             bucket_start=start;index=0;previous_chosen=None;previous_segment=None
             while bucket_start<end:
                 stop=bucket_start+step;chosen=None
