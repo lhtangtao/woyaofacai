@@ -195,6 +195,9 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.clear_analytics()
             if self.pages.currentIndex() != 0:
                 self.banner.show_status(message, "error")
+            if message.startswith('原始数据或参考行情在计算期间变化'):
+                self.banner.show_status('账本或收盘基准正在更新，正在自动重试持仓计算；已有五分钟曲线可独立读取。','loading')
+                QTimer.singleShot(1500,self.ensure_analytics)
         elif lane == "provenance":
             self.detail.setPlainText(message)
         else:
@@ -387,8 +390,8 @@ class MainWindow(InteractionMixin, QMainWindow):
                 self._history_coverage_details = result.details()
             self.history_coverage_button.setText(text)
             self.history_coverage_button.setToolTip(self._history_coverage_details[:2000])
-            if error or result.missing:
-                self.show_history_coverage(warning=True)
+            # Coverage is advisory. Do not interrupt startup or conceal saved
+            # curves behind a modal dialog; the toolbar still exposes details.
 
         self._submit('history_coverage', task, ready)
 

@@ -67,24 +67,33 @@ def maintenance_status(source):
 def needs_rebuild(source,store,quotes,start):
     """Check journals/partitions only; unchanged startup never replays history."""
     from datetime import datetime,time,timedelta
-    from portfolio.domain.live_quotes import NY,UTC
+    from portfolio.domain.live_quotes import NY,UTC,market_trade_day
     from portfolio.services.derived_builder import historical_people,history_days
     from portfolio.services.derived_codec import dumps
     from portfolio.services.derived_store import ALGORITHM
     if not store.readiness()['ready']:return True
+    now=datetime.now(UTC)
+    _,calendar,halves,_=quotes.load(now)
+    current=market_trade_day(now,calendar,halves).isoformat()
     people=historical_people(source)
     with closing(store.connect()) as c:
-        rows=c.execute('SELECT ledger,person_id,day,algorithm,status FROM partitions').fetchall()
+        # Intraday partitions alone do not supply the cross-day baseline.
+        # Retry failed/outdated daily report owners even if their bars exist.
+        for ledger,person in [('PERSON',p) for p in people]+[('BROKER',0)]:
+            algorithm=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_algorithm:{ledger}:{person}',)).fetchone()
+            checked=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_checked:{ledger}:{person}',)).fetchone()
+            if not algorithm or algorithm[0]!=ALGORITHM or not checked:return True
+        rows=c.execute('SELECT ledger,person_id,day,algorithm,status FROM partitions WHERE day<?',(current,)).fetchall()
         if any(r[3]!=ALGORITHM or r[4]=='INVALID' for r in rows):return True
-        inputs=c.execute('SELECT day,quote_revision FROM partition_inputs GROUP BY day,quote_revision').fetchall()
+        inputs=c.execute('SELECT day,quote_revision FROM partition_inputs WHERE day<? GROUP BY day,quote_revision',(current,)).fetchall()
     revisions={}
     for day,revision in inputs:
         if day not in revisions:revisions[day]=dumps(quotes.day_revision(day))
         if revision!=revisions[day]:return True
     existing={(ledger,person,day) for ledger,person,day,_,_ in rows}
-    now=datetime.now(UTC)
     days,_=history_days(source,quotes,start,datetime.now(NY).date())
     for day in days:
+        if day.isoformat()>=current:continue
         if datetime.combine(day-timedelta(days=1),time(20),NY)>now:continue
         for ledger,person in [('PERSON',p) for p in people]+[('BROKER',0)]:
             if (ledger,person,day.isoformat()) not in existing:return True

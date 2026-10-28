@@ -171,3 +171,18 @@ class DerivedStore:
             rows.append((kind,key,dependency,ALGORITHM,data,hashlib.sha256(data).hexdigest(),utcnow()))
         with exclusive(self.path),self.connect(write=True) as c:
             c.executemany('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',rows)
+
+    def merge_units(self,other,since):
+        """Bound memory/lock time; checkpoints publish with their date rows."""
+        with other.connect() as source:
+            cursor=source.execute("SELECT * FROM objects WHERE algorithm=? AND kind<>'intraday-state' AND updated_at>=?",(ALGORITHM,since))
+            while True:
+                rows=cursor.fetchmany(32)
+                if not rows:return
+                for row in rows:
+                    if hashlib.sha256(row[4]).hexdigest()!=row[5]:raise ValueError('计算单元校验失败，未发布。')
+                with exclusive(self.path),self.connect(write=True) as target:
+                    target.executemany('''INSERT INTO objects VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(kind,object_key) DO UPDATE SET dependency=excluded.dependency,
+                        algorithm=excluded.algorithm,payload=excluded.payload,checksum=excluded.checksum,
+                        updated_at=excluded.updated_at WHERE excluded.updated_at>objects.updated_at''',rows)

@@ -377,6 +377,33 @@ def api_holdings_today():
         return jsonify(status="error", message="今日盈亏读取失败，请检查账本及行情缓存后重试；已有数据保留。"), 503
 
 
+@api_v1.route('/charts/today',methods=['GET'])
+@require_capability(CAP_VIEW_ASSETS)
+def api_saved_today_curve():
+    """Read saved five-minute points independently of full holdings reports."""
+    try:
+        from types import SimpleNamespace
+        from zoneinfo import ZoneInfo
+        from portfolio.domain.live_quotes import UTC,market_trade_day,us_session
+        now=datetime.now(UTC);today=now.astimezone(ZoneInfo('Asia/Shanghai')).date()
+        selected=date.fromisoformat(request.args.get('as_of') or str(today))
+        if selected>today:raise ValueError('截止日期不能晚于今天。')
+        scope=get_user_query_scope(as_of=selected,person_id=request.args.get('person_id',type=int))
+        scope=replace(scope,search=(request.args.get('search') or '').strip())
+        service=get_today_service()
+        _,days,halves,_=service.store.load(now)
+        if selected==today:scope=replace(scope,as_of=market_trade_day(now,days,halves))
+        context=SimpleNamespace(scope=scope,trading_days=tuple(d.isoformat() for d in sorted(days)))
+        curve=service.curve(context,None,us_session(now,days,halves) if selected==today else None,now,
+                            ticker=(request.args.get('ticker') or '').strip(),channel=request.args.get('channel') or None)
+        return jsonify(status='ok',curve=curve)
+    except (ValueError,TypeError):
+        return jsonify(status='error',message='日期或筛选条件无效，未读取其他人员数据。'),400
+    except Exception:
+        logger.exception('Saved day curve read failed')
+        return jsonify(status='error',message='五分钟派生明细暂时读取失败，请检查后台任务状态。'),503
+
+
 # ------------------------------------------------------------------------------
 # 3. Desktop Analytical Reports (28 Reports Engine)
 # ------------------------------------------------------------------------------

@@ -19,7 +19,7 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
     from portfolio.services.quote_store import QuoteStore
     source=Path(source).resolve();published=DerivedStore(source)
     with exclusive(str(published.path)+'.build',wait=False):
-        token=uuid.uuid4().hex;target=None
+        token=uuid.uuid4().hex;target=None;started_at=utcnow()
         def notify(**values):write_progress(source,job_id=token,**values)
         try:
             notify(state='INITIALIZING',message='正在后台初始化共享历史派生库。',completed_units=0,total_units=0)
@@ -84,13 +84,9 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
             if automatic:
                 # Per-date releases are already visible. Merge reusable engine
                 # units and the completion marker without replacing live rows.
-                with closing(target.connect()) as c:
-                    objects=c.execute('SELECT * FROM objects').fetchall()
+                published.merge_units(target,started_at)
                 with exclusive(published.path),closing(published.connect(write=True)) as c:
                     c.execute('BEGIN IMMEDIATE')
-                    for row in objects:
-                        old=c.execute('SELECT updated_at FROM objects WHERE kind=? AND object_key=?',row[:2]).fetchone()
-                        if not old or old[0]<row[6]:c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',row)
                     c.execute('INSERT OR REPLACE INTO jobs VALUES (?,?,?,?,?,?)',(token,mode,'PUBLISHED',utcnow(),utcnow(),json.dumps(result)))
                     c.execute("INSERT OR REPLACE INTO metadata VALUES ('generation',?)",(token,))
                     c.execute("INSERT OR REPLACE INTO metadata VALUES ('algorithm',?)",(ALGORITHM,));c.commit()
@@ -120,6 +116,16 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
             if target is not None and target.available:
                 with closing(target.connect(write=True)) as c:
                     c.execute('UPDATE jobs SET state=?,finished_at=?,detail=? WHERE id=?',('FAILED',utcnow(),type(exc).__name__,token));c.commit()
+                if automatic:
+                    try:
+                        published.merge_units(target,started_at)
+                        # Only this job's disposable staging file; never old
+                        # backups, source facts or another process's staging.
+                        for suffix in ('','-journal','-wal','-shm'):
+                            Path(str(target.path)+suffix).unlink(missing_ok=True)
+                    except Exception:
+                        import logging
+                        logging.getLogger(__name__).exception('Could not finish failed staging cleanup; published generation retained')
             notify(state='FAILED',error_type=type(exc).__name__,message='历史生成未完成，原有效代保留；后台将稍后重试，请查看本机日志。')
             raise
 

@@ -105,6 +105,8 @@ export const api = {
   // Holdings & Today Intraday PnL
   holdingsToday: (filters: TodayFilters = {}, signal?: AbortSignal) =>
     requestApi<TodaySnapshot>(`/api/v1/holdings/today?${todayQuery(filters)}`, { signal }),
+  savedTodayCurve: (filters: TodayFilters = {}, signal?: AbortSignal) =>
+    requestApi<{ status: string; curve: TodaySnapshot["curve"] }>(`/api/v1/charts/today?${todayQuery(filters)}`, { signal }),
 
   // Trades & Provenance
   trades: (params: {

@@ -37,10 +37,31 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [savedCurve, setSavedCurve] = useState<TodaySnapshot["curve"] | null>(null);
+  const [savedCurveKey, setSavedCurveKey] = useState("");
+  const [curveError, setCurveError] = useState("");
   const generation = useRef(0);
   const filters: TodayFilters = { person_id: personId, as_of: day, ticker, channel, search,
     live: live ? "1" : "0", sort_col: sort.col, sort_dir: sort.dir };
   const key = todayQuery(filters);
+  const curveKey = JSON.stringify([personId, day, channel, ticker, search]);
+  useEffect(() => {
+    const controller = new AbortController();
+    let busy = false;
+    const load = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const result = await api.savedTodayCurve(filters, controller.signal);
+        if (!controller.signal.aborted) { setSavedCurve(result.curve); setSavedCurveKey(curveKey); setCurveError(""); }
+      } catch (err: any) {
+        if (!controller.signal.aborted) setCurveError(err.message || "五分钟曲线读取失败");
+      } finally { busy = false; }
+    };
+    void load();
+    const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 5000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [curveKey, refresh]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -70,7 +91,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
 
   // Never flash the previous person's data while a new scope is loading.
   const snapshot = dataKey === key ? data : null;
-  const curve = snapshot?.curve;
+  const curve = savedCurveKey === curveKey ? savedCurve : snapshot?.curve;
   const visibleColumns = showQuoteColumns ? order : order.filter(i => i !== 7 && i !== 8);
   const selectChannel = (name: string) => setChannel(current => current === name ? "" : name);
   const channelEvents = { click: (p: any) => {
@@ -162,6 +183,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
     </div>
     {curveKind !== "day" ? <HistoricalTrendView key={curveKind} personId={personId} initialKind={curveKind} embedded selectedChannel={channel} selectedTicker={ticker} search={search} /> : <section className="card-panel today-curve" aria-label="当日盈亏走势图">
       <h3>当日五分钟盈亏走势（USD） · 实盘交易日 {curve?.day || day}</h3>
+      {curveError && <p role="alert" className="today-warning">{curveError}</p>}
       {curve?.fallback && <p className="today-warning">所选日期 {curve.target_day} 非美股交易日，已回溯至 {curve.day}</p>}
       {chartOptions && <ReactECharts option={chartOptions} notMerge style={{ height: 420 }} />}
       {!curve?.complete_points && <p className="today-warning">{curve?.pending ? "后台正在采集并计算五分钟数据…" : "当前筛选暂无有效曲线数据；未生成模拟点。"}</p>}

@@ -20,6 +20,8 @@ from portfolio.services.derived_store import BuildBusyError,DerivedStore,exclusi
 
 _THREADS={};_LOCK=RLock()
 _HISTORY_POOL=ThreadPoolExecutor(max_workers=1,thread_name_prefix='money3-price-gaps')
+_CLOSE_POOL=ThreadPoolExecutor(max_workers=1,thread_name_prefix='money3-close-repair')
+_CLOSE_JOBS={}
 
 
 def pipeline_status(source):
@@ -136,6 +138,12 @@ class Producer:
             symbol=base.instruments[identifier]['symbol']+'.US';key=(symbol,previous)
             if key in self.close_attempts and now-self.close_attempts[key]<timedelta(minutes=30):continue
             self.close_attempts[key]=now
+            marker=f'close_attempt:{identifier}:{previous}'
+            with closing(self.store.connect()) as c:
+                attempted=c.execute('SELECT value FROM metadata WHERE key=?',(marker,)).fetchone()
+            if attempted and now-datetime.fromisoformat(attempted[0])<timedelta(minutes=30):continue
+            with exclusive(self.store.path),closing(self.store.connect(write=True)) as c:
+                c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(marker,now.isoformat()));c.commit()
             try:
                 from longbridge.openapi import AdjustType,Period,TradeSessions
                 if context is None:context=create_context(CREDENTIALS_PATH)
@@ -147,20 +155,37 @@ class Producer:
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning('Previous close unavailable; baseline remains missing')
+            # One symbol per background repair turn; a missing provider result
+            # must never hold up all current-day candle collection.
+            break
         return changed
+
+    def schedule_closes(self,base,ids,day,now):
+        if not CREDENTIALS_PATH.is_file():return
+        key=str(self.source)
+        with _LOCK:
+            previous=_CLOSE_JOBS.get(key)
+            if previous and not previous.done():return
+            def repair():
+                try:
+                    with exclusive(str(self.store.path)+'.close-repair',wait=False):
+                        self.prior_closes(base,ids,day,now)
+                except BuildBusyError:pass
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception('Close baseline repair failed; current-day collection continues')
+            _CLOSE_JOBS[key]=_CLOSE_POOL.submit(repair)
 
     def collect(self,day,now):
         from portfolio.services.intraday_history import collect_day_prices
         bases={ledger:self.snapshot(ledger,day) for ledger in (Ledger.PERSON,Ledger.BROKER)}
         ids=set()
         for base,_ in bases.values():ids.update(self.required(base,day))
-        if self.prior_closes(bases[Ledger.PERSON][0],ids,day,now):
-            self.snapshots.clear()
-            bases={ledger:self.snapshot(ledger,day) for ledger in (Ledger.PERSON,Ledger.BROKER)}
         result=collect_day_prices(bases[Ledger.PERSON][0],day,now,self.quotes,CREDENTIALS_PATH if CREDENTIALS_PATH.is_file() else None,instrument_ids=ids)
         from portfolio.services.derived_dependencies import check_changes
         check_changes(self.source,self.store)
         latest,errors=self.materialize(day,now,bases)
+        self.schedule_closes(bases[Ledger.PERSON][0],ids,day,now)
         return result,latest,errors
 
     def catch_up(self,current):
@@ -223,7 +248,11 @@ class Producer:
             with closing(self.store.connect()) as c:
                 historical_invalid=c.execute("SELECT 1 FROM partitions WHERE day<? AND status='INVALID' LIMIT 1",(target.isoformat(),)).fetchone()
                 full_generation=c.execute("SELECT value FROM metadata WHERE key='generation'").fetchone()
-            if historical_invalid or not full_generation:
+                from portfolio.services.derived_builder import historical_people
+                from portfolio.services.derived_store import ALGORITHM
+                incomplete_reports=any(not c.execute('SELECT 1 FROM metadata WHERE key=? AND value=?',(f'report_algorithm:{ledger}:{person}',ALGORITHM)).fetchone()
+                                       for ledger,person in [('PERSON',p) for p in historical_people(self.source)]+[('BROKER',0)])
+            if historical_invalid or not full_generation or incomplete_reports:
                 from portfolio.services.derived_maintenance import schedule_changed
                 schedule_changed(self.source)
         self.catch_up(target)

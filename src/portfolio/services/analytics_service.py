@@ -43,7 +43,9 @@ class AnalyticsService:
 
     def identity(self):
         from portfolio.services.derived_dependencies import source_identity
-        return (str(self.path),source_identity(self.path),
+        # Shared five-minute bars are not inputs to historical financial
+        # reports. Their arrival must not cancel an otherwise valid replay.
+        return (str(self.path),source_identity(self.path,financial_only=True),
                 self.fx_store.identity() if self.fx_store else None,
                 self.quote_store.history_identity() if self.quote_store else None)
 
@@ -67,7 +69,7 @@ class AnalyticsService:
     def calculate(self, scope, *, cancel=None, use_cache=True):
         from portfolio.services.derived_dependencies import check_changes
         changes=check_changes(self.path,self.derived)
-        if changes.get('changed') and self.derived.path.name == self.path.stem+'_derived.sqlite3':
+        if changes.get('financial_changed') and self.derived.path.name == self.path.stem+'_derived.sqlite3':
             from portfolio.services.derived_maintenance import schedule_changed
             schedule_changed(self.path)
         with self.derived.active():
@@ -177,7 +179,8 @@ class AnalyticsService:
                     reports[name] = replace(report, rows=tuple(r for r in report.rows if str(r.values[0])[:len(cutoff)] >= cutoff))
             result.charts = build_charts(result)
             if self.identity() != key[0]:
-                raise ValueError("原始数据或参考行情在计算期间变化，请刷新重试；未发布本次结果。")
+                from portfolio.services.derived_store import SourceChangedError
+                raise SourceChangedError("原始数据或参考行情在计算期间变化，请刷新重试；未发布本次结果。")
             with self._lock:
                 if len(self._cache) >= 4:
                     self._cache.pop(next(iter(self._cache)))

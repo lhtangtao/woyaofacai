@@ -636,7 +636,9 @@ class MonthlyRealtimePnlPage(QWidget):
             first,last=date(int(period),1,1),date(int(period),12,31)
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
-        scope=replace(self.analytics.scope,person_ids=self._shared_person_ids(),start_date=None,as_of=min(last,date.today()))
+        inherited=getattr(self,'_parent_filters',None) is not None
+        people=self.analytics.scope.person_ids if inherited else self._shared_person_ids()
+        scope=replace(self.analytics.scope,person_ids=people,start_date=None,as_of=min(last,date.today()))
         if getattr(self,'_parent_filters',None) is None:
             scope=replace(scope,account_ids=None,instrument_ids=None,category=None,search='')
         if scope.as_of < first:scope=replace(scope,as_of=last)

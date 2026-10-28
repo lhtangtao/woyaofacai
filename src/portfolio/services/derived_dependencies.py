@@ -152,4 +152,6 @@ def check_changes(source,derived):
         c.execute('DELETE FROM source_manifest')
         c.executemany('INSERT INTO source_manifest VALUES (?,?,?,?,?,?,?)',[(t,k,*v) for (t,k),v in current.items()])
         c.execute("INSERT OR REPLACE INTO metadata VALUES ('checked_source',?)",(identity,));c.commit()
-    return {'state':'CHANGED' if changes else 'UNCHANGED','changed':len(changes)}
+    financial_changed=any(table!='history_prices' and not (day and day.startswith('~'))
+                          for table,day,person,account,instrument,reason in changes)
+    return {'state':'CHANGED' if changes else 'UNCHANGED','changed':len(changes),'financial_changed':financial_changed}

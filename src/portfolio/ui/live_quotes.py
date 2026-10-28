@@ -62,12 +62,43 @@ class LiveQuotesPanel(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(10000)
         self.timer.timeout.connect(self.render)
+        self.saved_chart_timer = QTimer(self)
+        self.saved_chart_timer.setInterval(5000)
+        self.saved_chart_timer.timeout.connect(self.refresh_saved_charts)
+        self.saved_chart_timer.start()
         settings = window.settings
         saved_config = Path(str(settings.value('live_credentials', ''))) if settings else None
         self.path = str(saved_config) if saved_config and saved_config.is_file() and saved_config.resolve().is_relative_to(PROJECT_DIR) else (str(CREDENTIALS_PATH) if CREDENTIALS_PATH.is_file() else '')
         self.enabled.setChecked(str(settings.value('live_quotes_enabled', 'true')).lower() == 'true' if settings else False)
         self._last_cash_fetch = 0
         self.hide()
+
+    def refresh_saved_charts(self):
+        """Saved curves must not wait for full financial reports or a live feed."""
+        window=self.window
+        if not getattr(window,'info',None) or not getattr(self,'source_path',None) or getattr(self,'is_demo',True) or not window.today_snapshot():return
+        scope=window.make_scope()
+        if scope.reporting_currency!='USD':return
+        from types import SimpleNamespace
+        from portfolio.domain.live_quotes import market_trade_day,us_session
+        now=datetime.now(UTC)
+        _,days,halves,_=window.quote_store.load(now)
+        curve_scope=scope
+        current=scope.as_of==QDate.currentDate().toPython()
+        if current:curve_scope=replace(scope,as_of=market_trade_day(now,days,halves))
+        page=window.asset_page
+        mode=getattr(page,'trend_mode',0)
+        if mode==0:
+            page.intraday_chart.bind(window.quote_store,self.source_path,curve_scope,None,
+                                     us_session(now,days,halves) if current else None,now,
+                                     trading_days=tuple(d.isoformat() for d in sorted(days)))
+            page.intraday_chart.setVisible(True)
+            page.intraday_chart.draw(page.local_search.text(),page.channel_overview.selected_channel)
+        elif hasattr(window,'asset_trend'):
+            window.asset_trend.set_parent_filters(page.channel_overview.selected_channel,page.local_search.text())
+            if not window.analytics or window.analytics.scope!=scope:
+                window.asset_trend.set_analytics(SimpleNamespace(scope=scope,source_identity=str(self.source_path)))
+            window.asset_trend.show()
 
     def refresh_channel_cash(self, force=False):
         """后台异步获取长桥和嘉信的最新实时现金，写入 QuoteStore 并刷新渠道汇总。"""

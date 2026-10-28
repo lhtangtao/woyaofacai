@@ -43,8 +43,8 @@ class PartitionWriter:
         state='PARTIAL' if warning or any(r[-2] is None for r in records) else 'HISTORICAL_OBSERVED'
         if not records and warning=='当前筛选没有当日期初持仓或成交。':state='NO_EXPOSURE'
         elif not records and not resume_after:
-            if warning.startswith('尚无已完成'):state='PARTIAL'
-            else:raise ValueError(warning or '历史计算未返回有效结果，原分区保留。')
+            state='PARTIAL'
+            warning=warning or '尚无已完成的真实五分钟K线；等待补齐，不填零。'
         if (records or resume_after) and datetime.combine(date.fromisoformat(day),time(20),NY)>datetime.now(UTC):state='PROVISIONAL'
         revision=self.quotes.day_revision(day)
         if input_revision is not None and revision!=input_revision:

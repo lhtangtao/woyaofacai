@@ -217,6 +217,9 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 running=running+gain if running is not None and gain is not None else None
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')
     note='五分钟共享明细；月度30分钟/年度2小时采样。正式/原口径日收益参与跨日累计；缺失日内数据留空，不平滑、不补零。'
+    if getattr(analytics,'incomplete_people',False):
+        state={**state,'baseline_state':'REPORT_PENDING'}
+        note+=' 累计所需日报尚未生成或版本过期，后台将重试；可切换“每日日内盈亏”查看已保存五分钟点。'
     if state.get('progress',{}).get('calendar_warnings'):note+=' 日历覆盖元数据不足，使用已保存实际日期，未猜测缺失交易日。'
     if missing:note+=' 缺失或未生成：'+', '.join(missing[:12])+('…' if len(missing)>12 else '')
     chart=Chart(0,f'{period} '+('累计盈亏走势' if mode=='cumulative' else '每日日内盈亏走势'),'line',
