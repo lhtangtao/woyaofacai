@@ -57,9 +57,21 @@ def maintenance_status(source):
             progress={'state':'CHECKING','message':'正在更新共享历史分区。'}
         progress.setdefault('state','CHECKING')
         progress.setdefault('message','另一进程正在生成共享历史数据。')
-    elif progress.get('state') in RUNNING:
+    elif store.available:
+        batch_lock=Path(str(store.path)+'.price-history.lock')
+        batch_running=False
+        if batch_lock.is_file():
+            with batch_lock.open('r') as handle:
+                try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError:batch_running=True
+                else:fcntl.flock(handle,fcntl.LOCK_UN)
+        if batch_running:
+            with closing(store.connect()) as c:row=c.execute("SELECT value FROM metadata WHERE key='history_batch_status'").fetchone()
+            if row:
+                progress=json.loads(row[0]);running=True
+    if not running and progress.get('state') in RUNNING:
         progress.update(state='INTERRUPTED',message='上次历史生成已中断，将自动重试；原有效数据保留。')
-    elif not progress:
+    if not progress:
         progress={'state':status['state'],'message':'历史缓存可用。' if status['ready'] else '正在准备首次全人员历史预计算。'}
     return {**status,'running':running,'progress':progress}
 
@@ -86,10 +98,9 @@ def needs_rebuild(source,store,quotes,start):
         rows=c.execute('SELECT ledger,person_id,day,algorithm,status FROM partitions WHERE day<?',(current,)).fetchall()
         if any(r[3]!=ALGORITHM or r[4]=='INVALID' for r in rows):return True
         inputs=c.execute('SELECT day,quote_revision FROM partition_inputs WHERE day<? GROUP BY day,quote_revision',(current,)).fetchall()
-    revisions={}
+    revisions=quotes.day_revisions(day for day,_ in inputs)
     for day,revision in inputs:
-        if day not in revisions:revisions[day]=dumps(quotes.day_revision(day))
-        if revision!=revisions[day]:return True
+        if revision!=dumps(revisions[day]):return True
     existing={(ledger,person,day) for ledger,person,day,_,_ in rows}
     days,_=history_days(source,quotes,start,datetime.now(NY).date())
     for day in days:
@@ -123,3 +134,31 @@ def schedule_changed(source,start=None):
                 return {'state':'FAILED'}
         _JOBS[key]=(_POOL.submit(work),monotonic())
     return 'BUILDING'
+
+
+def pending_history_days(source,store,quotes,start,end,*,now=None):
+    """Persistent partition state is the resume cursor; no per-round year replay."""
+    from datetime import datetime,timedelta
+    from portfolio.domain.live_quotes import UTC
+    from portfolio.services.derived_builder import historical_people,history_days
+    from portfolio.services.derived_codec import dumps
+    from portfolio.services.derived_store import ALGORITHM
+    now=now or datetime.now(UTC)
+    dates,_=history_days(source,quotes,start,end)
+    dates=[d for d in dates if d<end]
+    revisions=quotes.day_revisions(str(d) for d in dates)
+    people=[('PERSON',p) for p in historical_people(source)]+[('BROKER',0)]
+    with closing(store.connect()) as c:
+        saved={(l,p,d):(a,state,warning,updated,revision) for l,p,d,a,state,warning,updated,revision in c.execute('SELECT p.ledger,p.person_id,p.day,p.algorithm,p.status,p.warning,p.updated_at,i.quote_revision FROM partitions p LEFT JOIN partition_inputs i USING(ledger,person_id,day) WHERE p.day BETWEEN ? AND ?',(str(start),str(end)))}
+    urgent=[];retry=[]
+    for day in dates:
+        changed=False;failed=False
+        for owner in people:
+            previous=saved.get((*owner,str(day)))
+            if not previous or previous[0]!=ALGORITHM or previous[1]=='INVALID' or previous[4]!=dumps(revisions[str(day)]):changed=True;break
+            due=now-datetime.fromisoformat(previous[3])>=timedelta(minutes=5)
+            recoverable=previous[1]=='ERROR' or previous[1]=='PARTIAL' and any(s in previous[2] for s in ('盘中行情缺失','缺少上一交易日','尚无已完成'))
+            failed|=bool(due and recoverable)
+        if changed:urgent.append(day)
+        elif failed:retry.append(day)
+    return sorted(urgent)+sorted(retry)

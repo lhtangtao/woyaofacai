@@ -78,6 +78,25 @@ class QuoteStore:
                     facts=revision[0] if revision else 0
         return (row[0] if row else 0,facts,calendar,closes)
 
+    def day_revisions(self, days):
+        """Batch the same dependency tokens without opening one DB per owner/day."""
+        from contextlib import closing
+        from portfolio.services.derived_store import digest
+        days=sorted(set(days))
+        if not days:return {}
+        with closing(self.read_connection()) as c:
+            calendars=c.execute('SELECT day,half_day FROM us_calendar WHERE day<=? ORDER BY day',(days[-1],)).fetchall()
+            closes=c.execute('SELECT day,revision FROM quote_close_revisions WHERE day<? ORDER BY day',(days[-1],)).fetchall()
+            bars=dict(c.execute('SELECT day,revision FROM quote_day_revisions WHERE day BETWEEN ? AND ?',(days[0],days[-1])))
+        facts={};has_facts=False
+        if self.source:
+            from portfolio.services.history_facts import readonly
+            with closing(readonly(self.source)) as c:
+                has_facts=bool(c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone())
+                if has_facts:facts=dict(c.execute('SELECT day,revision FROM history_fact_revisions WHERE day BETWEEN ? AND ?',(days[0],days[-1])))
+        return {day:(bars.get(day,0),facts.get(day,0) if has_facts else '',
+                     digest([r for r in calendars if r[0]<=day]),digest([r for r in closes if r[0]<day])) for day in days}
+
     def intraday_candles(self, symbol, day):
         if not self.path.is_file():
             from portfolio.services.history_facts import HistoryFacts

@@ -144,7 +144,7 @@ def check_changes(source,derived):
             # Widen when ownership mapping is not provable.
             if day and day.startswith('~'):continue
             if table=='history_prices' and day:
-                c.execute("UPDATE partitions SET status='INVALID' WHERE day=? OR day=(SELECT min(day) FROM partitions WHERE day>?)",(day,day))
+                c.execute("UPDATE partitions SET status='INVALID' WHERE day=?",(day,))
             elif table=='person_operations' and person is not None and day:
                 c.execute("UPDATE partitions SET status='INVALID' WHERE ledger='PERSON' AND person_id=? AND day>=?",(person,day))
             elif day:c.execute("UPDATE partitions SET status='INVALID' WHERE day>=?",(day,))

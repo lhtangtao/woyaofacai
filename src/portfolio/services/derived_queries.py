@@ -1,5 +1,5 @@
 """Shared, permission-scoped historical contribution queries for Mac and Web."""
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from contextlib import closing
 from dataclasses import replace
 from datetime import date,datetime,time,timedelta
@@ -15,7 +15,7 @@ from portfolio.services.derived_store import ALGORITHM,DerivedStore
 from portfolio.services.derived_codec import dumps
 
 
-_VALIDATED={}
+_TREND_ROWS=OrderedDict()
 _LOCK=RLock()
 
 
@@ -26,7 +26,7 @@ def allowed_people(source,scope):
     return tuple(p for p in ids if scope.person_ids is None or p in scope.person_ids)
 
 
-def load_history(source,quotes,scope,start,end):
+def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,ticker=None):
     from portfolio.services.quote_store import QuoteStore
     quotes=QuoteStore(quotes.path,source=source)
     store=DerivedStore(source)
@@ -41,30 +41,24 @@ def load_history(source,quotes,scope,start,end):
     if not people:return {},{'state':'EMPTY_AUTHORIZED_SCOPE','message':'当前授权范围没有人员。'}
     ledger=scope.ledger.value
     placeholders=','.join('?' for _ in people)
-    args=[ledger,*people,str(start),str(end)]
-    sql=f'SELECT person_id,day,stamp,channel,ticker,pnl,account_id,instrument_id,quantity FROM intraday_contributions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?'
-    for column,values in (('account_id',scope.account_ids),('instrument_id',scope.instrument_ids)):
-        if values is not None:
-            if not values:return {},{'state':'EMPTY_FILTER','message':'当前筛选为空。'}
-            sql+=f" AND {column} IN ("+','.join('?' for _ in values)+')';args.extend(values)
     with closing(store.connect()) as c:
         # Metadata, owner coverage and amounts must belong to one SQLite read
         # snapshot, even while the producer commits the next owner's partition.
         c.execute('BEGIN')
         has_inputs=bool(c.execute("SELECT 1 FROM sqlite_master WHERE name='partition_inputs'").fetchone())
         inputs={(p,d):revision for p,d,revision in c.execute(f'SELECT person_id,day,quote_revision FROM partition_inputs WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?',(ledger,*people,str(start),str(end)))} if has_inputs else {}
-        partitions=c.execute(f'SELECT person_id,day,dependency,algorithm,status,warning FROM partitions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ? ORDER BY day',
+        partitions=c.execute(f'SELECT person_id,day,dependency,algorithm,status,warning,updated_at FROM partitions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ? ORDER BY day',
                              (ledger,*people,str(start),str(end))).fetchall()
-        records=c.execute(sql+' ORDER BY day,stamp',args).fetchall()
-        coverage=c.execute(f'SELECT DISTINCT person_id,day,stamp FROM intraday_contributions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?',
-                           (ledger,*people,str(start),str(end))).fetchall()
-    valid=set();states={}
-    for person,day,dependency,algorithm,status,warning in partitions:
+    valid=set();states={};markers={}
+    revisions=quotes.day_revisions(d for _,d,_,_,_,_,_ in partitions)
+    for person,day,dependency,algorithm,status,warning,updated_at in partitions:
+        markers[person,day]=updated_at
         states[person,day]={'state':status,'warning':warning}
         if algorithm!=ALGORITHM or status in ('INVALID','ERROR'):
             states[person,day]['state']='INVALID' if algorithm!=ALGORITHM else status
+            states[person,day]['reason']='D_ALGORITHM_VERSION' if algorithm!=ALGORITHM else 'C_CALCULATION_FAILED' if status=='ERROR' else 'D_DEPENDENCY_INVALIDATED'
             continue
-        revision=quotes.day_revision(day)
+        revision=revisions[day]
         if (person,day) in inputs and inputs[person,day]==dumps(revision):
             valid.add((person,day));continue
         # Newly appended bars must not hide previously validated points. Only
@@ -76,32 +70,25 @@ def load_history(source,quotes,scope,start,end):
         old=loads(inputs[person,day]) if (person,day) in inputs else None
         if checkpoint and old and old[2:]==revision[2:] and checkpoint['price_hash']==quotes.prefix_identity(day,checkpoint['last'],checkpoint['price_ids']):
             valid.add((person,day))
-        else:states[person,day]={'state':'INVALID','warning':'依赖已变化或旧计算尚未校验，等待后台重算；不在图表中回放。'}
-    by_day=defaultdict(lambda:defaultdict(list))
-    owners_at=defaultdict(set)
-    for person,day,stamp in coverage:
-        if (person,day) in valid:owners_at[day,stamp].add(person)
-    for person,day,stamp,channel,ticker,pnl,account,instrument,quantity in records:
-        if (person,day) not in valid:continue
-        by_day[day][stamp].append({'person_id':person,'channel':channel,'ticker':ticker,'pnl':pnl,'account_id':account,'instrument_id':instrument,'quantity':quantity})
-    if scope.category or scope.search:
-        with readonly_connection(source) as c:categories={r['id']:r['category'] for r in c.execute('SELECT id,category FROM instruments')}
-        for day,stamps in by_day.items():
-            for stamp,items in stamps.items():
-                stamps[stamp]=[r for r in items if (not scope.category or categories.get(r['instrument_id'])==scope.category)
-                               and (not scope.search or scope.search.casefold() in (r['ticker']+' '+r['channel']).casefold())]
-    # A missing owner partition invalidates the aggregate, never silently omit it.
+        else:states[person,day]={'state':'INVALID','reason':'D_QUOTE_DEPENDENCY','warning':'依赖已变化或旧计算尚未校验，等待后台重算；不在图表中回放。'}
+    # Reject incomplete owner sets before touching the much larger amount table.
     valid_days={d for _,d in valid if all((p,d) in valid for p in people)}
-    output={};incomplete_points=0
-    for day,stamps in by_day.items():
-        if any((p,day) not in valid for p in people):continue
-        required={p for p in people if states[p,day]['state']!='NO_EXPOSURE'}
-        output[day]=[]
-        for stamp,items in sorted(stamps.items()):
-            if not required<=owners_at[day,stamp]:
-                incomplete_points+=1
-                continue
-            output[day].append((datetime.fromisoformat(stamp),items))
+    ready=[(p,d,markers[p,d],sum(states[owner,d]['state']!='NO_EXPOSURE' for owner in people))
+           for p,d in sorted(valid) if d in valid_days]
+    cache_key=(str(store.path),store.path.stat().st_ino,scope,start,end,tuple(sorted(channels or ())),ticker or '',
+               tuple(ready),tuple(sorted((d,dumps(r)) for d,r in revisions.items())))
+    cached=None
+    if aggregate:
+        with _LOCK:
+            cached=_TREND_ROWS.get(cache_key)
+            if cached is not None:_TREND_ROWS.move_to_end(cache_key)
+    if cached is not None:output,incomplete_points=cached
+    else:
+        output,incomplete_points=_read_points(store,source,scope,ready,aggregate,channels,ticker)
+        if aggregate:
+            with _LOCK:
+                _TREND_ROWS[cache_key]=(output,incomplete_points)
+                while len(_TREND_ROWS)>4:_TREND_ROWS.popitem(last=False)
     invalid=sum(v['state']=='INVALID' for v in states.values())
     errors=sum(v['state']=='ERROR' for v in states.values())
     partial=sum(v['state']=='PARTIAL' for v in states.values())
@@ -123,9 +110,62 @@ def load_history(source,quotes,scope,start,end):
 
     status=maintenance_status(source)
     return output,{'state':overall,'progress':status['progress'],'generation':status.get('generation'),
-                   'error_partitions':errors,'partial_partitions':partial,'incomplete_points':incomplete_points,'months':months,
-                   'trading_days':sorted({d.isoformat() for d in calendar}|{d for _,d in states}),'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
+                   'error_partitions':errors,'partial_partitions':partial,'incomplete_points':incomplete_points,'months':months,'aggregated':aggregate,'query_cache_hit':cached is not None,
+                   'trading_days':sorted({d.isoformat() for d in calendar}|{d for _,d in states}),'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},'blocked_owners':{d:[p for p in people if (p,d) not in valid] for d in sorted({d for _,d in states}) if d not in valid_days},
                    'message':('受影响分区正在后台增量生成，其他有效日期正常展示。' if invalid or missing_days else f'有效历史数据已加载；计算失败分区 {errors}，缺失/提示分区 {partial}，人员尚未齐备的时间点 {incomplete_points}；对应区段留空。')}
+
+
+class _DecimalTotal:
+    def __init__(self):self.total=Decimal(0);self.unknown=False
+    def step(self,value):
+        if value is None:self.unknown=True
+        else:
+            with localcontext() as context:
+                context.prec=50;self.total+=Decimal(value)
+    def finalize(self):return None if self.unknown else str(self.total)
+
+
+def _read_points(store,source,scope,ready,aggregate,channels,ticker):
+    if not ready:return {},0
+    predicates=[];filters=[]
+    for column,values in (('account_id',scope.account_ids),('instrument_id',scope.instrument_ids),('channel',channels)):
+        if values is not None:
+            predicates.append('0' if not values else f"c.{column} IN ("+','.join('?' for _ in values)+')')
+            filters.extend(values)
+    if ticker:predicates.append('instr(upper(c.ticker),upper(?))>0');filters.append(ticker.strip())
+    if scope.search:predicates.append("instr(lower(c.ticker||' '||c.channel),?)>0");filters.append(scope.search.casefold())
+    if scope.category:
+        with readonly_connection(source) as src:ids=[r[0] for r in src.execute('SELECT id FROM instruments WHERE category=?',(scope.category,))]
+        predicates.append('0' if not ids else 'c.instrument_id IN ('+','.join('?' for _ in ids)+')');filters.extend(ids)
+    matches=' AND '.join(predicates) or '1'
+    values=','.join('(?,?,?,?)' for _ in ready)
+    sql=f"""WITH ready(person_id,day,updated_at,required) AS (VALUES {values}), base AS (
+        SELECT c.*,r.required,CASE WHEN {matches} THEN 1 ELSE 0 END matched
+        FROM ready r JOIN partitions p ON p.ledger=? AND p.person_id=r.person_id AND p.day=r.day
+        JOIN intraday_contributions c ON c.ledger=p.ledger AND c.person_id=p.person_id AND c.day=p.day
+        WHERE p.updated_at=r.updated_at AND p.algorithm=? AND p.status NOT IN ('INVALID','ERROR')) """
+    args=[v for row in ready for v in row]+filters+[scope.ledger.value,ALGORITHM]
+    output=defaultdict(list);incomplete=0
+    with closing(store.connect()) as connection:
+        connection.execute('BEGIN')
+        if aggregate:
+            connection.create_aggregate('decimal_total',1,_DecimalTotal)
+            query=sql+"""SELECT day,stamp,CASE WHEN sum(matched)>0 THEN decimal_total(CASE WHEN matched THEN pnl ELSE '0' END) ELSE NULL END,
+                    count(DISTINCT person_id),max(required),sum(matched) FROM base GROUP BY day,stamp ORDER BY day,stamp"""
+            for day,stamp,pnl,owners,required,count in connection.execute(query,args):
+                if owners<required:incomplete+=1;continue
+                items=({'pnl':pnl,'channel':'','ticker':''},) if count else ()
+                output[day].append((datetime.fromisoformat(stamp),items))
+        else:
+            by_stamp=defaultdict(list);owners_at=defaultdict(set);requirements={}
+            for row in connection.execute(sql+'SELECT person_id,day,stamp,channel,ticker,pnl,account_id,instrument_id,quantity,required,matched FROM base ORDER BY day,stamp',args):
+                person,day,stamp,channel,symbol,pnl,account,instrument,quantity,required,matched=row
+                owners_at[day,stamp].add(person);requirements[day,stamp]=required
+                if matched:by_stamp[day,stamp].append(dict(person_id=person,channel=channel,ticker=symbol,pnl=pnl,account_id=account,instrument_id=instrument,quantity=quantity))
+            for day,stamp in sorted(owners_at):
+                if len(owners_at[day,stamp])<requirements[day,stamp]:incomplete+=1;continue
+                output[day].append((datetime.fromisoformat(stamp),by_stamp[day,stamp]))
+    return dict(output),incomplete
 
 
 def historical_analytics(source,scope,start,end):
@@ -194,9 +234,16 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
     for row in analytics.reports['每日持仓收益'].rows:
         v=row.values
         if str(first)<=v[0]<=str(last) and (channels is None or v[1] in channels) and (not ticker or ticker.upper() in v[3].upper()):daily[v[0]].append(v[19])
-    points=[];ticks=[];labels={};boundaries=[];running=Decimal(0) if calendar_days[0]<=first+timedelta(days=7) else None;missing=[]
-    last_month=None;baseline_breaks=[]
+    points=[];ticks=[];labels={};boundaries=[];missing=[];baseline_breaks=[];recovered=[];breaks=[];bridge_rejected=[]
+    running=Decimal(0) if calendar_days[0]<=first+timedelta(days=7) else None
     if running is None:missing.append('期间起始交易日历/累计基准未确认')
+    daily_rows=defaultdict(list)
+    for row in analytics.reports['每日持仓收益'].rows:
+        v=row.values
+        if str(first)<=v[0]<=str(last) and (channels is None or v[1] in channels) and (not ticker or ticker.upper() in v[3].upper()):daily_rows[v[0]].append(row)
+    bridge={};bridge_allowed=running is not None and not getattr(analytics,'incomplete_people',True)
+    permitted_people=allowed_people(source,analytics.scope)
+    last_month=None
     with localcontext() as ctx:
         ctx.prec=50
         for d in calendar_days:
@@ -204,29 +251,66 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             end=datetime.combine(d,time(20),NY).astimezone(UTC)
             close=datetime.combine(d,time(13 if d in halves else 16),NY).astimezone(UTC)
             if not year or d.month!=last_month:
-                ticks.append(start.isoformat())
-                labels[start.isoformat()]=f'{d.month}月' if year else d.strftime('%m-%d')
+                ticks.append(start.isoformat());labels[start.isoformat()]=f'{d.month}月' if year else d.strftime('%m-%d')
                 boundaries.append((start.isoformat(),'','dot'))
             last_month=d.month
-            samples=by_day.get(day,[]);index=-1;stamp=start
+            samples=by_day.get(day,[])
             baseline=running if mode=='cumulative' else Decimal(0)
-            while stamp<end:
-                while index+1<len(samples) and samples[index+1][0]<=stamp:index+=1
-                value=None
-                # At most one 5-minute interval; never stretch a sample across a gap.
-                if index>=0 and timedelta(0)<=stamp-samples[index][0]<timedelta(minutes=5) and stamp<=now:
-                    selected=[x for x in samples[index][1] if (channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper())]
-                    gain=strict_sum(Decimal(x['pnl']) if x['pnl'] is not None else None for x in selected) if selected else None
-                    value=baseline+gain if baseline is not None and gain is not None else None
-                points.append((stamp.isoformat(),value));stamp+=step
-            # Daily financial rows still advance the annual baseline when 5-min
-            # prices are missing; an unknown daily gain breaks later cumulative data.
+            observations=[];last_stamp=None;segment=0
+            for stamp,items in samples:
+                selected=list(items) if state.get('aggregated') else [x for x in items if (channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper())]
+                gain=strict_sum(Decimal(x['pnl']) if x['pnl'] is not None else None for x in selected) if selected else None
+                value=baseline+gain if baseline is not None and gain is not None else None
+                if last_stamp is not None and stamp-last_stamp>timedelta(minutes=5):segment+=1
+                if value is None:segment+=1
+                observations.append((stamp,value,segment))
+                last_stamp=stamp
+            # A real timestamp is chosen in each interval, including a partial
+            # current interval. No interpolation and no stretching a stale quote.
+            if not points or points[-1][0]!=start.isoformat():points.append((start.isoformat(),None))
+            bucket_start=start;index=0;previous_chosen=None;previous_segment=None
+            while bucket_start<end:
+                stop=bucket_start+step;chosen=None
+                while index<len(observations) and observations[index][0]<=stop:
+                    stamp,value,current_segment=observations[index];index+=1
+                    if stamp<=bucket_start:continue
+                    if value is not None and stamp<=now:
+                        chosen=(stamp,value,current_segment)
+                if chosen:
+                    stamp,value,current_segment=chosen
+                    if previous_chosen is not None and current_segment!=previous_segment:
+                        separator=(previous_chosen+timedelta(minutes=5)).isoformat()
+                        if points[-1][1] is not None:points.append((separator,None))
+                        breaks.append(stamp.isoformat())
+                    points.append((stamp.isoformat(),value));previous_chosen=stamp;previous_segment=current_segment
+                else:
+                    if points[-1][0]!=bucket_start.isoformat():points.append((bucket_start.isoformat(),None))
+                bucket_start=stop
             if close<now:
-                filtered_exposure=any((channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper()) for _,items in samples for x in items)
-                verified_no_exposure=bool(getattr(analytics,'baseline_end',None)) and day<=analytics.baseline_end and not filtered_exposure
+                filtered_exposure=any(bool(items) if state.get('aggregated') else any((channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper()) for x in items) for _,items in samples)
+                verified_no_exposure=bool(getattr(analytics,'baseline_end',None)) and day<=analytics.baseline_end and not filtered_exposure and not daily_rows[day] and all(e.get('quantity')==0 for e in bridge.values()) and all(state.get('partitions',{}).get(f'{p}:{day}',{}).get('state')=='NO_EXPOSURE' for p in permitted_people)
                 gain=None if getattr(analytics,'incomplete_people',True) else strict_sum(daily[day]) if day in daily else Decimal(0) if verified_no_exposure else None
+                candidate=running+gain if running is not None and gain is not None else None
                 if gain is None:missing.append(day);baseline_breaks.append(day)
-                running=running+gain if running is not None and gain is not None else None
+                # Reconcile an absolute prefix using the engine's existing
+                # MV - opening MV - buys + sells identity. Missing prices may
+                # recover; missing cash flows/opening values must remain unknown.
+                for row in daily_rows[day]:
+                    v=row.values;m=row.metadata;key=(m.get('person_id'),m.get('account_id'),m.get('instrument_id'))
+                    entry=bridge.setdefault(key,dict(opening=v[15],buy=Decimal(0),sell=Decimal(0),ending=None,valid=True))
+                    entry['valid'] &= bool(m.get('baseline_valid',False))
+                    entry['buy']=entry['buy']+v[16] if entry['buy'] is not None and v[16] is not None else None
+                    entry['sell']=entry['sell']+v[17] if entry['sell'] is not None and v[17] is not None else None
+                    trusted=(m.get('valuation_source')=='DAILY_CLOSE' or m.get('valuation_source')=='ESTIMATE_CLOSE' and m.get('price_status')=='CLOSE_ESTIMATE' or v[8]==0)
+                    entry['ending']=v[11] if trusted else None
+                    entry['quantity']=v[8];entry['day']=day
+                if any(e.get('day')!=day and e.get('quantity')!=0 for e in bridge.values()):bridge_allowed=False
+                absolute=strict_sum(e['ending']-e['opening']-e['buy']+e['sell'] if e['valid'] and all(e[k] is not None for k in ('ending','opening','buy','sell')) else None for e in bridge.values()) if bridge else Decimal(0) if verified_no_exposure else None
+                if candidate is not None and absolute is not None and abs(candidate-absolute)>Decimal('0.00000001'):
+                    bridge_allowed=False;bridge_rejected.append(day)
+                if candidate is None and bridge_allowed and absolute is not None:
+                    candidate=absolute;recovered.append(day)
+                running=candidate
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')
     note='五分钟共享明细；月度30分钟/年度2小时采样。正式/原口径日收益参与跨日累计；缺失日内数据留空，不平滑、不补零。'
     if getattr(analytics,'incomplete_people',False):
@@ -234,10 +318,12 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         note+=' 累计所需日报尚未生成或版本过期，后台将重试；可切换“每日日内盈亏”查看已保存五分钟点。'
     if state.get('progress',{}).get('calendar_warnings'):note+=' 日历覆盖元数据不足，使用已保存实际日期，未猜测缺失交易日。'
     if missing:note+=' 缺失或未生成：'+', '.join(missing[:12])+('…' if len(missing)>12 else '')
-    state={**state,'baseline_break_days':baseline_breaks}
-    if baseline_breaks:note+=' 累计基准在 '+baseline_breaks[0]+' 中断；没有可信基准前不恢复累计，不补零。'
+    state={**state,'baseline_break_days':baseline_breaks,'baseline_recovered_days':recovered,'baseline_rejected_days':bridge_rejected}
+    if baseline_breaks:note+=' 累计未知日：'+','.join(baseline_breaks[:5])+'；没有可信基准不补零。'
+    if bridge_rejected:note+=' 绝对基准与日报前缀核对不一致，停止使用恢复基准：'+','.join(bridge_rejected[:5])
+    if recovered:note+=' 已用经核对的期初市值、实际买卖现金流与可信日末估值恢复累计基准：'+','.join(recovered[:5])
     chart=Chart(0,f'{period} '+('累计盈亏走势' if mode=='cumulative' else '每日日内盈亏走势'),'line',
                 (Series('累计盈亏' if mode=='cumulative' else '当日盈亏',tuple(points)),),note,
                 x_labels=labels,x_ticks=tuple(ticks),vertical_lines=tuple(boundaries),highlight_extremes=True,
-                show_points=False,line_width=1.5,calendar_axis='year' if year else 'month')
+                show_points=False,line_width=1.5,calendar_axis='year' if year else 'month',break_keys=tuple(breaks))
     return chart,state

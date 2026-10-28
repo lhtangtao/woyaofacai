@@ -55,10 +55,10 @@ def audit(source,quotes,day,person,stamp,channel=None):
     totals=defaultdict(list)
     for row in records:totals[row['stamp']].append(Decimal(row['pnl']) if row['pnl'] is not None else None)
     complete={time:strict_sum(values) for time,values in totals.items() if all(v is not None for v in values)}
-    if not complete:raise ValueError('当前范围没有完整的已存时间点；未生成替代数据。')
-    peak=max(complete,key=complete.get)
+    peak=max(complete,key=complete.get) if complete else None
     requested=stamp.astimezone(UTC).isoformat()
-    chosen=sorted({requested,peak})
+    if requested not in totals:raise ValueError('请求的五分钟时点没有已存明细；不生成替代数据。')
+    chosen=sorted({requested}|({peak} if peak else set()))
     session_start=datetime.combine(day-timedelta(days=1),clock_time(20),NY).astimezone(UTC)
     session_end=datetime.combine(day,clock_time(20),NY).astimezone(UTC)
     output=[]

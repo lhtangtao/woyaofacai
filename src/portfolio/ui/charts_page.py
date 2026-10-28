@@ -151,6 +151,7 @@ class ChartCanvas(QWidget):
         def ys(value):
             return top + height - float((value - low) / span) * height
         categories = list(dict.fromkeys(key for series in chart.series for key, _ in series.points))
+        category_positions = {key: index for index, key in enumerate(categories)}
         fixed_axis = bool(chart.x_ticks)
         step = width / max(len(categories) - (1 if fixed_axis else 0), 1)
         for mark in range(5):
@@ -177,7 +178,7 @@ class ChartCanvas(QWidget):
                 v_style = v_item[2] if len(v_item) > 2 else "dash"
                 if v_key not in categories:
                     continue
-                vx = left + (categories.index(v_key) + (0 if fixed_axis else .5)) * step
+                vx = left + (category_positions[v_key] + (0 if fixed_axis else .5)) * step
                 # 绘制细虚线（不在左右最边缘绘制重合边框）
                 if vx > left + 4 and vx < left + width - 4:
                     pen = vpen_dot if v_style == "dot" else (vpen_solid if v_style == "solid" else vpen_dash)
@@ -201,7 +202,7 @@ class ChartCanvas(QWidget):
                 if value is None:
                     last = None
                     continue
-                x, y = left + (categories.index(key) + (0 if fixed_axis else .5)) * step, ys(value)
+                x, y = left + (category_positions[key] + (0 if fixed_axis else .5)) * step, ys(value)
                 painter.setPen(QPen(color, getattr(chart,'line_width',2.0)))
                 if chart.kind == "line":
                     if last and not series.name.startswith(("B ", "S ", "◇")):
@@ -236,7 +237,7 @@ class ChartCanvas(QWidget):
                 for kind, (ekey, evalue) in extremes:
                     if ekey not in categories:
                         continue
-                    ex = left + (categories.index(ekey) + (0 if fixed_axis else .5)) * step
+                    ex = left + (category_positions[ekey] + (0 if fixed_axis else .5)) * step
                     ey = ys(evalue)
                     is_max = kind == "max"
                     dot_color = QColor(t.profit if evalue >= 0 else t.loss) if is_max else QColor(t.loss if evalue < 0 else t.profit)

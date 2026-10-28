@@ -66,9 +66,10 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
             def reports(ledger,person,inputs):
                 if source_version(source)!=expected_source:raise SourceChangedError('账本或收盘基准变化，正在重新准备后台任务。')
                 return publish_reports(target,published,ledger,person,expected_source,quotes,inputs)
-            result=build_all(source,target,quotes,start=start,end=end,force=mode=='all',retry_errors=not automatic,
-                             on_reports=reports if automatic else None,on_partition=release if automatic else None,
-                             progress=(lambda message:None) if automatic else print,on_progress=lambda values:notify(**values))
+            with exclusive(str(published.path)+'.price-history',wait=True):
+                result=build_all(source,target,quotes,start=start,end=end,force=mode=='all',retry_errors=not automatic,
+                                 on_reports=reports if automatic else None,on_partition=release if automatic else None,
+                                 progress=(lambda message:None) if automatic else print,on_progress=lambda values:notify(**values))
             notify(state='VALIDATING',message='正在核对历史计算结果与数据库完整性。')
             result['validation']=validate_generation(target,historical_people(source))
             if source_identity(source,financial_only=True)!=before or (not automatic and historical_prices_revision()!=historical_before):

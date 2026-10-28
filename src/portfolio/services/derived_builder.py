@@ -91,10 +91,24 @@ def history_days(source,quotes,start,end):
 
 def record_error(derived,quotes,ledger,person,day,dependency,error):
     """Hide only the failed partition; preserve its old rows for recovery."""
+    # A source/cache read must not hold the derived write lock. Failure to read
+    # a new revision must not abort the remaining independent dates.
+    try:revision=dumps(quotes.day_revision(day))
+    except Exception:revision=None
     with exclusive(derived.path),closing(derived.connect(write=True)) as c:
         c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',
                   (ledger,person,day,dependency or 'ERROR',ALGORITHM,'ERROR',f'该日期计算失败（{type(error).__name__}）：{str(error)[:300]}；其他日期可继续查看。',utcnow()))
-        c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',(ledger,person,day,dumps(quotes.day_revision(day))));c.commit()
+        if revision is not None:c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',(ledger,person,day,revision))
+        c.commit()
+
+
+def _reusable_reports(derived,ledger,person,end,quote_inputs):
+    with closing(derived.connect()) as c:
+        meta=dict(c.execute("SELECT key,value FROM metadata WHERE key LIKE ?",(f'report_%:{ledger}:{person}',)))
+        checked=meta.get(f'report_checked:{ledger}:{person}')
+        if not checked or meta.get(f'report_algorithm:{ledger}:{person}')!=ALGORITHM or meta.get(f'report_through:{ledger}:{person}','')!=str(end):return False
+        if json.loads(meta.get(f'report_quotes:{ledger}:{person}','{}'))!=quote_inputs:return False
+        return not c.execute("SELECT 1 FROM invalidations WHERE detected_at>? AND table_name<>'history_prices' AND (person_id IS NULL OR person_id=?) AND (day IS NULL OR (day NOT LIKE '~%' AND day<=?)) LIMIT 1",(checked,person,str(end))).fetchone()
 
 
 def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True,on_reports=None,on_partition=None):
@@ -104,8 +118,9 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
     from portfolio.services.derived_store import SourceChangedError
     end=end or datetime.now(NY).date();now=datetime.now(UTC)
     days,calendar_warnings=history_days(source,quotes,start,end)
-    days=sorted(days,reverse=True)
     days=[d for d in days if datetime.combine(d-timedelta(days=1),time(20),NY)<now]
+    recent=sorted(days,reverse=True)[:2]
+    days=recent+[d for d in sorted(days) if d not in recent]
     if not days:raise ValueError('本地没有可计算的已发生历史日期；缺失行情未伪造。')
     targets=[(Ledger.PERSON,(p,)) for p in historical_people(source)]+[(Ledger.BROKER,None)]
     total=len(targets)*(len(days)+1);done=errors=partial=report_errors=skipped=0
@@ -114,28 +129,31 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
     service=AnalyticsService(source,quote_store=quotes,derived_store=derived)
     financial={'每日持仓收益','每月持仓收益','月度净投入明细','完整交易净投入','每月微操收益','微操配对证据','当前持仓','清仓收益','股票汇总','人员资产','账户资产','交易回放'}
     with derived.active():
+        prepared=[]
         for ledger,persons in targets:
             scope=QueryScope(end,ledger=ledger,person_ids=persons,include_disabled=True,start_date=None)
             person=persons[0] if persons else 0
             notify('CALCULATING_REPORTS','正在计算全部历史权益人员的持仓与财务报表。')
             try:
                 with closing(quotes.read_connection()) as q:
-                    quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<?',(str(end),)))
-                result=service.calculate(scope,use_cache=False)
-                with exclusive(derived.path),closing(derived.connect(write=True)) as c:
-                    c.execute('BEGIN IMMEDIATE')
-                    c.execute('DELETE FROM report_details WHERE ledger=? AND person_id=?',(ledger.value,person))
-                    records=[]
-                    for name,report in result.reports.items():
-                        if name not in financial:continue
-                        for index,row in enumerate(report.rows):
-                            period=str(row.metadata.get('valuation_date') or row.metadata.get('month') or (row.values[0] if name in {'每日持仓收益','每月持仓收益','月度净投入明细','完整交易净投入','每月微操收益','微操配对证据','交易回放'} and row.values else end.isoformat()))[:10]
-                            records.append((ledger.value,person,name,period,row.metadata.get('account_id') or 0,row.metadata.get('instrument_id') or 0,index,dumps(row)))
-                    c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',records)
-                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger.value}:{person}',utcnow()))
-                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger.value}:{person}',ALGORITHM))
-                    c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger.value}:{person}',json.dumps(quote_inputs)))
-                    c.commit()
+                    quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<=?',(str(end),)))
+                if force or not _reusable_reports(derived,ledger.value,person,end,quote_inputs):
+                    result=service.calculate(scope,use_cache=False)
+                    with exclusive(derived.path),closing(derived.connect(write=True)) as c:
+                        c.execute('BEGIN IMMEDIATE')
+                        c.execute('DELETE FROM report_details WHERE ledger=? AND person_id=?',(ledger.value,person))
+                        records=[]
+                        for name,report in result.reports.items():
+                            if name not in financial:continue
+                            for index,row in enumerate(report.rows):
+                                period=str(row.metadata.get('valuation_date') or row.metadata.get('month') or (row.values[0] if name in {'每日持仓收益','每月持仓收益','月度净投入明细','完整交易净投入','每月微操收益','微操配对证据','交易回放'} and row.values else end.isoformat()))[:10]
+                                records.append((ledger.value,person,name,period,row.metadata.get('account_id') or 0,row.metadata.get('instrument_id') or 0,index,dumps(row)))
+                        c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',records)
+                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger.value}:{person}',utcnow()))
+                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger.value}:{person}',ALGORITHM))
+                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_through:{ledger.value}:{person}',str(end)))
+                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger.value}:{person}',json.dumps(quote_inputs)))
+                        c.commit()
                 if on_reports:on_reports(ledger.value,person,quote_inputs)
             except SourceChangedError:raise
             except Exception:
@@ -144,14 +162,16 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
             done+=1
             try:
                 with readonly_connection(source) as c:snapshot=load_snapshot(c,scope)
-                quotes.supplement(snapshot)
+                quotes.supplement(snapshot,readonly=True)
             except Exception as exc:
                 for d in days:
                     record_error(derived,quotes,ledger.value,person,d.isoformat(),'',exc)
                     errors+=1;done+=1
                     notify('CALCULATING_HISTORY','部分账本输入无法读取，已隔离失败分区，继续其他历史人员。')
                 continue
-            for d in days:
+            prepared.append((ledger,person,scope,snapshot))
+        for d in days:
+            for ledger,person,scope,snapshot in prepared:
                 day=d.isoformat();dep=''
                 notify('CALCULATING_HISTORY',f'正在处理历史五分钟数据：{day}。')
                 try:
@@ -263,12 +283,15 @@ def publish_reports(staging,published,ledger,person,expected_source,quotes=None,
         if any(current.get(day)!=revision for day,revision in quote_inputs.items()):return False
     with closing(staging.connect()) as c:
         rows=c.execute('SELECT * FROM report_details WHERE ledger=? AND person_id=?',(ledger,person)).fetchall()
+        end_row=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_through:{ledger}:{person}',)).fetchone()
+        staging_end=end_row[0] if end_row else ''
     with exclusive(published.path),closing(published.connect(write=True)) as c:
         c.execute('BEGIN IMMEDIATE')
         c.execute('DELETE FROM report_details WHERE ledger=? AND person_id=?',(ledger,person))
         c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',rows)
         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger}:{person}',utcnow()))
         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger}:{person}',ALGORITHM))
+        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_through:{ledger}:{person}',str(staging_end)))
         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger}:{person}',json.dumps(quote_inputs or {})))
         c.commit()
     return True

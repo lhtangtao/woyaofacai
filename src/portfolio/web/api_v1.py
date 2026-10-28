@@ -2032,16 +2032,16 @@ def api_shared_history():
                             'cache':state,'channels':[],'tickers':[]})
         from portfolio.services.derived_queries import historical_analytics
         analytics=historical_analytics(DATABASE_PATH,scope,first,last)
-        rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
         channels=request.args.getlist('channel') or None
         ticker=request.args.get('ticker') or None
+        rows,state=load_history(DATABASE_PATH,quotes,scope,first,last,aggregate=True,channels=channels,ticker=ticker)
         mode=request.args.get('mode','cumulative')
         if mode not in ('cumulative','intraday'):raise ValueError('未知走势模式。')
         chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
         daily=analytics.reports['每日持仓收益'].rows
         return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':[{'name':s.name,'points':s.points} for s in chart.series],
                      'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks,
-                     'x_labels':chart.x_labels,'calendar_axis':chart.calendar_axis,'line_width':chart.line_width},'cache':state,
+                     'x_labels':chart.x_labels,'calendar_axis':chart.calendar_axis,'line_width':chart.line_width,'break_keys':chart.break_keys},'cache':state,
                      'channels':sorted({r.values[1] for r in daily}),'tickers':sorted({r.values[3] for r in daily})}))
     except (ValueError,TypeError) as exc:return jsonify({'status':'error','message':str(exc)}),400
     except Exception:

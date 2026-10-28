@@ -351,6 +351,7 @@ class MonthlyRealtimePnlPage(QWidget):
             if progress.get('total_units'):
                 text+=f" {progress.get('completed_units',0)}/{progress['total_units']}（{progress.get('percent',0)}%）"
             self.summary_badge.setText(text)
+        if getattr(self,'_shared_busy',None):return
         if status['ready'] and status.get('generation')!=self._derived_generation:
             self._derived_generation=status['generation']
             if not self.month_combo.count():self._init_available_months()
@@ -642,20 +643,29 @@ class MonthlyRealtimePnlPage(QWidget):
         if getattr(self,'_parent_filters',None) is None:
             scope=replace(scope,account_ids=None,instrument_ids=None,category=None,search='')
         if scope.as_of < first:scope=replace(scope,as_of=last)
-        self._shared_request=(period,year,scope)
+        inherited_filters=getattr(self,'_parent_filters',None)
+        channels=([inherited_filters[0]] if inherited_filters[0] else None) if inherited_filters is not None else self.channel_filter.selected_channels()
+        ticker=inherited_filters[1] if inherited_filters is not None else self.stock_combo.selected_ticker()
+        mode=self.mode_combo.currentData() or 'cumulative'
+        request=(period,year,scope,tuple(sorted(channels or ())),ticker,mode)
+        if getattr(self,'_shared_busy',None)==request:return
+        self._shared_request=request;self._shared_busy=request
         self.summary_badge.setText('正在读取共享历史派生数据…')
         def task(cancel):
             from portfolio.services.derived_store import DerivedStore
             if not DerivedStore(source).readiness()['ready']:
                 rows,state=load_history(source,self.window.quote_store,scope,first,last)
-                return None,rows,state
+                return None,rows,state,None
             from portfolio.services.derived_queries import historical_analytics
             result=historical_analytics(source,scope,first,last)
-            rows,state=load_history(source,self.window.quote_store,scope,first,last)
-            return result,rows,state
+            rows,state=load_history(source,self.window.quote_store,scope,first,last,aggregate=True,channels=channels,ticker=ticker)
+            from portfolio.services.derived_queries import trend
+            chart,state=trend(source,self.window.quote_store,result,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+            return result,rows,state,chart
         def ready(value):
-            if self._shared_request != (period,year,scope):return
-            self._shared_analytics,self._shared_rows,self._shared_state=value
+            if self._shared_request != request:return
+            self._shared_busy=None
+            self._shared_analytics,self._shared_rows,self._shared_state,chart=value
             self._shared_period,self._shared_year=period,year
             if year:self._cached_year=period
             else:self._cached_month=period
@@ -666,8 +676,14 @@ class MonthlyRealtimePnlPage(QWidget):
             channels={r.values[1] for r in value[0].reports['每日持仓收益'].rows}
             tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
             self.channel_filter.populate(sorted(channels));self.stock_combo.populate(sorted(tickers))
-            self.update_chart()
-        self.window._submit(f'shared-trend-{id(self)}',task,ready)
+            self._display_shared_chart(chart,value[2],year)
+        lane=f'shared-trend-{id(self)}'
+        self.window._submit(lane,task,ready)
+        def failed(message):
+            if self._shared_request==request:
+                self._shared_busy=None
+                self.summary_badge.setText(message)
+        self.window.jobs[lane].signals.error.connect(failed,Qt.ConnectionType.QueuedConnection)
 
     def set_parent_filters(self,channel,ticker):
         """Embedded Today charts share the parent channel/Ticker selection."""
@@ -680,16 +696,10 @@ class MonthlyRealtimePnlPage(QWidget):
         self.update_chart()
 
     def _render_shared_chart(self, year):
-        if not getattr(self,'_shared_analytics',None) or self._shared_year != year:return
-        from portfolio.services.derived_queries import trend
-        source=self._resolve_source_path()
-        inherited=getattr(self,'_parent_filters',None)
-        channels=([inherited[0]] if inherited[0] else None) if inherited is not None else self.channel_filter.selected_channels()
-        ticker=inherited[1] if inherited is not None else self.stock_combo.selected_ticker()
-        chart,state=trend(source,self.window.quote_store,self._shared_analytics,self._shared_period,year=year,
-                          channels=channels,ticker=ticker,
-                          mode=self.mode_combo.currentData() or 'cumulative',
-                          history_data=(self._shared_rows,self._shared_state))
+        period=self.year_combo.currentText() if year else self.month_combo.currentText()
+        self._load_shared_period(period,year)
+
+    def _display_shared_chart(self,chart,state,year):
         self.canvas.chart=chart;self.canvas.update()
         self.summary_badge.setText(state.get('message',''))
         self.notes_label.setText(chart.note)

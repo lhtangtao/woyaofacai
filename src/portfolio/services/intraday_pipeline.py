@@ -95,6 +95,11 @@ class Producer:
                 sub=replace(base,scope=scope,events=[e for e in base.events if not person or e.person_id==person],
                             baselines=[b for b in base.baselines if b.get('person_id')==person] if person else [b for b in base.baselines if b.get('scope_type') in ('ACCOUNT','TOTAL')],issues=[])
                 try:
+                    from portfolio.services.derived_codec import dumps
+                    from portfolio.services.derived_store import ALGORITHM
+                    with closing(self.store.connect()) as c:
+                        saved=c.execute('SELECT p.algorithm,p.status,i.quote_revision FROM partitions p LEFT JOIN partition_inputs i USING(ledger,person_id,day) WHERE p.ledger=? AND p.person_id=? AND p.day=?',(ledger.value,person,day)).fetchone()
+                    if saved and saved[0]==ALGORITHM and saved[1] not in ('INVALID','ERROR') and saved[2]==dumps(self.quotes.day_revision(day)):continue
                     class Writer(PartitionWriter):
                         def save_historical_pnl(writer,key,day,rows,unused,warning='',**kwargs):
                             if source_version(self.source)!=version:raise ValueError('交易数据变化，本次分区不发布。')
@@ -197,27 +202,32 @@ class Producer:
                 import logging
                 logging.getLogger(__name__).exception('Historical price recovery failed; retry remaining partitions')
         def work():
-            # One past date per turn; the current-day producer has its own lock
-            # and can continue while historical local recovery/network work runs.
+            from time import monotonic
+            from portfolio.services.derived_maintenance import build_running,pending_history_days
+            if build_running(self.source):return
             with exclusive(str(self.store.path)+'.price-history',wait=False),self.store.active(),localcontext() as ctx:
                 ctx.prec=50
-                from portfolio.services.derived_builder import history_days
-                dates,_=history_days(self.source,self.quotes,date(2026,1,1),current)
-                dates=[d for d in sorted(dates,reverse=True) if d<current]
-                from portfolio.services.derived_builder import historical_people
-                from portfolio.services.derived_codec import dumps
-                from portfolio.services.derived_store import ALGORITHM
-                expected=len(historical_people(self.source))+1
-                pending=[]
-                with closing(self.store.connect()) as c:
-                    for candidate in dates:
-                        partitions=c.execute('SELECT p.algorithm,p.status,i.quote_revision FROM partitions p LEFT JOIN partition_inputs i USING(ledger,person_id,day) WHERE p.day=?',(candidate.isoformat(),)).fetchall()
-                        revision=dumps(self.quotes.day_revision(candidate.isoformat()))
-                        if len(partitions)!=expected or any(a!=ALGORITHM or state not in ('HISTORICAL_OBSERVED','NO_EXPOSURE') or inputs!=revision for a,state,inputs in partitions):pending.append(candidate)
-                if not pending:return
-                target=pending[self.history_cursor%len(pending)];self.history_cursor+=1
+                if build_running(self.source):return
+                dates=pending_history_days(self.source,self.store,self.quotes,date(2026,1,1),current)
+                if not dates:return
+                started=monotonic();done=0;failures=[]
                 other=Producer(self.source)
-                other.collect(target.isoformat(),datetime.now(UTC))
+                def progress(state):
+                    value=dict(state=state,total_units=len(dates),completed_units=done,
+                               percent=done*100//len(dates),failed_dates=failures,checked_at=utcnow(),
+                               message=f'正在按日期批量补齐历史人员：本批已处理 {done}/{len(dates)} 个缺失日期。')
+                    with exclusive(self.store.path),closing(self.store.connect(write=True)) as c:
+                        c.execute("INSERT OR REPLACE INTO metadata VALUES ('history_batch_status',?)",(json.dumps(value,ensure_ascii=False),));c.commit()
+                progress('CALCULATING_HISTORY')
+                for target in dates[:8]:
+                    if build_running(self.source) or monotonic()-started>30:break
+                    try:other.collect(target.isoformat(),datetime.now(UTC))
+                    except Exception:
+                        failures.append(target.isoformat())
+                        import logging
+                        logging.getLogger(__name__).exception('Historical date failed; continue batch')
+                    done+=1;progress('CALCULATING_HISTORY')
+                progress('PARTIAL' if failures else 'PUBLISHED')
         self.history_job=_HISTORY_POOL.submit(work)
 
     def tick(self):

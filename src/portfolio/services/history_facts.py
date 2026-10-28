@@ -193,13 +193,23 @@ def append_completed(source,symbol,day,rows,*,kind='FIVE_MINUTE',confirmation='P
     No DDL, source ledger updates, replacement, or erasure are permitted here.
     """
     source=Path(source).resolve()
+    rows=list(rows)
     with closing(readonly(source)) as c:
         if not c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():return False
         ids=[r[0] for r in c.execute("SELECT id FROM instruments WHERE symbol||'.'||market=?",(symbol,))]
+        existing={(stamp,phase):Decimal(price) for stamp,phase,price in c.execute("SELECT stamp_utc,session,price FROM history_prices WHERE instrument_id=? AND trade_date=? AND price_type=? AND adjustment='RAW' AND provider='Longbridge'",(ids[0],str(day),kind))} if len(ids)==1 else {}
     if len(ids)!=1:raise ValueError('行情证券缺少唯一稳定标识。')
+    pending=[]
+    for stamp,phase,value in rows:
+        if stamp.tzinfo is None or not value.is_finite() or value<=0:raise ValueError('无效已完成行情。')
+        if kind=='FIVE_MINUTE' and stamp+timedelta(minutes=5)>datetime.now(timezone.utc):raise ValueError('未完成K线不得归档。')
+        old=existing.get((stamp.astimezone(timezone.utc).isoformat(),phase))
+        if old is not None and old!=value:raise ValueError('已归档价格冲突；保留原值，请通过明确行情修正流程核对。')
+        if old is None:pending.append((stamp,phase,value))
+    if not pending:return True
     with exclusive(source),closing(sqlite3.connect(source,timeout=60)) as c:
         c.execute('BEGIN IMMEDIATE')
-        for stamp,phase,value in rows:
+        for stamp,phase,value in pending:
             if stamp.tzinfo is None or not value.is_finite() or value<=0:raise ValueError('无效已完成行情。')
             if kind=='FIVE_MINUTE' and stamp+timedelta(minutes=5)>datetime.now(timezone.utc):raise ValueError('未完成K线不得归档。')
             key=(ids[0],str(day),stamp.astimezone(timezone.utc).isoformat(),kind,phase,'RAW','Longbridge')
