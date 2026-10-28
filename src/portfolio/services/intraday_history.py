@@ -177,10 +177,11 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
         state=checkpoint['state'];resume_after=checkpoint['last']
     rows=[];missing_regular=defaultdict(set)
     observed={stamp+timedelta(minutes=5) for candles in prices.values() for stamp,_,_ in candles if stamp+timedelta(minutes=5)<=cutoff}
-    cur_reg = regular_start + timedelta(minutes=5)
-    while cur_reg <= min(cutoff, regular_end):
-        observed.add(cur_reg)
-        cur_reg += timedelta(minutes=5)
+    if observed or closes:
+        cur_slot = start + timedelta(minutes=5)
+        while cur_slot <= cutoff:
+            observed.add(cur_slot)
+            cur_slot += timedelta(minutes=5)
     stamp=(resume_after or start)+timedelta(minutes=5)
     saved_state=deepcopy(state) if resume_after else None
     saved_last=resume_after

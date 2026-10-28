@@ -126,10 +126,17 @@ class IntradayPnlChart(QWidget):
             target = date.fromisoformat(self.day)
             start = datetime.combine(target-timedelta(days=1), time(20), NY).astimezone(UTC)
             end = datetime.combine(target, time(20), NY).astimezone(UTC)
+            max_stamp = max((s for s, v in samples.items() if v is not None), default=None)
+            last_val = None
             stamp = start
             while stamp <= end:
                 key = stamp.isoformat()
-                points.append((key, samples.get(stamp)))
+                val = samples.get(stamp)
+                if val is not None:
+                    last_val = val
+                elif max_stamp is not None and stamp <= max_stamp and last_val is not None:
+                    val = last_val
+                points.append((key, val))
                 labels[key] = stamp.astimezone(zone).strftime('%H:%M')
                 if (stamp-start).total_seconds() % 1800 == 0 or stamp == end:
                     ticks.append(key)

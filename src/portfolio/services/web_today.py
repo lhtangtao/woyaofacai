@@ -178,9 +178,15 @@ class WebTodayService:
         start = datetime.combine(target_date - timedelta(days=1), time(20), NY).astimezone(UTC)
         end = datetime.combine(target_date, time(20), NY).astimezone(UTC)
         interval = timedelta(minutes=5)
+        max_stamp = max((s for s, (v, _) in samples.items() if v is not None), default=None)
+        last_val, last_phase = None, None
         points, stamp = [], start
         while stamp <= end:
             value, phase = samples.get(stamp, (None, None))
+            if value is not None:
+                last_val, last_phase = value, phase
+            elif max_stamp is not None and stamp <= max_stamp and last_val is not None:
+                value, phase = last_val, last_phase
             points.append({'time': stamp, 'pnl': value, 'session': phase})
             stamp += interval
         valid = [p for p in points if p['pnl'] is not None]

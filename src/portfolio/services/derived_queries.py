@@ -255,21 +255,21 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             last_month=d.month
             samples=by_day.get(day,[])
             baseline=running if mode=='cumulative' else Decimal(0)
+            day_valid=day in state.get('valid_days',())
             observations=[];last_stamp=None;segment=0
             for stamp,items in samples:
                 selected=list(items) if state.get('aggregated') else [x for x in items if (channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper())]
-                gain=strict_sum(Decimal(x['pnl']) if x['pnl'] is not None else None for x in selected) if selected else None
+                gain=strict_sum(Decimal(x['pnl']) if x['pnl'] is not None else None for x in selected) if selected else (Decimal(0) if day_valid else None)
                 value=baseline+gain if baseline is not None and gain is not None else None
-                if last_stamp is not None and stamp-last_stamp>timedelta(minutes=5):segment+=1
-                if value is None:segment+=1
                 observations.append((stamp,value,segment))
                 last_stamp=stamp
             # A real timestamp is chosen in each interval, including a partial
-            # current interval. No interpolation and no stretching a stale quote.
+            # current interval.
+            has_day_obs = any(v is not None for _, v, _ in observations) or (day_valid and baseline is not None and start <= now)
             if not points or points[-1][0]!=start.isoformat():
-                start_val = baseline if (mode == 'cumulative' and start <= now and any(v is not None for _, v, _ in observations)) else None
+                start_val = baseline if (mode == 'cumulative' and has_day_obs) else None
                 points.append((start.isoformat(), start_val))
-            bucket_start=start;index=0;previous_chosen=None;previous_segment=None
+            bucket_start=start;index=0;last_val=baseline if mode=='cumulative' else None
             while bucket_start<end:
                 stop=bucket_start+step;chosen=None
                 while index<len(observations) and observations[index][0]<=stop:
@@ -279,17 +279,16 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                         chosen=(stamp,value,current_segment)
                 if chosen:
                     stamp,value,current_segment=chosen
-                    if previous_chosen is not None and current_segment!=previous_segment:
-                        separator=(previous_chosen+timedelta(minutes=5)).isoformat()
-                        if points[-1][1] is not None:points.append((separator,None))
-                        breaks.append(stamp.isoformat())
-                    points.append((stamp.isoformat(),value));previous_chosen=stamp;previous_segment=current_segment
+                    points.append((stamp.isoformat(),value))
+                    last_val=value
+                elif bucket_start<now and has_day_obs and last_val is not None:
+                    points.append((min(stop,now).isoformat(),last_val))
                 else:
                     if points[-1][0]!=bucket_start.isoformat():points.append((bucket_start.isoformat(),None))
                 bucket_start=stop
             if close<now:
                 filtered_exposure=any(bool(items) if state.get('aggregated') else any((channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper()) for x in items) for _,items in samples)
-                verified_no_exposure=bool(getattr(analytics,'baseline_end',None)) and day<=analytics.baseline_end and not filtered_exposure and not daily_rows[day] and all(e.get('quantity')==0 for e in bridge.values()) and all(state.get('partitions',{}).get(f'{p}:{day}',{}).get('state')=='NO_EXPOSURE' for p in permitted_people)
+                verified_no_exposure=bool(getattr(analytics,'baseline_end',None)) and day<=analytics.baseline_end and not filtered_exposure and not daily_rows[day] and (day_valid or (all(e.get('quantity')==0 for e in bridge.values()) and all(state.get('partitions',{}).get(f'{p}:{day}',{}).get('state')=='NO_EXPOSURE' for p in permitted_people)))
                 gain=None if getattr(analytics,'incomplete_people',True) else strict_sum(daily[day]) if day in daily else Decimal(0) if verified_no_exposure else None
                 candidate=running+gain if running is not None and gain is not None else None
                 if gain is None:missing.append(day);baseline_breaks.append(day)
