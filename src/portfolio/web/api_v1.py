@@ -2040,7 +2040,8 @@ def api_shared_history():
         chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
         daily=analytics.reports['每日持仓收益'].rows
         return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':[{'name':s.name,'points':s.points} for s in chart.series],
-                     'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks},'cache':state,
+                     'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks,
+                     'x_labels':chart.x_labels,'calendar_axis':chart.calendar_axis,'line_width':chart.line_width},'cache':state,
                      'channels':sorted({r.values[1] for r in daily}),'tickers':sorted({r.values[3] for r in daily})}))
     except (ValueError,TypeError) as exc:return jsonify({'status':'error','message':str(exc)}),400
     except Exception:

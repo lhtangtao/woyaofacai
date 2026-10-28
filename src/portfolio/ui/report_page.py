@@ -359,7 +359,7 @@ class ReportPage(QWidget):
             totals = self.cumulative_totals
             selected = self.channel_overview.selected_channel
             cumulative = lifetime_total(totals, selected)
-            day_title = '当日盈亏' if self.snapshot_date and self.snapshot_date != QDate.currentDate().toString('yyyy-MM-dd') else '今日盈亏'
+            day_title = '所选日持仓盈亏' if self.snapshot_date and self.snapshot_date != QDate.currentDate().toString('yyyy-MM-dd') else '当前持仓当日盈亏'
             values = ((day_title, f'{pnl:+,.2f}' if pnl is not None else '— 等待报价/基准', pnl),
                       ('当日收益率', f'{rate:+.2%}' if rate is not None else '— 等待报价/基准', rate),
                       ('上涨 / 下跌标的', f'{up} / {down}　平盘 {flat}　待报价 {unknown}', None),

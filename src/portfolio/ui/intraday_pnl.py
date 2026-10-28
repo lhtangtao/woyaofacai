@@ -95,7 +95,7 @@ class IntradayPnlChart(QWidget):
 
     def draw(self, search='', channel=None):
         zone = ZoneInfo('Asia/Shanghai')
-        samples = {}
+        samples = {};parts={}
         complete = 0
         history = True
         observations = self.history
@@ -108,6 +108,8 @@ class IntradayPnlChart(QWidget):
                 value = sum((Decimal(r['pnl']) for r in selected), Decimal(0)) if selected and all(r['pnl'] is not None for r in selected) else None
             complete += value is not None
             samples[stamp.astimezone(UTC)] = value
+            from portfolio.engine.today_holdings import intraday_scope_parts
+            parts[stamp.astimezone(UTC)]=intraday_scope_parts(selected)
         # Keep the entire session on screen, even before the market closes.
         # ISO keys remain unique across midnight; only tick labels omit dates.
         points, labels, ticks = [], {}, []
@@ -140,10 +142,10 @@ class IntradayPnlChart(QWidget):
                 (t_intra.isoformat(), f"盘中 {t_intra.astimezone(zone).strftime('%H:%M')}"),
                 (t_post.isoformat(), f"盘后 {t_post.astimezone(zone).strftime('%H:%M')}"),
             ]
-        title = '当日五分钟盈亏走势' if history else '当日分钟盈亏走势'
+        title = '当日全部交易盈亏五分钟走势（含当日清仓）'
         day_sub = f'{self.day}（非交易日自动回溯）' if self.is_fallback else (self.day or "—")
         self.canvas.chart = Chart(-100, f'{title}（USD） · 实盘交易日 {day_sub}', 'line',
-                                  (Series('当时的今日累计盈亏', tuple(points)),),
+                                  (Series('当日全部交易盈亏（含当日清仓）', tuple(points)),),
                                   '北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。未到时段留白；五分钟K线估值，含当日清仓。' if history else
                                   '北京时间；完整交易时段固定显示，未到时段留白。正在补取长桥历史五分钟行情。',
                                   x_labels=labels, x_ticks=tuple(ticks),
@@ -164,8 +166,12 @@ class IntradayPnlChart(QWidget):
             self.status.setText(fallback_tag + (self.history_warning or '尚无完整有效五分钟点，请查看后台采集状态；不使用实时快照代替历史。'))
         else:
             latest_stamp, latest = next((stamp, value) for stamp, value in sorted(samples.items(), reverse=True) if value is not None)
+            components=parts.get(latest_stamp,{})
+            describe=lambda value:f'{value:+,.2f}' if value is not None else '—'
+            scope_note=f" 同一五分钟点：持仓部分 {describe(components.get('current_holdings'))}，当日全清仓部分 {describe(components.get('closed_today'))} USD。"
             latest_stamp = latest_stamp.astimezone(zone).strftime('%H:%M')
             interval_text = '五分钟历史' if history else '实时分钟'
             self.status.setText(fallback_tag + f'{complete} 个完整{interval_text}点 · 最近有效盈亏 {latest:+,.2f} USD · 最后有效五分钟点 {latest_stamp} 北京时间（上方卡片为独立10秒报价）。'
                                 + ('长桥行情已落库，重启后优先读库；含当日清仓，可能与仅当前持仓的上方卡片不同。' if history else '正在补取开机前的历史行情。')
                                 + (' 提示：'+self.history_warning if self.history_warning and not regular_alert else ''))
+            self.status.setText(self.status.text()+scope_note)

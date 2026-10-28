@@ -188,7 +188,7 @@ class QuoteStore:
             values.append((symbol, day.isoformat(), phase, price, stamp))
         connection.executemany('INSERT INTO daily_quote_snapshots VALUES (?,?,?,?,?) ON CONFLICT(symbol,day,session) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at WHERE excluded.quoted_at>daily_quote_snapshots.quoted_at OR (excluded.quoted_at=daily_quote_snapshots.quoted_at AND excluded.price<>daily_quote_snapshots.price)', values)
 
-    def historical_quotes(self, as_of, now=None):
+    def historical_quotes(self, as_of, now=None, *, readonly=False):
         """Archive latest-cache migration; completed US days only, never official closes.
 
         Prefer regular-session snapshots over extended hours. A regular tick
@@ -199,8 +199,8 @@ class QuoteStore:
         now = now or datetime.now(UTC)
         if not self.path.exists():
             return ()
-        with self.connect() as c:
-            self._archive(c, c.execute('SELECT symbol,session,price,quoted_at FROM latest_quotes').fetchall())
+        with (self.read_connection() if readonly else self.connect()) as c:
+            if not readonly:self._archive(c, c.execute('SELECT symbol,session,price,quoted_at FROM latest_quotes').fetchall())
             halves = {row[0] for row in c.execute('SELECT day FROM us_calendar WHERE half_day=1')}
             official = c.execute('SELECT symbol,day,price,candle_time FROM official_daily_closes WHERE day<=?', (as_of.isoformat(),)).fetchall()
             rows = c.execute('SELECT symbol,day,session,price,quoted_at FROM daily_quote_snapshots WHERE day<=? ORDER BY day,quoted_at', (as_of.isoformat(),)).fetchall()
@@ -244,7 +244,7 @@ class QuoteStore:
         except Exception:
             return {}
 
-    def supplement(self, snapshot):
+    def supplement(self, snapshot, *, readonly=False):
         from portfolio.domain.analytics import Issue, Price
         instruments = {i['symbol']+'.US': key for key, i in snapshot.instruments.items() if i.get('market') == 'US'}
         if self.source:
@@ -254,7 +254,7 @@ class QuoteStore:
                 snapshot.prices.append(Price(identifier, day, Decimal(value), 'DAILY_CLOSE', 'OFFICIAL_CLOSE', 0, stamp, 'RAW'))
         official = {(p.instrument_id, p.day) for p in snapshot.prices if p.kind == 'DAILY_CLOSE'}
         if self.path.exists():
-            with self.connect() as c:
+            with (self.read_connection() if readonly else self.connect()) as c:
                 snapshot.extras['trading_days'] = tuple(r[0] for r in c.execute('SELECT day FROM us_calendar ORDER BY day'))
                 try:
                     c_rows = c.execute('SELECT channel, amount FROM channel_cash_snapshots').fetchall()
@@ -262,7 +262,7 @@ class QuoteStore:
                 except Exception:
                     pass
         count = 0
-        for symbol, day, price, stamp, status in self.historical_quotes(snapshot.scope.as_of):
+        for symbol, day, price, stamp, status in self.historical_quotes(snapshot.scope.as_of,readonly=readonly):
             identifier = instruments.get(symbol)
             if identifier is not None and (identifier, day) not in official:
                 snapshot.prices.append(Price(identifier, day, price, 'DAILY_CLOSE' if status == 'OFFICIAL_CLOSE' else 'ESTIMATE_CLOSE', status, 0, stamp, 'RAW'))

@@ -2,6 +2,21 @@
 from datetime import date, timedelta
 
 
+def admissible_close(day,kind,status,basis,expected):
+    return day==expected and basis in ('RAW','UNKNOWN') and (kind=='DAILY_CLOSE' or kind=='ESTIMATE_CLOSE' and status=='CLOSE_ESTIMATE')
+
+
+def intraday_closes(prices, expected):
+    """Same prior trading date and admissible estimates as the native card."""
+    result={}
+    for price in prices:
+        if not admissible_close(price.day,price.kind,price.status,price.basis,expected):continue
+        current=result.get(price.instrument_id)
+        if current is None or (current.kind!='DAILY_CLOSE' and price.kind=='DAILY_CLOSE'):
+            result[price.instrument_id]=price
+    return result
+
+
 def previous_trading_day(analytics, day, calendar=None):
     if calendar:
         known = [d.isoformat() if hasattr(d, 'isoformat') else str(d) for d in calendar]

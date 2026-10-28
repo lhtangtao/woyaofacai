@@ -13,7 +13,7 @@ from portfolio.db.connection import readonly_connection
 from portfolio.db.repositories.analytics import load_snapshot
 from portfolio.domain.live_quotes import NY, UTC
 from portfolio.domain.trade_time import assumes_open, event_time_utc
-from portfolio.engine.close_baseline import previous_trading_day
+from portfolio.engine.close_baseline import previous_trading_day, intraday_closes
 from portfolio.engine.replay import action_applies, normalize_quantity, replay
 from portfolio.services.live_quotes import _SDK_VALUES_LOCK, create_context
 
@@ -87,6 +87,13 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     # Prepared callers include real dates discovered in saved price tables.
     # A shorter calendar cache must not make those dates disappear.
     days=days|{date.fromisoformat(d) for d in analytics.trading_days}
+    # Calendar caches may start on Jan 2. Actual earlier daily-close dates
+    # retain the Dec 31 year-opening baseline instead of guessing Jan 1.
+    if days:
+        first_calendar=min(days)
+        days|={date.fromisoformat(p.day) for p in snapshot.prices if p.kind=='DAILY_CLOSE'
+               and snapshot.instruments.get(p.instrument_id,{}).get('market')=='US'
+               and p.basis in ('RAW','UNKNOWN') and date.fromisoformat(p.day)<first_calendar}
     regular_start = datetime.combine(target, time(9, 30), NY).astimezone(UTC)
     regular_end = datetime.combine(target, time(13 if target in half_days else 16), NY).astimezone(UTC)
     past = replace(snapshot, scope=replace(snapshot.scope, as_of=target-timedelta(days=1)), events=[e for e in snapshot.events if e.day < day],
@@ -101,19 +108,16 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
     if not keys:
         return '当前筛选没有当日期初持仓或成交。'
     expected = previous_trading_day(analytics, day, calendar=days)
-    closes = {p.instrument_id: p.value for p in snapshot.prices
-              if p.day == expected and p.kind == 'DAILY_CLOSE' and p.basis in ('RAW', 'UNKNOWN')}
-    if not closes:
-        price_days = [p.day for p in snapshot.prices if p.kind == 'DAILY_CLOSE' and p.basis in ('RAW', 'UNKNOWN') and p.day < day]
-        if price_days:
-            expected = max(price_days)
-            closes = {p.instrument_id: p.value for p in snapshot.prices
-                      if p.day == expected and p.kind == 'DAILY_CLOSE' and p.basis in ('RAW', 'UNKNOWN')}
+    baseline_prices=intraday_closes(snapshot.prices,expected)
+    closes={identifier:price.value for identifier,price in baseline_prices.items()}
     groups = defaultdict(list)
     for key in keys:
         groups[(key[1], key[2])].append(key)
     timed, invalid = defaultdict(list), set()
     notices = []
+    missing_baselines=sorted({snapshot.instruments[k[2]]['symbol'] for k in keys if k in positions and positions[k].quantity and k[2] not in closes})
+    if missing_baselines:notices.append(f'缺少上一交易日 {expected} 的可信收盘基准：'+','.join(missing_baselines)+'；不回退到更早收盘价。')
+    if any(p.kind=='ESTIMATE_CLOSE' for p in baseline_prices.values()):notices.append(f'期初基准含 {expected} 近收盘估值（CLOSE_ESTIMATE），与持仓卡片规则一致，非正式收盘价。')
     estimated_open = 0
     for event in events:
         if event.key not in keys:
@@ -167,7 +171,8 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
         bad = group in invalid or initial < 0 or any('成交粒度冲突' in positions[k].warnings for k in group_keys if k in positions)
         state[group] = [quantity, opening, Decimal(0), Decimal(0), 0, sorted(timed[group]), bad]
     from portfolio.services.derived_store import digest
-    state_dependency=digest((snapshot.scope.ledger,snapshot.scope.person_ids,day,state))
+    baseline_identity=tuple((i,p.day,p.kind,p.status,p.value,p.basis) for i,p in sorted(baseline_prices.items()))
+    state_dependency=digest((snapshot.scope.ledger,snapshot.scope.person_ids,day,state,baseline_identity))
     checkpoint=store.load_checkpoint(state_dependency) if hasattr(store,'load_checkpoint') else None
     price_ids=tuple(sorted(prices))
     resume_after=None

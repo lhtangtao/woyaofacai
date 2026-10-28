@@ -202,7 +202,7 @@ class ChartCanvas(QWidget):
                     last = None
                     continue
                 x, y = left + (categories.index(key) + (0 if fixed_axis else .5)) * step, ys(value)
-                painter.setPen(QPen(color, 2))
+                painter.setPen(QPen(color, getattr(chart,'line_width',2.0)))
                 if chart.kind == "line":
                     if last and not series.name.startswith(("B ", "S ", "◇")):
                         painter.drawLine(last, QPointF(x, y))

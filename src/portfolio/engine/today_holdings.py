@@ -1,9 +1,9 @@
 """Today's movement for currently held securities; no historical/source mutation."""
-from decimal import localcontext
+from decimal import Decimal, localcontext
 
 from portfolio.domain.analytics import Report, ReportRow, ratio, strict_sum
 from portfolio.domain.live_quotes import NY, SESSION_LABELS
-from portfolio.engine.close_baseline import previous_trading_day, trusted_close, valid_opening
+from portfolio.engine.close_baseline import previous_trading_day, trusted_close, valid_opening, admissible_close
 from portfolio.engine.holdings import MIN_OPEN_QUANTITY
 
 
@@ -14,12 +14,13 @@ def today_holdings(analytics, live, session):
     expected_close = previous_trading_day(analytics, day) if day else None
     daily = {(r.metadata['account_id'], r.metadata['instrument_id']): r for r in analytics.reports['每日持仓收益'].rows if r.values[0] == day}
     stocks = {(r.metadata['account_id'], r.metadata['instrument_id']): r for r in analytics.reports.get('股票汇总', Report('', (), ())).rows}
-    closes = {}
+    closes = {};close_kinds={}
     for row in analytics.reports.get('行情状态', Report('', (), ())).rows:
-        if day and (row.values[2] == 'DAILY_CLOSE' or row.values[2] == 'ESTIMATE_CLOSE' and row.values[4] == 'CLOSE_ESTIMATE') and row.values[1] == expected_close and row.values[3] is not None and row.values[5] in ('RAW', 'UNKNOWN'):
+        if day and row.values[3] is not None and admissible_close(row.values[1],row.values[2],row.values[4],row.values[5],expected_close):
             key = row.metadata['instrument_id']
-            if key not in closes or closes[key][0] < row.values[1]:
+            if key not in closes or close_kinds[key]!='DAILY_CLOSE' and row.values[2]=='DAILY_CLOSE':
                 closes[key] = (row.values[1], row.values[3])
+                close_kinds[key]=row.values[2]
     last_close = max((v[0] for v in closes.values()), default=None)
     unit = '$' if analytics.scope.reporting_currency == 'USD' else '¥'
     with localcontext() as ctx:
@@ -91,6 +92,19 @@ def today_summary(rows):
         flat = sum(v is not None and v == 0 for v in rates.values())
         unknown = sum(v is None for v in rates.values())
         return profit, ratio(profit, value - profit if value is not None and profit is not None else None), up, down, flat, unknown
+
+
+def intraday_scope_parts(items):
+    """Describe the saved point's scope; never turn missing P&L into zero."""
+    if not items:return {'current_holdings':None,'closed_today':None,'other':None}
+    groups={'current_holdings':[],'closed_today':[],'other':[]}
+    with localcontext() as ctx:
+        ctx.prec=50
+        for item in items:
+            quantity=Decimal(item['quantity']) if item.get('quantity') is not None else None
+            key='current_holdings' if quantity is not None and quantity>=MIN_OPEN_QUANTITY else 'closed_today' if quantity==0 else 'other'
+            groups[key].append(Decimal(item['pnl']) if item['pnl'] is not None else None)
+        return {key:strict_sum(values) for key,values in groups.items()}
 
 
 def channel_summary(rows):

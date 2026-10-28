@@ -155,7 +155,7 @@ class WebTodayService:
         warning=cache_state.get('message','')
         observations=history
         job = self._backfill(analytics, day, history, warning, now)
-        samples = {}
+        samples = {};parts={}
         with localcontext() as context:
             context.prec = 50
             for stamp, phase, rows in observations:
@@ -164,6 +164,8 @@ class WebTodayService:
                 value = (sum((Decimal(r['pnl']) for r in selected), Decimal(0))
                          if selected and all(r['pnl'] is not None for r in selected) else None)
                 samples[stamp.astimezone(UTC)] = (value, phase)
+                from portfolio.engine.today_holdings import intraday_scope_parts
+                parts[stamp.astimezone(UTC)]=intraday_scope_parts(selected)
         target_date = date.fromisoformat(day)
         start = datetime.combine(target_date - timedelta(days=1), time(20), NY).astimezone(UTC)
         end = datetime.combine(target_date, time(20), NY).astimezone(UTC)
@@ -183,6 +185,7 @@ class WebTodayService:
                                warning=warning, **job,
                                boundaries=[{'time': t, 'label': s} for t, s in boundaries],
                                complete_points=len(valid), latest=valid[-1] if valid else None,
+                               pnl_scope='ALL_DAY_TRADES',scope_parts=parts.get(valid[-1]['time']) if valid else None,
                                high=max(valid, key=lambda p: p['pnl']) if valid else None,
                                low=min(valid, key=lambda p: p['pnl']) if valid else None))
 

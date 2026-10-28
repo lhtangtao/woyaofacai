@@ -42,7 +42,7 @@ def load_history(source,quotes,scope,start,end):
     ledger=scope.ledger.value
     placeholders=','.join('?' for _ in people)
     args=[ledger,*people,str(start),str(end)]
-    sql=f'SELECT person_id,day,stamp,channel,ticker,pnl,account_id,instrument_id FROM intraday_contributions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?'
+    sql=f'SELECT person_id,day,stamp,channel,ticker,pnl,account_id,instrument_id,quantity FROM intraday_contributions WHERE ledger=? AND person_id IN ({placeholders}) AND day BETWEEN ? AND ?'
     for column,values in (('account_id',scope.account_ids),('instrument_id',scope.instrument_ids)):
         if values is not None:
             if not values:return {},{'state':'EMPTY_FILTER','message':'当前筛选为空。'}
@@ -81,9 +81,9 @@ def load_history(source,quotes,scope,start,end):
     owners_at=defaultdict(set)
     for person,day,stamp in coverage:
         if (person,day) in valid:owners_at[day,stamp].add(person)
-    for person,day,stamp,channel,ticker,pnl,account,instrument in records:
+    for person,day,stamp,channel,ticker,pnl,account,instrument,quantity in records:
         if (person,day) not in valid:continue
-        by_day[day][stamp].append({'person_id':person,'channel':channel,'ticker':ticker,'pnl':pnl,'account_id':account,'instrument_id':instrument})
+        by_day[day][stamp].append({'person_id':person,'channel':channel,'ticker':ticker,'pnl':pnl,'account_id':account,'instrument_id':instrument,'quantity':quantity})
     if scope.category or scope.search:
         with readonly_connection(source) as c:categories={r['id']:r['category'] for r in c.execute('SELECT id,category FROM instruments')}
         for day,stamps in by_day.items():
@@ -109,12 +109,21 @@ def load_history(source,quotes,scope,start,end):
     _,calendar,_,_=quotes.load(now)
     expected={d.isoformat() for d in calendar if str(start)<=d.isoformat()<=str(end) and datetime.combine(d-timedelta(days=1),time(20),NY)<=now}
     missing_days={d for d in expected if any((p,d) not in states for p in people)}
+    months={}
+    for day in sorted({d for _,d in states}|expected):
+        summary=months.setdefault(day[:7],{'saved_days':0,'readable_points':0,'complete_points':0,'not_generated_days':0,'invalid_days':0})
+        if any((p,day) in states for p in people):summary['saved_days']+=1
+        if day in missing_days:summary['not_generated_days']+=1
+        if any(states.get((p,day),{}).get('state') in ('INVALID','ERROR') for p in people):summary['invalid_days']+=1
+        samples=output.get(day,())
+        summary['readable_points']+=len(samples)
+        summary['complete_points']+=sum(bool(items) and all(item['pnl'] is not None for item in items) for _,items in samples)
     overall='INVALID' if invalid else 'PARTIAL' if missing_days or errors or partial or incomplete_points else 'AVAILABLE' if partitions else 'NOT_GENERATED'
     maintenance=None
 
     status=maintenance_status(source)
     return output,{'state':overall,'progress':status['progress'],'generation':status.get('generation'),
-                   'error_partitions':errors,'partial_partitions':partial,'incomplete_points':incomplete_points,
+                   'error_partitions':errors,'partial_partitions':partial,'incomplete_points':incomplete_points,'months':months,
                    'trading_days':sorted({d.isoformat() for d in calendar}|{d for _,d in states}),'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},
                    'message':('受影响分区正在后台增量生成，其他有效日期正常展示。' if invalid or missing_days else f'有效历史数据已加载；计算失败分区 {errors}，缺失/提示分区 {partial}，人员尚未齐备的时间点 {incomplete_points}；对应区段留空。')}
 
@@ -186,6 +195,7 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         v=row.values
         if str(first)<=v[0]<=str(last) and (channels is None or v[1] in channels) and (not ticker or ticker.upper() in v[3].upper()):daily[v[0]].append(v[19])
     points=[];ticks=[];labels={};boundaries=[];running=Decimal(0) if calendar_days[0]<=first+timedelta(days=7) else None;missing=[]
+    last_month=None;baseline_breaks=[]
     if running is None:missing.append('期间起始交易日历/累计基准未确认')
     with localcontext() as ctx:
         ctx.prec=50
@@ -193,9 +203,11 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             day=d.isoformat();start=datetime.combine(d-timedelta(days=1),time(20),NY).astimezone(UTC)
             end=datetime.combine(d,time(20),NY).astimezone(UTC)
             close=datetime.combine(d,time(13 if d in halves else 16),NY).astimezone(UTC)
-            ticks.append(start.isoformat());labels[start.isoformat()]=start.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Shanghai')).strftime('%m-%d\n%H:%M')
-            for h,m,label in ((4,0,'盘前'),(9,30,'盘中'),(13 if d in halves else 16,0,'盘后')):
-                boundaries.append((datetime.combine(d,time(h,m),NY).astimezone(UTC).isoformat(),label,'dot'))
+            if not year or d.month!=last_month:
+                ticks.append(start.isoformat())
+                labels[start.isoformat()]=f'{d.month}月' if year else d.strftime('%m-%d')
+                boundaries.append((start.isoformat(),'','dot'))
+            last_month=d.month
             samples=by_day.get(day,[]);index=-1;stamp=start
             baseline=running if mode=='cumulative' else Decimal(0)
             while stamp<end:
@@ -213,7 +225,7 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 filtered_exposure=any((channels is None or x['channel'] in channels) and (not ticker or ticker.upper() in x['ticker'].upper()) for _,items in samples for x in items)
                 verified_no_exposure=bool(getattr(analytics,'baseline_end',None)) and day<=analytics.baseline_end and not filtered_exposure
                 gain=None if getattr(analytics,'incomplete_people',True) else strict_sum(daily[day]) if day in daily else Decimal(0) if verified_no_exposure else None
-                if gain is None:missing.append(day)
+                if gain is None:missing.append(day);baseline_breaks.append(day)
                 running=running+gain if running is not None and gain is not None else None
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')
     note='五分钟共享明细；月度30分钟/年度2小时采样。正式/原口径日收益参与跨日累计；缺失日内数据留空，不平滑、不补零。'
@@ -222,7 +234,10 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         note+=' 累计所需日报尚未生成或版本过期，后台将重试；可切换“每日日内盈亏”查看已保存五分钟点。'
     if state.get('progress',{}).get('calendar_warnings'):note+=' 日历覆盖元数据不足，使用已保存实际日期，未猜测缺失交易日。'
     if missing:note+=' 缺失或未生成：'+', '.join(missing[:12])+('…' if len(missing)>12 else '')
+    state={**state,'baseline_break_days':baseline_breaks}
+    if baseline_breaks:note+=' 累计基准在 '+baseline_breaks[0]+' 中断；没有可信基准前不恢复累计，不补零。'
     chart=Chart(0,f'{period} '+('累计盈亏走势' if mode=='cumulative' else '每日日内盈亏走势'),'line',
                 (Series('累计盈亏' if mode=='cumulative' else '当日盈亏',tuple(points)),),note,
-                x_labels=labels,x_ticks=tuple(ticks),vertical_lines=tuple(boundaries),highlight_extremes=True)
+                x_labels=labels,x_ticks=tuple(ticks),vertical_lines=tuple(boundaries),highlight_extremes=True,
+                show_points=False,line_width=1.5,calendar_axis='year' if year else 'month')
     return chart,state

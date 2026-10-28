@@ -36,7 +36,8 @@ export interface TodaySnapshot {
   curve: { day: string; target_day: string; fallback: boolean; points: PnlPoint[];
     interval_minutes: number; historical: boolean; warning: string; pending: boolean; message: string;
     boundaries: { time: string; label: string }[]; complete_points: number;
-    latest: PnlPoint | null; high: PnlPoint | null; low: PnlPoint | null };
+    latest: PnlPoint | null; high: PnlPoint | null; low: PnlPoint | null;
+    scope_parts?: { current_holdings: string | null; closed_today: string | null; other: string | null } | null };
 }
 
 function getCsrfToken(): string {

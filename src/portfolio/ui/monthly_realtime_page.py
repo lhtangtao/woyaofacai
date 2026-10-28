@@ -695,6 +695,10 @@ class MonthlyRealtimePnlPage(QWidget):
         self.notes_label.setText(chart.note)
         valid=[(k,v) for series in chart.series for k,v in series.points if v is not None]
         self.status_label.setText(f'有效采样 {len(valid)} · 最新 {valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
+        if year:
+            months=state.get('months',{})
+            coverage='；'.join(f"{month[5:]}月 {info['saved_days']}日/{info['complete_points']}个完整点" for month,info in sorted(months.items()) if month[5:]<='06')
+            if coverage:self.status_label.setText(self.status_label.text()+' · 上半年已存明细：'+coverage+'；缺失/未确认部分不连线。')
 
     def _load_month_data(self, month_str):
         return self._load_shared_period(month_str, False)

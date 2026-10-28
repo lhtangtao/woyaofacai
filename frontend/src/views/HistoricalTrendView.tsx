@@ -57,10 +57,18 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
     return {
       animation: false, title: { text: data?.chart?.title || "历史走势", textStyle: { fontSize: 14 } },
       grid: { left: 85, right: 55, top: 70, bottom: 85 },
-      tooltip: { trigger: "axis", valueFormatter: (v: any) => v == null ? "—" : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
-      xAxis: { type: "time", min: points[0]?.[0], max: points[points.length - 1]?.[0], axisLabel: { formatter: (v: string) => new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) } },
+      tooltip: { trigger: "axis", renderMode: "richText", formatter: (params: any[]) => {
+        const item = params[0]; if (!item) return "—";
+        const stamp = new Date(item.axisValue).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+        const value = item.value?.[1];
+        return `${stamp} 北京时间\n${item.seriesName}：${value == null ? "—" : Number(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+      } },
+      xAxis: { type: "category", boundaryGap: false, data: points.map((p: any) => p[0]),
+        axisLabel: { interval: 0, hideOverlap: true, formatter: (v: string) => data?.chart?.x_labels?.[v] || "" },
+        axisTick: { show: false } },
       yAxis: { type: "value", scale: true }, dataZoom: [{ type: "inside" }, { type: "slider" }],
       series: [{ name: data?.chart?.series?.[0]?.name || "盈亏", type: "line", showSymbol: false, connectNulls: false,
+        lineStyle: { width: data?.chart?.line_width || 1.5 },
         data: points.map((p: any) => [p[0], p[1] === null ? null : Number(p[1])]),
         markPoint: { data: [high && { name: "最高", coord: high, value: high[1].toFixed(2), itemStyle: { color: "#16a34a" } }, low && { name: "最低", coord: low, value: low[1].toFixed(2), itemStyle: { color: "#dc2626" } }].filter(Boolean) },
         markLine: { symbol: "none", silent: true, data: (data?.chart?.boundaries || []).map((b: any) => ({ name: b[1], xAxis: b[0], label: { formatter: b[1], fontSize: 9 }, lineStyle: { color: "#dbe3ef", type: "dotted" } })) } }],
@@ -84,6 +92,7 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
     </div>}
     {error ? <div role="alert" className="card-panel">{error}</div> : !data ? <div>正在读取共享历史派生数据…</div> : <>
       <div role="status">{data.cache?.message}</div>
+      {kind === "year" && <div>上半年已保存明细：{Object.entries(data.cache?.months || {}).filter(([month]) => month.slice(5, 7) <= "06").map(([month, info]: [string, any]) => `${month.slice(5)}月 ${info.saved_days}日／${info.complete_points}个完整点（待生成${info.not_generated_days}日，失效/失败${info.invalid_days}日）`).join("；") || "尚无已发布分区"}。缺失区段留空，不能代表整月无原始行情。</div>}
       <div className="card-panel"><ReactECharts option={option} notMerge style={{ height: 520 }} /></div>
       <div>{data.chart?.note}</div>
       <div>来源：共享五分钟派生数据库；月度30分钟／年度2小时采样，缺失区段留空。</div>

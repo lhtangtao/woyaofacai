@@ -116,7 +116,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
       axisLabel: { formatter: clock, interval: curve.interval_minutes === 5 ? 11 : 59 } },
     yAxis: { type: "value", scale: true, splitLine: { lineStyle: { color: "#E5EAF1" } },
       axisLine: { onZero: true }, axisLabel: { formatter: (v: number) => money(v) } },
-    series: [{ name: "当时的今日累计盈亏（USD）", type: "line", showSymbol: false, connectNulls: false,
+    series: [{ name: "当日全部交易盈亏（含当日清仓，USD）", type: "line", showSymbol: false, connectNulls: false,
       data: curve.points.map(p => p.pnl == null ? null : Number(p.pnl)),
       lineStyle: { width: 2, color: "#2563EB" },
       markLine: { symbol: "none", silent: true, data: [
@@ -168,7 +168,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
       <button className="btn" onClick={() => setRefresh(v => v + 1)}>重试</button></div>}
     <div className="today-cards" data-testid="today-cards">
       {[
-        [day === beijingDate() ? "今日盈亏" : "当日盈亏", money(summary?.pnl), summary?.pnl],
+        [day === beijingDate() ? "当前持仓当日盈亏" : "所选日持仓盈亏", money(summary?.pnl), summary?.pnl],
         ["当日收益率", money(summary?.rate, true), summary?.rate],
         ["上涨 / 下跌标的", summary ? `${summary.up} / ${summary.down}　平盘 ${summary.flat}　待报价 ${summary.unknown}` : "—", null],
         ["累计盈亏（含已清仓）", money(summary?.cumulative), summary?.cumulative],
@@ -182,7 +182,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
         <button key={value} role="tab" aria-selected={curveKind === value} className="btn" onClick={() => setCurveKind(value)}>{label}</button>)}
     </div>
     {curveKind !== "day" ? <HistoricalTrendView key={curveKind} personId={personId} initialKind={curveKind} embedded selectedChannel={channel} selectedTicker={ticker} search={search} /> : <section className="card-panel today-curve" aria-label="当日盈亏走势图">
-      <h3>当日五分钟盈亏走势（USD） · 实盘交易日 {curve?.day || day}</h3>
+      <h3>当日全部交易盈亏五分钟走势（含当日清仓，USD） · {curve?.day || day}</h3>
       {curveError && <p role="alert" className="today-warning">{curveError}</p>}
       {curve?.fallback && <p className="today-warning">所选日期 {curve.target_day} 非美股交易日，已回溯至 {curve.day}</p>}
       {chartOptions && <ReactECharts option={chartOptions} notMerge style={{ height: 420 }} />}
@@ -190,6 +190,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
       {curve && <p>{curve.complete_points} 个完整五分钟历史点
         {curve.latest && ` · 最近有效盈亏 ${money(curve.latest.pnl)} USD · 截至 ${clock(curve.latest.time)} 北京时间`}</p>}
       {curve?.high && curve.low && <p>最高 {money(curve.high.pnl)}（{clock(curve.high.time)}） · 最低 {money(curve.low.pnl)}（{clock(curve.low.time)}）</p>}
+      {curve?.scope_parts && <p>同一五分钟点：持仓部分 {money(curve.scope_parts.current_holdings)} USD · 当日全清仓部分 {money(curve.scope_parts.closed_today)} USD；上方卡片使用独立10秒报价。</p>}
       {curve?.warning && <p role="alert" className="today-warning">{curve.warning}</p>}
       {curve?.message && <p className="today-warning">{curve.message}</p>}
       <p>北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。缺失断线，未到时段留白；含当日清仓，可能与仅当前持仓的上方卡片不同。</p>

@@ -29,6 +29,8 @@ class Chart:
     vertical_lines: tuple[tuple[str, str], ...] = ()
     highlight_extremes: bool = False
     break_keys: tuple[str, ...] = ()
+    line_width: float = 2.0
+    calendar_axis: str = ""
 
 
 def rank_chart(chart, order='profit', offset=0):
