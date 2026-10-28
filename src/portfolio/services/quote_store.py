@@ -311,14 +311,46 @@ class QuoteStore:
         return (observed | required | {target}) - saved
 
     def save_official_close(self, symbol, day, price, candle_time, now):
-        """Only the daily regular-session history endpoint may call this path."""
-        if not price.is_finite() or price<=0 or day>now.astimezone(NY).date():raise ValueError('无效日K收盘数据')
-        if self.source:
-            from portfolio.services.history_facts import append_completed
-            if append_completed(self.source,symbol,day,[(candle_time,'Intraday',price)],kind='DAILY_CLOSE',confirmation='CONFIRMED'):return
+        """Archive a completed RAW regular-session daily bar, never overwrite."""
+        from contextlib import closing
+        from datetime import time
+        from portfolio.services.derived_store import exclusive
+        # SDK naive times are system-local (same convention as live_quotes).
+        candle_time=candle_time.astimezone(UTC)
+        if (not price.is_finite() or price<=0 or candle_time.astimezone(NY).date()!=day
+                or candle_time>now):raise ValueError('日K价格无效或交易日期不匹配')
         with self.connect() as c:
-            c.execute('INSERT INTO official_daily_closes VALUES (?,?,?,?,?) ON CONFLICT(symbol,day) DO UPDATE SET price=excluded.price,candle_time=excluded.candle_time,fetched_at=excluded.fetched_at',
-                      (symbol,day.isoformat(),str(price),candle_time.isoformat(),now.astimezone(UTC).isoformat()))
+            half=c.execute('SELECT half_day FROM us_calendar WHERE day=?',(str(day),)).fetchone()
+        if now<datetime.combine(day,time(13 if half and half[0] else 16),NY)+timedelta(minutes=15):
+            raise ValueError('交易日尚未完成收盘确认窗口')
+        with exclusive(str(self.path)+'.official-close'):
+            known=[]
+            with self.read_connection() as c:
+                old=c.execute('SELECT price FROM official_daily_closes WHERE symbol=? AND day=?',(symbol,str(day))).fetchone()
+                if old:known.append(Decimal(old[0]))
+            if self.source:
+                from portfolio.services.history_facts import readonly,append_completed
+                with closing(readonly(self.source)) as c:
+                    if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_prices'").fetchone():
+                        known.extend(Decimal(r[0]) for r in c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))))
+                if any(value!=price for value in known):raise ValueError('已确认收盘价冲突，保留原值，需显式核对')
+                if known:return False
+                if append_completed(self.source,symbol,day,[(candle_time,'Intraday',price)],kind='DAILY_CLOSE',confirmation='CONFIRMED'):
+                    with closing(readonly(self.source)) as c:
+                        archived=c.execute("SELECT h.price FROM history_prices h JOIN instruments i ON i.id=h.instrument_id WHERE i.symbol||'.'||i.market=? AND h.trade_date=? AND h.price_type='DAILY_CLOSE' AND h.confirmation='CONFIRMED' AND h.adjustment='RAW'",(symbol,str(day))).fetchall()
+                    if not archived or any(Decimal(r[0])!=price for r in archived):
+                        raise ValueError('归档记录尚未确认或存在冲突，保留原记录待核对')
+                    # Source facts are authoritative; notify every dependent day
+                    # without duplicating the archived price in the legacy cache.
+                    with self.connect() as c:
+                        c.execute('INSERT INTO quote_close_revisions VALUES (?,1) ON CONFLICT(day) DO UPDATE SET revision=revision+1',(str(day),))
+                    return True
+            if any(value!=price for value in known):raise ValueError('已确认收盘价冲突，保留原值，需显式核对')
+            if known:return False
+            with self.connect() as c:
+                c.execute('INSERT INTO official_daily_closes VALUES (?,?,?,?,?)',
+                          (symbol,str(day),str(price),candle_time.isoformat(),now.astimezone(UTC).isoformat()))
+            return True
 
     def load_earnings(self, key, max_age_seconds=86400):
         if not self.path.exists():

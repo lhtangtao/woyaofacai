@@ -131,38 +131,92 @@ class Producer:
                 logging.getLogger(__name__).warning('Five-minute calendar unavailable; using saved dates')
         return days,halves
 
+    def _close_attempt(self,identifier,previous,**values):
+        """Persist per-security evidence/retry state; both clients share it."""
+        import logging
+        values.update(checked_at=utcnow(),symbol=values.get('symbol'),day=str(previous))
+        with exclusive(self.store.path),closing(self.store.connect(write=True)) as c:
+            c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                      (f'close_retry:{identifier}:{previous}',json.dumps(values,ensure_ascii=False)));c.commit()
+        if values.get('state')!='CONFIRMED':
+            logging.getLogger(__name__).warning('Previous close repair symbol=%s day=%s history=%s fallback=%s retry=%s',
+                values.get('symbol'),previous,values.get('history_error'),values.get('fallback_reason'),values.get('next_retry'))
+
+    @staticmethod
+    def _close_error(error):
+        # Retain useful SDK code/message without logging credentials or URLs.
+        import re
+        message=re.sub(r'https?://\S+','<url>',str(error))
+        message=re.sub(r'(?i)(token|secret|password|authorization|app_key)([\s:=]+)[^\s,;]+',r'\1\2<redacted>',message)
+        message=re.sub(r'[A-Za-z0-9_/-]{32,}','<redacted>',message)
+        return type(error).__name__+': '+message[:240]
+
     def prior_closes(self,base,ids,day,now):
         from portfolio.engine.close_baseline import previous_trading_day
         from portfolio.services.live_quotes import create_context,_SDK_VALUES_LOCK
+        from longbridge.openapi import AdjustType,Period,TradeSessions
         _,days,_,_=self.quotes.load(now)
         previous=date.fromisoformat(previous_trading_day(SimpleNamespace(trading_days=tuple(d.isoformat() for d in days)),day,calendar=days))
-        known={p.instrument_id for p in base.prices if p.day==previous.isoformat() and p.kind=='DAILY_CLOSE' and p.basis in ('RAW','UNKNOWN')}
-        context=None;changed=False
+        # Refresh local confirmed facts first: another client may have saved them
+        # after this worker's holdings snapshot was prepared.
+        base=replace(base,prices=list(base.prices),extras=dict(base.extras),issues=list(base.issues))
+        self.quotes.supplement(base,readonly=True)
+        known={p.instrument_id for p in base.prices if p.day==str(previous) and p.kind=='DAILY_CLOSE'
+               and p.basis=='RAW' and p.status in ('OFFICIAL_CLOSE','CONFIRMED')}
+        context=None;changed=False;failed=[]
         if not CREDENTIALS_PATH.is_file():return False
         for identifier in sorted(ids-known):
-            symbol=base.instruments[identifier]['symbol']+'.US';key=(symbol,previous)
-            if key in self.close_attempts and now-self.close_attempts[key]<timedelta(minutes=30):continue
-            self.close_attempts[key]=now
-            marker=f'close_attempt:{identifier}:{previous}'
+            symbol=base.instruments[identifier]['symbol']+'.US'
             with closing(self.store.connect()) as c:
-                attempted=c.execute('SELECT value FROM metadata WHERE key=?',(marker,)).fetchone()
-            if attempted and now-datetime.fromisoformat(attempted[0])<timedelta(minutes=30):continue
-            with exclusive(self.store.path),closing(self.store.connect(write=True)) as c:
-                c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(marker,now.isoformat()));c.commit()
+                row=c.execute('SELECT value FROM metadata WHERE key=?',(f'close_retry:{identifier}:{previous}',)).fetchone()
+            attempt=json.loads(row[0]) if row else {}
+            if attempt.get('next_retry') and now<datetime.fromisoformat(attempt['next_retry']):continue
+            count=attempt.get('failures',0)+1
             try:
-                from longbridge.openapi import AdjustType,Period,TradeSessions
+                from portfolio.services.history_facts import calendar_covers
+                if previous not in days or date.fromisoformat(day) not in days or not calendar_covers(self.quotes.path,previous,date.fromisoformat(day)):
+                    raise ValueError('交易所日历未确认目标交易日/上一交易日，拒绝猜测昨收归属')
                 if context is None:context=create_context(CREDENTIALS_PATH)
                 with _SDK_VALUES_LOCK:
                     bars=context.history_candlesticks_by_date(symbol,Period.Day,AdjustType.NoAdjust,previous,previous+timedelta(days=1),TradeSessions.Intraday)
-                    for bar in bars:
-                        if bar.timestamp.astimezone(NY).date()==previous and bar.close.is_finite() and bar.close>0:
-                            self.quotes.save_official_close(symbol,previous,bar.close,bar.timestamp,now);changed=True
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning('Previous close unavailable; baseline remains missing')
-            # One symbol per background repair turn; a missing provider result
-            # must never hold up all current-day candle collection.
-            break
+                matching=[bar for bar in bars if bar.timestamp.astimezone(NY).date()==previous]
+                if not matching:raise ValueError('历史日K未返回目标交易日')
+                prices={bar.close for bar in matching}
+                if len(prices)!=1:raise ValueError('同一交易日返回冲突日K价格')
+                bar=matching[-1]
+                changed=self.quotes.save_official_close(symbol,previous,bar.close,bar.timestamp,datetime.now(UTC)) or changed
+                self._close_attempt(identifier,previous,symbol=symbol,state='CONFIRMED',failures=0,
+                                    source='Longbridge.history_candlesticks_by_date',adjustment='RAW',session='Intraday')
+            except Exception as error:
+                failed.append((identifier,symbol,count,self._close_error(error)))
+        # Batch fallback requests, after every missing security got a daily-K
+        # attempt. SecurityQuote has no prev-close date/adjustment evidence in
+        # this SDK; its last-price timestamp cannot prove those fields.
+        for offset in range(0,len(failed),50):
+            group=failed[offset:offset+50];received={};fallback_error=None
+            try:
+                if context is None:context=create_context(CREDENTIALS_PATH)
+                with _SDK_VALUES_LOCK:received={v.symbol:v for v in context.quote([symbol for _,symbol,_,_ in group])}
+            except Exception as error:fallback_error=self._close_error(error)
+            for identifier,symbol,count,error in group:
+                quote=received.get(symbol);candidate=None;quoted_at=None
+                reason=fallback_error or 'quote未返回该股票'
+                if quote is not None:
+                    try:
+                        value=quote.prev_close
+                        quoted_at=quote.timestamp.astimezone(UTC).isoformat()
+                        if not value.is_finite() or value<=0:reason='quote.prev_close非有效正价格'
+                        elif quote.timestamp>datetime.now(quote.timestamp.tzinfo):reason='quote报价时间来自未来，拒绝候选'
+                        elif quote.timestamp.astimezone(NY).date()!=date.fromisoformat(day):reason='quote最新报价不属于目标交易日，prev_close归属未确认'
+                        else:
+                            candidate=str(value)
+                            reason='quote.prev_close未提供收盘所属日期和复权证据，仅存待确认候选，禁止写入正式收盘价'
+                    except Exception as error_detail:reason=self._close_error(error_detail)
+                checked=datetime.now(UTC)
+                self._close_attempt(identifier,previous,symbol=symbol,state='UNCONFIRMED' if candidate else 'FAILED',
+                    failures=count,next_retry=(checked+timedelta(seconds=min(300,20*2**min(count-1,4)))).isoformat(),
+                    source='Longbridge.quote.prev_close',adjustment='UNVERIFIED',candidate=candidate,
+                    quote_time=quoted_at,history_error=error,fallback_reason=reason)
         return changed
 
     def schedule_closes(self,base,ids,day,now):
@@ -174,7 +228,18 @@ class Producer:
             def repair():
                 try:
                     with exclusive(str(self.store.path)+'.close-repair',wait=False):
-                        self.prior_closes(base,ids,day,now)
+                        if self.prior_closes(base,ids,day,now):
+                            # Reuse existing completed bars; only the affected
+                            # day is materialized. Busy current-day work will
+                            # observe the changed close revision on its next tick.
+                            from portfolio.services.derived_dependencies import check_changes
+                            try:
+                                with exclusive(str(self.store.path)+'.intraday',wait=False),self.store.active(),localcontext() as ctx:
+                                    ctx.prec=50
+                                    check_changes(self.source,self.store)
+                                    bases={ledger:self.snapshot(ledger,day) for ledger in (Ledger.PERSON,Ledger.BROKER)}
+                                    self.materialize(day,datetime.now(UTC),bases)
+                            except BuildBusyError:pass
                 except BuildBusyError:pass
                 except Exception:
                     import logging
