@@ -88,8 +88,16 @@ class IntradayPnlChart(QWidget):
         self.history=();self.snapshots=()
         try:
             from portfolio.services.derived_queries import day_history
-            self.history,state=day_history(source_path,store,scope,self.day)
-            self.history_warning=state.get('message','')
+            self.history, state = day_history(source_path, store, scope, self.day)
+            self.history_warning = state.get('message', '')
+            report_day = next((r.metadata.get('trading_day') for r in report.rows if r.metadata.get('trading_day')), '') if report and report.rows else ''
+            if not self.history and report_day and report_day != self.day and session is None:
+                fallback_history, fallback_state = day_history(source_path, store, scope, report_day)
+                if fallback_history:
+                    self.history = fallback_history
+                    self.day = report_day
+                    self.is_fallback = True
+                    self.history_warning = fallback_state.get('message', '')
         except Exception:
             self.error='已保存的五分钟明细暂时读取失败，请查看后台任务状态；未使用分钟快照替代。'
 

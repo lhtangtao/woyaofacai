@@ -79,6 +79,87 @@ def today_holdings(analytics, live, session):
     return Report('今日盈亏', ('渠道', 'Ticker', '持仓数量', f'昨收价({unit})', f'最新价({unit})', '今日涨跌幅', f'今日盈亏({unit})', '行情时段', '报价时间', f'成本价({unit})', f'累计盈亏({unit})', f'当前市值({unit})', '回本涨幅', '占比'), tuple(result), note)
 
 
+def align_with_intraday_history(report, history):
+    """方案A：当未连接实时行情时，若目标交易日已落库五分钟分时走势，将持仓报表对齐至最新五分钟估值点。"""
+    if not history or not report or not report.rows:
+        return report
+    valid_points = [
+        (stamp, phase, rows)
+        for stamp, phase, rows in history
+        if any(r.get('pnl') is not None for r in rows)
+    ]
+    if not valid_points:
+        return report
+    latest_stamp, latest_phase, latest_rows = valid_points[-1]
+    from collections import defaultdict
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo('Asia/Shanghai')
+    time_str = latest_stamp.astimezone(zone).strftime('%H:%M')
+    acc_inst = defaultdict(lambda: {'pnl': Decimal(0), 'qty': Decimal(0), 'mv': None, 'candle_price': None})
+    for r in latest_rows:
+        key = (r.get('account_id'), r.get('instrument_id'))
+        if r.get('pnl') is not None:
+            acc_inst[key]['pnl'] += Decimal(r['pnl'])
+        if r.get('quantity') is not None:
+            acc_inst[key]['qty'] += Decimal(r['quantity'])
+        if r.get('market_value') is not None:
+            acc_inst[key]['mv'] = (acc_inst[key]['mv'] or Decimal(0)) + Decimal(r['market_value'])
+        if r.get('candle_price') is not None:
+            acc_inst[key]['candle_price'] = Decimal(r['candle_price'])
+        elif r.get('price') is not None:
+            acc_inst[key]['candle_price'] = Decimal(r['price'])
+
+    with localcontext() as ctx:
+        ctx.prec = 50
+        new_rows = []
+        for row in report.rows:
+            v, meta = list(row.values), dict(row.metadata)
+            key = (meta.get('account_id'), meta.get('instrument_id'))
+            pt = acc_inst.get(key)
+            if pt is not None:
+                qty = pt['qty'] if pt['qty'] > 0 else v[2]
+                mv = pt['mv']
+                pnl = pt['pnl']
+                price = pt['candle_price']
+                if price is None and mv is not None and qty and qty > 0:
+                    price = mv / qty
+                if price is None and v[3] is not None and qty and qty > 0:
+                    price = v[3] + pnl / qty
+                prev = v[3]
+                chg = ratio(price - prev, prev) if (price is not None and prev is not None) else None
+                if mv is None and price is not None and qty is not None:
+                    mv = qty * price
+                old_mv = v[11]
+                diff_mv = (mv - old_mv) if (mv is not None and old_mv is not None) else Decimal(0)
+                new_lifetime = (v[10] + diff_mv) if v[10] is not None else None
+                recovery = (v[9] - price) / price if v[9] is not None and price is not None and price > 0 and v[9] > price else None
+
+                v[2] = qty
+                if price is not None:
+                    v[4] = price
+                v[5] = chg
+                v[6] = pnl
+                v[7] = '五分钟分时'
+                v[8] = time_str
+                v[10] = new_lifetime
+                v[11] = mv
+                v[12] = recovery
+                meta.update(today_pnl=pnl, current_asset=mv, valuation_time=time_str)
+            new_rows.append(ReportRow(tuple(v), meta))
+
+        total_mv = strict_sum(r.values[11] for r in new_rows if isinstance(r.values[11], Decimal))
+        for i, row in enumerate(new_rows):
+            v, meta = list(row.values), dict(row.metadata)
+            mv = v[11]
+            prop_val = (mv / total_mv) if (total_mv and total_mv > 0 and mv is not None) else None
+            v[13] = prop_val
+            new_rows[i] = ReportRow(tuple(v), meta)
+
+        day_str = next((r.metadata.get('trading_day') for r in new_rows if r.metadata.get('trading_day')), '')
+        note = f'估值日：{day_str or "当日"} · 五分钟分时估值（截至 {time_str} 北京时间）。已与下方分时走势图严格对齐最新点。'
+        return Report(report.name, report.columns, tuple(new_rows), note)
+
+
 def today_summary(rows):
     with localcontext() as ctx:
         ctx.prec = 50

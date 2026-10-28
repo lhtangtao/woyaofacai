@@ -247,6 +247,10 @@ class LiveQuotesPanel(QWidget):
                                  record=self.enabled.isChecked() and not getattr(self, 'is_demo', True)
                                  and self.analytics.scope.reporting_currency == 'USD',
                                  trading_days=self.analytics.trading_days if self.analytics else ())
+        if session is None and page.intraday_chart.history and not page.intraday_chart.is_fallback:
+            from portfolio.engine.today_holdings import align_with_intraday_history
+            today = align_with_intraday_history(today, page.intraday_chart.history)
+            page.reports = {**page.reports, '今日盈亏': today}
         if page.broker_page and page.broker_page.bundle is not None and page.broker_page.bundle.aggregate.scope == self.analytics.scope:
             page.broker_page.render(self.instruments, quotes or {}, session, now or datetime.now(UTC))
         if page.selector.currentText() == '今日盈亏':

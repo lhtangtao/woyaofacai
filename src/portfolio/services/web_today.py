@@ -151,8 +151,16 @@ class WebTodayService:
         from portfolio.ui.intraday_pnl import _resolve_effective_day
         day, target, fallback = _resolve_effective_day(analytics.scope.as_of, session, report, analytics.trading_days)
         from portfolio.services.derived_queries import day_history
-        history,cache_state=day_history(self.path,self.store,analytics.scope,day)
-        warning=cache_state.get('message','')
+        history, cache_state = day_history(self.path, self.store, analytics.scope, day)
+        report_day = next((r.metadata.get('trading_day') for r in report.rows if r.metadata.get('trading_day')), '') if report and report.rows else ''
+        if not history and report_day and report_day != day and session is None:
+            fallback_hist, fb_state = day_history(self.path, self.store, analytics.scope, report_day)
+            if fallback_hist:
+                history = fallback_hist
+                day = report_day
+                fallback = True
+                cache_state = fb_state
+        warning = cache_state.get('message', '')
         observations=history
         job = self._backfill(analytics, day, history, warning, now)
         samples = {};parts={}
@@ -199,6 +207,20 @@ class WebTodayService:
         status, session, quotes = self.quote_snapshot(analytics, instruments, enabled, now)
         live, total, floating, fresh = live_holdings(analytics, instruments, quotes, session, now)
         report = today_holdings(analytics, live, session)
+        if session is None:
+            from portfolio.ui.intraday_pnl import _resolve_effective_day
+            from portfolio.services.derived_queries import day_history
+            from portfolio.engine.today_holdings import align_with_intraday_history
+            eff_day, _, is_fb = _resolve_effective_day(analytics.scope.as_of, session, report, analytics.trading_days)
+            hist, _ = day_history(self.path, self.store, analytics.scope, eff_day)
+            report_day = next((r.metadata.get('trading_day') for r in report.rows if r.metadata.get('trading_day')), '')
+            if not hist and report_day and report_day != eff_day:
+                hist, _ = day_history(self.path, self.store, analytics.scope, report_day)
+                if hist:
+                    eff_day = report_day
+                    is_fb = True
+            if hist and not is_fb:
+                report = align_with_intraday_history(report, hist)
         overview_rows = tuple(r for r in report.rows if ticker.casefold().strip() in str(r.values[1]).casefold())
         rows = [r for r in overview_rows if channel is None or r.values[0] == channel]
         # ReportPage re-bases the displayed weight after its local ticker/channel
