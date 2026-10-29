@@ -38,10 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     entries: [
       { id: "overview", label: "资产总览", icon: <LayoutGrid size={16} /> },
       { id: "reports:今日盈亏", label: "今日盈亏", icon: <TrendingUp size={16} /> },
-      { id: "reports:当前持仓", label: "当前持仓", icon: <Wallet size={16} /> },
-      { id: "reports:股票汇总", label: "股票汇总", icon: <Table size={16} /> },
-      { id: "people", label: "人员资产", icon: <Users size={16} /> },
-      { id: "brokers", label: "券商资产", icon: <Building2 size={16} /> },
+      { id: "holdings", label: "持仓管理", icon: <Wallet size={16} /> },
       { id: "ownership", label: "股票归属", icon: <PieChart size={16} /> },
       { id: "earnings", label: "持仓财报日历", icon: <Calendar size={16} /> },
     ],

@@ -158,6 +158,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.top_days_page.update_canvases()
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.canvas.update()
+        if hasattr(self, "holdings_page"):
+            self.holdings_page.dist_canvas.update()
         self.earnings_page.draw()
         self.monitor_page.draw_table()
 
@@ -645,6 +647,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "earnings_page"):
             self.earnings_page.activate()
         self.preload_people_bundle()
+        if hasattr(self, "holdings_page"):
+            self.holdings_page.set_analytics(analytics)
         self.stock_detail.set_analytics(analytics)
         for page in self.report_pages:
             page.set_reports(analytics.reports)

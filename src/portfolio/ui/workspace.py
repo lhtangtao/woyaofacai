@@ -385,6 +385,10 @@ def build_workspace(self):
     from portfolio.ui.monitor_page import MonitoringPage
     self.monitor_page = MonitoringPage(self)
     self.pages.addWidget(self.monitor_page)
+    from portfolio.ui.holdings_page import HoldingsPage
+    self.holdings_page = HoldingsPage(self)
+    self.pages.addWidget(self.holdings_page)
+    self.holdings_page.drill.connect(self.drill_chart)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

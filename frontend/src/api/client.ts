@@ -273,6 +273,34 @@ export const api = {
       body: JSON.stringify({ symbol, prompt: message, message }),
     }),
 
+  // Unified Holdings Management
+  holdingsDashboard: (person_id?: number | null) => {
+    const q = person_id != null ? `?person_id=${person_id}` : "";
+    return requestApi(`/api/v1/holdings/dashboard${q}`);
+  },
+  holdingsDetail: (params: {
+    dimension?: string;
+    person_id?: number | null;
+    broker?: string;
+    ticker?: string;
+    status?: string;
+    search?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v != null && v !== "") query.set(k, String(v));
+    });
+    return requestApi(`/api/v1/holdings/detail?${query.toString()}`);
+  },
+  stockDrawer: (ticker: string, person_id?: number | null, broker?: string) => {
+    const query = new URLSearchParams({ ticker });
+    if (person_id != null) query.set("person_id", String(person_id));
+    if (broker) query.set("broker", broker);
+    return requestApi(`/api/v1/holdings/stock_drawer?${query.toString()}`);
+  },
+
   // System Diagnostics
   systemDbCheck: () => requestApi("/api/v1/system/database"),
   systemProgress: () => requestApi("/api/v1/system/progress"),

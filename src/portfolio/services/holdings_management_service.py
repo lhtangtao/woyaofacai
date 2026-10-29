@@ -1,0 +1,572 @@
+"""Unified holdings management service powering both Desktop and Web.
+
+Provides:
+1. Holdings dashboard totals, breakdowns by person/broker/stock, and distribution donut data.
+2. Unified holdings detail items supporting person, broker, and stock viewing dimensions.
+3. Stock right drawer details:
+   - Top metrics (quantity, cost, current price, market value, floating pnl, cumulative pnl)
+   - 11-column trade history with cost changes and latest quote
+   - Holding analysis (quantity and cost trajectory)
+   - PnL analysis (cumulative return curve with buy/sell execution markers)
+   - Monthly performance breakdown
+"""
+from collections import defaultdict
+from dataclasses import replace
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from portfolio.domain.analytics import ZERO, ratio, strict_sum
+from portfolio.domain.models import QueryScope
+from portfolio.services.post_trade_positions import attach_post_trade_positions
+from portfolio.services.trades_service import TradesService
+
+
+def serialize_val(val: Any) -> Any:
+    """Format Decimal or numbers safely for JSON or UI display."""
+    if val is None:
+        return None
+    if isinstance(val, Decimal):
+        if val.is_nan() or val.is_infinite():
+            return None
+        return float(val)
+    return val
+
+
+class HoldingsManagementService:
+    @staticmethod
+    def get_dashboard_data(analytics, scope: QueryScope | None = None) -> dict[str, Any]:
+        """Compute top 4 cards, person/broker/stock summaries, and distribution data."""
+        if not analytics or not hasattr(analytics, "reports"):
+            return {
+                "cards": {},
+                "person_summary": [],
+                "broker_summary": [],
+                "stock_summary": [],
+                "distribution": {"by_person": [], "by_broker": [], "by_stock": []},
+            }
+
+        pa = analytics.reports.get("人员资产")
+        th = analytics.reports.get("当前持仓")
+        ch = analytics.reports.get("清仓收益")
+        sh = analytics.reports.get("股票汇总")
+        qh = analytics.reports.get("渠道汇总")
+
+        pa_rows = pa.rows if pa else ()
+        th_rows = th.rows if th else ()
+        ch_rows = ch.rows if ch else ()
+        sh_rows = sh.rows if sh else ()
+        qh_rows = qh.rows if qh else ()
+
+        # --- Top 4 Cards ---
+        total_market_value = sum(
+            (r.values[7] for r in pa_rows if r.values[4] == "持有中" and isinstance(r.values[7], Decimal)),
+            Decimal(0),
+        )
+        total_floating_pnl = sum(
+            (r.values[8] for r in pa_rows if r.values[4] == "持有中" and isinstance(r.values[8], Decimal)),
+            Decimal(0),
+        )
+        total_closed_pnl = sum(
+            (r.values[8] for r in pa_rows if r.values[4] == "已清仓" and isinstance(r.values[8], Decimal)),
+            Decimal(0),
+        )
+        total_cumulative_pnl = total_floating_pnl + total_closed_pnl
+
+        # Net invested / Total capital
+        open_net = sum(
+            (r.values[12] for r in pa_rows if r.values[4] == "持有中" and isinstance(r.values[12], Decimal)),
+            Decimal(0),
+        )
+        closed_net = sum(
+            (r.values[12] for r in pa_rows if r.values[4] == "已清仓" and isinstance(r.values[12], Decimal)),
+            Decimal(0),
+        )
+        total_invested = open_net + closed_net
+        if total_invested <= 0:
+            total_invested = total_market_value - total_cumulative_pnl
+
+        floating_pnl_rate = ratio(total_floating_pnl, open_net) if open_net > 0 else None
+        cumulative_pnl_rate = ratio(total_cumulative_pnl, total_invested) if total_invested > 0 else None
+
+        # Stock counts
+        all_tickers = {r.values[2] for r in pa_rows if r.values[2]}
+        open_tickers = {r.values[2] for r in pa_rows if r.values[4] == "持有中" and r.values[2]}
+        closed_only_tickers = {r.values[2] for r in pa_rows if r.values[4] == "已清仓" and r.values[2]} - open_tickers
+
+        cards = {
+            "total_market_value": serialize_val(total_market_value),
+            "floating_pnl": serialize_val(total_floating_pnl),
+            "floating_pnl_rate": serialize_val(floating_pnl_rate),
+            "total_stock_count": len(all_tickers),
+            "open_stock_count": len(open_tickers),
+            "closed_stock_count": len(closed_only_tickers),
+            "cumulative_pnl": serialize_val(total_cumulative_pnl),
+            "cumulative_pnl_rate": serialize_val(cumulative_pnl_rate),
+            "total_invested": serialize_val(total_invested),
+            "realized_pnl": serialize_val(total_closed_pnl),
+        }
+
+        # --- 1. 人员持仓汇总 ---
+        person_groups: dict[Any, dict[str, Any]] = {}
+        for r in pa_rows:
+            p_id = r.metadata.get("person_id")
+            p_name = r.values[0] or "未知人员"
+            if p_id not in person_groups:
+                person_groups[p_id] = {
+                    "person_id": p_id,
+                    "name": p_name,
+                    "market_value": Decimal(0),
+                    "total_pnl": Decimal(0),
+                    "net_invested": Decimal(0),
+                    "all_stocks": set(),
+                    "open_stocks": set(),
+                    "closed_stocks": set(),
+                }
+            item = person_groups[p_id]
+            ticker = r.values[2]
+            if ticker:
+                item["all_stocks"].add(ticker)
+                if r.values[4] == "持有中":
+                    item["open_stocks"].add(ticker)
+                    if isinstance(r.values[7], Decimal):
+                        item["market_value"] += r.values[7]
+                    if isinstance(r.values[8], Decimal):
+                        item["total_pnl"] += r.values[8]
+                    if isinstance(r.values[12], Decimal):
+                        item["net_invested"] += r.values[12]
+                elif r.values[4] == "已清仓":
+                    item["closed_stocks"].add(ticker)
+                    if isinstance(r.values[8], Decimal):
+                        item["total_pnl"] += r.values[8]
+                    if isinstance(r.values[12], Decimal):
+                        item["net_invested"] += r.values[12]
+
+        person_summary = []
+        for p_id, item in sorted(person_groups.items(), key=lambda x: str(x[1]["name"])):
+            closed_count = len(item["closed_stocks"] - item["open_stocks"])
+            net = item["net_invested"]
+            mv = item["market_value"]
+            base = net if net > 0 else (mv - item["total_pnl"])
+            p_rate = ratio(item["total_pnl"], base) if base > 0 else None
+            person_summary.append({
+                "person_id": p_id,
+                "name": item["name"],
+                "market_value": serialize_val(mv),
+                "total_pnl": serialize_val(item["total_pnl"]),
+                "pnl_rate": serialize_val(p_rate),
+                "total_stocks": len(item["all_stocks"]),
+                "open_stocks": len(item["open_stocks"]),
+                "closed_stocks": closed_count,
+            })
+
+        # --- 2. 券商持仓汇总 ---
+        broker_summary = []
+        if qh_rows:
+            for r in qh_rows:
+                channel = r.values[0]
+                mv = r.values[1] or Decimal(0)
+                pnl = r.values[8] or Decimal(0)
+                net = r.values[2] or Decimal(0)
+                b_rate = ratio(pnl, net if net > 0 else (mv - pnl))
+                cash = r.values[12]
+                broker_summary.append({
+                    "channel": channel,
+                    "market_value": serialize_val(mv),
+                    "total_pnl": serialize_val(pnl),
+                    "pnl_rate": serialize_val(b_rate),
+                    "cash": serialize_val(cash),
+                })
+        else:
+            # Fallback by grouping pa_rows by channel
+            b_groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"mv": Decimal(0), "pnl": Decimal(0), "net": Decimal(0)})
+            for r in pa_rows:
+                ch_name = r.values[1] or "未知渠道"
+                if isinstance(r.values[7], Decimal) and r.values[4] == "持有中":
+                    b_groups[ch_name]["mv"] += r.values[7]
+                if isinstance(r.values[8], Decimal):
+                    b_groups[ch_name]["pnl"] += r.values[8]
+                if isinstance(r.values[12], Decimal):
+                    b_groups[ch_name]["net"] += r.values[12]
+            for ch_name, b_data in sorted(b_groups.items()):
+                b_rate = ratio(b_data["pnl"], b_data["net"]) if b_data["net"] > 0 else None
+                broker_summary.append({
+                    "channel": ch_name,
+                    "market_value": serialize_val(b_data["mv"]),
+                    "total_pnl": serialize_val(b_data["pnl"]),
+                    "pnl_rate": serialize_val(b_rate),
+                    "cash": None,
+                })
+
+        # --- 3. 股票持仓汇总 ---
+        stock_groups: dict[str, dict[str, Any]] = {}
+        for r in pa_rows:
+            tk = r.values[2]
+            if not tk:
+                continue
+            if tk not in stock_groups:
+                stock_groups[tk] = {
+                    "ticker": tk,
+                    "market_value": Decimal(0),
+                    "floating_pnl": Decimal(0),
+                    "total_pnl": Decimal(0),
+                    "net_invested": Decimal(0),
+                    "quantity": Decimal(0),
+                    "status": "已清仓",
+                }
+            sg = stock_groups[tk]
+            if r.values[4] == "持有中":
+                sg["status"] = "持有中"
+                if isinstance(r.values[3], Decimal):
+                    sg["quantity"] += r.values[3]
+                if isinstance(r.values[7], Decimal):
+                    sg["market_value"] += r.values[7]
+                if isinstance(r.values[8], Decimal):
+                    sg["floating_pnl"] += r.values[8]
+                    sg["total_pnl"] += r.values[8]
+                if isinstance(r.values[12], Decimal):
+                    sg["net_invested"] += r.values[12]
+            elif r.values[4] == "已清仓":
+                if isinstance(r.values[8], Decimal):
+                    sg["total_pnl"] += r.values[8]
+                if isinstance(r.values[12], Decimal):
+                    sg["net_invested"] += r.values[12]
+
+        stock_summary = []
+        for tk, sg in sorted(stock_groups.items(), key=lambda x: (x[1]["status"] != "持有中", -x[1]["market_value"])):
+            base = sg["net_invested"] if sg["net_invested"] > 0 else (sg["market_value"] - sg["total_pnl"])
+            s_rate = ratio(sg["total_pnl"], base) if base > 0 else None
+            stock_summary.append({
+                "ticker": tk,
+                "market_value": serialize_val(sg["market_value"]),
+                "floating_pnl": serialize_val(sg["floating_pnl"]),
+                "total_pnl": serialize_val(sg["total_pnl"]),
+                "pnl_rate": serialize_val(s_rate),
+                "quantity": serialize_val(sg["quantity"]),
+                "status": sg["status"],
+            })
+
+        # --- 4. 资产分布图数据 (Donut) ---
+        dist_person = []
+        if total_market_value > 0:
+            for item in sorted(person_summary, key=lambda x: -float(x["market_value"] or 0)):
+                mv = float(item["market_value"] or 0)
+                if mv > 0:
+                    dist_person.append({
+                        "name": item["name"],
+                        "value": mv,
+                        "percent": round(mv / float(total_market_value) * 100, 2),
+                    })
+
+        dist_broker = []
+        if total_market_value > 0:
+            for item in sorted(broker_summary, key=lambda x: -float(x["market_value"] or 0)):
+                mv = float(item["market_value"] or 0)
+                if mv > 0:
+                    dist_broker.append({
+                        "name": item["channel"],
+                        "value": mv,
+                        "percent": round(mv / float(total_market_value) * 100, 2),
+                    })
+
+        dist_stock = []
+        if total_market_value > 0:
+            for item in sorted(stock_summary, key=lambda x: -float(x["market_value"] or 0)):
+                mv = float(item["market_value"] or 0)
+                if mv > 0:
+                    dist_stock.append({
+                        "name": item["ticker"],
+                        "value": mv,
+                        "percent": round(mv / float(total_market_value) * 100, 2),
+                    })
+
+        return {
+            "cards": cards,
+            "person_summary": person_summary,
+            "broker_summary": broker_summary,
+            "stock_summary": stock_summary,
+            "distribution": {
+                "by_person": dist_person,
+                "by_broker": dist_broker,
+                "by_stock": dist_stock,
+            },
+        }
+
+    @staticmethod
+    def get_holdings_detail_rows(
+        analytics,
+        dimension: str = "person",
+        person_id: int | tuple[int, ...] | None = None,
+        broker: str | None = None,
+        ticker: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return unified holdings detail rows matching filters."""
+        if not analytics or not hasattr(analytics, "reports"):
+            return []
+
+        pa = analytics.reports.get("人员资产")
+        if not pa:
+            return []
+
+        search_text = (search or "").strip().upper()
+        ticker_filter = (ticker or "").strip().upper()
+        broker_filter = (broker or "").strip().upper()
+        person_ids = (person_id,) if isinstance(person_id, int) else tuple(person_id) if isinstance(person_id, (tuple, list)) else None
+
+        rows = []
+        for r in pa.rows:
+            p_name = r.values[0] or ""
+            p_id = r.metadata.get("person_id")
+            channel = r.values[1] or ""
+            tk = r.values[2] or ""
+            qty = r.values[3]
+            st = r.values[4] or "持有中"
+            cost_p = r.values[5]
+            curr_p = r.values[6]
+            mv = r.values[7] or Decimal(0)
+            pnl = r.values[8] or Decimal(0)
+            pnl_rate = r.values[9]
+            recovery = r.values[10]
+            weight = r.values[11]
+            net = r.values[12] or Decimal(0)
+
+            # Filter checks
+            if person_ids is not None and p_id not in person_ids:
+                continue
+            if broker_filter and broker_filter not in channel.upper():
+                continue
+            if ticker_filter and ticker_filter != tk.upper():
+                continue
+            if status == "持有中" and st != "持有中":
+                continue
+            if status == "已清仓" and st != "已清仓":
+                continue
+            if search_text:
+                combined = f"{p_name} {channel} {tk}".upper()
+                if search_text not in combined:
+                    continue
+
+            rows.append({
+                "person_name": p_name,
+                "person_id": p_id,
+                "channel": channel,
+                "ticker": tk,
+                "quantity": serialize_val(qty),
+                "status": st,
+                "cost_price": serialize_val(cost_p),
+                "current_price": serialize_val(curr_p),
+                "market_value": serialize_val(mv),
+                "pnl": serialize_val(pnl),
+                "pnl_rate": serialize_val(pnl_rate),
+                "recovery_or_exit": serialize_val(recovery),
+                "weight": serialize_val(weight),
+                "net_invested": serialize_val(net),
+                "account_id": r.metadata.get("account_id"),
+                "instrument_id": r.metadata.get("instrument_id"),
+            })
+
+        # Sort according to selected dimension
+        if dimension == "person":
+            rows.sort(key=lambda x: (x["person_name"], x["status"] != "持有中", -float(x["market_value"] or 0)))
+        elif dimension == "broker":
+            rows.sort(key=lambda x: (x["channel"], x["status"] != "持有中", -float(x["market_value"] or 0)))
+        elif dimension == "stock":
+            rows.sort(key=lambda x: (x["ticker"], x["status"] != "持有中", -float(x["market_value"] or 0)))
+
+        return rows
+
+    @staticmethod
+    def get_stock_drawer_data(
+        source_path: str,
+        analytics,
+        ticker: str,
+        person_id: int | None = None,
+        broker: str | None = None,
+        as_of: date | None = None,
+    ) -> dict[str, Any]:
+        """Fetch all data required by the 4-tab stock drawer."""
+        ticker = ticker.strip().upper()
+        as_of = as_of or (analytics.scope.as_of if analytics and hasattr(analytics, "scope") else date.today())
+
+        # 1. Top Summary Metrics
+        pa = analytics.reports.get("人员资产") if analytics else None
+        pa_rows = [
+            r for r in (pa.rows if pa else ())
+            if r.values[2] and r.values[2].upper() == ticker
+            and (person_id is None or r.metadata.get("person_id") == person_id)
+            and (broker is None or (r.values[1] and broker.upper() in r.values[1].upper()))
+        ]
+
+        active_rows = [r for r in pa_rows if r.values[4] == "持有中"]
+        current_quantity = sum((r.values[3] for r in active_rows if isinstance(r.values[3], Decimal)), Decimal(0))
+        market_value = sum((r.values[7] for r in active_rows if isinstance(r.values[7], Decimal)), Decimal(0))
+        floating_pnl = sum((r.values[8] for r in active_rows if isinstance(r.values[8], Decimal)), Decimal(0))
+        total_pnl = sum((r.values[8] for r in pa_rows if isinstance(r.values[8], Decimal)), Decimal(0))
+
+        # Current Price & Cost Price
+        current_price = None
+        for r in active_rows:
+            if isinstance(r.values[6], Decimal) and r.values[6] > 0:
+                current_price = r.values[6]
+                break
+
+        cost_price = None
+        if current_quantity > 0:
+            open_net = sum((r.values[12] for r in active_rows if isinstance(r.values[12], Decimal)), Decimal(0))
+            cost_price = open_net / current_quantity if open_net > 0 else (market_value - floating_pnl) / current_quantity
+
+        net_invested = sum((r.values[12] for r in pa_rows if isinstance(r.values[12], Decimal)), Decimal(0))
+        base_invested = net_invested if net_invested > 0 else (market_value - total_pnl)
+        floating_pnl_rate = ratio(floating_pnl, open_net) if (current_quantity > 0 and open_net > 0) else None
+        total_pnl_rate = ratio(total_pnl, base_invested) if base_invested > 0 else None
+
+        summary = {
+            "ticker": ticker,
+            "company_name": f"{ticker} Corporation",
+            "tags": ["美股", "标的"],
+            "current_quantity": serialize_val(current_quantity),
+            "cost_price": serialize_val(cost_price),
+            "current_price": serialize_val(current_price),
+            "market_value": serialize_val(market_value),
+            "floating_pnl": serialize_val(floating_pnl),
+            "floating_pnl_rate": serialize_val(floating_pnl_rate),
+            "cumulative_pnl": serialize_val(total_pnl),
+            "cumulative_pnl_rate": serialize_val(total_pnl_rate),
+        }
+
+        # 2. Tab 1: 交易记录 (11 Columns)
+        ts = TradesService(source_path)
+        trade_scope = QueryScope(
+            as_of=as_of,
+            person_ids=(person_id,) if person_id is not None else None,
+            include_disabled=True,
+            search=ticker,
+        )
+        trade_page = ts.get_trades(trade_scope)
+        matched_trades = []
+        for r in trade_page.rows:
+            if r.values[3] and r.values[3].upper() == ticker:
+                if broker and r.values[1] and broker.upper() not in r.values[1].upper():
+                    continue
+                matched_trades.append(r)
+
+        trade_records = []
+        for r in matched_trades:
+            # 1. 交易时间
+            trade_time = str(r.values[0])
+            # 2. 归属人员
+            p_name = r.metadata.get("person_name") or "个人"
+            # 3. 券商渠道
+            channel = r.values[1] or ""
+            # 4. 交易方向
+            side = r.values[4] or "买入"
+            # 5. 成交数量
+            qty = r.values[5]
+            # 6. 当前价格
+            c_price = r.metadata.get("current_price") or current_price
+            # 7. 成交价格
+            exec_price = r.values[6]
+            # 8. 成交金额 (quantity * price, fee excluded)
+            amount = (qty * exec_price) if (qty is not None and exec_price is not None) else r.values[7]
+            # 9. 手续费
+            fee_e8 = r.metadata.get("fees_e8")
+            if fee_e8 is not None:
+                fee = Decimal(fee_e8) / Decimal(100_000_000)
+            else:
+                fee = r.values[8] if len(r.values) > 8 and isinstance(r.values[8], Decimal) else Decimal(0)
+            # 10. 成交后持仓
+            post_q = r.metadata.get("post_quantity")
+            # 11. 成本变化
+            cost_diff = r.metadata.get("cost_diff")
+            if post_q is not None and post_q == 0:
+                cost_change_text = "清仓"
+            elif cost_diff is not None:
+                if cost_diff < 0:
+                    cost_change_text = f"降低 ${abs(cost_diff):.2f}/股"
+                elif cost_diff > 0:
+                    cost_change_text = f"提高 ${cost_diff:.2f}/股"
+                else:
+                    cost_change_text = "持平"
+            else:
+                cost_change_text = "建仓" if (post_q and post_q > 0) else "—"
+
+            trade_records.append({
+                "trade_time": trade_time,
+                "person_name": p_name,
+                "channel": channel,
+                "side": side,
+                "quantity": serialize_val(qty),
+                "current_price": serialize_val(c_price),
+                "price": serialize_val(exec_price),
+                "amount": serialize_val(amount),
+                "fee": serialize_val(fee),
+                "post_quantity": serialize_val(post_q),
+                "cost_change": cost_change_text,
+                "raw_cost_diff": serialize_val(cost_diff),
+            })
+
+        # Default sort descending by trade time
+        trade_records.sort(key=lambda x: str(x["trade_time"]), reverse=True)
+
+        # 3. Tab 2: 持仓分析 (Quantity and Cost changes over time)
+        holding_analysis = {"dates": [], "quantities": [], "costs": []}
+        # Chronological sort for the chart
+        for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
+            dt = str(t["trade_time"])[:10]
+            holding_analysis["dates"].append(dt)
+            holding_analysis["quantities"].append(t["post_quantity"] or 0)
+            # Cost per share
+            c_val = serialize_val(cost_price)
+            holding_analysis["costs"].append(c_val or 0)
+
+        # 4. Tab 3: 收益分析 (PnL Analysis)
+        pnl_analysis = {
+            "floating_pnl": serialize_val(floating_pnl),
+            "floating_rate": serialize_val(floating_pnl_rate),
+            "realized_pnl": serialize_val(total_pnl - floating_pnl),
+            "cumulative_pnl": serialize_val(total_pnl),
+            "cumulative_rate": serialize_val(total_pnl_rate),
+            "chart_dates": [],
+            "cumulative_rates": [],
+            "floating_rates": [],
+            "markers": [],
+        }
+        # Collect buy / sell execution markers
+        for t in trade_records:
+            pnl_analysis["markers"].append({
+                "date": str(t["trade_time"])[:10],
+                "side": t["side"],
+                "price": t["price"],
+                "quantity": t["quantity"],
+            })
+
+        # 5. Tab 4: 月度表现 (Monthly Performance)
+        monthly_rep = analytics.reports.get("每月持仓收益") if analytics else None
+        monthly_records = []
+        if monthly_rep:
+            for r in monthly_rep.rows:
+                if r.values[3] and r.values[3].upper() == ticker:
+                    if person_id is not None and r.metadata.get("person_id") != person_id:
+                        continue
+                    m_pnl = r.values[20]
+                    m_mv = r.values[11]
+                    m_rate = r.values[21] if len(r.values) > 21 else None
+                    if m_rate is None and m_mv and m_mv > 0 and m_pnl is not None:
+                        m_rate = ratio(m_pnl, m_mv - m_pnl)
+                    monthly_records.append({
+                        "month": str(r.values[0]),
+                        "market_value": serialize_val(m_mv),
+                        "monthly_pnl": serialize_val(m_pnl),
+                        "return_rate": serialize_val(m_rate),
+                    })
+        monthly_records.sort(key=lambda x: x["month"], reverse=True)
+
+        return {
+            "summary": summary,
+            "trades": trade_records,
+            "holding_analysis": holding_analysis,
+            "pnl_analysis": pnl_analysis,
+            "monthly_performance": monthly_records,
+        }

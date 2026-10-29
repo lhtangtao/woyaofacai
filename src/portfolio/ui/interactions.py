@@ -8,8 +8,8 @@ from portfolio.domain.models import TradeFilters
 TITLES = ("交易明细", "数据源检查", "资产总览", "持仓与资产", "收益报表", "图表分析", "数据中心", "异常中心", "Excel 对账", "指标说明", "证券详情", "数据同步", "开发进度", "设置", "持仓财报日历", "持仓分布", "走势图", "Top日/月汇总", "月度走势详情", "AI 投资问答", "AI 股票分析")
 DESCRIPTIONS = ("查看每笔交易，追溯原始记录与人员归属。", "查看完整数据源路径、结构检查及数据日期。", "查看资产、收益与资金变化。", "按人员、账户和证券查看资产与历史成本。", "查看每日、每月、微操及清仓收益。", "查看当前范围的趋势、分布与贡献。", "检查行情、资金和导入数据。", "核对缺失信息与待审核记录。", "按人员与日期对照原工作簿。", "查看计算口径、取值逻辑与限制。", "查看选中证券的交易、持仓与收益。", "使用Money3本地同步脚本更新数据库后刷新。", "查看可用功能与尚待验收内容。", "调整外观和数据源设置。", "按月份查看当前持仓公司的财报日期和发布时间。", "查看当前与月末的股票市值、渠道资产及分类持仓占比分布。", "查看每月收益、收益率、净投入及资产累计变化走势。", "查看历史最高与最低单日/单月持仓收益与收益率汇总（最爽与最惨日/月极值）。", "按高频采样精细展示月度（半小时采样）与年度（2小时采样）累计盈亏走势与极值。", "基于本地 Codex 订阅驱动，结合持仓成本与盈亏进行智能诊断与复盘问答。", "纯粹聚焦标的公司的基本面、财报数据、商业前景与竞争护城河，脱敏且不受个人账本数据干扰。")
 COMBOS = ("person", "stock", "ledger", "category", "currency", "side", "link_status")
-TITLES += ("行情监控中心",)
-DESCRIPTIONS += ("当前持仓自动导入，观察底层标的与技术指标；默认全部暂停，不创建提醒规则。",)
+TITLES += ("行情监控中心", "持仓管理")
+DESCRIPTIONS += ("当前持仓自动导入，观察底层标的与技术指标；默认全部暂停，不创建提醒规则。", "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选。")
 CHECKS = ("disabled", "audit", "start_enabled", "include_reversed", "include_reference")
 
 
@@ -213,6 +213,18 @@ class InteractionMixin:
         self.update_filter_chips()
 
     def route_changed(self, page, target):
+        if page == 3 and target in ('当前持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总'):
+            # 兼容旧导航入口，自动映射跳转至统一「持仓管理」对应的视图与筛选
+            page = 22
+            if hasattr(self, 'holdings_page'):
+                if target == '当前持仓':
+                    self.holdings_page.set_view("detail", dimension="person", status="持有中")
+                elif target == '股票汇总':
+                    self.holdings_page.set_view("detail", dimension="stock")
+                elif target == '人员资产':
+                    self.holdings_page.set_view("detail", dimension="person")
+                elif target in ('券商资产', '渠道汇总'):
+                    self.holdings_page.set_view("detail", dimension="broker")
         route = (page, target)
         if not self._restoring_history and route != self._route:
             if self._history:
@@ -287,6 +299,8 @@ class InteractionMixin:
         if page == 18 and hasattr(self, 'monthly_realtime_page'):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             self.monthly_realtime_page.set_analytics(self.analytics)
+        if page == 22 and hasattr(self, 'holdings_page') and self.analytics:
+            self.holdings_page.set_analytics(self.analytics)
         self.ensure_analytics()
         if page == 0 and self.info is not None and (self.current_page is None or self.current_page.scope != self.make_scope()):
             self.refresh()

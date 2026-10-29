@@ -428,6 +428,82 @@ def api_saved_today_curve():
 
 
 # ------------------------------------------------------------------------------
+# 2.5. Unified Holdings Management (Dashboard, Unified Detail, Stock Drawer)
+# ------------------------------------------------------------------------------
+
+
+@api_v1.route("/holdings/dashboard", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_holdings_dashboard():
+    """Retrieve holdings management dashboard: 4 cards, person/broker/stock summaries, and donut distribution."""
+    try:
+        from portfolio.services.holdings_management_service import HoldingsManagementService
+        svc = get_analytics_service()
+        person_id = request.args.get("person_id", type=int)
+        scope = get_user_query_scope(person_id=person_id)
+        analytics = svc.calculate(scope)
+        data = HoldingsManagementService.get_dashboard_data(analytics, scope)
+        return jsonify(status="ok", **data)
+    except Exception as e:
+        logger.exception("Holdings dashboard error")
+        return jsonify(status="error", message=str(e)), 500
+
+
+@api_v1.route("/holdings/detail", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_holdings_detail():
+    """Retrieve unified holdings detail rows supporting person, broker, and stock dimensions."""
+    try:
+        from portfolio.services.holdings_management_service import HoldingsManagementService
+        svc = get_analytics_service()
+        dimension = request.args.get("dimension", "person")
+        person_id = request.args.get("person_id", type=int)
+        broker = request.args.get("broker") or None
+        ticker = request.args.get("ticker") or None
+        status = request.args.get("status") or None
+        search = request.args.get("search") or None
+        page = request.args.get("page", 1, type=int)
+        page_size = request.args.get("page_size", 50, type=int)
+
+        scope = get_user_query_scope(person_id=person_id)
+        analytics = svc.calculate(scope)
+        rows = HoldingsManagementService.get_holdings_detail_rows(
+            analytics, dimension=dimension, person_id=person_id, broker=broker, ticker=ticker, status=status, search=search
+        )
+        total = len(rows)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paged_rows = rows[start:end]
+        return jsonify(status="ok", rows=paged_rows, total=total, page=page, page_size=page_size)
+    except Exception as e:
+        logger.exception("Holdings detail error")
+        return jsonify(status="error", message=str(e)), 500
+
+
+@api_v1.route("/holdings/stock_drawer", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_holdings_stock_drawer():
+    """Retrieve 4-tab stock right drawer details for a ticker."""
+    try:
+        ticker = (request.args.get("ticker") or "").strip()
+        if not ticker:
+            return jsonify(status="error", message="缺少股票代码 (ticker)"), 400
+        from portfolio.services.holdings_management_service import HoldingsManagementService
+        svc = get_analytics_service()
+        person_id = request.args.get("person_id", type=int)
+        broker = request.args.get("broker") or None
+        scope = get_user_query_scope(person_id=person_id)
+        analytics = svc.calculate(scope)
+        data = HoldingsManagementService.get_stock_drawer_data(
+            str(DATABASE_PATH), analytics, ticker, person_id=person_id, broker=broker
+        )
+        return jsonify(status="ok", **data)
+    except Exception as e:
+        logger.exception("Stock drawer error")
+        return jsonify(status="error", message=str(e)), 500
+
+
+# ------------------------------------------------------------------------------
 # 3. Desktop Analytical Reports (28 Reports Engine)
 # ------------------------------------------------------------------------------
 

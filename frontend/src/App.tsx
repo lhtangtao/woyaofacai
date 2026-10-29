@@ -11,6 +11,7 @@ import { EntitiesView } from "./views/EntitiesView";
 import { EarningsView } from "./views/EarningsView";
 import { AiViews } from "./views/AiViews";
 import { SystemViews } from "./views/SystemViews";
+import { HoldingsView } from "./views/HoldingsView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { api } from "./api/client";
 import { SystemBootstrap, UserProfile, PersonItem, ReportMeta } from "./types";
@@ -190,6 +191,7 @@ export const App: React.FC = () => {
   // Get Page Title & Subtitle based on Route
   const getHeaderMeta = () => {
     if (currentRoute === "overview") return { title: "资产总览", subtitle: "全时期投资组合资产、净投入与全周期盈亏看板" };
+    if (currentRoute === "holdings") return { title: "持仓管理", subtitle: "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选" };
     if (currentRoute === "trades") return { title: "交易明细", subtitle: "查看每笔交易，追溯原始记录与人员归属" };
     if (currentRoute.startsWith("reports:")) {
       const repName = currentRoute.replace("reports:", "");
@@ -264,7 +266,14 @@ export const App: React.FC = () => {
               />
             )}
 
-            {currentRoute.startsWith("reports:") && (
+            {currentRoute === "holdings" && <HoldingsView key={assetResetKey} personId={selectedPersonId} />}
+            {currentRoute === "reports:当前持仓" && <HoldingsView key={`open:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialStatus="持有中" />}
+            {currentRoute === "reports:股票汇总" && <HoldingsView key={`stock:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="stock" />}
+            {currentRoute === "people" && <HoldingsView key={`people:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="person" />}
+            {currentRoute === "brokers" && <HoldingsView key={`brokers:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="broker" />}
+
+            {currentRoute.startsWith("reports:") &&
+              !["reports:当前持仓", "reports:股票汇总"].includes(currentRoute) && (
               <ReportsView
                 key={`${currentRoute}:${assetResetKey}`}
                 initialReportName={currentRoute.replace("reports:", "")}
@@ -275,8 +284,6 @@ export const App: React.FC = () => {
 
             {currentRoute === "monitor" && <MonitorView />}
 
-            {currentRoute === "people" && <EntitiesView key={`people:${assetResetKey}`} type="people" personId={selectedPersonId} />}
-            {currentRoute === "brokers" && <EntitiesView key={`brokers:${assetResetKey}`} type="brokers" personId={selectedPersonId} />}
             {currentRoute === "ownership" && <EntitiesView key={`ownership:${assetResetKey}`} type="ownership" personId={selectedPersonId} />}
 
             {currentRoute === "earnings" && <EarningsView key={assetResetKey} />}
