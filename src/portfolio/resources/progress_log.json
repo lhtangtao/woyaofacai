@@ -1,5 +1,19 @@
 [
   {
+    "title": "股票归属与成本分析重构股票下拉选择框并展示全员与他人持仓标的",
+    "time": "2026-10-29 23:32",
+    "author": "Antigravity",
+    "tag": "代码已修改并完成离屏实机交互测试，待用户验收",
+    "details": [
+      "修改者：Antigravity（股票下拉选择框体验重构与他人持仓标的全量呈现）",
+      "问题排查：桌面端 OwnershipAnalysisPage 原先使用了 editable=True 的 QComboBox，在 macOS 原生样式下被渲染成普通单行文本框（带光标），去除了下拉三角箭头，且点击文本框区域仅激活输入光标而不弹出下拉菜单；同时用户无法直观得知包含哪些股票，尤其担心遗漏了他人（如拉科、摸总、华等）持有的股票。",
+      "服务层（ownership_analysis.py）：升级 choices(bundle) 算法，全面扫描 bundle.aggregate、bundle.broker 及全部 bundle.persons（含启用与禁用的全部历史人员账本），确保不论何人持有（包括拉科独有的 INTW、SKHY，摸总持有的 WDCX，陈行持有的 LITE 等），只要持仓大于0均完整收录；同时新增 holders 统计与选项展示文本 label，格式如「AAOX（个人、拉科、摸总）」、「INTW（拉科）」、「TSLL（个人、华、巴小、拉科、钱、陈行）」，直观展示标的归属人员。",
+      "桌面端（ownership_analysis_page.py）：将股票选择框重构为标准原生下拉控件（非 editable），恢复清晰的下拉倒三角箭头与鼠标单击即弹出的菜单交互；选项宽度扩展至 240px 并注入持有人 Tooltip；将信号绑定升级为 currentIndexChanged，确保鼠标点击、滚轮或键盘快速切换时均即时无缝联动计算与渲染。",
+      "Web 端（OwnershipAnalysisView.tsx）：同步升级股票 select 下拉选项内容为包含持有人信息的 label，支持模糊搜索 Ticker 及持有人姓名；完成前端静态资源重新编译构建。",
+      "验证范围：通过离屏模拟与真实数据验证，下拉框完整列出 23 只真实持仓股票及对应持有人；模拟切换到拉科单独持有的 INTW（拉科）进行测试，账本核对 100% 一致（券商 20 股 · 全部人员 20 股），图表与明细精准联动。"
+    ]
+  },
+  {
     "title": "持仓管理页面优化为展示全员信息并彻底解耦跨页面联动",
     "time": "2026-10-29 23:15",
     "author": "Antigravity",

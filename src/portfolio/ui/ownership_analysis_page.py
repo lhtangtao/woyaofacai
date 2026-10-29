@@ -31,7 +31,7 @@ class OwnershipAnalysisPage(QWidget):
         self.bundle=None;self.data=None;self.identity=None;self.busy=None;self.expanded=set();self.selected=None;self.sort_key='quantity';self.descending=True
         outer=QVBoxLayout(self)
         controls=QHBoxLayout();outer.addLayout(controls)
-        self.stock=QComboBox();self.stock.setEditable(True);self.stock.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);self.stock.setMinimumWidth(150)
+        self.stock=QComboBox();self.stock.setMinimumWidth(240);self.stock.setToolTip('选择要查看归属与成本的股票（包含全部人员及他人持有的真实持仓股票）')
         self.date=QDateEdit(QDate.currentDate());self.date.setCalendarPopup(True);self.date.setMaximumDate(QDate.currentDate());self.date.setDisplayFormat('yyyy-MM-dd')
         self.search=QLineEdit();self.search.setPlaceholderText('搜索人员')
         for w in (QLabel('股票'),self.stock,QLabel('统计截止日期'),self.date,self.search):controls.addWidget(w)
@@ -48,9 +48,10 @@ class OwnershipAnalysisPage(QWidget):
         self.chart=OwnershipBars();self.chart.setMinimumHeight(250);left.addWidget(self.chart);charts.addLayout(left,2)
         self.cost=QLabel();self.cost.setWordWrap(True);charts.addWidget(self.cost,1);body.addLayout(charts)
         self.table=QTreeWidget();self.table.setColumnCount(10);self.table.setHeaderLabels(COLUMNS);self.table.setAlternatingRowColors(True);self.table.setMinimumHeight(330);self.table.setRootIsDecorated(True)
+        self.table.header().setSectionsClickable(True);self.table.header().setSortIndicatorShown(True);self.table.header().setSortIndicator(1,Qt.SortOrder.DescendingOrder)
         body.addWidget(self.table)
         self.note=QLabel();self.note.setWordWrap(True);body.addWidget(self.note)
-        self.stock.activated.connect(self.stock_changed);self.date.dateChanged.connect(lambda:self.activate(True));self.search.textChanged.connect(self.redraw)
+        self.stock.currentIndexChanged.connect(self.stock_changed);self.date.dateChanged.connect(lambda:self.activate(True));self.search.textChanged.connect(self.redraw)
         self.mode.currentIndexChanged.connect(self.redraw);self.chart.selected.connect(lambda link,name:self.select_person(name))
         self.table.itemExpanded.connect(lambda item:self.expanded.add(item.data(0,Qt.ItemDataRole.UserRole)))
         self.table.itemCollapsed.connect(lambda item:self.expanded.discard(item.data(0,Qt.ItemDataRole.UserRole)))
@@ -84,10 +85,14 @@ class OwnershipAnalysisPage(QWidget):
             self.bundle,self.catalog,self.quotes,self.session,self.now,self.data=value
             current=self.stock.currentData()
             self.stock.blockSignals(True);self.stock.clear()
-            for option in self.data['choices']:self.stock.addItem(option['symbol'],option['id'])
+            for option in self.data['choices']:
+                label=option.get('label') or option['symbol']
+                self.stock.addItem(label,option['id'])
+                idx=self.stock.count()-1
+                self.stock.setItemData(idx,f"{option['symbol']} · 持有人：{'、'.join(option.get('holders',[])) or '全渠道'}",Qt.ItemDataRole.ToolTipRole)
             index=self.stock.findData(current)
             if index<0:index=self.stock.findData(self.data['instrument_id'])
-            self.stock.setCurrentIndex(index)
+            self.stock.setCurrentIndex(max(0,index))
             self.stock.blockSignals(False);self.redraw()
             self.status.setText(f'数据源：{identity[0]} · 截止 {identity[1]} · 全部历史人员／全部渠道 · '+('实时/缓存有效报价' if self.session else '历史收盘参考'))
         lane='ownership-analysis';main._submit(lane,task,ready)
@@ -121,6 +126,7 @@ class OwnershipAnalysisPage(QWidget):
         self.chart.setFixedHeight(max(250,100+len(rows)*38))
         self.chart.selected_name=self.selected
         self.chart.bar_color=t.brand
+        self.chart.empty_message='当前没有可绘制的有效持股数量或占比；请查看股数核对提示。'
         self.chart.update()
         rows=sorted(rows,key=lambda r:(r[self.sort_key] is None,-r[self.sort_key] if self.descending and r[self.sort_key] is not None else r[self.sort_key] or Decimal(0)))
         self.table.blockSignals(True);self.table.clear()
@@ -154,9 +160,11 @@ class OwnershipAnalysisPage(QWidget):
     def sort(self,column):
         keys={1:'quantity',2:'share',3:'cost',4:'cost_total',6:'market_value',7:'rate',8:'pnl'}
         if column not in keys:return
-        self.descending=not self.descending if self.sort_key==keys[column] else True;self.sort_key=keys[column];self.redraw()
+        self.descending=not self.descending if self.sort_key==keys[column] else True;self.sort_key=keys[column]
+        self.table.header().setSortIndicator(column,Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder);self.redraw()
     def reset(self):
         self.search.clear();self.selected=None;self.expanded.clear();self.sort_key='quantity';self.descending=True
+        self.table.header().setSortIndicator(1,Qt.SortOrder.DescendingOrder)
         self.stock.setCurrentIndex(0);self.date.setDate(QDate.currentDate());self.activate(True)
     def export(self):
         if not self.data:return

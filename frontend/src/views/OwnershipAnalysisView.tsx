@@ -38,7 +38,7 @@ export function OwnershipAnalysisView({refresh=0,reset=0}: {refresh?:number;rese
   return <div className="ownership-analysis">
     <div className="card-panel ownership-controls">
       <input aria-label="Ticker搜索" placeholder="搜索 Ticker" value={stockSearch} onChange={e=>setStockSearch(e.target.value)}/>
-      <label>股票 <select aria-label="选择股票" value={instrument||String(data?.instrument_id||'')} onChange={e=>{setInstrument(e.target.value);setSelected(null);setExpanded(new Set());}}><option value="">默认股票</option>{choices.filter((c:any)=>c.symbol.toUpperCase().includes(stockSearch.toUpperCase())).map((c:any)=><option key={c.id} value={c.id}>{c.symbol}</option>)}</select></label>
+      <label>股票 <select aria-label="选择股票" value={instrument||String(data?.instrument_id||'')} onChange={e=>{setInstrument(e.target.value);setSelected(null);setExpanded(new Set());}}><option value="">默认股票</option>{choices.filter((c:any)=>(c.label||c.symbol).toUpperCase().includes(stockSearch.toUpperCase())).map((c:any)=><option key={c.id} value={c.id}>{c.label||c.symbol}</option>)}</select></label>
       <label>统计截止日期 <input type="date" aria-label="统计截止日期" max={today()} value={day} onChange={e=>setDay(e.target.value)}/></label>
       <input aria-label="人员搜索" placeholder="搜索人员" value={search} onChange={e=>setSearch(e.target.value)}/>
       <button className="btn" onClick={()=>setRevision(v=>v+1)}>刷新</button><button className="btn" onClick={resetLocal}>重置筛选</button>

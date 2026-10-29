@@ -10,10 +10,35 @@ BROKER_COLUMNS=('券商','持股数量','成本价','成本总额','当前价','
 
 def choices(bundle):
     items={}
-    for book in (bundle.broker,*(book for _,_,book in bundle.persons)):
-        for row in book.reports['股票汇总'].rows:
-            if row.values[4] is None or row.values[4]!=0:items[row.metadata['instrument_id']]=row.values[2]
-    return [dict(id=i,symbol=s) for i,s in sorted(items.items(),key=lambda item:(item[1],item[0]))]
+    holders=defaultdict(list)
+    for person_id,name,book in bundle.persons:
+        for report_name in ('股票汇总','当前持仓'):
+            if report_name in book.reports:
+                qty_idx=4 if report_name=='股票汇总' else 3
+                for row in book.reports[report_name].rows:
+                    qty=row.values[qty_idx] if qty_idx<len(row.values) else None
+                    if qty is None or qty!=0:
+                        inst_id=row.metadata['instrument_id']
+                        sym=row.values[2]
+                        items[inst_id]=sym
+                        if name not in holders[inst_id]:
+                            holders[inst_id].append(name)
+    for book in (bundle.aggregate,bundle.broker):
+        for report_name in ('股票汇总','当前持仓'):
+            if report_name in book.reports:
+                qty_idx=4 if report_name=='股票汇总' else 3
+                for row in book.reports[report_name].rows:
+                    qty=row.values[qty_idx] if qty_idx<len(row.values) else None
+                    if qty is None or qty!=0:
+                        inst_id=row.metadata['instrument_id']
+                        sym=row.values[2]
+                        items[inst_id]=sym
+    result=[]
+    for inst_id,sym in sorted(items.items(),key=lambda item:(item[1],item[0])):
+        h_list=holders.get(inst_id,[])
+        h_str='、'.join(h_list) if h_list else '券商'
+        result.append(dict(id=inst_id,symbol=sym,holders=h_list,label=f"{sym}（{h_str}）"))
+    return result
 
 
 def analyze(bundle,instrument_id,instruments,quotes,session,now,search=''):

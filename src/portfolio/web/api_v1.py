@@ -1012,8 +1012,10 @@ def api_stock_ownership():
         from portfolio.db.repositories.analytics import instrument_catalog
         from portfolio.domain.live_quotes import UTC
         from portfolio.services.web_today import exact_json
-        cutoff=date.fromisoformat(request.args.get('as_of') or date.today().isoformat())
-        if cutoff>date.today():raise ValueError('统计截止日期不能晚于今天。')
+        from zoneinfo import ZoneInfo
+        today=datetime.now(UTC).astimezone(ZoneInfo('Asia/Shanghai')).date()
+        cutoff=date.fromisoformat(request.args.get('as_of') or today.isoformat())
+        if cutoff>today:raise ValueError('统计截止日期不能晚于今天。')
         # This page intentionally authorizes all historical owners, independently
         # of the global/person scope used by every other endpoint.
         scope=QueryScope(cutoff,person_ids=None,include_disabled=True,start_date=None)

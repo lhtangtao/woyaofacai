@@ -30,6 +30,7 @@ export const App: React.FC = () => {
   // Person Filter State
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
   const [assetResetKey, setAssetResetKey] = useState(0);
+  const [ownershipRefresh,setOwnershipRefresh]=useState(0);
 
   // Layout & Theme State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -119,6 +120,7 @@ export const App: React.FC = () => {
   };
 
   const handleRefresh = () => {
+    if(currentRoute === "ownership"){setOwnershipRefresh(v=>v+1);return;}
     setRefreshKey((k) => k + 1);
   };
 
@@ -328,7 +330,7 @@ export const App: React.FC = () => {
 
             {currentRoute === "monitor" && <MonitorView />}
 
-            {currentRoute === "ownership" && (bootstrap?.user?.can_view_ownership ? <OwnershipAnalysisView refresh={refreshKey} reset={ownershipReset} /> : <div role="alert">当前设备或账号无权访问股票归属与成本分析。</div>)}
+            {currentRoute === "ownership" && (bootstrap?.user?.can_view_ownership ? <OwnershipAnalysisView refresh={ownershipRefresh} reset={ownershipReset} /> : <div role="alert">当前设备或账号无权访问股票归属与成本分析。</div>)}
 
             {currentRoute === "earnings" && <EarningsView key={assetResetKey} />}
 
