@@ -539,73 +539,148 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             </button>
           </div>
 
-          {/* Bottom Grid: Tables on Left (60%), Donut on Right (40%) */}
-          <div style={{ display: "grid", gridTemplateColumns: "1.65fr 1fr", gap: "16px" }}>
-            {/* Left Column: Summary Tables */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              {/* 人员持仓明细 */}
-              <div className="card-panel" style={{ padding: "16px 20px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                  <div style={{ fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
-                    <Users size={16} color="var(--brand, #2563EB)" />
-                    人员持仓明细
-                  </div>
-                  <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击人员直达专属持仓明细</span>
+          {/* 上下两层结构：上层人员持仓明细，下层[券商持仓汇总 | 股票持仓汇总 | 资产分布] 等高三列并排 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* 上层：人员持仓明细 (全宽) */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div style={{ fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Users size={16} color="var(--brand, #2563EB)" />
+                  人员持仓明细
                 </div>
+                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击人员直达专属持仓明细</span>
+              </div>
 
-                <div className="table-container">
-                  <table className="finance-table" style={{ fontSize: "12px" }}>
+              <div className="table-container">
+                <table className="finance-table" style={{ fontSize: "12px" }}>
+                  <thead>
+                    <tr>
+                      <th>人员</th>
+                      <th style={{ textAlign: "right" }}>持仓市值 (USD)</th>
+                      <th style={{ textAlign: "right" }}>累计盈亏 (USD)</th>
+                      <th style={{ textAlign: "right" }}>收益率</th>
+                      <th style={{ textAlign: "right" }}>持仓股票</th>
+                      <th style={{ textAlign: "right" }}>当前持仓</th>
+                      <th style={{ textAlign: "right" }}>已清仓</th>
+                      <th style={{ textAlign: "center" }}>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {personSummary.map((p, idx) => (
+                      <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToPerson(p.person_id)}>
+                        <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          ${formatNumber(p.market_value, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 700,
+                            color: (p.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {(p.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(p.total_pnl, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 600,
+                            color: (p.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {formatPercent(p.pnl_rate)}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{p.total_stocks}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{p.open_stocks}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{p.closed_stocks}</td>
+                        <td style={{ textAlign: "center" }}>
+                          <span style={{ fontSize: "11px", color: "var(--brand, #2563EB)", display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
+                            🔍 查看明细
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {/* 合计行 */}
+                    {personSummary.length > 0 && (
+                      <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
+                        <td>合计</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {formatPercent(cards.cumulative_pnl_rate)}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.total_stock_count ?? 0}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.open_stock_count ?? 0}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.closed_stock_count ?? 0}</td>
+                        <td></td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (三列并列等高) */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.15fr", gap: "16px", alignItems: "stretch" }}>
+              {/* 1. 券商持仓汇总 */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: "14px", fontWeight: 700, marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Building2 size={15} color="var(--brand, #2563EB)" />
+                  券商持仓汇总
+                </div>
+                <div className="table-container" style={{ flex: 1 }}>
+                  <table className="finance-table" style={{ fontSize: "11px" }}>
                     <thead>
                       <tr>
-                        <th>人员</th>
-                        <th style={{ textAlign: "right" }}>持仓市值 (USD)</th>
-                        <th style={{ textAlign: "right" }}>累计盈亏 (USD)</th>
+                        <th>券商</th>
+                        <th style={{ textAlign: "right" }}>持仓市值</th>
+                        <th style={{ textAlign: "right" }}>累计盈亏</th>
                         <th style={{ textAlign: "right" }}>收益率</th>
-                        <th style={{ textAlign: "right" }}>持仓股票</th>
-                        <th style={{ textAlign: "right" }}>当前持仓</th>
-                        <th style={{ textAlign: "right" }}>已清仓</th>
-                        <th style={{ textAlign: "center" }}>操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {personSummary.map((p, idx) => (
-                        <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToPerson(p.person_id)}>
-                          <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>
-                            ${formatNumber(p.market_value, 2)}
-                          </td>
+                      {brokerSummary.map((b, idx) => (
+                        <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
+                          <td style={{ fontWeight: 600 }}>{b.channel}</td>
+                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(b.market_value, 2)}</td>
                           <td
                             className="font-mono"
                             style={{
                               textAlign: "right",
                               fontWeight: 700,
-                              color: (p.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                              color: (b.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            {(p.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(p.total_pnl, 2)}
+                            {(b.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(b.total_pnl, 2)}
                           </td>
                           <td
                             className="font-mono"
                             style={{
                               textAlign: "right",
-                              fontWeight: 600,
-                              color: (p.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                              color: (b.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            {formatPercent(p.pnl_rate)}
-                          </td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{p.total_stocks}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{p.open_stocks}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{p.closed_stocks}</td>
-                          <td style={{ textAlign: "center" }}>
-                            <span style={{ fontSize: "11px", color: "var(--brand, #2563EB)", display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
-                              🔍 查看明细
-                            </span>
+                            {formatPercent(b.pnl_rate)}
                           </td>
                         </tr>
                       ))}
-                      {/* 合计行 */}
-                      {personSummary.length > 0 && (
+                      {brokerSummary.length > 0 && (
                         <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
                           <td>合计</td>
                           <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
@@ -627,10 +702,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           >
                             {formatPercent(cards.cumulative_pnl_rate)}
                           </td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{cards.total_stock_count ?? 0}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{cards.open_stock_count ?? 0}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>{cards.closed_stock_count ?? 0}</td>
-                          <td></td>
                         </tr>
                       )}
                     </tbody>
@@ -638,215 +709,143 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 </div>
               </div>
 
-              {/* 券商持仓汇总 & 股票持仓汇总 (Side-by-side) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                {/* 券商持仓汇总 */}
-                <div className="card-panel" style={{ padding: "16px 18px" }}>
-                  <div style={{ fontSize: "14px", fontWeight: 700, marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px" }}>
-                    <Building2 size={15} color="var(--brand, #2563EB)" />
-                    券商持仓汇总
+              {/* 2. 股票持仓汇总 */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                  <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Layers size={15} color="var(--brand, #2563EB)" />
+                    股票持仓汇总
                   </div>
-                  <div className="table-container">
-                    <table className="finance-table" style={{ fontSize: "11px" }}>
-                      <thead>
-                        <tr>
-                          <th>券商</th>
-                          <th style={{ textAlign: "right" }}>持仓市值</th>
-                          <th style={{ textAlign: "right" }}>累计盈亏</th>
-                          <th style={{ textAlign: "right" }}>收益率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {brokerSummary.map((b, idx) => (
-                          <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
-                            <td style={{ fontWeight: 600 }}>{b.channel}</td>
-                            <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(b.market_value, 2)}</td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                fontWeight: 700,
-                                color: (b.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {(b.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(b.total_pnl, 2)}
-                            </td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                color: (b.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {formatPercent(b.pnl_rate)}
-                            </td>
-                          </tr>
-                        ))}
-                        {brokerSummary.length > 0 && (
-                          <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
-                            <td>合计</td>
-                            <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
-                            </td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {formatPercent(cards.cumulative_pnl_rate)}
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                  <button
+                    onClick={() => { setDimension("stock"); setViewMode("detail"); }}
+                    style={{ border: "none", color: "#2563EB", fontSize: "11px", fontWeight: 600, background: "transparent", cursor: "pointer" }}
+                  >
+                    查看更多 &gt;
+                  </button>
                 </div>
-
-                {/* 股票持仓汇总 */}
-                <div className="card-panel" style={{ padding: "16px 18px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                    <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
-                      <Layers size={15} color="var(--brand, #2563EB)" />
-                      股票持仓汇总
-                    </div>
-                    <button
-                      onClick={() => { setDimension("stock"); setViewMode("detail"); }}
-                      style={{ border: "none", color: "#2563EB", fontSize: "11px", fontWeight: 600, background: "transparent", cursor: "pointer" }}
-                    >
-                      查看更多 &gt;
-                    </button>
-                  </div>
-                  <div className="table-container">
-                    <table className="finance-table" style={{ fontSize: "11px" }}>
-                      <thead>
-                        <tr>
-                          <th>Ticker</th>
-                          <th style={{ textAlign: "right" }}>持仓市值</th>
-                          <th style={{ textAlign: "right" }}>累计盈亏</th>
-                          <th style={{ textAlign: "right" }}>收益率</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stockSummary.slice(0, 7).map((s, idx) => (
-                          <tr
-                            key={idx}
-                            style={{ cursor: "pointer" }}
-                            onClick={() => {
-                              setDrawerTicker(s.ticker);
+                <div className="table-container" style={{ flex: 1 }}>
+                  <table className="finance-table" style={{ fontSize: "11px" }}>
+                    <thead>
+                      <tr>
+                        <th>Ticker</th>
+                        <th style={{ textAlign: "right" }}>持仓市值</th>
+                        <th style={{ textAlign: "right" }}>累计盈亏</th>
+                        <th style={{ textAlign: "right" }}>收益率</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stockSummary.slice(0, 7).map((s, idx) => (
+                        <tr
+                          key={idx}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => {
+                            setDrawerTicker(s.ticker);
+                          }}
+                        >
+                          <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
+                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(s.market_value, 2)}</td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              fontWeight: 700,
+                              color: (s.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
-                            <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(s.market_value, 2)}</td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                fontWeight: 700,
-                                color: (s.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {(s.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(s.total_pnl, 2)}
-                            </td>
-                            <td
-                              className="font-mono"
-                              style={{
-                                textAlign: "right",
-                                color: (s.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                              }}
-                            >
-                              {formatPercent(s.pnl_rate)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                            {(s.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(s.total_pnl, 2)}
+                          </td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              color: (s.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {formatPercent(s.pnl_rate)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 3. 资产分布图 (Donut Ring Chart) */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                    <PieIcon size={15} color="var(--brand, #2563EB)" />
+                    资产分布
+                  </div>
+
+                  {/* Donut Tabs */}
+                  <div
+                    style={{
+                      display: "flex",
+                      background: "var(--bg-app, #f1f5f9)",
+                      padding: "2px",
+                      borderRadius: "6px",
+                      gap: "2px",
+                    }}
+                  >
+                    {[
+                      { key: "by_person", label: "按人员" },
+                      { key: "by_broker", label: "按券商" },
+                      { key: "by_stock", label: "按股票" },
+                    ].map((t) => (
+                      <button
+                        key={t.key}
+                        onClick={() => setDistTab(t.key as any)}
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: "4px",
+                          border: "none",
+                          fontSize: "11px",
+                          background: distTab === t.key ? "var(--brand, #2563eb)" : "transparent",
+                          color: distTab === t.key ? "#fff" : "var(--text-muted, #64748B)",
+                          fontWeight: distTab === t.key ? 700 : 500,
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </div>
-            </div>
+                <div style={{ fontSize: "11px", color: "var(--text-muted, #64748B)", marginBottom: "8px" }}>持仓市值分布占比</div>
 
-            {/* Right Column: 资产分布图 (Donut Ring Chart Matching Mockup) */}
-            <div className="card-panel" style={{ padding: "18px 20px", display: "flex", flexDirection: "column" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                <div style={{ fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
-                  <PieIcon size={16} color="var(--brand, #2563EB)" />
-                  资产分布
-                </div>
+                {/* Donut Chart Ring & Clean Legend */}
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minHeight: "220px" }}>
+                  <div style={{ flex: 1.1, height: "200px" }}>
+                    <ReactECharts option={donutOption} style={{ height: "100%", width: "100%" }} />
+                  </div>
 
-                {/* Donut Tabs */}
-                <div
-                  style={{
-                    display: "flex",
-                    background: "var(--bg-app, #f1f5f9)",
-                    padding: "2px",
-                    borderRadius: "6px",
-                  }}
-                >
-                  {[
-                    { key: "by_person", label: "按人员" },
-                    { key: "by_broker", label: "按券商" },
-                    { key: "by_stock", label: "按股票" },
-                  ].map((t) => (
-                    <button
-                      key={t.key}
-                      onClick={() => setDistTab(t.key as any)}
-                      style={{
-                        padding: "3px 10px",
-                        borderRadius: "4px",
-                        border: "none",
-                        fontSize: "11px",
-                        background: distTab === t.key ? "var(--brand, #2563eb)" : "transparent",
-                        color: distTab === t.key ? "#fff" : "var(--text-muted, #64748B)",
-                        fontWeight: distTab === t.key ? 700 : 500,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--text-muted, #64748B)", marginBottom: "10px" }}>持仓市值分布占比</div>
-
-              {/* Donut Chart Ring & Clean Legend */}
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", minHeight: "240px" }}>
-                <div style={{ flex: 1.2, height: "230px" }}>
-                  <ReactECharts option={donutOption} style={{ height: "100%", width: "100%" }} />
-                </div>
-
-                {/* Legend Table on the Right */}
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px", overflowY: "auto", maxHeight: "240px" }}>
-                  {donutSlices.map((d: any, idx: number) => (
-                    <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", gap: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span
-                          style={{
-                            width: "8px",
-                            height: "8px",
-                            borderRadius: "50%",
-                            background: donutColors[idx % donutColors.length],
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span style={{ fontWeight: 600, color: "var(--text-heading, #0f172a)", maxWidth: "70px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {d.name}
-                        </span>
+                  {/* Legend Table on the Right */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", overflowY: "auto", maxHeight: "200px" }}>
+                    {donutSlices.map((d: any, idx: number) => (
+                      <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", gap: "4px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                          <span
+                            style={{
+                              width: "8px",
+                              height: "8px",
+                              borderRadius: "50%",
+                              background: donutColors[idx % donutColors.length],
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span style={{ fontWeight: 600, color: "var(--text-heading, #0f172a)", maxWidth: "60px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {d.name}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: "6px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+                          <span>${formatNumber(d.value, 0)}</span>
+                          <span style={{ color: "var(--text-muted, #64748B)", width: "32px", textAlign: "right" }}>{d.percent}%</span>
+                        </div>
                       </div>
-                      <div style={{ display: "flex", gap: "8px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
-                        <span>${formatNumber(d.value, 0)}</span>
-                        <span style={{ color: "var(--text-muted, #64748B)", width: "36px", textAlign: "right" }}>{d.percent}%</span>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

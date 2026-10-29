@@ -648,15 +648,13 @@ class HoldingsPage(QWidget):
         dim_bar.addStretch()
         dash_layout.addLayout(dim_bar)
 
-        # Lower grid: Left tables (60%) + Right donut (40%)
-        grid_layout = QHBoxLayout()
-        grid_layout.setSpacing(14)
+        # =====================================================================
+        # 上下两层结构：
+        # 上层：人员持仓明细 (Full Width)
+        # 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (等高三列并排)
+        # =====================================================================
 
-        # Left column: Person, Broker, Stock tables
-        left_box = QVBoxLayout()
-        left_box.setSpacing(12)
-
-        # 人员持仓明细
+        # 上层：人员持仓明细
         p_card = QFrame()
         p_card.setObjectName("filterCard")
         p_layout = QVBoxLayout(p_card)
@@ -675,20 +673,24 @@ class HoldingsPage(QWidget):
         self.p_model = HoldingsTableModel(self.p_table)
         self.p_model.columns = ("人员", "持仓市值(USD)", "累计盈亏(USD)", "收益率", "持仓股票", "当前持仓", "已清仓", "操作")
         self.p_table.setModel(self.p_model)
-        self.p_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.p_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.p_table.horizontalHeader().setStretchLastSection(True)
+        self.p_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.p_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.p_table.clicked.connect(self._on_person_table_clicked)
         p_layout.addWidget(self.p_table)
-        left_box.addWidget(p_card)
+        dash_layout.addWidget(p_card)
 
-        # Broker & Stock in horizontal row
-        mid_row = QHBoxLayout()
-        mid_row.setSpacing(12)
+        # 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (等高并列)
+        lower_row = QHBoxLayout()
+        lower_row.setSpacing(12)
 
-        # 券商持仓汇总
+        # 1. 券商持仓汇总
         b_card = QFrame()
         b_card.setObjectName("filterCard")
+        b_card.setMinimumHeight(290)
         b_layout = QVBoxLayout(b_card)
-        b_layout.setContentsMargins(10, 8, 10, 8)
+        b_layout.setContentsMargins(12, 10, 12, 10)
         b_lbl = QLabel("券商持仓汇总")
         b_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #0F172A;")
         b_layout.addWidget(b_lbl)
@@ -696,16 +698,20 @@ class HoldingsPage(QWidget):
         self.b_model = HoldingsTableModel(self.b_table)
         self.b_model.columns = ("券商", "持仓市值(USD)", "累计盈亏", "收益率")
         self.b_table.setModel(self.b_model)
-        self.b_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.b_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.b_table.horizontalHeader().setStretchLastSection(True)
+        self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.b_table.clicked.connect(self._on_broker_table_clicked)
         b_layout.addWidget(self.b_table)
-        mid_row.addWidget(b_card, 1)
+        lower_row.addWidget(b_card, 1)
 
-        # 股票持仓汇总
+        # 2. 股票持仓汇总
         s_card = QFrame()
         s_card.setObjectName("filterCard")
+        s_card.setMinimumHeight(290)
         s_layout = QVBoxLayout(s_card)
-        s_layout.setContentsMargins(10, 8, 10, 8)
+        s_layout.setContentsMargins(12, 10, 12, 10)
         s_hdr = QHBoxLayout()
         s_lbl = QLabel("股票持仓汇总")
         s_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #0F172A;")
@@ -721,17 +727,18 @@ class HoldingsPage(QWidget):
         self.s_model = HoldingsTableModel(self.s_table)
         self.s_model.columns = ("Ticker", "持仓市值(USD)", "累计盈亏", "收益率")
         self.s_table.setModel(self.s_model)
-        self.s_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.s_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.s_table.horizontalHeader().setStretchLastSection(True)
+        self.s_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.s_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.s_table.clicked.connect(self._on_stock_table_clicked)
         s_layout.addWidget(self.s_table)
-        mid_row.addWidget(s_card, 1)
+        lower_row.addWidget(s_card, 1)
 
-        left_box.addLayout(mid_row)
-        grid_layout.addLayout(left_box, 6)
-
-        # Right column: Asset Distribution Donut Chart
+        # 3. 资产分布 (Donut Ring Chart)
         right_card = QFrame()
         right_card.setObjectName("filterCard")
+        right_card.setMinimumHeight(290)
         right_layout = QVBoxLayout(right_card)
         right_layout.setContentsMargins(12, 10, 12, 10)
 
@@ -743,20 +750,27 @@ class HoldingsPage(QWidget):
 
         self.dist_tabs = QTabBar()
         self.dist_tabs.setDrawBase(False)
+        self.dist_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.dist_tabs.setExpanding(False)
         self.dist_tabs.setStyleSheet("""
             QTabBar::tab {
                 background: #F1F5F9;
                 color: #64748B;
-                padding: 4px 10px;
+                padding: 4px 12px;
+                min-width: 52px;
                 border-radius: 4px;
                 font-size: 11px;
-                font-weight: 500;
-                margin-left: 4px;
+                font-weight: 600;
+                margin-left: 3px;
             }
             QTabBar::tab:selected {
                 background: #2563EB;
                 color: #FFFFFF;
                 font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #E2E8F0;
+                color: #1E293B;
             }
         """)
         self.dist_tabs.addTab("按人员")
@@ -773,9 +787,9 @@ class HoldingsPage(QWidget):
         # Custom Donut Chart Ring Widget
         self.dist_donut = DonutChartWidget(self)
         right_layout.addWidget(self.dist_donut, 1)
-        grid_layout.addWidget(right_card, 4)
+        lower_row.addWidget(right_card, 1)
 
-        dash_layout.addLayout(grid_layout)
+        dash_layout.addLayout(lower_row)
         dash_scroll.setWidget(dash_widget)
         self.stack.addWidget(dash_scroll)
 

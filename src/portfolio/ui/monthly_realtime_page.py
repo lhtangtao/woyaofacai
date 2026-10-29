@@ -347,6 +347,10 @@ class MonthlyRealtimePnlPage(QWidget):
         if not source:return
         from portfolio.services.derived_maintenance import maintenance_status
         status=maintenance_status(source);progress=status['progress']
+        was_running=getattr(self,'_history_running',False)
+        self._history_running=status['running']
+        if was_running and not status['running']:self._derived_generation=None
+        self._sync_loading(status)
         if status['running'] or not status['ready']:
             text=progress.get('message','正在后台计算全部历史人员。')
             if progress.get('total_units'):
@@ -660,6 +664,8 @@ class MonthlyRealtimePnlPage(QWidget):
         if getattr(self,'_shared_busy',None)==request:return
         self._shared_request=request;self._shared_busy=request
         self.summary_badge.setText('正在读取共享历史派生数据…')
+        self.canvas.chart=None
+        self.canvas.set_loading('正在读取并整理月度/年度历史曲线…')
         def task(cancel):
             from portfolio.services.derived_store import DerivedStore
             if not DerivedStore(source).readiness()['ready']:
@@ -682,17 +688,22 @@ class MonthlyRealtimePnlPage(QWidget):
                         person_series.append(Series(pname, sub_chart.series[0].points))
                 if person_series:
                     chart = replace(chart, series=tuple(person_series))
+            if not any(v is not None for series in chart.series for _,v in series.points) and (state.get('invalid_partitions') or state.get('not_generated_days') or getattr(result,'incomplete_people',False) or state.get('baseline_break_days')):
+                from portfolio.services.derived_maintenance import schedule_changed
+                schedule_changed(source)
             return result,rows,state,chart
         def ready(value):
             if self._shared_request != request:return
             self._shared_busy=None
+            self.canvas.set_loading()
             self._shared_analytics,self._shared_rows,self._shared_state,chart=value
             self._shared_period,self._shared_year=period,year
             if year:self._cached_year=period
             else:self._cached_month=period
             if value[0] is None:
                 self.canvas.chart=None;self.canvas.update()
-                self.status_label.setText(value[2].get('message','正在后台生成全部历史人员。'))
+                self.status_label.setText(value[2].get('message','尚无已发布历史数据。'))
+                self._sync_loading()
                 return
             channels={r.values[1] for r in value[0].reports['每日持仓收益'].rows}
             tickers={r.values[3] for r in value[0].reports['每日持仓收益'].rows}
@@ -704,6 +715,9 @@ class MonthlyRealtimePnlPage(QWidget):
             if self._shared_request==request:
                 self._shared_busy=None
                 self.summary_badge.setText(message)
+                self.canvas.set_loading()
+                self.canvas.empty_message='历史曲线查询失败：'+message
+                self.canvas.update()
         self.window.jobs[lane].signals.error.connect(failed,Qt.ConnectionType.QueuedConnection)
 
     def set_parent_filters(self,channel,ticker):
@@ -727,6 +741,28 @@ class MonthlyRealtimePnlPage(QWidget):
         else:
             period=self.year_combo.currentText() if year else self.month_combo.currentText()
         self._load_shared_period(period,year)
+
+    def _sync_loading(self,status=None):
+        if getattr(self,'_shared_busy',None):return
+        from portfolio.services.derived_maintenance import maintenance_status
+        source=self._resolve_source_path()
+        if not source:return
+        status=status or maintenance_status(source)
+        progress=status['progress']
+        chart=self.canvas.chart
+        valid=bool(chart and any(v is not None for series in chart.series for _,v in series.points))
+        if status['running']:
+            text='正在后台生成历史盈亏，完成后自动刷新。\n'+progress.get('message','正在处理历史分区。')
+            self.status_label.setText(text)
+            if not valid:self.canvas.set_loading(text,progress.get('completed_units'),progress.get('total_units'))
+        else:
+            self.canvas.set_loading()
+            if not valid:
+                state=getattr(self,'_shared_state',{})
+                message=progress.get('message','') if progress.get('state') in ('FAILED','INTERRUPTED') else state.get('message','')
+                self.canvas.empty_message='历史曲线尚不可用（当前没有后台生成任务）。\n'+(message or '请检查行情覆盖、累计基准或任务失败原因。')
+                self.status_label.setText(self.canvas.empty_message)
+                self.canvas.update()
 
     def _display_shared_chart(self,chart,state,year):
         self.canvas.chart=chart;self.canvas.update()
@@ -753,6 +789,7 @@ class MonthlyRealtimePnlPage(QWidget):
             months=state.get('months',{})
             coverage='；'.join(f"{month[5:]}月 {info['saved_days']}日/{info['complete_points']}个完整点" for month,info in sorted(months.items()) if month[5:]<='06')
             if coverage:self.status_label.setText(self.status_label.text()+' · 上半年已存明细：'+coverage+'；缺失/未确认部分不连线。')
+        self._sync_loading()
         # The parent owns its cards and table. Re-entering show_page here can
         # call the wrong page after navigation/refactoring and abort rendering.
 

@@ -2,7 +2,7 @@ import math
 from decimal import Decimal
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -39,6 +39,21 @@ class ChartCanvas(QWidget):
         self.setMinimumSize(360, 260)
         self.setMouseTracking(True)
 
+    def set_loading(self,message='',completed=None,total=None):
+        self.loading_message=message
+        self.loading_progress=(completed,total)
+        if not hasattr(self,'loading_timer'):
+            self.loading_angle=0
+            self.loading_timer=QTimer(self)
+            self.loading_timer.setInterval(80)
+            def advance():
+                self.loading_angle=(self.loading_angle+24)%360
+                self.update()
+            self.loading_timer.timeout.connect(advance)
+        if message:self.loading_timer.start()
+        else:self.loading_timer.stop()
+        self.update()
+
     def paintEvent(self, event):
         t = tokens(self)
         colors = (t.brand, t.warning, t.teal, t.violet, "#EC4899", "#0284C7", "#EA580C", "#4F46E5", t.loss, t.muted)
@@ -55,6 +70,17 @@ class ChartCanvas(QWidget):
         painter.setPen(QColor(t.heading))
         painter.setFont(chart_font(15 if self.card_mode else 17, bold=True))
         painter.drawText(QRectF(20 if self.card_mode else 24, 14, self.width() - 40, 32), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, chart.title if chart else "等待计算结果")
+        if getattr(self,'loading_message',''):
+            center=self.rect().center()
+            painter.setPen(QPen(QColor(t.brand),3))
+            painter.drawArc(QRectF(center.x()-14,center.y()-50,28,28),self.loading_angle*16,260*16)
+            painter.setPen(QColor(t.heading));painter.setFont(chart_font(14))
+            painter.drawText(QRectF(30,center.y()-10,self.width()-60,85),Qt.AlignmentFlag.AlignHCenter|Qt.TextFlag.TextWordWrap,self.loading_message)
+            done,total=self.loading_progress
+            if total:
+                painter.setPen(QColor(t.muted));painter.setFont(chart_font(12))
+                painter.drawText(QRectF(30,center.y()+80,self.width()-60,30),Qt.AlignmentFlag.AlignHCenter,f'{done or 0}/{total}（{(done or 0)*100//total}%）')
+            return
         if not chart:
             return
         painter.setFont(chart_font(11))
@@ -63,7 +89,7 @@ class ChartCanvas(QWidget):
         painter.setFont(chart_font(13))
         data = [(series.name, key, value, index) for index, series in enumerate(chart.series) for key, value in series.points if value is not None and key.strip()]
         if not data:
-            painter.drawText(QRectF(30, 90, self.width() - 60, 160), Qt.AlignmentFlag.AlignCenter, "该筛选组合暂无完整数据\n请检查行情日期")
+            painter.drawText(QRectF(30, 90, self.width() - 60, 160), Qt.AlignmentFlag.AlignCenter, getattr(self,"empty_message",None) or "该筛选组合暂无完整数据\n请检查行情日期")
             return
         if chart.kind == "capital_assets":
             self.paint_capital_assets(painter, chart, t)
