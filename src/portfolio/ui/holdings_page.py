@@ -201,14 +201,77 @@ class HoldingsTableModel(FinanceModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.columns = ()
+        self.sort_column = -1
+        self.sort_order = Qt.SortOrder.AscendingOrder
+        self._raw_rows = []
 
     def columnCount(self, parent=None):
         return len(self.columns)
 
+    def replace(self, rows):
+        self._raw_rows = list(rows)
+        if self.sort_column >= 0:
+            self._apply_sort()
+        else:
+            self.beginResetModel()
+            self.rows = tuple(self._raw_rows)
+            self.endResetModel()
+
+    def toggle_sort(self, column: int):
+        if column < 0 or column >= len(self.columns):
+            return
+        if self.columns[column] == "操作":
+            return
+        if self.sort_column == column:
+            if self.sort_order == Qt.SortOrder.AscendingOrder:
+                self.sort_order = Qt.SortOrder.DescendingOrder
+            else:
+                self.sort_order = Qt.SortOrder.AscendingOrder
+        else:
+            self.sort_column = column
+            self.sort_order = Qt.SortOrder.AscendingOrder
+        self._apply_sort()
+
+    def _apply_sort(self):
+        if self.sort_column < 0 or not self._raw_rows:
+            self.beginResetModel()
+            self.rows = tuple(self._raw_rows)
+            self.endResetModel()
+            return
+
+        col = self.sort_column
+        normal_rows = []
+        total_rows = []
+        for r in self._raw_rows:
+            if (len(r.values) > 0 and r.values[0] == "合计") or r.metadata.get("is_total", False):
+                total_rows.append(r)
+            else:
+                normal_rows.append(r)
+
+        def sort_key(row):
+            if col >= len(row.values):
+                return (0, 0, "")
+            val = row.values[col]
+            if val is None or val == "—":
+                return (0, 0, "")
+            if isinstance(val, (int, float, Decimal)):
+                return (1, float(val), "")
+            return (2, 0, str(val).strip().lower())
+
+        reverse = (self.sort_order == Qt.SortOrder.DescendingOrder)
+        normal_rows.sort(key=sort_key, reverse=reverse)
+        self.beginResetModel()
+        self.rows = tuple(normal_rows + total_rows)
+        self.endResetModel()
+
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self.columns):
             if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
-                return self.columns[section]
+                col_name = self.columns[section]
+                if self.sort_column == section and col_name != "操作":
+                    arrow = " ▲" if self.sort_order == Qt.SortOrder.AscendingOrder else " ▼"
+                    return f"{col_name}{arrow}"
+                return col_name
             return None
         if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
             return str(section + 1)
@@ -227,7 +290,12 @@ class HoldingsTableModel(FinanceModel):
             if col_name == "操作" and not is_total:
                 return "🔍 查看明细"
             if isinstance(val, (int, float, Decimal)):
-                if "数量" in col_name or "股数" in col_name or "股票" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态"))):
+                # 股票只数/数量等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
+                if col_name in ("已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
+                    ("股票" in col_name or "清仓" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金"))
+                ):
+                    return f"{int(round(float(val))):,d}"
+                if "数量" in col_name or "股数" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态"))):
                     return f"{val:,.0f}" if isinstance(val, (int, Decimal)) and val % 1 == 0 else f"{val:,.2f}"
                 if any(w in col_name for w in ("收益率", "比例", "占比", "涨幅")):
                     sign = "+" if val > 0 else ""
@@ -401,6 +469,7 @@ class StockDrawerWidget(QFrame):
         self.monthly_model.columns = ("月份", "月末市值(USD)", "月度盈亏(USD)", "收益率")
         self.monthly_table.setModel(self.monthly_model)
         self.monthly_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.monthly_table.horizontalHeader().sectionClicked.connect(self.monthly_model.toggle_sort)
         tm_layout.addWidget(self.monthly_table, 1)
         self.stack.addWidget(tab_monthly)
 
@@ -414,9 +483,7 @@ class StockDrawerWidget(QFrame):
         self.stack.setCurrentIndex(idx)
 
     def _on_trade_header_clicked(self, col):
-        if col == 0:
-            self.sort_asc = not self.sort_asc
-            self._render_trades_table()
+        self.trade_model.toggle_sort(col)
 
     def set_data(self, drawer_data: dict[str, Any]):
         summary = drawer_data.get("summary", {})
@@ -627,31 +694,10 @@ class HoldingsPage(QWidget):
             cards_layout.addWidget(c, 1)
         dash_layout.addLayout(cards_layout)
 
-        # Three Dimension Action Buttons under the 4 cards (Matching mockup)
-        dim_bar = QHBoxLayout()
-        dim_bar.setSpacing(10)
-        self.dim_btn_p = QPushButton("按人员查看")
-        self.dim_btn_p.setStyleSheet("background: #2563EB; color: #FFFFFF; font-weight: bold; padding: 7px 18px; border-radius: 6px; border: none; font-size: 12px;")
-        self.dim_btn_p.clicked.connect(lambda: self.set_view("detail", dimension="person"))
-
-        self.dim_btn_b = QPushButton("按券商查看")
-        self.dim_btn_b.setStyleSheet("background: #FFFFFF; color: #334155; font-weight: 600; padding: 7px 18px; border-radius: 6px; border: 1px solid #CBD5E1; font-size: 12px;")
-        self.dim_btn_b.clicked.connect(lambda: self.set_view("detail", dimension="broker"))
-
-        self.dim_btn_s = QPushButton("按股票查看")
-        self.dim_btn_s.setStyleSheet("background: #FFFFFF; color: #334155; font-weight: 600; padding: 7px 18px; border-radius: 6px; border: 1px solid #CBD5E1; font-size: 12px;")
-        self.dim_btn_s.clicked.connect(lambda: self.set_view("detail", dimension="stock"))
-
-        dim_bar.addWidget(self.dim_btn_p)
-        dim_bar.addWidget(self.dim_btn_b)
-        dim_bar.addWidget(self.dim_btn_s)
-        dim_bar.addStretch()
-        dash_layout.addLayout(dim_bar)
-
         # =====================================================================
         # 上下两层结构：
         # 上层：人员持仓明细 (Full Width)
-        # 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (等高三列并排)
+        # 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (等高三列并排，表头严格水平对齐)
         # =====================================================================
 
         # 上层：人员持仓明细
@@ -659,6 +705,7 @@ class HoldingsPage(QWidget):
         p_card.setObjectName("filterCard")
         p_layout = QVBoxLayout(p_card)
         p_layout.setContentsMargins(12, 10, 12, 10)
+        p_layout.setSpacing(8)
         p_hdr = QHBoxLayout()
         p_lbl = QLabel("人员持仓明细")
         p_lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: #0F172A;")
@@ -673,11 +720,13 @@ class HoldingsPage(QWidget):
         self.p_model = HoldingsTableModel(self.p_table)
         self.p_model.columns = ("人员", "持仓市值(USD)", "累计盈亏(USD)", "收益率", "持仓股票", "当前持仓", "已清仓", "操作")
         self.p_table.setModel(self.p_model)
+        self.p_table.horizontalHeader().setFixedHeight(36)
         self.p_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.p_table.horizontalHeader().setStretchLastSection(True)
         self.p_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.p_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.p_table.clicked.connect(self._on_person_table_clicked)
+        self.p_table.horizontalHeader().sectionClicked.connect(self.p_model.toggle_sort)
         p_layout.addWidget(self.p_table)
         dash_layout.addWidget(p_card)
 
@@ -691,18 +740,29 @@ class HoldingsPage(QWidget):
         b_card.setMinimumHeight(290)
         b_layout = QVBoxLayout(b_card)
         b_layout.setContentsMargins(12, 10, 12, 10)
+        b_layout.setSpacing(8)
+
+        b_hdr_widget = QWidget()
+        b_hdr_widget.setFixedHeight(24)
+        b_hdr = QHBoxLayout(b_hdr_widget)
+        b_hdr.setContentsMargins(0, 0, 0, 0)
         b_lbl = QLabel("券商持仓汇总")
         b_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #0F172A;")
-        b_layout.addWidget(b_lbl)
+        b_hdr.addWidget(b_lbl)
+        b_hdr.addStretch()
+        b_layout.addWidget(b_hdr_widget)
+
         self.b_table = FinanceTable(freeze=False)
         self.b_model = HoldingsTableModel(self.b_table)
         self.b_model.columns = ("券商", "持仓市值(USD)", "累计盈亏", "收益率")
         self.b_table.setModel(self.b_model)
+        self.b_table.horizontalHeader().setFixedHeight(36)
         self.b_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.b_table.horizontalHeader().setStretchLastSection(True)
         self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.b_table.clicked.connect(self._on_broker_table_clicked)
+        self.b_table.horizontalHeader().sectionClicked.connect(self.b_model.toggle_sort)
         b_layout.addWidget(self.b_table)
         lower_row.addWidget(b_card, 1)
 
@@ -712,26 +772,34 @@ class HoldingsPage(QWidget):
         s_card.setMinimumHeight(290)
         s_layout = QVBoxLayout(s_card)
         s_layout.setContentsMargins(12, 10, 12, 10)
-        s_hdr = QHBoxLayout()
+        s_layout.setSpacing(8)
+
+        s_hdr_widget = QWidget()
+        s_hdr_widget.setFixedHeight(24)
+        s_hdr = QHBoxLayout(s_hdr_widget)
+        s_hdr.setContentsMargins(0, 0, 0, 0)
         s_lbl = QLabel("股票持仓汇总")
         s_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #0F172A;")
         s_hdr.addWidget(s_lbl)
         s_hdr.addStretch()
         more_btn = QPushButton("查看更多 >")
-        more_btn.setStyleSheet("border: none; color: #2563EB; font-size: 11px; font-weight: 600; background: transparent;")
+        more_btn.setFixedHeight(20)
+        more_btn.setStyleSheet("border: none; color: #2563EB; font-size: 11px; font-weight: 600; background: transparent; padding: 0; margin: 0;")
         more_btn.clicked.connect(lambda: self.set_view("detail", dimension="stock"))
         s_hdr.addWidget(more_btn)
-        s_layout.addLayout(s_hdr)
+        s_layout.addWidget(s_hdr_widget)
 
         self.s_table = FinanceTable(freeze=False)
         self.s_model = HoldingsTableModel(self.s_table)
         self.s_model.columns = ("Ticker", "持仓市值(USD)", "累计盈亏", "收益率")
         self.s_table.setModel(self.s_model)
+        self.s_table.horizontalHeader().setFixedHeight(36)
         self.s_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.s_table.horizontalHeader().setStretchLastSection(True)
         self.s_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.s_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.s_table.clicked.connect(self._on_stock_table_clicked)
+        self.s_table.horizontalHeader().sectionClicked.connect(self.s_model.toggle_sort)
         s_layout.addWidget(self.s_table)
         lower_row.addWidget(s_card, 1)
 
@@ -872,6 +940,7 @@ class HoldingsPage(QWidget):
         )
         self.detail_table.setModel(self.detail_model)
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.detail_table.horizontalHeader().sectionClicked.connect(self.detail_model.toggle_sort)
         self.detail_table.clicked.connect(self._on_detail_row_clicked)
         lt_layout.addWidget(self.detail_table, 1)
 

@@ -67,6 +67,40 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [sortField, setSortField] = useState<string>("market_value");
   const [sortAsc, setSortAsc] = useState<boolean>(false);
 
+  // Dashboard tables sorting state
+  const [pSortField, setPSortField] = useState<string>("");
+  const [pSortAsc, setPSortAsc] = useState<boolean>(true);
+  const togglePSort = (field: string) => {
+    if (pSortField === field) {
+      setPSortAsc(!pSortAsc);
+    } else {
+      setPSortField(field);
+      setPSortAsc(true);
+    }
+  };
+
+  const [bSortField, setBSortField] = useState<string>("");
+  const [bSortAsc, setBSortAsc] = useState<boolean>(true);
+  const toggleBSort = (field: string) => {
+    if (bSortField === field) {
+      setBSortAsc(!bSortAsc);
+    } else {
+      setBSortField(field);
+      setBSortAsc(true);
+    }
+  };
+
+  const [sSortField, setSSortField] = useState<string>("");
+  const [sSortAsc, setSSortAsc] = useState<boolean>(true);
+  const toggleSSort = (field: string) => {
+    if (sSortField === field) {
+      setSSortAsc(!sSortAsc);
+    } else {
+      setSSortField(field);
+      setSSortAsc(true);
+    }
+  };
+
   // Stock Drawer State (Right slide-out)
   const [drawerTicker, setDrawerTicker] = useState<string | null>(null);
 
@@ -173,6 +207,46 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       return sortAsc ? valA - valB : valB - valA;
     }
     return sortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
+  });
+
+  // Sorted Dashboard Summaries
+  const sortedPersonSummary = [...personSummary].sort((a, b) => {
+    if (!pSortField) return 0;
+    const valA = a[pSortField];
+    const valB = b[pSortField];
+    if (valA == null && valB == null) return 0;
+    if (valA == null) return 1;
+    if (valB == null) return -1;
+    if (typeof valA === "number" && typeof valB === "number") {
+      return pSortAsc ? valA - valB : valB - valA;
+    }
+    return pSortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
+  });
+
+  const sortedBrokerSummary = [...brokerSummary].sort((a, b) => {
+    if (!bSortField) return 0;
+    const valA = a[bSortField];
+    const valB = b[bSortField];
+    if (valA == null && valB == null) return 0;
+    if (valA == null) return 1;
+    if (valB == null) return -1;
+    if (typeof valA === "number" && typeof valB === "number") {
+      return bSortAsc ? valA - valB : valB - valA;
+    }
+    return bSortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
+  });
+
+  const sortedStockSummary = [...stockSummary].sort((a, b) => {
+    if (!sSortField) return 0;
+    const valA = a[sSortField];
+    const valB = b[sSortField];
+    if (valA == null && valB == null) return 0;
+    if (valA == null) return 1;
+    if (valB == null) return -1;
+    if (typeof valA === "number" && typeof valB === "number") {
+      return sSortAsc ? valA - valB : valB - valA;
+    }
+    return sSortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
   });
 
   const totalDetailCount = sortedDetailRows.length;
@@ -478,67 +552,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             </div>
           </div>
 
-          {/* Three Dimension Buttons under Cards (Mockup requirement) */}
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              onClick={() => { setDimension("person"); setViewMode("detail"); }}
-              style={{
-                background: "#2563EB",
-                color: "#FFFFFF",
-                fontWeight: 700,
-                fontSize: "13px",
-                padding: "8px 22px",
-                borderRadius: "6px",
-                border: "none",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <Users size={15} />
-              按人员查看
-            </button>
-            <button
-              onClick={() => { setDimension("broker"); setViewMode("detail"); }}
-              style={{
-                background: "#FFFFFF",
-                color: "#334155",
-                fontWeight: 600,
-                fontSize: "13px",
-                padding: "8px 22px",
-                borderRadius: "6px",
-                border: "1px solid #CBD5E1",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <Building2 size={15} />
-              按券商查看
-            </button>
-            <button
-              onClick={() => { setDimension("stock"); setViewMode("detail"); }}
-              style={{
-                background: "#FFFFFF",
-                color: "#334155",
-                fontWeight: 600,
-                fontSize: "13px",
-                padding: "8px 22px",
-                borderRadius: "6px",
-                border: "1px solid #CBD5E1",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <Layers size={15} />
-              按股票查看
-            </button>
-          </div>
-
           {/* 上下两层结构：上层人员持仓明细，下层[券商持仓汇总 | 股票持仓汇总 | 资产分布] 等高三列并排 */}
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* 上层：人员持仓明细 (全宽) */}
@@ -548,25 +561,39 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <Users size={16} color="var(--brand, #2563EB)" />
                   人员持仓明细
                 </div>
-                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击人员直达专属持仓明细</span>
+                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击人员直达专属持仓明细，点击表头可正倒序排列</span>
               </div>
 
               <div className="table-container">
                 <table className="finance-table" style={{ fontSize: "12px" }}>
                   <thead>
                     <tr>
-                      <th>人员</th>
-                      <th style={{ textAlign: "right" }}>持仓市值 (USD)</th>
-                      <th style={{ textAlign: "right" }}>累计盈亏 (USD)</th>
-                      <th style={{ textAlign: "right" }}>收益率</th>
-                      <th style={{ textAlign: "right" }}>持仓股票</th>
-                      <th style={{ textAlign: "right" }}>当前持仓</th>
-                      <th style={{ textAlign: "right" }}>已清仓</th>
+                      <th onClick={() => togglePSort("name")} style={{ cursor: "pointer", userSelect: "none" }}>
+                        人员 {pSortField === "name" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("market_value")}>
+                        持仓市值 (USD) {pSortField === "market_value" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_pnl")}>
+                        累计盈亏 (USD) {pSortField === "total_pnl" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("pnl_rate")}>
+                        收益率 {pSortField === "pnl_rate" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_stocks")}>
+                        持仓股票 {pSortField === "total_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("open_stocks")}>
+                        当前持仓 {pSortField === "open_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("closed_stocks")}>
+                        已清仓 {pSortField === "closed_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
                       <th style={{ textAlign: "center" }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {personSummary.map((p, idx) => (
+                    {sortedPersonSummary.map((p, idx) => (
                       <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToPerson(p.person_id)}>
                         <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>
@@ -592,9 +619,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         >
                           {formatPercent(p.pnl_rate)}
                         </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{p.total_stocks}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{p.open_stocks}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{p.closed_stocks}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.total_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.open_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.closed_stocks || 0)}</td>
                         <td style={{ textAlign: "center" }}>
                           <span style={{ fontSize: "11px", color: "var(--brand, #2563EB)", display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
                             🔍 查看明细
@@ -625,9 +652,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         >
                           {formatPercent(cards.cumulative_pnl_rate)}
                         </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.total_stock_count ?? 0}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.open_stock_count ?? 0}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{cards.closed_stock_count ?? 0}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.total_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.open_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.closed_stock_count ?? 0)}</td>
                         <td></td>
                       </tr>
                     )}
@@ -636,11 +663,11 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
               </div>
             </div>
 
-            {/* 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (三列并列等高) */}
+            {/* 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (三列并列等高，表头线水平对齐) */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.15fr", gap: "16px", alignItems: "stretch" }}>
               {/* 1. 券商持仓汇总 */}
               <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
-                <div style={{ fontSize: "14px", fontWeight: 700, marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <div style={{ fontSize: "14px", fontWeight: 700, marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px", height: "24px" }}>
                   <Building2 size={15} color="var(--brand, #2563EB)" />
                   券商持仓汇总
                 </div>
@@ -648,14 +675,22 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <table className="finance-table" style={{ fontSize: "11px" }}>
                     <thead>
                       <tr>
-                        <th>券商</th>
-                        <th style={{ textAlign: "right" }}>持仓市值</th>
-                        <th style={{ textAlign: "right" }}>累计盈亏</th>
-                        <th style={{ textAlign: "right" }}>收益率</th>
+                        <th onClick={() => toggleBSort("channel")} style={{ cursor: "pointer", userSelect: "none" }}>
+                          券商 {bSortField === "channel" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("market_value")}>
+                          持仓市值 {bSortField === "market_value" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("total_pnl")}>
+                          累计盈亏 {bSortField === "total_pnl" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("pnl_rate")}>
+                          收益率 {bSortField === "pnl_rate" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {brokerSummary.map((b, idx) => (
+                      {sortedBrokerSummary.map((b, idx) => (
                         <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
                           <td style={{ fontWeight: 600 }}>{b.channel}</td>
                           <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(b.market_value, 2)}</td>
@@ -711,14 +746,14 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
               {/* 2. 股票持仓汇总 */}
               <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", height: "24px" }}>
                   <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
                     <Layers size={15} color="var(--brand, #2563EB)" />
                     股票持仓汇总
                   </div>
                   <button
                     onClick={() => { setDimension("stock"); setViewMode("detail"); }}
-                    style={{ border: "none", color: "#2563EB", fontSize: "11px", fontWeight: 600, background: "transparent", cursor: "pointer" }}
+                    style={{ border: "none", color: "#2563EB", fontSize: "11px", fontWeight: 600, background: "transparent", cursor: "pointer", padding: 0 }}
                   >
                     查看更多 &gt;
                   </button>
@@ -727,14 +762,22 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <table className="finance-table" style={{ fontSize: "11px" }}>
                     <thead>
                       <tr>
-                        <th>Ticker</th>
-                        <th style={{ textAlign: "right" }}>持仓市值</th>
-                        <th style={{ textAlign: "right" }}>累计盈亏</th>
-                        <th style={{ textAlign: "right" }}>收益率</th>
+                        <th onClick={() => toggleSSort("ticker")} style={{ cursor: "pointer", userSelect: "none" }}>
+                          Ticker {sSortField === "ticker" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("market_value")}>
+                          持仓市值 {sSortField === "market_value" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("total_pnl")}>
+                          累计盈亏 {sSortField === "total_pnl" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("pnl_rate")}>
+                          收益率 {sSortField === "pnl_rate" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {stockSummary.slice(0, 7).map((s, idx) => (
+                      {sortedStockSummary.slice(0, 7).map((s, idx) => (
                         <tr
                           key={idx}
                           style={{ cursor: "pointer" }}
