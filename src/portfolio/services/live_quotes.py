@@ -44,9 +44,17 @@ def credentials(path):
 
 def create_context(path):
     from longbridge.openapi import Config, QuoteContext
-    key, secret, token = credentials(path)
-    return QuoteContext(Config.from_apikey(key, secret, token, enable_overnight=True,
-                                          enable_print_quote_packages=False))
+    from portfolio.services.quote_diagnostics import report,observing,ObservedContext
+    values=()
+    try:
+        values=credentials(path)
+        key,secret,token=values
+        context=QuoteContext(Config.from_apikey(key, secret, token, enable_overnight=True,
+                                              enable_print_quote_packages=False))
+    except Exception as error:
+        info=report('create_context','',error,values)
+        raise ValueError(info['detail']) from None
+    return ObservedContext(context,values) if observing() else context
 
 
 class QuoteFeed:
@@ -274,12 +282,17 @@ class QuoteFeed:
                     self._state(f'长桥{SESSION_LABELS[session.name]} · 已订阅{len(active)}只 · 10秒刷新及保存'+(' · 缓存写入失败' if self.cache_error else '')+(' · 正式收盘补取未完成，将重试' if self.close_error else ''), session)
                     retries = 0
                     self._wait(10)
-                except Exception:
-                    # Never surface SDK exception strings: they may contain keys.
+                except Exception as error:
+                    from portfolio.services.quote_diagnostics import describe_error
+                    try:secrets=credentials(self.path)
+                    except Exception:secrets=()
+                    failure=describe_error(error,secrets)
+                    import logging
+                    logging.getLogger(__name__).warning('Longbridge feed category=%s detail=%s',failure['category'],failure['detail'])
                     context, active, last_session, covered = None, set(), None, None
                     retries += 1
                     delay = min(300, 30 * 2 ** min(retries - 1, 4))
-                    self._state(f'长桥行情连接失败：请检查网络、Token及OpenAPI权限；{delay}秒后重试', us_session(self.clock(), days, halves) if covered else None)
+                    self._state(f"长桥行情连接失败 [{failure['category']}]：{failure['detail']}；{delay}秒后重试", us_session(self.clock(), days, halves) if covered else None)
                     self._wait(delay)
         finally:
             self._flush()

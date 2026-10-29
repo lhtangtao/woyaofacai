@@ -2051,7 +2051,7 @@ def api_shared_history():
         from portfolio.services.derived_store import DerivedStore
         if not DerivedStore(DATABASE_PATH).readiness()['ready']:
             rows,state=load_history(DATABASE_PATH,quotes,scope,first,last)
-            return jsonify({'status':'ok','chart':{'title':period+' 历史走势','series':[],'note':'历史数据正在后台初始化，完成后自动刷新。','boundaries':[]},
+            return jsonify({'status':'ok','chart':{'title':period+' 历史走势','series':[],'note':state.get('message','尚无已发布历史数据，请查看任务状态。'),'boundaries':[]},
                             'cache':state,'channels':[],'tickers':[]})
         from portfolio.services.derived_queries import historical_analytics
         analytics=historical_analytics(DATABASE_PATH,scope,first,last)

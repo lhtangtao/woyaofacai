@@ -143,7 +143,7 @@ class WebTodayService:
     def _backfill(self, analytics, day, history, warning, now):
         from portfolio.services.intraday_pipeline import pipeline_status
         status=pipeline_status(self.path)
-        return {'pending':status.get('state') in ('INITIALIZING','STARTING','COLLECTING'),
+        return {'pending':status.get('state') in ('INITIALIZING','STARTING','COLLECTING','CONNECTING','FETCHING','CALCULATING'),
                 'message':status.get('message','五分钟明细由后台统一任务生成。')}
 
     def curve(self, analytics, report, session, now, ticker='', channel=None):

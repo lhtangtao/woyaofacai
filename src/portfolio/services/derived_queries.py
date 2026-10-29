@@ -31,12 +31,14 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
     quotes=QuoteStore(quotes.path,source=source)
     store=DerivedStore(source)
     from portfolio.services.derived_maintenance import maintenance_status
+    from portfolio.services.intraday_pipeline import pipeline_status
     ready=store.readiness()
     if not ready['ready']:
         status=maintenance_status(source)
-        return {},{'state':'BUILDING' if status['running'] else status['state'],
+        live=pipeline_status(source)
+        return {},{'state':'BUILDING' if status['running'] or live.get('running') else status['state'],
                    'progress':status['progress'],'generation':status.get('generation'),
-                   'message':status['progress'].get('message','尚无已发布五分钟明细，后台任务正在生成。')}
+                   'message':status['progress'].get('message','历史数据正在计算。') if status['running'] else live['message'],'pipeline':live}
     people=allowed_people(source,scope)
     if not people:return {},{'state':'EMPTY_AUTHORIZED_SCOPE','message':'当前授权范围没有人员。'}
     ledger=scope.ledger.value
@@ -93,7 +95,7 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
     errors=sum(v['state']=='ERROR' for v in states.values())
     partial=sum(v['state']=='PARTIAL' for v in states.values())
     now=datetime.now(UTC)
-    _,calendar,_,_=quotes.load(now)
+    _,calendar,halves,_=quotes.load(now)
     expected={d.isoformat() for d in calendar if str(start)<=d.isoformat()<=str(end) and datetime.combine(d-timedelta(days=1),time(20),NY)<=now}
     missing_days={d for d in expected if any((p,d) not in states for p in people)}
     months={}
@@ -109,10 +111,23 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
     maintenance=None
 
     status=maintenance_status(source)
+    live=pipeline_status(source)
+    from portfolio.domain.live_quotes import market_trade_day
+    current=market_trade_day(now,calendar,halves).isoformat()
+    current_relevant=str(start)<=current<=str(end)
+    if invalid or missing_days:
+        if current_relevant:message=live['message']
+        elif status['running']:message=status['progress'].get('message','历史分区正在计算。')
+        else:message='该范围存在未生成或失效分区，当前没有历史重算任务；不会把失效金额展示为有效结果。'
+    else:
+        message=f'已读取有效历史数据；计算失败分区 {errors}，缺失/提示分区 {partial}，未齐备时间点 {incomplete_points}。'
+        warnings=list(dict.fromkeys(v.get('warning','') for v in states.values() if v.get('warning')))
+        if warnings:message+=' '+ '；'.join(warnings[:2])
+        if current_relevant and live.get('state') not in ('READY','NO_HOLDINGS'):message+=' '+live['message']
     return output,{'state':overall,'progress':status['progress'],'generation':status.get('generation'),
                    'error_partitions':errors,'partial_partitions':partial,'incomplete_points':incomplete_points,'months':months,'aggregated':aggregate,'query_cache_hit':cached is not None,
                    'trading_days':sorted({d.isoformat() for d in calendar}|{d for _,d in states}),'maintenance':maintenance,'not_generated_days':sorted(missing_days),'valid_days':sorted(valid_days),'invalid_partitions':invalid,'partitions':{f'{p}:{d}':v for (p,d),v in states.items()},'blocked_owners':{d:[p for p in people if (p,d) not in valid] for d in sorted({d for _,d in states}) if d not in valid_days},
-                   'message':('受影响分区正在后台增量生成，其他有效日期正常展示。' if invalid or missing_days else f'有效历史数据已加载；计算失败分区 {errors}，缺失/提示分区 {partial}，人员尚未齐备的时间点 {incomplete_points}；对应区段留空。')}
+                   'pipeline':live,'message':message}
 
 
 class _DecimalTotal:

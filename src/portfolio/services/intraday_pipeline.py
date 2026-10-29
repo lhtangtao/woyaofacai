@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date,datetime,time,timedelta
 from decimal import Decimal,localcontext
 import json
+import fcntl
 import sqlite3
 from pathlib import Path
 from threading import Event,RLock,Thread
@@ -24,13 +25,32 @@ _CLOSE_POOL=ThreadPoolExecutor(max_workers=1,thread_name_prefix='money3-close-re
 _CLOSE_JOBS={}
 
 
+def producer_running(source):
+    lock=Path(str(DerivedStore(source).path)+'.producer.lock')
+    if not lock.is_file():return False
+    with lock.open('r') as handle:
+        try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:return True
+        fcntl.flock(handle,fcntl.LOCK_UN)
+    return False
+
+
 def pipeline_status(source):
-    store=DerivedStore(source)
-    if not store.available:return {'state':'INITIALIZING','message':'正在准备五分钟行情采集。'}
+    store=DerivedStore(source);running=producer_running(source)
+    if not running:return {'state':'NOT_STARTED','running':False,'message':'五分钟采集任务未运行；请重新启动软件，已有数据保留。'}
+    if not store.available:return {'state':'INITIALIZING','running':True,'message':'正在初始化当天五分钟采集。'}
     try:
-        with closing(store.connect()) as c:row=c.execute("SELECT value FROM metadata WHERE key='intraday_status'").fetchone()
-        return json.loads(row[0]) if row else {'state':'STARTING','message':'五分钟采集任务正在启动。'}
-    except (ValueError,OSError,sqlite3.Error):return {'state':'INITIALIZING','message':'五分钟采集等待数据库初始化。'}
+        with closing(sqlite3.connect(store.path.as_uri()+'?mode=ro',uri=True,timeout=.1)) as c:
+            recorded_source=c.execute("SELECT value FROM metadata WHERE key='source'").fetchone()
+            if not recorded_source or recorded_source[0]!=str(store.source):raise ValueError('状态源不匹配')
+            row=c.execute("SELECT value FROM metadata WHERE key='intraday_status'").fetchone()
+        status=json.loads(row[0]) if row else {'state':'STARTING','message':'五分钟采集任务正在启动。'}
+        status['running']=True
+        checked=status.get('checked_at')
+        if checked and status.get('state') in ('COLLECTING','CONNECTING','FETCHING','CALCULATING','STARTING') and datetime.now(UTC)-datetime.fromisoformat(checked)>timedelta(minutes=3):
+            status.update(state='WAITING_RESPONSE',message='五分钟任务长时间没有新进度，可能正在等待接口或数据库；请查看日志，不能视为数据已生成。')
+        return status
+    except (ValueError,OSError,sqlite3.Error):return {'state':'STATUS_UNAVAILABLE','running':True,'message':'五分钟任务已启动，状态暂时读取失败。'}
 
 
 def _status(store,**values):
@@ -248,14 +268,39 @@ class Producer:
 
     def collect(self,day,now):
         from portfolio.services.intraday_history import collect_day_prices
+        from portfolio.services.quote_diagnostics import observe
         bases={ledger:self.snapshot(ledger,day) for ledger in (Ledger.PERSON,Ledger.BROKER)}
         ids=set()
         for base,_ in bases.values():ids.update(self.required(base,day))
-        result=collect_day_prices(bases[Ledger.PERSON][0],day,now,self.quotes,CREDENTIALS_PATH if CREDENTIALS_PATH.is_file() else None,instrument_ids=ids)
+        # Publish saved real bars first. A slow/failed network request must not
+        # hold an already usable local curve hostage.
+        has_saved=any(self.quotes.intraday_candles(bases[Ledger.PERSON][0].instruments[i]['symbol']+'.US',day)[0] for i in ids)
+        latest=None;errors=0
+        if has_saved:
+            _status(self.store,state='CALCULATING',day=day,message='正在复用本地五分钟价格生成当天全部人员盈亏。')
+            latest,errors=self.materialize(day,now,bases)
+        self.quote_errors=[]
+        def observed(method,symbol,info):
+            if info:
+                self.quote_errors.append(dict(method=method,symbol=symbol,**info))
+                import logging
+                logging.getLogger(__name__).warning('Five-minute quote failed day=%s symbol=%s method=%s category=%s detail=%s',day,symbol,method,info['category'],info['detail'])
+                _status(self.store,state='CONNECTION_FAILED',day=day,message=f"五分钟行情请求失败 [{info['category']}]；后台继续处理本轮其他股票，已有有效点保留，具体原因见日志。")
+            else:
+                _status(self.store,state='FETCHING',day=day,message='正在获取缺失的真实五分钟K线；已有本地数据保留。')
+        _status(self.store,state='CONNECTING',day=day,message='正在连接长桥并补取当天缺失五分钟行情。')
+        with observe(observed):
+            result=collect_day_prices(bases[Ledger.PERSON][0],day,now,self.quotes,CREDENTIALS_PATH if CREDENTIALS_PATH.is_file() else None,instrument_ids=ids)
+        if self.quote_errors:
+            with exclusive(self.store.path),closing(self.store.connect(write=True)) as c:
+                c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',('intraday_errors:'+day,json.dumps(self.quote_errors,ensure_ascii=False)));c.commit()
         from portfolio.services.derived_dependencies import check_changes
-        check_changes(self.source,self.store)
-        latest,errors=self.materialize(day,now,bases)
+        changes=check_changes(self.source,self.store)
+        if not has_saved or result['saved'] or changes.get('changed'):
+            _status(self.store,state='CALCULATING',day=day,message='正在将当天五分钟盈亏增量保存到派生库。')
+            latest,errors=self.materialize(day,datetime.now(UTC),bases)
         self.schedule_closes(bases[Ledger.PERSON][0],ids,day,now)
+        result['required_symbols']=len(ids)
         return result,latest,errors
 
     def catch_up(self,current):
@@ -315,11 +360,24 @@ class Producer:
             if not changes.get('changed') and previous.get('source_version')==version and previous.get('day')==target.isoformat() and previous.get('next_poll') and now<datetime.fromisoformat(previous['next_poll']):return
             _status(self.store,state='COLLECTING',day=target.isoformat(),message='正在收集真实已完成五分钟K线并更新全部人员。')
             result,latest,errors=self.collect(target.isoformat(),now)
-            _status(self.store,state='PARTIAL' if result['failed'] or errors or not latest else 'READY',day=target.isoformat(),
+            if not result['required_symbols']:
+                state,message='NO_HOLDINGS','当前账本没有需要五分钟行情的美股持仓或当日成交。'
+            elif not CREDENTIALS_PATH.is_file():
+                state,message='CREDENTIALS_MISSING','未找到长桥凭证，无法补取五分钟行情；已有有效点保留。'
+            elif result['failed']:
+                category=self.quote_errors[-1]['category'] if self.quote_errors else 'API'
+                state,message='CONNECTION_FAILED',f'长桥五分钟行情获取失败 [{category}]；稍后自动重试，具体接口原因见本机日志；已有有效点保留。'
+            elif errors:
+                state,message='CALCULATION_FAILED','部分人员的当天盈亏计算失败；已隔离失败分区，具体原因见日志。'
+            elif not latest:
+                state,message='NO_DATA','尚无可用五分钟盈亏；接口可能未返回已完成K线，或收益基准尚未齐备；不填零。'
+            else:
+                state,message='READY','当天真实五分钟价格与人员盈亏已保存；卡片仍按10秒刷新。'
+            _status(self.store,state=state,day=target.isoformat(),
                     latest_price=result['latest_price'].isoformat() if result['latest_price'] else None,latest_result=latest,
                     source_version=version,next_poll=(now+timedelta(seconds=60)).isoformat(),
                     missing_symbols=len(result['failed']),failed_partitions=errors,
-                    message='五分钟采集/计算存在缺失，已有有效点保留。' if result['failed'] or errors or not latest else '五分钟行情和全人员盈亏已落库；卡片仍按10秒刷新。')
+                    message=message)
             with closing(self.store.connect()) as c:
                 historical_invalid=c.execute("SELECT 1 FROM partitions WHERE day<? AND status='INVALID' LIMIT 1",(target.isoformat(),)).fetchone()
                 full_generation=c.execute("SELECT value FROM metadata WHERE key='generation'").fetchone()
@@ -327,20 +385,32 @@ class Producer:
                 from portfolio.services.derived_store import ALGORITHM
                 incomplete_reports=any(not c.execute('SELECT 1 FROM metadata WHERE key=? AND value=?',(f'report_algorithm:{ledger}:{person}',ALGORITHM)).fetchone()
                                        for ledger,person in [('PERSON',p) for p in historical_people(self.source)]+[('BROKER',0)])
-            if historical_invalid or not full_generation or incomplete_reports:
+            if latest and not result['failed'] and (historical_invalid or not full_generation or incomplete_reports):
                 from portfolio.services.derived_maintenance import schedule_changed
                 schedule_changed(self.source)
-        self.catch_up(target)
+        if latest and not result['failed']:self.catch_up(target)
 
 
 def _run(source):
-    producer=Producer(source);stop=Event()
+    stop=Event()
     while not stop.is_set():
-        try:producer.tick()
-        except BuildBusyError:pass
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).exception('Five-minute producer failed; existing data retained')
-            try:_status(producer.store,state='FAILED',message='五分钟任务暂时失败，将自动重试；已保存曲线不清空。',error_type=type(exc).__name__)
-            except Exception:pass
-        stop.wait(10)
+        try:
+            # One lifetime owner across Mac and Web; standby retries ownership
+            # after the other process exits. No duplicate expensive collectors.
+            with exclusive(str(DerivedStore(source).path)+'.producer',wait=False):
+                producer=Producer(source)
+                if producer.store.available:
+                    try:_status(producer.store,state='STARTING',message='五分钟采集任务已启动，优先处理当前交易日。')
+                    except (sqlite3.Error,ValueError):pass
+                while not stop.is_set():
+                    try:producer.tick()
+                    except BuildBusyError:pass
+                    except Exception as exc:
+                        import logging
+                        from portfolio.services.quote_diagnostics import describe_error
+                        failure=describe_error(exc)
+                        logging.getLogger(__name__).warning('Five-minute task failed type=%s detail=%s',type(exc).__name__,failure['detail'])
+                        try:_status(producer.store,state='FAILED',message='五分钟任务本轮失败，稍后自动重试；具体原因见日志，已有有效点保留。',error_type=type(exc).__name__)
+                        except Exception:pass
+                    stop.wait(10)
+        except BuildBusyError:stop.wait(10)

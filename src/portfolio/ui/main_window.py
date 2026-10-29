@@ -257,6 +257,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.info = info
         self.live_panel.source_changed(info)
         if not info.is_demo:
+            from portfolio.services.intraday_pipeline import start_pipeline
+            start_pipeline(info.path)
             self.check_monthly_history()
         else:
             self.history_coverage_button.setText('历史行情：合成演示不检查')
