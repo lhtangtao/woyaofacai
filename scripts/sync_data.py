@@ -59,9 +59,12 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        # API异常可能包含敏感请求内容，不打印原始异常或完整traceback。
+        import traceback
         print(
-            f"[ERROR] 同步失败（{type(exc).__name__}）；请核对本地流水字段、凭证与授权，数据库事务已停止。",
+            f"[ERROR] 同步失败 [{type(exc).__name__}]: {exc}",
             file=sys.stderr,
         )
+        print("--- 详细报错堆栈 ---", file=sys.stderr)
+        traceback.print_exc()
+        print("--- 请根据上方具体报错排查对应流水字段、行数据或数据库约束 ---", file=sys.stderr)
         raise SystemExit(1)

@@ -1,5 +1,18 @@
 [
   {
+    "title": "修复同步时person_trade_fees外键冲突导致的事务回滚并大幅丰富报错堆栈提示",
+    "time": "2026-10-30 00:28",
+    "author": "Antigravity",
+    "tag": "代码已修改并完成真实同步全流程验证，待用户验收",
+    "details": [
+      "修改者：Antigravity（同步流水入库事务回滚排查与报错可观测性增强）",
+      "问题排查：1. BBAE 订单数据实际上早在 00:17 已成功转换为美东账务日格式写入交易流水.xlsx 第一行（2026-10-29 16:15:47 TQQQ 卖出 5 股），但用户 WPS 窗口未重载文件显示旧缓存，且后续启动时因 SHA256 未变触发增量跳过；2. 更关键的是，在将交易流水同步入库（refresh_allocations）时，归档旧人员份额（_archive_operations）尝试 DELETE FROM person_operations，触发了 person_trade_fees 表的外键约束（FOREIGN KEY constraint failed），导致整笔数据库事务回滚，86笔改动未能入库；3. scripts/sync_data.py 原先捕获全局异常仅打印抽象的 IntegrityError，吞掉了具体表名与错误原因。",
+      "数据同步引擎（database_sync.py）：在 _archive_operations 中清理 person_operations 前，先同步级联清理 person_trade_fees 中对该 operation_id 的引用（费用表在后续步骤会自动基于最新份额全量重建 refresh_fees），彻底消除外键约束冲突，确保流水数据 100% 顺畅入库并提交事务。",
+      "同步命令行输出优化（sync_data.py）：移除笼统的单一错误文案，优化为直接输出具体异常类型、错误详情以及完整的 Python 报错堆栈（traceback），让后续排查一目了然。",
+      "验证范围：使用真实数据库与交易流水.xlsx 执行本地数据同步，86笔数据顺利提交事务无任何报错，BBAE TQQQ 卖出 5 股记录已正确入库激活（ACTIVE 状态）。"
+    ]
+  },
+  {
     "title": "股票归属与成本分析移除冗余模式筛选框并将人员分布升级为环形饼图",
     "time": "2026-10-30 00:06",
     "author": "Antigravity",

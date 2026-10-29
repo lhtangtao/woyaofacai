@@ -1034,6 +1034,9 @@ def _archive_operations(connection, identifiers, reason):
         "id INTEGER PRIMARY KEY, original_id INTEGER NOT NULL, archived_at TEXT NOT NULL, "
         "reason TEXT NOT NULL, payload_json TEXT NOT NULL)"
     )
+    has_fees = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='person_trade_fees'"
+    ).fetchone() is not None
     count = 0
     for identifier in identifiers:
         row = connection.execute("SELECT * FROM person_operations WHERE id=?", (identifier,)).fetchone()
@@ -1042,6 +1045,8 @@ def _archive_operations(connection, identifiers, reason):
                 "INSERT INTO person_operations_archive(original_id,archived_at,reason,payload_json) VALUES(?,?,?,?)",
                 (identifier, _now(), reason, _json(dict(row))),
             )
+            if has_fees:
+                connection.execute("DELETE FROM person_trade_fees WHERE operation_id=?", (identifier,))
             connection.execute("DELETE FROM person_operations WHERE id=?", (identifier,))
             count += 1
     return count
