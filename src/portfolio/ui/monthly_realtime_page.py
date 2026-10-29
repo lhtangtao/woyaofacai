@@ -688,7 +688,7 @@ class MonthlyRealtimePnlPage(QWidget):
                         person_series.append(Series(pname, sub_chart.series[0].points))
                 if person_series:
                     chart = replace(chart, series=tuple(person_series))
-            if not any(v is not None for series in chart.series for _,v in series.points) and (state.get('invalid_partitions') or state.get('not_generated_days') or getattr(result,'incomplete_people',False) or state.get('baseline_break_days')):
+            if state.get('baseline_state')=='REPORT_PENDING' or (not any(v is not None for series in chart.series for _,v in series.points) and (state.get('invalid_partitions') or state.get('not_generated_days') or getattr(result,'incomplete_people',False) or state.get('baseline_break_days'))):
                 from portfolio.services.derived_maintenance import schedule_changed
                 schedule_changed(source)
             return result,rows,state,chart
@@ -784,7 +784,8 @@ class MonthlyRealtimePnlPage(QWidget):
             )
         else:
             valid=[(k,v) for series in chart.series for k,v in series.points if v is not None]
-            self.status_label.setText(f'有效采样 {len(valid)} · 最新 {valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
+            latest=datetime.fromisoformat(valid[-1][0]).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M') if valid else ''
+            self.status_label.setText(f'有效采样 {len(valid)} · 最近有效点 {latest} 北京时间：{valid[-1][1]:+,.2f} USD' if valid else '当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。')
         if year:
             months=state.get('months',{})
             coverage='；'.join(f"{month[5:]}月 {info['saved_days']}日/{info['complete_points']}个完整点" for month,info in sorted(months.items()) if month[5:]<='06')

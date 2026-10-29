@@ -65,7 +65,9 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
                 return publish_partition(target,published,quotes,ledger,person,day,expected_source)
             def reports(ledger,person,inputs):
                 if source_version(source)!=expected_source:raise SourceChangedError('账本或收盘基准变化，正在重新准备后台任务。')
-                return publish_reports(target,published,ledger,person,expected_source,quotes,inputs)
+                if not publish_reports(target,published,ledger,person,expected_source,quotes,inputs):
+                    raise SourceChangedError('日报依赖在发布前变化，未发布新日报；保留原结果并等待重试。')
+                return True
             with exclusive(str(published.path)+'.price-history',wait=True):
                 result=build_all(source,target,quotes,start=start,end=end,force=mode=='all',retry_errors=not automatic,
                                  on_reports=reports if automatic else None,on_partition=release if automatic else None,

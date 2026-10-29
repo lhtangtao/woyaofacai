@@ -119,12 +119,20 @@ def _reusable_reports(derived,ledger,person,end,quote_inputs):
         return not c.execute("SELECT 1 FROM invalidations WHERE detected_at>? AND table_name<>'history_prices' AND (person_id IS NULL OR person_id=?) AND (day IS NULL OR (day NOT LIKE '~%' AND day<=?)) LIMIT 1",(checked,person,str(end))).fetchone()
 
 
+def historical_report_end(end,now):
+    """Freeze historical reports before the unfinished US trading session."""
+    local=now.astimezone(NY)
+    completed=local.date() if local.time()>=time(20) else local.date()-timedelta(days=1)
+    return min(end,completed)
+
+
 def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True,on_reports=None,on_partition=None):
     from portfolio.services.analytics_service import AnalyticsService
     from portfolio.services.derived_dependencies import partition_dependency
     import logging
     from portfolio.services.derived_store import SourceChangedError
     end=end or datetime.now(NY).date();now=datetime.now(UTC)
+    report_end=historical_report_end(end,now)
     days,calendar_warnings=history_days(source,quotes,start,end)
     days=[d for d in days if datetime.combine(d-timedelta(days=1),time(20),NY)<now]
     recent=sorted(days,reverse=True)[:2]
@@ -144,9 +152,9 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
             notify('CALCULATING_REPORTS','正在计算全部历史权益人员的持仓与财务报表。')
             try:
                 with closing(quotes.read_connection()) as q:
-                    quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<=?',(str(end),)))
-                if force or not _reusable_reports(derived,ledger.value,person,end,quote_inputs):
-                    result=service.calculate(scope,use_cache=False)
+                    quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<=?',(str(report_end),)))
+                if force or not _reusable_reports(derived,ledger.value,person,report_end,quote_inputs):
+                    result=service.calculate(replace(scope,as_of=report_end),use_cache=False)
                     with exclusive(derived.path),closing(derived.connect(write=True)) as c:
                         c.execute('BEGIN IMMEDIATE')
                         c.execute('DELETE FROM report_details WHERE ledger=? AND person_id=?',(ledger.value,person))
@@ -159,7 +167,7 @@ def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,
                         c.executemany('INSERT INTO report_details VALUES (?,?,?,?,?,?,?,?)',records)
                         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_checked:{ledger.value}:{person}',utcnow()))
                         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_algorithm:{ledger.value}:{person}',ALGORITHM))
-                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_through:{ledger.value}:{person}',str(end)))
+                        c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_through:{ledger.value}:{person}',str(report_end)))
                         c.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'report_quotes:{ledger.value}:{person}',json.dumps(quote_inputs)))
                         c.commit()
                 if on_reports:on_reports(ledger.value,person,quote_inputs)

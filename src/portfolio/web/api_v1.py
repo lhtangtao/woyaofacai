@@ -2137,6 +2137,9 @@ def api_shared_history():
         mode=request.args.get('mode','cumulative')
         if mode not in ('cumulative','intraday'):raise ValueError('未知走势模式。')
         chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+        if state.get('baseline_state')=='REPORT_PENDING':
+            from portfolio.services.derived_maintenance import schedule_changed
+            schedule_changed(DATABASE_PATH)
         daily=analytics.reports['每日持仓收益'].rows
         return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':[{'name':s.name,'points':s.points} for s in chart.series],
                      'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks,

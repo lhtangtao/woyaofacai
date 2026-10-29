@@ -80,7 +80,7 @@ def needs_rebuild(source,store,quotes,start):
     """Check journals/partitions only; unchanged startup never replays history."""
     from datetime import datetime,time,timedelta
     from portfolio.domain.live_quotes import NY,UTC,market_trade_day
-    from portfolio.services.derived_builder import historical_people,history_days
+    from portfolio.services.derived_builder import historical_people,history_days,historical_report_end,_reusable_reports
     from portfolio.services.derived_codec import dumps
     from portfolio.services.derived_store import ALGORITHM
     if not store.readiness()['ready']:return True
@@ -88,6 +88,11 @@ def needs_rebuild(source,store,quotes,start):
     _,calendar,halves,_=quotes.load(now)
     current=market_trade_day(now,calendar,halves).isoformat()
     people=historical_people(source)
+    report_end=historical_report_end(datetime.now(NY).date(),now)
+    with closing(quotes.read_connection()) as q:
+        quote_inputs=dict(q.execute('SELECT day,revision FROM quote_close_revisions WHERE day<=?',(str(report_end),)))
+    for ledger,person in [('PERSON',p) for p in people]+[('BROKER',0)]:
+        if not _reusable_reports(store,ledger,person,report_end,quote_inputs):return True
     with closing(store.connect()) as c:
         # Intraday partitions alone do not supply the cross-day baseline.
         # Retry failed/outdated daily report owners even if their bars exist.

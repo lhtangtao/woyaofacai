@@ -101,6 +101,10 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
         loadingOption={{ text: loading ? "正在读取历史曲线…" : `${maintenance?.progress?.message || "正在生成历史盈亏"}${maintenance?.progress?.total_units ? ` ${maintenance.progress.completed_units || 0}/${maintenance.progress.total_units}` : ""}` }}
         style={{ height: 520 }} /></div>
       <div>{data.chart?.note}</div>
+      <div>最近有效采样：{(() => {
+        const points = data.chart?.series?.flatMap((s: any) => s.points || []).filter((p: any) => p[1] !== null).sort((a: any, b: any) => a[0].localeCompare(b[0])) || [];
+        return points.length ? new Date(points[points.length - 1][0]).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) + "（北京时间）" : "暂无可信累计采样";
+      })()}</div>
       <div>来源：共享五分钟派生数据库；月度30分钟／年度2小时采样，缺失区段留空。</div>
     </>}
   </div>;

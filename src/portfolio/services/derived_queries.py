@@ -208,7 +208,11 @@ def historical_analytics(source,scope,start,end):
             algorithm=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_algorithm:{scope.ledger.value}:{person}',)).fetchone()
             quote_row=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_quotes:{scope.ledger.value}:{person}',)).fetchone()
             recorded=__import__('json').loads(quote_row[0]) if quote_row else {}
-            changed_quotes=[d for d in recorded.keys()|current_quotes.keys() if recorded.get(d)!=current_quotes.get(d)]
+            through=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_through:{scope.ledger.value}:{person}',)).fetchone()
+            through=through[0] if through else str(end)
+            # Today's changing snapshots cannot invalidate yesterday's frozen reports.
+            changed_quotes=[d for d in recorded.keys()|current_quotes.keys() if d<=through and recorded.get(d)!=current_quotes.get(d)]
+            baseline_end=min(baseline_end,through)
             if not stamp or not algorithm or not algorithm[0].startswith('money3-derived-v1:'):incomplete=True
             impacts=[]
             if stamp:
@@ -244,6 +248,9 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         import calendar
         y,m=map(int,period.split('-'));first=date(y,m,1);last=date(y,m,calendar.monthrange(y,m)[1]);step=timedelta(minutes=30)
     by_day,state=history_data if history_data is not None else load_history(source,quotes,analytics.scope,first,last)
+    from portfolio.services.derived_builder import historical_report_end
+    expected_baseline=historical_report_end(min(last,analytics.scope.as_of),now)
+    report_pending=bool(getattr(analytics,'incomplete_people',True) or not getattr(analytics,'baseline_end',None) or analytics.baseline_end<str(expected_baseline))
     _,days,halves,_=quotes.load(now)
     observed={date.fromisoformat(d) for d in state.get('trading_days',())}
     calendar_days=sorted(d for d in days|observed if first<=d<=last)
@@ -253,7 +260,7 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
         v=row.values
         if str(first)<=v[0]<=str(last) and (channels is None or v[1] in channels) and (not ticker or ticker.upper() in v[3].upper()):daily[v[0]].append(v[19])
     points=[];ticks=[];labels={};boundaries=[];missing=[];baseline_breaks=[];recovered=[];breaks=[];bridge_rejected=[]
-    running=Decimal(0) if calendar_days[0]<=first+timedelta(days=7) else None
+    running=Decimal(0) if calendar_days[0]<=first+timedelta(days=7) and not getattr(analytics,'incomplete_people',True) and getattr(analytics,'baseline_end','') and analytics.baseline_end>=str(first) else None
     if running is None:missing.append('期间起始交易日历/累计基准未确认')
     daily_rows=defaultdict(list)
     for row in analytics.reports['每日持仓收益'].rows:
@@ -288,20 +295,16 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             if not points or points[-1][0]!=start.isoformat():
                 start_val = baseline if (mode == 'cumulative' and has_day_obs) else None
                 points.append((start.isoformat(), start_val))
-            bucket_start=start;index=0;last_val=baseline if mode=='cumulative' else None
+            bucket_start=start;index=0
             while bucket_start<end:
                 stop=bucket_start+step;chosen=None
                 while index<len(observations) and observations[index][0]<=stop:
                     stamp,value,current_segment=observations[index];index+=1
                     if stamp<=bucket_start:continue
-                    if value is not None and stamp<=now:
-                        chosen=(stamp,value,current_segment)
+                    if stamp<=now:chosen=(stamp,value,current_segment)
                 if chosen:
                     stamp,value,current_segment=chosen
-                    points.append((stop.isoformat(),value))
-                    last_val=value
-                elif bucket_start<now and has_day_obs and last_val is not None:
-                    points.append((stop.isoformat(),last_val))
+                    points.append((stamp.isoformat(),value))
                 else:
                     if points[-1][0]!=stop.isoformat():points.append((stop.isoformat(),None))
                 bucket_start=stop
@@ -332,7 +335,7 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 running=candidate
             if not samples and start<=now:missing.append(day+'（无有效五分钟派生数据）')
     note='五分钟共享明细；月度30分钟/年度2小时采样。正式/原口径日收益参与跨日累计；缺失日内数据留空，不平滑、不补零。'
-    if getattr(analytics,'incomplete_people',False):
+    if report_pending:
         state={**state,'baseline_state':'REPORT_PENDING'}
         note+=' 累计所需日报尚未生成或版本过期，后台将重试；可切换“每日日内盈亏”查看已保存五分钟点。'
     if state.get('progress',{}).get('calendar_warnings'):note+=' 日历覆盖元数据不足，使用已保存实际日期，未猜测缺失交易日。'
