@@ -54,10 +54,13 @@ class HoldingsTableModel(FinanceModel):
         return len(self.columns)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and section < len(self.columns):
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self.columns):
             if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
                 return self.columns[section]
-        return super().headerData(section, orientation, role)
+            return None
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+            return str(section + 1)
+        return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
@@ -192,7 +195,7 @@ class StockDrawerWidget(QFrame):
         t_bar.addWidget(self.export_csv_btn)
         tt_layout.addLayout(t_bar)
 
-        self.trade_table = FinanceTable()
+        self.trade_table = FinanceTable(freeze=False)
         self.trade_model = HoldingsTableModel(self.trade_table)
         self.trade_model.columns = (
             "交易时间", "归属人员", "券商渠道", "交易方向", "成交数量",
@@ -229,7 +232,7 @@ class StockDrawerWidget(QFrame):
         tm_layout = QVBoxLayout(tab_monthly)
         tm_layout.setContentsMargins(0, 4, 0, 0)
         tm_layout.addWidget(QLabel("按月展示持仓市值、月度盈亏和收益率"))
-        self.monthly_table = FinanceTable()
+        self.monthly_table = FinanceTable(freeze=False)
         self.monthly_model = HoldingsTableModel(self.monthly_table)
         self.monthly_model.columns = ("月份", "月末市值(USD)", "月度盈亏(USD)", "收益率")
         self.monthly_table.setModel(self.monthly_model)
@@ -464,7 +467,7 @@ class HoldingsPage(QWidget):
         p_lbl = QLabel("人员持仓明细（点击人员查看专属持仓）")
         p_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
         p_layout.addWidget(p_lbl)
-        self.p_table = FinanceTable()
+        self.p_table = FinanceTable(freeze=False)
         self.p_model = HoldingsTableModel(self.p_table)
         self.p_model.columns = ("人员", "持仓市值", "累计盈亏", "收益率", "持仓股票", "当前持仓", "已清仓")
         self.p_table.setModel(self.p_model)
@@ -485,7 +488,7 @@ class HoldingsPage(QWidget):
         b_lbl = QLabel("券商持仓汇总")
         b_lbl.setStyleSheet("font-weight: bold; font-size: 12px;")
         b_layout.addWidget(b_lbl)
-        self.b_table = FinanceTable()
+        self.b_table = FinanceTable(freeze=False)
         self.b_model = HoldingsTableModel(self.b_table)
         self.b_model.columns = ("券商", "持仓市值", "累计盈亏", "收益率")
         self.b_table.setModel(self.b_model)
@@ -502,7 +505,7 @@ class HoldingsPage(QWidget):
         s_lbl = QLabel("股票持仓汇总（点击展开抽屉）")
         s_lbl.setStyleSheet("font-weight: bold; font-size: 12px;")
         s_layout.addWidget(s_lbl)
-        self.s_table = FinanceTable()
+        self.s_table = FinanceTable(freeze=False)
         self.s_model = HoldingsTableModel(self.s_table)
         self.s_model.columns = ("Ticker", "持仓市值", "累计盈亏", "收益率")
         self.s_table.setModel(self.s_model)
@@ -557,7 +560,7 @@ class HoldingsPage(QWidget):
         self.detail_info.setObjectName("secondary")
         lt_layout.addWidget(self.detail_info)
 
-        self.detail_table = FinanceTable()
+        self.detail_table = FinanceTable(freeze=False)
         self.detail_model = HoldingsTableModel(self.detail_table)
         self.detail_model.columns = (
             "归属人员", "券商渠道", "Ticker", "持仓状态", "持仓数量",
