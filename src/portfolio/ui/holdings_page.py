@@ -1121,7 +1121,9 @@ class HoldingsPage(QWidget):
                 tot_p_open,
                 tot_p_closed,
             ), {"is_total": True}))
-        self.p_model.replace(p_rows)
+        p_scroll = self.p_table.verticalScrollBar().value()
+        b_scroll = self.b_table.verticalScrollBar().value()
+        s_scroll = self.s_table.verticalScrollBar().value()
 
         # 券商持仓汇总
         b_recs = dash.get("broker_summary", [])
@@ -1148,7 +1150,6 @@ class HoldingsPage(QWidget):
                 tot_b_pnl,
                 b_tot_rate,
             ), {"is_total": True}))
-        self.b_model.replace(b_rows)
 
         # 股票持仓汇总
         s_recs = dash.get("stock_summary", [])
@@ -1160,7 +1161,14 @@ class HoldingsPage(QWidget):
                 Decimal(str(sr.get("total_pnl") or 0)),
                 Decimal(str(sr.get("pnl_rate") or 0)) if sr.get("pnl_rate") is not None else None,
             ), {}))
+
+        self.p_model.replace(p_rows)
+        self.b_model.replace(b_rows)
         self.s_model.replace(s_rows)
+
+        self.p_table.verticalScrollBar().setValue(p_scroll)
+        self.b_table.verticalScrollBar().setValue(b_scroll)
+        self.s_table.verticalScrollBar().setValue(s_scroll)
 
         # 3. Donut Ring Chart
         self._on_dist_tab_changed(self.dist_tabs.currentIndex())
@@ -1261,7 +1269,11 @@ class HoldingsPage(QWidget):
                     "ticker": item.get("ticker"),
                 }))
 
+        v_scroll = self.detail_table.verticalScrollBar().value()
+        h_scroll = self.detail_table.horizontalScrollBar().value()
         self.detail_model.replace(rows)
+        self.detail_table.verticalScrollBar().setValue(v_scroll)
+        self.detail_table.horizontalScrollBar().setValue(h_scroll)
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(f"[桌面端持仓] 明细表格刷新完成 (状态: {status_filter})，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
         view_title = "已清仓明细" if status_filter == "已清仓" else "当前持仓明细"

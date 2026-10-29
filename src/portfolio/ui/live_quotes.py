@@ -427,3 +427,18 @@ class LiveQuotesPanel(QWidget):
             page.page = min(current_page, max(0, (len(page.sorted_rows) - 1) // 200))
             page.show_page()
             page.table.verticalScrollBar().setValue(scroll)
+
+        # 同步更新主财务分析对象的报表缓存（含盘中实时估值的人员资产、渠道汇总等）
+        self.analytics.reports = {**self.analytics.reports, '实时持仓': report, **summaries}
+
+        # 联动更新现代持仓管理页（HoldingsPage）
+        if hasattr(self.window, "holdings_page") and self.window.holdings_page:
+            try:
+                self.window.holdings_page.analytics = self.analytics
+                if self.window.holdings_page.isVisible():
+                    if getattr(self.window.holdings_page, "view_mode", "dashboard") == "dashboard":
+                        self.window.holdings_page.refresh_dashboard()
+                    else:
+                        self.window.holdings_page.refresh_detail()
+            except Exception as e:
+                pass

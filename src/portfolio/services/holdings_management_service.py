@@ -20,7 +20,7 @@ from pathlib import Path
 import time
 from typing import Any
 
-from portfolio.domain.analytics import ZERO, ratio, strict_sum
+from portfolio.domain.analytics import ReportRow, ZERO, ratio, strict_sum
 from portfolio.domain.models import QueryScope
 from portfolio.paths import DATABASE_PATH
 from portfolio.services.post_trade_positions import attach_post_trade_positions
@@ -63,6 +63,34 @@ class HoldingsManagementService:
         pa_rows = pa.rows if pa else ()
         if person_id is not None and pa_rows:
             pa_rows = tuple(r for r in pa_rows if r.metadata.get("person_id") == person_id)
+
+        # 实时行情叠加：优先使用最新实时报价更新持有中标的的市值、浮动盈亏与浮动收益率
+        latest_quotes_map = HoldingsManagementService.get_latest_quotes_map()
+        if latest_quotes_map and pa_rows:
+            enriched_pa_rows = []
+            for r in pa_rows:
+                tk = r.values[2] or ""
+                qty = r.values[3]
+                st = r.values[4] or "持有中"
+                cost_p = r.values[5]
+                raw_mv = r.values[7] or Decimal(0)
+                raw_pnl = r.values[8] if r.values[8] is not None else Decimal(0)
+                net_inv = r.values[12] if len(r.values) > 12 and isinstance(r.values[12], Decimal) else None
+                live_p = latest_quotes_map.get(tk.upper())
+                if st in ("持有中", "当前持仓") and live_p is not None and qty and qty > ZERO:
+                    curr_p = live_p
+                    mv = qty * curr_p
+                    pnl = (mv - net_inv) if (net_inv is not None) else (mv - (qty * cost_p) if cost_p is not None else raw_pnl)
+                    pnl_rate = ratio(curr_p - cost_p, cost_p) if (cost_p is not None and cost_p > ZERO) else None
+                    new_vals = list(r.values)
+                    new_vals[6] = curr_p
+                    new_vals[7] = mv
+                    new_vals[8] = pnl
+                    new_vals[9] = pnl_rate
+                    enriched_pa_rows.append(ReportRow(tuple(new_vals), r.metadata))
+                else:
+                    enriched_pa_rows.append(r)
+            pa_rows = tuple(enriched_pa_rows)
 
         th_rows = th.rows if th else ()
         ch_rows = ch.rows if ch else ()
@@ -322,6 +350,42 @@ class HoldingsManagementService:
         return {k: (v["buy_count"], v["sell_count"]) for k, v in stats_map.items()}
 
     @staticmethod
+    def get_latest_quotes_map(quote_path: str | Path | None = None) -> dict[str, Decimal]:
+        """Query latest available market quotes from live_quotes sqlite cache.
+
+        Prefers Intraday over Post, Pre, and Overnight.
+        """
+        try:
+            from portfolio.paths import quote_cache_path
+            target_path = Path(quote_path) if quote_path else quote_cache_path()
+            if not target_path.exists():
+                return {}
+            conn = sqlite3.connect(f"{target_path.as_uri()}?mode=ro", uri=True, timeout=5.0)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, session, price, quoted_at FROM latest_quotes ORDER BY quoted_at ASC")
+            rows = cursor.fetchall()
+            conn.close()
+
+            session_priority = {"OVERNIGHT": 1, "PRE": 2, "POST": 3, "INTRADAY": 4}
+            latest_map: dict[str, tuple[int, str, Decimal]] = {}
+            for sym, session, val, stamp in rows:
+                clean_sym = sym.split(".")[0].upper()
+                try:
+                    p = Decimal(str(val))
+                    if p <= 0:
+                        continue
+                except Exception:
+                    continue
+                priority = session_priority.get(str(session).upper(), 0)
+                if clean_sym not in latest_map or priority > latest_map[clean_sym][0] or (priority == latest_map[clean_sym][0] and stamp >= latest_map[clean_sym][1]):
+                    latest_map[clean_sym] = (priority, stamp, p)
+            return {k: v[2] for k, v in latest_map.items()}
+        except Exception as e:
+            logger.debug(f"[实时行情查询] 读取本地行情缓存跳过: {e}")
+            return {}
+
+    @staticmethod
     def get_corporate_actions_map(
         db_path: str | Path | None = None,
     ) -> tuple[dict[int, list[dict[str, Any]]], dict[int, str]]:
@@ -466,6 +530,7 @@ class HoldingsManagementService:
         positions_map = getattr(analytics, "positions", {}) or {}
         trade_stats_map = HoldingsManagementService.get_trade_stats_map(db_path=db_path)
         actions_map, accounts_map = HoldingsManagementService.get_corporate_actions_map(db_path=db_path)
+        latest_quotes_map = HoldingsManagementService.get_latest_quotes_map()
 
         search_text = (search or "").strip().upper()
         ticker_filter = (ticker or "").strip().upper()
@@ -484,8 +549,9 @@ class HoldingsManagementService:
             st = r.values[4] or "持有中"
             cost_p = r.values[5]
             raw_curr_p = r.values[6]
-            mv = r.values[7] or Decimal(0)
-            pnl = r.values[8] if r.values[8] is not None else Decimal(0)
+            raw_mv = r.values[7] or Decimal(0)
+            raw_pnl = r.values[8] if r.values[8] is not None else Decimal(0)
+            net_inv = r.values[12] if len(r.values) > 12 and isinstance(r.values[12], Decimal) else None
 
             # Filter checks
             if person_ids is not None and p_id not in person_ids:
@@ -505,12 +571,26 @@ class HoldingsManagementService:
 
             pos = positions_map.get((p_id, acc_id, inst_id))
 
-            # For closed positions, analytics_service falls back to p.last_price when quote is missing.
-            # Ensure current_price is strictly the latest market quote and None when quote is missing.
-            if st == "已清仓":
+            # 实时行情叠加：优先采用最新盘中报价；已清仓股票无最新行情时保持None或数据库收盘价
+            live_p = latest_quotes_map.get(tk.upper())
+            if live_p is not None:
+                curr_p = live_p
+            elif st == "已清仓":
                 curr_p = raw_curr_p if r.metadata.get("valuation_date") is not None else None
             else:
                 curr_p = raw_curr_p
+
+            if st in ("持有中", "当前持仓") and live_p is not None and qty and qty > ZERO:
+                mv = qty * curr_p
+                if net_inv is not None:
+                    pnl = mv - net_inv
+                elif cost_p is not None:
+                    pnl = mv - (qty * cost_p)
+                else:
+                    pnl = raw_pnl
+            else:
+                mv = raw_mv
+                pnl = raw_pnl
 
             # Calculate cost total amount (成本总额 = 数量 * 成本价)
             cost_amount = (qty * cost_p) if (qty is not None and cost_p is not None) else None

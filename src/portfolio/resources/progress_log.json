@@ -1,5 +1,18 @@
 [
   {
+    "title": "持仓管理页面打通实时行情与盘中报价联动更新",
+    "time": "2026-10-29 22:31",
+    "author": "Antigravity",
+    "tag": "代码已修改并完成实时行情比对，待用户验收",
+    "details": [
+      "修改者：Antigravity（问题排查与实时行情联动修复）",
+      "问题排查：持仓管理（HoldingsPage）此前直接从静态财务分析对象中读取昨日历史收盘价（2026-10-28 收盘价 $88.02），且长桥实时行情（LiveQuotesPanel）仅向旧资产报表注入更新，未通知持仓管理页，导致 GGLL 等活跃交易标的未能反映盘中真实股价（市场最新价已回调至 $66.5 左右）。",
+      "服务层（HoldingsManagementService）：新增 get_latest_quotes_map() 接口，按 Intraday/Post/Pre/Overnight 优先级直接从 live_quotes.sqlite3 缓存中批量加载全部美股最新盘中有效报价；在 get_dashboard_data 与 get_holdings_detail_rows 中自动以最新行情重算当前价、市值、浮动盈亏与收益率，无实时行情时安全回退至官方收盘价。",
+      "桌面端（live_quotes.py & holdings_page.py）：打通 LiveQuotesPanel 10秒行情推送与 HoldingsPage 的联动机制；并在表格数据重绘时智能保存并恢复滚动条位置，防止页面跳动闪烁。",
+      "验证范围：比对验证了当前本地环境真实盘中行情，嘉信账户 GGLL 当前最新价从滞后的昨日收盘价 $88.02 恢复为最新盘中价 $66.53，市值从 $1,760.40 修正为 $1,330.60，累计盈亏从 +$36.50 修正为 -$393.30，收益率从 +2.12% 修正为 -22.81%，与市场真实走势完全对齐。"
+    ]
+  },
+  {
     "title": "已清仓页面除权拆股/并股价格折算与涨跌幅修正",
     "time": "2026-10-29 22:15",
     "author": "Antigravity",
