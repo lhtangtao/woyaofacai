@@ -308,9 +308,19 @@ class HoldingsTableModel(FinanceModel):
                     return f"{sign}{val * 100:.2f}%"
                 if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价")):
                     sign = "+" if "盈亏" in col_name and val > 0 else ""
+                    if col_name == "清仓价" and row.metadata.get("is_split_adjusted"):
+                        return f"${val:,.2f}*"
                     return f"{sign}${val:,.2f}"
                 return f"{val:,.2f}"
             return exact_text(val)
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if col_name == "清仓价" and row.metadata.get("is_split_adjusted"):
+                orig = row.metadata.get("orig_close_price")
+                notes = row.metadata.get("split_notes") or ""
+                orig_str = f"${orig:,.2f}" if orig is not None else "—"
+                return f"折算后清仓价: ${val:,.2f}\n原始清仓价: {orig_str}\n清仓后除权调整: {notes}"
+            return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if col_name == "操作":
@@ -1224,6 +1234,10 @@ class HoldingsPage(QWidget):
                     "person_id": item.get("person_id"),
                     "account_id": item.get("account_id"),
                     "ticker": item.get("ticker"),
+                    "is_split_adjusted": item.get("is_split_adjusted"),
+                    "orig_close_price": to_dec(item.get("orig_close_price")),
+                    "split_notes": item.get("split_notes"),
+                    "split_factor": to_dec(item.get("split_factor")),
                 }))
         else:
             for item in raw_rows:

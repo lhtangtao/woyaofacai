@@ -322,6 +322,73 @@ class HoldingsManagementService:
         return {k: (v["buy_count"], v["sell_count"]) for k, v in stats_map.items()}
 
     @staticmethod
+    def get_corporate_actions_map(
+        db_path: str | Path | None = None,
+    ) -> tuple[dict[int, list[dict[str, Any]]], dict[int, str]]:
+        """Batch query active corporate actions (SPLIT, REVERSE_SPLIT) and broker accounts.
+
+        Returns:
+            (actions_map, accounts_map):
+            - actions_map: mapping instrument_id -> list of action dicts sorted by effective_date asc
+            - accounts_map: mapping account_id -> broker_code
+        """
+        start_t = time.monotonic()
+        target_path = Path(db_path) if db_path else DATABASE_PATH
+        if not target_path.exists():
+            return {}, {}
+        try:
+            conn = sqlite3.connect(f"{target_path.as_uri()}?mode=ro", uri=True, timeout=10.0)
+            conn.execute("PRAGMA busy_timeout = 10000")
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT id, broker_code FROM broker_accounts")
+            accounts_map = {int(r[0]): str(r[1]).upper() for r in cursor.fetchall()}
+
+            cursor.execute(
+                """
+                SELECT instrument_id, effective_date, action_type, broker_scope, ratio_numerator, ratio_denominator
+                FROM corporate_actions
+                WHERE record_state = 'ACTIVE' AND action_type IN ('SPLIT', 'REVERSE_SPLIT')
+                ORDER BY effective_date ASC
+                """
+            )
+            actions_map: dict[int, list[dict[str, Any]]] = {}
+            for r in cursor.fetchall():
+                inst_id = int(r[0])
+                eff_date = str(r[1])[:10]
+                act_type = str(r[2]).upper()
+                broker_scope = str(r[3]).upper()
+                num = int(r[4])
+                den = int(r[5]) if r[5] else 1
+                if den == 0:
+                    continue
+                factor = Decimal(num) / Decimal(den)
+                if factor > 1:
+                    ratio_desc = f"{num // den if num % den == 0 else f'{factor:.2f}'}:1 拆股"
+                elif factor < 1:
+                    inv = Decimal(1) / factor
+                    ratio_desc = f"1:{round(inv) if abs(inv - round(inv)) < 0.001 else f'{inv:.2f}'} 并股"
+                else:
+                    ratio_desc = "1:1"
+                actions_map.setdefault(inst_id, []).append({
+                    "effective_date": eff_date,
+                    "action_type": act_type,
+                    "broker_scope": broker_scope,
+                    "ratio_numerator": num,
+                    "ratio_denominator": den,
+                    "factor": factor,
+                    "desc": f"{eff_date} {ratio_desc}",
+                })
+            conn.close()
+            elapsed_ms = (time.monotonic() - start_t) * 1000
+            logger.info(f"[除权统计查询] 成功加载 {len(actions_map)} 种标的除权拆并股事件，耗时 {elapsed_ms:.1f}ms")
+            return actions_map, accounts_map
+        except Exception as e:
+            elapsed_ms = (time.monotonic() - start_t) * 1000
+            logger.exception(f"[除权统计查询] 查询异常 (耗时 {elapsed_ms:.1f}ms): {e}")
+            return {}, {}
+
+    @staticmethod
     def get_trade_stats_map(db_path: str | Path | None = None) -> dict[tuple[int, int, int], dict[str, Any]] | None:
         """Batch query historical valid buy/sell trade counts and dates in one read-only SQL query.
 
@@ -398,6 +465,7 @@ class HoldingsManagementService:
 
         positions_map = getattr(analytics, "positions", {}) or {}
         trade_stats_map = HoldingsManagementService.get_trade_stats_map(db_path=db_path)
+        actions_map, accounts_map = HoldingsManagementService.get_corporate_actions_map(db_path=db_path)
 
         search_text = (search or "").strip().upper()
         ticker_filter = (ticker or "").strip().upper()
@@ -491,11 +559,34 @@ class HoldingsManagementService:
 
             # 清仓价：最近一次使持仓数量归零的有效卖出成交价格
             if pos is not None and pos.last_price is not None and (sell_count is None or sell_count > 0 or (pos.sell_quantity and pos.sell_quantity > ZERO)):
-                close_price = pos.last_price
+                orig_close_price = pos.last_price
             else:
-                close_price = None
+                orig_close_price = None
 
-            # 清仓后涨跌幅 = (当前价 - 清仓价) ÷ 清仓价
+            # 清仓后拆股/并股折算逻辑：
+            # 若清仓后发生了除权拆股/并股事件，需将历史成交清仓价折算至当前口径，以与当前市价进行可比的涨跌幅对比
+            split_factor = Decimal(1)
+            split_notes_list = []
+            if st == "已清仓" and orig_close_price is not None and last_close_date and inst_id in actions_map:
+                broker_code = accounts_map.get(acc_id, "")
+                for act in actions_map[inst_id]:
+                    if act["effective_date"] > last_close_date:
+                        scope = act["broker_scope"]
+                        if scope in ("ALL", broker_code):
+                            split_factor *= act["factor"]
+                            split_notes_list.append(act["desc"])
+
+            is_split_adjusted = (split_factor != Decimal(1))
+            if is_split_adjusted and split_factor > ZERO:
+                adj_close_price = orig_close_price / split_factor
+                split_notes = "; ".join(split_notes_list)
+            else:
+                adj_close_price = orig_close_price
+                split_notes = None
+
+            close_price = adj_close_price
+
+            # 清仓后涨跌幅 = (当前价 - 清仓价) ÷ 清仓价（清仓价采用除权折算后价格，避免拆股引起失真）
             if curr_p is not None and close_price is not None and close_price > ZERO:
                 post_close_change = (curr_p - close_price) / close_price
             else:
@@ -531,6 +622,10 @@ class HoldingsManagementService:
                 "avg_buy_price": avg_buy_price,
                 "avg_sell_price": avg_sell_price,
                 "close_price": close_price,
+                "orig_close_price": orig_close_price,
+                "is_split_adjusted": is_split_adjusted,
+                "split_factor": split_factor,
+                "split_notes": split_notes,
                 "post_close_change": post_close_change,
                 "total_buy_amount": total_buy_amount,
                 "total_sell_amount": total_sell_amount,
@@ -571,6 +666,10 @@ class HoldingsManagementService:
                 "avg_buy_price": serialize_val(it["avg_buy_price"]),
                 "avg_sell_price": serialize_val(it["avg_sell_price"]),
                 "close_price": serialize_val(it["close_price"]),
+                "orig_close_price": serialize_val(it["orig_close_price"]),
+                "is_split_adjusted": bool(it["is_split_adjusted"]),
+                "split_factor": serialize_val(it["split_factor"]),
+                "split_notes": it["split_notes"],
                 "post_close_change": serialize_val(it["post_close_change"]),
                 "total_buy_amount": serialize_val(it["total_buy_amount"]),
                 "total_sell_amount": serialize_val(it["total_sell_amount"]),

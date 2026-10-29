@@ -1178,7 +1178,19 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           {r.avg_sell_price != null ? `$${formatNumber(r.avg_sell_price, 2)}` : "—"}
                         </td>
                         <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                          {r.close_price != null ? `$${formatNumber(r.close_price, 2)}` : "—"}
+                          {r.close_price != null ? (
+                            r.is_split_adjusted ? (
+                              <span
+                                title={`折算后清仓价: $${formatNumber(r.close_price, 2)}\n原始清仓价: $${formatNumber(r.orig_close_price, 2)}\n清仓后除权调整: ${r.split_notes || ""}`}
+                                style={{ borderBottom: "1px dashed var(--brand, #2563EB)", cursor: "help" }}
+                              >
+                                ${formatNumber(r.close_price, 2)}
+                                <span style={{ fontSize: "10px", color: "var(--brand, #2563EB)", marginLeft: "2px", fontWeight: 700 }}>*</span>
+                              </span>
+                            ) : (
+                              `$${formatNumber(r.close_price, 2)}`
+                            )
+                          ) : "—"}
                         </td>
                         <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
                           {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
