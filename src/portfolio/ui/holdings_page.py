@@ -40,7 +40,7 @@ from portfolio.services.holdings_management_service import HoldingsManagementSer
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
-from portfolio.ui.metric_card import MetricCard
+from portfolio.ui.components import MetricCard
 from portfolio.ui.theme import numeric_font, tokens
 
 
