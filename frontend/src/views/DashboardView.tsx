@@ -58,6 +58,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ personId }) => {
   const todayProfit = metrics["今日盈亏"] || kpis.today_profit || 0;
   const todayProfitRate = metrics["当日收益率"] || kpis.today_profit_rate || 0;
   const netInvested = metrics["回本缺口"] || kpis.net_invested || 0;
+  const holdingCost = metrics["当前持仓总成本"];
 
   const isProfit = totalProfit >= 0;
   const isTodayProfit = todayProfit >= 0;
@@ -159,8 +160,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ personId }) => {
             有效出入金与净本金
           </div>
         </div>
-      </div>
 
+      <div className="card-panel" title="当前持仓累计买入金额减累计卖出金额之和，沿用原账本历史基准及费用口径；不含已清仓分组。">
+        <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>当前持仓总成本</div>
+        <div className="font-mono" style={{ fontSize: "28px", fontWeight: 700, color: "var(--text-heading)" }}>
+          {holdingCost == null ? "— 数据不完整" : `$${Number(holdingCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+        </div>
+        <div style={{ fontSize: "11px", color: "var(--text-subtle)", marginTop: "4px" }}>当前持仓净投入，卖出回款已抵扣</div>
+      </div>
+      </div>
       {/* Distribution Charts Row */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
         <div className="card-panel" style={{ height: "320px", display: "flex", flexDirection: "column" }}>

@@ -277,7 +277,9 @@ def api_portfolio_overview():
         scope = get_user_query_scope(currency=currency, person_id=person_id)
 
         res = svc.calculate(scope)
-        metric_map = {m.name: m.value for m in res.metrics}
+        from portfolio.services.overview_metrics import overview_metrics
+        display_metrics=overview_metrics(res)
+        metric_map = {m.name: m.value for m in display_metrics}
 
         total_asset_val = metric_map.get("当前总资产")
         total_profit_val = metric_map.get("全时期总盈亏")
@@ -336,7 +338,7 @@ def api_portfolio_overview():
             "as_of": scope.as_of.isoformat(),
             "currency": currency,
             "user": g.auth_context.to_dict() if hasattr(g, "auth_context") and g.auth_context else None,
-            "metrics": {m.name: serialize_val(m.value) for m in res.metrics},
+            "metrics": {m.name: serialize_val(m.value) for m in display_metrics},
             "overview": kpis,
             "kpis": kpis,
             "category_distribution": category_rows,

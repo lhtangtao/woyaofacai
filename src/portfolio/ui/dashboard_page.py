@@ -173,11 +173,13 @@ class DashboardPage(QWidget):
         if not self.analytics:
             return
         analytics = self.analytics
+        from portfolio.services.overview_metrics import overview_metrics
+        metrics=overview_metrics(analytics,metrics)
         for card, metric in zip(self.cards, metrics):
             gap, _ = metric_gap(metric.name, analytics.reports['每日持仓收益'].rows, analytics.scope.as_of) if metric.value is None else ('', '')
             if metric.value is None and metric.formula.startswith('长桥'):
                 gap = '等待报价或收盘基准'
-            always_neutral = metric.name in ("当前总资产", "当前持仓胜率")
+            always_neutral = metric.name in ("当前总资产", "当前持仓总成本")
             if always_neutral:
                 value = f"— {gap}" if metric.value is None else f"{metric.value:.2%}" if metric.ratio else f"{metric.value:,.2f}"
             else:
@@ -195,8 +197,9 @@ class DashboardPage(QWidget):
 
     def waiting_live(self):
         if self.analytics:
-            keep = {'已清仓收益', '上月盈亏', '去年盈亏', '本月微操收益', '本年微操收益'}
-            for card, metric in zip(self.cards, self.analytics.metrics):
+            from portfolio.services.overview_metrics import overview_metrics
+            keep = {'已清仓收益', '上月盈亏', '去年盈亏', '本月微操收益', '本年微操收益','当前持仓总成本'}
+            for card, metric in zip(self.cards, overview_metrics(self.analytics)):
                 if metric.name not in keep:
                     card.setText(metric.name+'\n— 正在读取本时段行情')
 
