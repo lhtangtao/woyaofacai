@@ -1,5 +1,18 @@
 [
   {
+    "title": "为摸总/陈行/钱/华等全体人员生成专属Web访问账号并在启动脚本中清晰展示",
+    "time": "2026-10-30 01:10",
+    "author": "Antigravity",
+    "tag": "代码已修改并完成账号密码安全散列认证验证，待用户验收",
+    "details": [
+      "修改者：Antigravity（Web权限体系完善与全员账号自动预设）",
+      "需求落地：按照团队成员名单，自动生成对应的 Web 访问账号与密码（账号即名字，密码为姓名拼音+123），并在系统启动脚本中整齐打印输出，便于不同人员在手机或浏览器直接登录并查看专属个人账本与盈亏持仓。",
+      "安全认证中心（credentials.py）：定义 DEFAULT_PERSON_ACCOUNTS 标准配置表，包含个人(geren123)、华(hua123)、巴小(baxiao123)、张薇(zhangwei123)、拉科(lake123)、摸总(mozong123)、百万(baiwan123)、钱(qian123)、陈行(chenhang123) 全部 9 位成员；在 init_security_db 时自动调用 ensure_default_person_accounts 进行幂等检查与密码 PBKDF2 强散列入库，严格绑定对应 person_id 与 user 角色隔离。",
+      "启动脚本（启动Money3.command）：更新用户登录账号展示模块，由原先仅打印拉科、巴小扩展为完整展示全部 9 位成员的账号、初始密码及绑定的专属账本说明，对齐格式排版。",
+      "验证范围：对本地安全数据库 security.sqlite3 执行全员自动化验证脚本，9 个账号均成功通过密码散列校验与 person_id 权限绑定匹配。"
+    ]
+  },
+  {
     "title": "彻底清理43.5GB孤立构建缓存并建立派生构建生命周期自动回收机制",
     "time": "2026-10-30 01:02",
     "author": "Antigravity",

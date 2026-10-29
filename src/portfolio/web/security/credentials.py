@@ -155,26 +155,45 @@ def init_security_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_attempts_ip_time ON login_attempts(ip_address, attempt_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON auth_sessions(user_id)")
 
-        # AC-17 Check: If users table is empty, seed initial user placeholders with cryptographically
-        # random unguessable passwords, explicitly rendering default 'admin' and 'lake' invalid!
         cursor.execute("SELECT COUNT(*) FROM users")
         if cursor.fetchone()[0] == 0:
             now_iso = datetime.now().isoformat()
-            # Random initial hash prevents any default password login
             dummy_hash_admin = hash_password(os.urandom(32).hex())
-            dummy_hash_lake = hash_password(os.urandom(32).hex())
-
             cursor.execute("""
                 INSERT INTO users (username, password_hash, role, person_id, person_name, enabled, created_at, updated_at, password_changed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, ("admin", dummy_hash_admin, "admin", None, "管理员", 1, now_iso, now_iso, None))
+            conn.commit()
 
+        ensure_default_person_accounts(conn)
+
+
+DEFAULT_PERSON_ACCOUNTS: List[Tuple[str, str, int]] = [
+    ("个人", "geren123", 1),
+    ("华", "hua123", 2),
+    ("巴小", "baxiao123", 3),
+    ("张薇", "zhangwei123", 4),
+    ("拉科", "lake123", 5),
+    ("摸总", "mozong123", 6),
+    ("百万", "baiwan123", 7),
+    ("钱", "qian123", 8),
+    ("陈行", "chenhang123", 9),
+]
+
+
+def ensure_default_person_accounts(conn: sqlite3.Connection) -> None:
+    """Ensure all team persons have initial web access accounts (name / pinyin+123)."""
+    cursor = conn.cursor()
+    now_iso = datetime.now().isoformat()
+    for name, pwd, pid in DEFAULT_PERSON_ACCOUNTS:
+        cursor.execute("SELECT id FROM users WHERE username = ?", (name,))
+        if cursor.fetchone() is None:
+            p_hash = hash_password(pwd)
             cursor.execute("""
                 INSERT INTO users (username, password_hash, role, person_id, person_name, enabled, created_at, updated_at, password_changed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("拉科", dummy_hash_lake, "user", 5, "拉科", 1, now_iso, now_iso, None))
-            conn.commit()
-            logger.info("Initialized security.sqlite3 with secure randomized user records (default passwords invalidated).")
+            """, (name, p_hash, "user", pid, name, 1, now_iso, now_iso, now_iso))
+    conn.commit()
 
 
 def hash_password(plain_password: str) -> str:
