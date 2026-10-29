@@ -37,7 +37,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   persons = [],
   onPersonChange,
   initialDimension = "person",
-  initialStatus = "全部",
+  initialStatus = "持有中",
   initialMode = "dashboard",
   initialFilter = {},
 }) => {
@@ -45,8 +45,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [viewMode, setViewMode] = useState<"dashboard" | "detail">(initialMode);
   const [dimension, setDimension] = useState<"person" | "broker" | "stock">(initialDimension);
 
-  // Filters
-  const [statusFilter, setStatusFilter] = useState<string>(initialStatus);
+  // Filters (仅支持持有中与已清仓两种状态，默认持有中)
+  const [statusFilter, setStatusFilter] = useState<string>(initialStatus === "已清仓" ? "已清仓" : "持有中");
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(
     personId !== undefined ? personId : initialFilter.person_id ?? null
   );
@@ -561,7 +561,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <Users size={16} color="var(--brand, #2563EB)" />
                   人员持仓明细
                 </div>
-                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击人员直达专属持仓明细，点击表头可正倒序排列</span>
+                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击表头可正倒序排列</span>
               </div>
 
               <div className="table-container">
@@ -589,12 +589,11 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("closed_stocks")}>
                         已清仓 {pSortField === "closed_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "center" }}>操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {sortedPersonSummary.map((p, idx) => (
-                      <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToPerson(p.person_id)}>
+                      <tr key={idx}>
                         <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>
                           ${formatNumber(p.market_value, 2)}
@@ -622,11 +621,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.total_stocks || 0)}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.open_stocks || 0)}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.closed_stocks || 0)}</td>
-                        <td style={{ textAlign: "center" }}>
-                          <span style={{ fontSize: "11px", color: "var(--brand, #2563EB)", display: "flex", alignItems: "center", justifyContent: "center", gap: "2px" }}>
-                            🔍 查看明细
-                          </span>
-                        </td>
                       </tr>
                     ))}
                     {/* 合计行 */}
@@ -655,7 +649,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.total_stock_count ?? 0)}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.open_stock_count ?? 0)}</td>
                         <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.closed_stock_count ?? 0)}</td>
-                        <td></td>
                       </tr>
                     )}
                   </tbody>
@@ -746,17 +739,11 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
               {/* 2. 股票持仓汇总 */}
               <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", height: "24px" }}>
+                <div style={{ display: "flex", alignItems: "center", marginBottom: "10px", height: "24px" }}>
                   <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
                     <Layers size={15} color="var(--brand, #2563EB)" />
                     股票持仓汇总
                   </div>
-                  <button
-                    onClick={() => { setDimension("stock"); setViewMode("detail"); }}
-                    style={{ border: "none", color: "#2563EB", fontSize: "11px", fontWeight: 600, background: "transparent", cursor: "pointer", padding: 0 }}
-                  >
-                    查看更多 &gt;
-                  </button>
                 </div>
                 <div className="table-container" style={{ flex: 1 }}>
                   <table className="finance-table" style={{ fontSize: "11px" }}>
@@ -905,7 +892,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           <div
             style={{
               display: "flex",
-              justifyContent: "space-between",
+              justifyContent: "flex-end",
               alignItems: "center",
               flexWrap: "wrap",
               gap: "10px",
@@ -913,32 +900,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
               borderBottom: "1px solid var(--border-color, #e2e8f0)",
             }}
           >
-            {/* Dimension Buttons */}
-            <div style={{ display: "flex", gap: "6px" }}>
-              {[
-                { key: "person", label: "按人员查看", icon: <Users size={14} /> },
-                { key: "broker", label: "按券商查看", icon: <Building2 size={14} /> },
-                { key: "stock", label: "按股票查看", icon: <Layers size={14} /> },
-              ].map((d) => (
-                <button
-                  key={d.key}
-                  onClick={() => setDimension(d.key as any)}
-                  className={`btn ${dimension === d.key ? "btn-primary" : "btn-quiet"}`}
-                  style={{
-                    fontSize: "12px",
-                    padding: "6px 14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    borderRadius: "6px",
-                  }}
-                >
-                  {d.icon}
-                  {d.label}
-                </button>
-              ))}
-            </div>
-
             {/* Status, Broker, Search, Export */}
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <select
@@ -947,9 +908,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 className="input-control"
                 style={{ fontSize: "12px", padding: "5px 10px" }}
               >
-                <option value="全部">全部状态</option>
-                <option value="持有中">当前持仓 (持有中)</option>
-                <option value="已清仓">已清仓记录</option>
+                <option value="持有中">当前持仓</option>
+                <option value="已清仓">已清仓</option>
               </select>
 
               <select

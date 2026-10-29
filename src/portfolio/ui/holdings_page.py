@@ -711,21 +711,20 @@ class HoldingsPage(QWidget):
         p_lbl.setStyleSheet("font-weight: bold; font-size: 14px; color: #0F172A;")
         p_hdr.addWidget(p_lbl)
         p_hdr.addStretch()
-        p_sub = QLabel("点击人员直达专属持仓明细")
+        p_sub = QLabel("点击表头可正倒序切换")
         p_sub.setStyleSheet("font-size: 11px; color: #64748B;")
         p_hdr.addWidget(p_sub)
         p_layout.addLayout(p_hdr)
 
         self.p_table = FinanceTable(freeze=False)
         self.p_model = HoldingsTableModel(self.p_table)
-        self.p_model.columns = ("人员", "持仓市值(USD)", "累计盈亏(USD)", "收益率", "持仓股票", "当前持仓", "已清仓", "操作")
+        self.p_model.columns = ("人员", "持仓市值(USD)", "累计盈亏(USD)", "收益率", "持仓股票", "当前持仓", "已清仓")
         self.p_table.setModel(self.p_model)
         self.p_table.horizontalHeader().setFixedHeight(36)
         self.p_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.p_table.horizontalHeader().setStretchLastSection(True)
         self.p_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.p_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
-        self.p_table.clicked.connect(self._on_person_table_clicked)
         self.p_table.horizontalHeader().sectionClicked.connect(self.p_model.toggle_sort)
         p_layout.addWidget(self.p_table)
         dash_layout.addWidget(p_card)
@@ -761,7 +760,6 @@ class HoldingsPage(QWidget):
         self.b_table.horizontalHeader().setStretchLastSection(True)
         self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
-        self.b_table.clicked.connect(self._on_broker_table_clicked)
         self.b_table.horizontalHeader().sectionClicked.connect(self.b_model.toggle_sort)
         b_layout.addWidget(self.b_table)
         lower_row.addWidget(b_card, 1)
@@ -782,11 +780,6 @@ class HoldingsPage(QWidget):
         s_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #0F172A;")
         s_hdr.addWidget(s_lbl)
         s_hdr.addStretch()
-        more_btn = QPushButton("查看更多 >")
-        more_btn.setFixedHeight(20)
-        more_btn.setStyleSheet("border: none; color: #2563EB; font-size: 11px; font-weight: 600; background: transparent; padding: 0; margin: 0;")
-        more_btn.clicked.connect(lambda: self.set_view("detail", dimension="stock"))
-        s_hdr.addWidget(more_btn)
         s_layout.addWidget(s_hdr_widget)
 
         self.s_table = FinanceTable(freeze=False)
@@ -873,23 +866,12 @@ class HoldingsPage(QWidget):
         detail_bar = QHBoxLayout()
         detail_bar.setSpacing(10)
 
-        # Dimension selector (Person, Broker, Stock)
-        dim_lbl = QLabel("维度：")
-        detail_bar.addWidget(dim_lbl)
-        self.dim_combo = QComboBox()
-        self.dim_combo.addItem("按人员查看", "person")
-        self.dim_combo.addItem("按券商查看", "broker")
-        self.dim_combo.addItem("按股票查看", "stock")
-        self.dim_combo.currentIndexChanged.connect(self._on_dim_changed)
-        detail_bar.addWidget(self.dim_combo)
-
-        # Status filter
+        # Status filter (仅持仓与已清仓两种状态，默认持仓)
         status_lbl = QLabel("状态：")
         detail_bar.addWidget(status_lbl)
         self.status_combo = QComboBox()
-        self.status_combo.addItem("全部状态", "全部")
-        self.status_combo.addItem("当前持仓 (持有中)", "持有中")
-        self.status_combo.addItem("已清仓记录", "已清仓")
+        self.status_combo.addItem("当前持仓", "持有中")
+        self.status_combo.addItem("已清仓", "已清仓")
         self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
         detail_bar.addWidget(self.status_combo)
 
@@ -1006,14 +988,13 @@ class HoldingsPage(QWidget):
         else:
             self.refresh_detail()
 
-    def set_view(self, mode: str, dimension: str = "person", status: str = "全部", person_id: int | None = None, broker: str | None = None, ticker: str | None = None):
+    def set_view(self, mode: str, dimension: str = "person", status: str = "持有中", person_id: int | None = None, broker: str | None = None, ticker: str | None = None):
         self.dimension = dimension
-        idx = self.dim_combo.findData(dimension)
-        if idx >= 0:
-            self.dim_combo.setCurrentIndex(idx)
         s_idx = self.status_combo.findData(status)
         if s_idx >= 0:
             self.status_combo.setCurrentIndex(s_idx)
+        else:
+            self.status_combo.setCurrentIndex(0)
         if broker:
             b_idx = self.broker_combo.findText(broker)
             if b_idx >= 0:
@@ -1029,10 +1010,6 @@ class HoldingsPage(QWidget):
                     self.person_tab_bar.blockSignals(False)
                     break
         self.switch_view_mode(mode)
-
-    def _on_dim_changed(self, idx):
-        self.dimension = self.dim_combo.currentData() or "person"
-        self.refresh_detail()
 
     def _on_filter_changed(self):
         self.refresh_detail()
@@ -1113,7 +1090,6 @@ class HoldingsPage(QWidget):
                 ts,
                 os,
                 cs,
-                "🔍 查看明细",
             ), {"person_id": pr.get("person_id")}))
 
         if p_rows:
@@ -1127,7 +1103,6 @@ class HoldingsPage(QWidget):
                 tot_p_stocks,
                 tot_p_open,
                 tot_p_closed,
-                "",
             ), {"is_total": True}))
         self.p_model.replace(p_rows)
 
@@ -1176,8 +1151,8 @@ class HoldingsPage(QWidget):
     def refresh_detail(self):
         if not self.analytics:
             return
-        status = self.status_combo.currentData()
-        status_filter = None if status == "全部" else status
+        status = self.status_combo.currentData() or "持有中"
+        status_filter = status
         broker_filter = self.broker_combo.currentData() or None
         search_filter = self.search_input.text().strip() or None
 
@@ -1212,7 +1187,7 @@ class HoldingsPage(QWidget):
             }))
 
         self.detail_model.replace(rows)
-        self.detail_info.setText(f"统一持仓明细（按{self.dim_combo.currentText()}）· 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
+        self.detail_info.setText(f"统一持仓明细 · 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
 
     def _on_person_table_clicked(self, index):
         if not index.isValid():

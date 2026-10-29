@@ -72,13 +72,14 @@ def ensure_total(store,ledger,person,day):
         c.commit()
 
 
-def cached_history(store,scope,ready):
+def cached_history(store,scope,ready,*,progress=None):
     """Common unfiltered charts read daily persisted totals, not stock rows."""
     from portfolio.services.derived_codec import loads
     output=defaultdict(dict)
     with closing(store.connect()) as c:
         c.execute('BEGIN')
-        for person,day,updated,required in ready:
+        for index,(person,day,updated,required) in enumerate(ready):
+            if progress:progress('读取已保存五分钟汇总',index,len(ready))
             partition=c.execute('SELECT updated_at,status FROM partitions WHERE ledger=? AND person_id=? AND day=?',(scope.ledger.value,person,day)).fetchone()
             if not partition or partition[0]!=updated or partition[1] in ('INVALID','ERROR'):return None
             row=c.execute("SELECT payload,checksum FROM objects WHERE kind='owner-day-pnl' AND object_key=? AND dependency=? AND algorithm=?",(key(scope.ledger.value,person,day),updated,ALGORITHM)).fetchone()
@@ -95,4 +96,5 @@ def cached_history(store,scope,ready):
                 if len(values)<requirements[day]:incomplete+=1;continue
                 value=str(sum((Decimal(v) for v in values),Decimal(0))) if all(v is not None for v in values) else None
                 result[day].append((datetime.fromisoformat(stamp),({'pnl':value,'channel':'','ticker':''},)))
+    if progress:progress('读取已保存五分钟汇总',len(ready),len(ready))
     return result,incomplete

@@ -26,7 +26,7 @@ def allowed_people(source,scope):
     return tuple(p for p in ids if scope.person_ids is None or p in scope.person_ids)
 
 
-def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,ticker=None):
+def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,ticker=None,progress=None):
     from portfolio.services.quote_store import QuoteStore
     quotes=QuoteStore(quotes.path,source=source)
     store=DerivedStore(source)
@@ -53,7 +53,8 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
                              (ledger,*people,str(start),str(end))).fetchall()
     valid=set();states={};markers={}
     revisions=quotes.day_revisions(d for _,d,_,_,_,_,_ in partitions)
-    for person,day,dependency,algorithm,status,warning,updated_at in partitions:
+    for partition_index,(person,day,dependency,algorithm,status,warning,updated_at) in enumerate(partitions):
+        if progress:progress('校验历史分区',partition_index,len(partitions))
         markers[person,day]=updated_at
         states[person,day]={'state':status,'warning':warning}
         if not algorithm.startswith('money3-derived-v1:') or status in ('INVALID','ERROR'):
@@ -73,6 +74,7 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
         if checkpoint and old and old[2:]==revision[2:] and checkpoint['price_hash']==quotes.prefix_identity(day,checkpoint['last'],checkpoint['price_ids']):
             valid.add((person,day))
         else:states[person,day]={'state':'INVALID','reason':'D_QUOTE_DEPENDENCY','warning':'依赖已变化或旧计算尚未校验，等待后台重算；不在图表中回放。'}
+    if progress:progress('校验历史分区',len(partitions),len(partitions))
     # Reject incomplete owner sets before touching the much larger amount table.
     valid_days={d for _,d in valid if all((p,d) in valid for p in people)}
     ready=[(p,d,markers[p,d],sum(states[owner,d]['state']!='NO_EXPOSURE' for owner in people))
@@ -86,7 +88,7 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
             if cached is not None:_TREND_ROWS.move_to_end(cache_key)
     if cached is not None:output,incomplete_points=cached
     else:
-        output,incomplete_points=_read_points(store,source,scope,ready,aggregate,channels,ticker)
+        output,incomplete_points=_read_points(store,source,scope,ready,aggregate,channels,ticker,progress=progress)
         if aggregate:
             with _LOCK:
                 _TREND_ROWS[cache_key]=(output,incomplete_points)
@@ -139,11 +141,11 @@ class _DecimalTotal:
     def finalize(self):return None if self.unknown else str(self.total)
 
 
-def _read_points(store,source,scope,ready,aggregate,channels,ticker):
+def _read_points(store,source,scope,ready,aggregate,channels,ticker,progress=None):
     if not ready:return {},0
     if aggregate and channels is None and not ticker and not scope.search and not scope.category and scope.account_ids is None and scope.instrument_ids is None:
         from portfolio.services.derived_continuity import cached_history
-        persisted=cached_history(store,scope,ready)
+        persisted=cached_history(store,scope,ready,progress=progress)
         if persisted is not None:return persisted
     predicates=[];filters=[]
     for column,values in (('account_id',scope.account_ids),('instrument_id',scope.instrument_ids),('channel',channels)):
@@ -164,6 +166,8 @@ def _read_points(store,source,scope,ready,aggregate,channels,ticker):
         WHERE p.updated_at=r.updated_at AND p.algorithm LIKE 'money3-derived-v1:%' AND p.status NOT IN ('INVALID','ERROR')) """
     args=[v for row in ready for v in row]+filters+[scope.ledger.value]
     output=defaultdict(list);incomplete=0
+    read_days=set();total_days=len({d for _,d,_,_ in ready})
+    if progress:progress('查询五分钟明细',None,None)
     with closing(store.connect()) as connection:
         connection.execute('BEGIN')
         if aggregate:
@@ -171,6 +175,9 @@ def _read_points(store,source,scope,ready,aggregate,channels,ticker):
             query=sql+"""SELECT day,stamp,CASE WHEN sum(matched)>0 THEN decimal_total(CASE WHEN matched THEN pnl ELSE '0' END) ELSE NULL END,
                     count(DISTINCT person_id),max(required),sum(matched) FROM base GROUP BY day,stamp ORDER BY day,stamp"""
             for day,stamp,pnl,owners,required,count in connection.execute(query,args):
+                if day not in read_days:
+                    if progress:progress('读取五分钟明细（按交易日）',len(read_days),total_days)
+                    read_days.add(day)
                 if owners<required:incomplete+=1;continue
                 items=({'pnl':pnl,'channel':'','ticker':''},) if count else ()
                 output[day].append((datetime.fromisoformat(stamp),items))
@@ -178,15 +185,19 @@ def _read_points(store,source,scope,ready,aggregate,channels,ticker):
             by_stamp=defaultdict(list);owners_at=defaultdict(set);requirements={}
             for row in connection.execute(sql+'SELECT person_id,day,stamp,channel,ticker,pnl,account_id,instrument_id,quantity,required,matched FROM base ORDER BY day,stamp',args):
                 person,day,stamp,channel,symbol,pnl,account,instrument,quantity,required,matched=row
+                if day not in read_days:
+                    if progress:progress('读取五分钟明细（按交易日）',len(read_days),total_days)
+                    read_days.add(day)
                 owners_at[day,stamp].add(person);requirements[day,stamp]=required
                 if matched:by_stamp[day,stamp].append(dict(person_id=person,channel=channel,ticker=symbol,pnl=pnl,account_id=account,instrument_id=instrument,quantity=quantity))
             for day,stamp in sorted(owners_at):
                 if len(owners_at[day,stamp])<requirements[day,stamp]:incomplete+=1;continue
                 output[day].append((datetime.fromisoformat(stamp),by_stamp[day,stamp]))
+    if progress:progress('读取五分钟明细（按交易日）',total_days,total_days)
     return dict(output),incomplete
 
 
-def historical_analytics(source,scope,start,end):
+def historical_analytics(source,scope,start,end,*,progress=None):
     """Read persisted daily baselines; never call AnalyticsService/replay here."""
     from portfolio.services.derived_codec import loads
     from portfolio.domain.analytics import Report,ReportRow
@@ -203,6 +214,9 @@ def historical_analytics(source,scope,start,end):
                 current_quotes=dict(q.execute('SELECT day,revision FROM quote_close_revisions'))
     if not store.available or not people:return SimpleNamespace(scope=scope,reports={'每日持仓收益':Report('每日持仓收益',DAILY_COLUMNS,())})
     with closing(store.connect()) as c:
+        total_rows=sum(c.execute("SELECT count(*) FROM report_details WHERE ledger=? AND person_id=? AND report='每日持仓收益' AND period BETWEEN ? AND ?",(scope.ledger.value,p,str(start),str(end))).fetchone()[0] for p in people) if progress else 0
+        read_rows=0
+        if progress:progress('读取历史日报基准',0,total_rows)
         for person in people:
             stamp=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_checked:{scope.ledger.value}:{person}',)).fetchone()
             algorithm=c.execute('SELECT value FROM metadata WHERE key=?',(f'report_algorithm:{scope.ledger.value}:{person}',)).fetchone()
@@ -222,6 +236,8 @@ def historical_analytics(source,scope,start,end):
             if None in impacts:incomplete=True
             if cutoffs:baseline_end=min(baseline_end,(date.fromisoformat(min(cutoffs))-timedelta(days=1)).isoformat())
             for account,instrument,payload in c.execute("SELECT account_id,instrument_id,payload FROM report_details WHERE ledger=? AND person_id=? AND report='每日持仓收益' AND period BETWEEN ? AND ? ORDER BY period,ordinal",(scope.ledger.value,person,str(start),str(end))):
+                read_rows+=1
+                if progress:progress('读取历史日报基准',read_rows,total_rows)
                 if scope.account_ids is not None and account not in scope.account_ids:continue
                 if scope.instrument_ids is not None and instrument not in scope.instrument_ids:continue
                 row=loads(payload)
@@ -238,7 +254,7 @@ def day_history(source,quotes,scope,day):
     return tuple((stamp,'History5',items) for stamp,items in rows.get(day,())),status
 
 
-def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,mode='cumulative',now=None,history_data=None):
+def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,mode='cumulative',now=None,history_data=None,progress=None):
     """No invented intraday points and no smoothing to a different daily result."""
     from portfolio.services.charts_service import Chart,Series
     now=now or datetime.now(UTC)
@@ -271,7 +287,8 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
     last_month=None
     with localcontext() as ctx:
         ctx.prec=50
-        for d in calendar_days:
+        for day_index,d in enumerate(calendar_days):
+            if progress:progress('整理曲线采样（按交易日）',day_index,len(calendar_days))
             day=d.isoformat();start=datetime.combine(d-timedelta(days=1),time(20),NY).astimezone(UTC)
             end=datetime.combine(d,time(20),NY).astimezone(UTC)
             close=datetime.combine(d,time(13 if d in halves else 16),NY).astimezone(UTC)
@@ -348,4 +365,5 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
                 (Series('累计盈亏' if mode=='cumulative' else '当日盈亏',tuple(points)),),note,
                 x_labels=labels,x_ticks=tuple(ticks),vertical_lines=tuple(boundaries),highlight_extremes=True,
                 show_points=False,line_width=1.5,calendar_axis='year' if year else 'month',break_keys=tuple(breaks))
+    if progress:progress('整理曲线采样（按交易日）',len(calendar_days),len(calendar_days))
     return chart,state

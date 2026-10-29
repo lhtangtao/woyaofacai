@@ -78,8 +78,14 @@ class ChartCanvas(QWidget):
             painter.drawText(QRectF(30,center.y()-10,self.width()-60,85),Qt.AlignmentFlag.AlignHCenter|Qt.TextFlag.TextWordWrap,self.loading_message)
             done,total=self.loading_progress
             if total:
+                fraction=max(0,min(1,(done or 0)/total))
+                bar=QRectF(center.x()-min(180,self.width()/3),center.y()+80,min(360,self.width()*2/3),8)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(t.border));painter.drawRoundedRect(bar,4,4)
+                filled=QRectF(bar);filled.setWidth(bar.width()*fraction)
+                painter.setBrush(QColor(t.brand));painter.drawRoundedRect(filled,4,4)
                 painter.setPen(QColor(t.muted));painter.setFont(chart_font(12))
-                painter.drawText(QRectF(30,center.y()+80,self.width()-60,30),Qt.AlignmentFlag.AlignHCenter,f'{done or 0}/{total}（{(done or 0)*100//total}%）')
+                painter.drawText(QRectF(30,center.y()+98,self.width()-60,30),Qt.AlignmentFlag.AlignHCenter,f'{done or 0}/{total}（{int(fraction*100)}%）')
             return
         if not chart:
             return
