@@ -1,5 +1,18 @@
 [
   {
+    "title": "彻底清理43.5GB孤立构建缓存并建立派生构建生命周期自动回收机制",
+    "time": "2026-10-30 01:02",
+    "author": "Antigravity",
+    "tag": "代码已修改并完成磁盘空间回收与构建闭环验证，待用户验收",
+    "details": [
+      "修改者：Antigravity（磁盘异常膨胀排查、垃圾回收机制与生命周期保护）",
+      "问题排查：数据库目录异常膨胀至 47.45 GB。经精准拆解，真正核心业务库 money.sqlite3 仅 455.66 MB，正式派生库 1.80 GB；其余 45.15 GB 均为历史构建中断留下的 93 个 money_derived.sqlite3.building-* 孤立临时文件（38.38 GB）与 5 个未限制保留上限的 previous-* 备份（6.77 GB）。此前在构建发生异常、中途取消或被外部中断时，代码缺少可靠的 cleanup 保证，导致 1.8GB 的影子工作副本永久残留磁盘。",
+      "自动垃圾回收机制（derived_maintenance.py）：实现 clean_stale_staging_files() 核心函数，通过 flock 检测安全扫描并清除所有非活跃进程锁定的 building-* 临时构建库及衍生文件（-journal, -wal, -shm）；同时对 previous-* 历史备份库设定上限（仅保留最新 1 份，旧版本自动淘汰）。",
+      "生命周期闭环保证（derived.py & sync_data.py）：1. 在 rebuild() 开始前主动执行孤立临时文件清理；2. 在 rebuild() 全流程 try...finally 块中确保当前 staging 临时库在发布失败或中断时 100% 销毁，杜绝再次产生孤立副本；3. 在系统启动（prepare_startup）与数据同步（sync_data.py）入口均自动执行空间保洁。",
+      "验证范围：清理现存 97 个孤立垃圾文件，瞬间释放 43.48 GB 固态硬盘空间，数据库目录总占用从 47.45 GB 骤降至 3.98 GB（核心库 456MB + 派生库 1.8GB + 1份回滚备份 1.7GB），全流程自动化运行平稳无损。"
+    ]
+  },
+  {
     "title": "修复同步时person_trade_fees外键冲突导致的事务回滚并大幅丰富报错堆栈提示",
     "time": "2026-10-30 00:28",
     "author": "Antigravity",

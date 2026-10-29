@@ -141,6 +141,39 @@ def schedule_changed(source,start=None):
     return 'BUILDING'
 
 
+def clean_stale_staging_files(source, keep_previous=1):
+    """Safely remove orphaned .building-* staging files and excess .previous-* backups."""
+    try:
+        store = DerivedStore(source)
+        db_dir = Path(store.path).parent
+        prefix = Path(store.path).name
+        for f in db_dir.glob(f"{prefix}.building-*"):
+            lock_file = f if f.name.endswith(".lock") else f.with_name(f.name.split("-journal")[0].split("-wal")[0].split("-shm")[0] + ".lock")
+            is_locked = False
+            if lock_file.exists():
+                try:
+                    with open(lock_file, "r") as h:
+                        fcntl.flock(h, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(h, fcntl.LOCK_UN)
+                except (BlockingIOError, OSError):
+                    is_locked = True
+            if not is_locked:
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        prev_dbs = [f for f in db_dir.glob(f"{prefix}.previous-*") if not f.name.endswith((".lock", "-journal", "-wal", "-shm"))]
+        prev_dbs.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        for stale_prev in prev_dbs[keep_previous:]:
+            for f in db_dir.glob(f"{stale_prev.name}*"):
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
 def pending_history_days(source,store,quotes,start,end,*,now=None):
     """Persistent partition state is the resume cursor; no per-round year replay."""
     from datetime import datetime,timedelta

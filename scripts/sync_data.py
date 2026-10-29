@@ -37,6 +37,8 @@ def main():
         print("[OK] 本地数据库结构及五个核心sheet可读取；未执行同步。")
         return 0
     sync_database_orders(base_dir=base, database=database, refresh_sources=not args.no_api)
+    from portfolio.services.derived_maintenance import clean_stale_staging_files
+    clean_stale_staging_files(database)
     if not args.no_api:
         from portfolio.sync.fee_api import fetch_missing
         from portfolio.sync.trade_fees import load_evidence, store_evidence, refresh_fees

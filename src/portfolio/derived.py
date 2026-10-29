@@ -15,11 +15,12 @@ from portfolio.services.derived_store import DerivedStore, exclusive, utcnow
 def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=None, automatic=False):
     from portfolio.services.derived_builder import build_all,validate_generation,historical_people
     from portfolio.services.derived_dependencies import check_changes,source_identity
-    from portfolio.services.derived_maintenance import write_progress,needs_rebuild
+    from portfolio.services.derived_maintenance import write_progress,needs_rebuild,clean_stale_staging_files
     from portfolio.services.quote_store import QuoteStore
     source=Path(source).resolve();published=DerivedStore(source)
+    clean_stale_staging_files(source)
     with exclusive(str(published.path)+'.build',wait=False):
-        token=uuid.uuid4().hex;target=None;started_at=utcnow()
+        token=uuid.uuid4().hex;target=None;staging=None;started_at=utcnow()
         def notify(**values):write_progress(source,job_id=token,**values)
         try:
             notify(state='INITIALIZING',message='正在后台初始化共享历史派生库。',completed_units=0,total_units=0)
@@ -131,11 +132,18 @@ def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=No
                         logging.getLogger(__name__).exception('Could not finish failed staging cleanup; published generation retained')
             notify(state='FAILED',error_type=type(exc).__name__,message='历史生成未完成，原有效代保留；后台将稍后重试，请查看本机日志。')
             raise
+        finally:
+            if staging is not None and staging.is_file():
+                for suffix in ('','-journal','-wal','-shm'):
+                    Path(str(staging)+suffix).unlink(missing_ok=True)
+            clean_stale_staging_files(source)
 
 
 def prepare_startup(source=DATABASE_PATH,mode=None,*,background=False):
     source=Path(source).resolve()
     if not source.is_file():return {'state':'SOURCE_MISSING'}
+    from portfolio.services.derived_maintenance import clean_stale_staging_files
+    clean_stale_staging_files(source)
     if mode:
         result=rebuild(source,mode=mode)
         if background:
