@@ -119,7 +119,11 @@ class Producer:
                     from portfolio.services.derived_store import ALGORITHM
                     with closing(self.store.connect()) as c:
                         saved=c.execute('SELECT p.algorithm,p.status,i.quote_revision FROM partitions p LEFT JOIN partition_inputs i USING(ledger,person_id,day) WHERE p.ledger=? AND p.person_id=? AND p.day=?',(ledger.value,person,day)).fetchone()
-                    if saved and saved[0]==ALGORITHM and saved[1] not in ('INVALID','ERROR') and saved[2]==dumps(self.quotes.day_revision(day)):continue
+                    from portfolio.services.derived_continuity import intact,ensure_total
+                    healthy=saved and saved[0]==ALGORITHM and saved[1] not in ('INVALID','ERROR') and saved[2]==dumps(self.quotes.day_revision(day))
+                    if healthy and (saved[1]=='NO_EXPOSURE' or intact(self.store,self.quotes,ledger.value,person,day,scope)):
+                        ensure_total(self.store,ledger.value,person,day)
+                        continue
                     class Writer(PartitionWriter):
                         def save_historical_pnl(writer,key,day,rows,unused,warning='',**kwargs):
                             if source_version(self.source)!=version:raise ValueError('交易数据变化，本次分区不发布。')
@@ -303,7 +307,7 @@ class Producer:
         result['required_symbols']=len(ids)
         return result,latest,errors
 
-    def catch_up(self,current):
+    def catch_up(self,current,*,local_only=False):
         if self.history_job is not None and not self.history_job.done():return
         if self.history_job is not None:
             try:self.history_job.result()
@@ -331,7 +335,11 @@ class Producer:
                 progress('CALCULATING_HISTORY')
                 for target in dates[:8]:
                     if build_running(self.source) or monotonic()-started>30:break
-                    try:other.collect(target.isoformat(),datetime.now(UTC))
+                    try:
+                        if local_only:
+                            bases={ledger:other.snapshot(ledger,target.isoformat()) for ledger in (Ledger.PERSON,Ledger.BROKER)}
+                            other.materialize(target.isoformat(),datetime.now(UTC),bases)
+                        else:other.collect(target.isoformat(),datetime.now(UTC))
                     except Exception:
                         failures.append(target.isoformat())
                         import logging
@@ -388,7 +396,7 @@ class Producer:
             if latest and not result['failed'] and (historical_invalid or not full_generation or incomplete_reports):
                 from portfolio.services.derived_maintenance import schedule_changed
                 schedule_changed(self.source)
-        if latest and not result['failed']:self.catch_up(target)
+        self.catch_up(target,local_only=not latest or bool(result['failed']))
 
 
 def _run(source):

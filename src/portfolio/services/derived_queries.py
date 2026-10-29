@@ -141,6 +141,10 @@ class _DecimalTotal:
 
 def _read_points(store,source,scope,ready,aggregate,channels,ticker):
     if not ready:return {},0
+    if aggregate and channels is None and not ticker and not scope.search and not scope.category and scope.account_ids is None and scope.instrument_ids is None:
+        from portfolio.services.derived_continuity import cached_history
+        persisted=cached_history(store,scope,ready)
+        if persisted is not None:return persisted
     predicates=[];filters=[]
     for column,values in (('account_id',scope.account_ids),('instrument_id',scope.instrument_ids),('channel',channels)):
         if values is not None:

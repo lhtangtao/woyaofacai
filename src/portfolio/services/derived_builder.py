@@ -31,7 +31,11 @@ class PartitionWriter:
     def checkpoint_key(self):
         return digest((self.scope.ledger,self.scope.person_ids,self.scope.as_of))
     def load_checkpoint(self,dependency):
-        return self.derived.get('intraday-state',self.checkpoint_key(),dependency) if self.incremental else None
+        if not self.incremental:return None
+        from portfolio.services.derived_continuity import intact
+        person=self.scope.person_ids[0] if self.scope.person_ids else 0
+        if not intact(self.derived,self.quotes,self.scope.ledger.value,person,str(self.scope.as_of),self.scope):return None
+        return self.derived.get('intraday-state',self.checkpoint_key(),dependency)
     def save_historical_pnl(self,key,day,rows,source_version,warning='',*,input_revision=None,checkpoint=None,resume_after=None):
         ledger=self.scope.ledger.value;person=self.scope.person_ids[0] if self.scope.person_ids else 0
         records=[]
@@ -56,11 +60,15 @@ class PartitionWriter:
             else:c.execute('DELETE FROM intraday_contributions WHERE ledger=? AND person_id=? AND day=?',(ledger,person,day))
             c.executemany('INSERT INTO intraday_contributions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',records)
             c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',(ledger,person,day,dumps(input_revision if input_revision is not None else revision)))
+            published_at=utcnow()
             c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',
-                      (ledger,person,day,self.dependency,ALGORITHM,state,warning,utcnow()))
+                      (ledger,person,day,self.dependency,ALGORITHM,state,warning,published_at))
+            from portfolio.services.derived_continuity import save_total
+            save_total(c,ledger,person,day,published_at)
             if checkpoint:
                 import hashlib,zlib
                 checkpoint['warning']=warning
+                checkpoint['coverage_stamps']=[r[0] for r in c.execute('SELECT DISTINCT stamp FROM intraday_contributions INDEXED BY ix_intraday_person_day WHERE ledger=? AND person_id=? AND day=? ORDER BY stamp',(ledger,person,day))]
                 payload=zlib.compress(dumps(checkpoint).encode())
                 c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',('intraday-state',self.checkpoint_key(),checkpoint['state_dependency'],ALGORITHM,payload,hashlib.sha256(payload).hexdigest(),utcnow()))
             elif not resume_after:
@@ -331,5 +339,7 @@ def publish_partition(staging,published,quotes,ledger,person,day,expected_source
         c.execute('INSERT OR REPLACE INTO partitions VALUES (?,?,?,?,?,?,?,?)',partition)
         c.execute('INSERT OR REPLACE INTO partition_inputs VALUES (?,?,?,?)',inputs)
         if checkpoint:c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?,?,?,?,?)',checkpoint)
+        from portfolio.services.derived_continuity import save_total
+        save_total(c,ledger,person,day,partition[7])
         mark_partition_publication(c);c.commit()
     return True

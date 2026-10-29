@@ -156,6 +156,11 @@ def pending_history_days(source,store,quotes,start,end,*,now=None):
         for owner in people:
             previous=saved.get((*owner,str(day)))
             if not previous or previous[0]!=ALGORITHM or previous[1]=='INVALID' or previous[4]!=dumps(revisions[str(day)]):changed=True;break
+            from portfolio.services.derived_continuity import intact,total
+            from portfolio.domain.models import QueryScope,Ledger
+            scope=QueryScope(day,ledger=Ledger(owner[0]),person_ids=(owner[1],) if owner[1] else None)
+            if previous[1]!='NO_EXPOSURE' and not intact(store,quotes,owner[0],owner[1],str(day),scope):changed=True;break
+            if total(store,owner[0],owner[1],str(day),previous[3]) is None:changed=True;break
             due=now-datetime.fromisoformat(previous[3])>=timedelta(minutes=5)
             recoverable=previous[1]=='ERROR' or previous[1]=='PARTIAL' and any(s in previous[2] for s in ('盘中行情缺失','缺少上一交易日','尚无已完成'))
             failed|=bool(due and recoverable)
