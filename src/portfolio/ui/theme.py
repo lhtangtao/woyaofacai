@@ -41,7 +41,10 @@ class DesignTokens:
 
 
 def tokens(widget=None):
-    return getattr(widget.window(), "design_tokens", DesignTokens()) if widget else DesignTokens()
+    if not widget:
+        return DesignTokens()
+    win = widget.window() if callable(getattr(widget, "window", None)) else getattr(widget, "window", None)
+    return getattr(win, "design_tokens", DesignTokens()) if win else DesignTokens()
 
 
 def numeric_font(size=13, *, bold=False):

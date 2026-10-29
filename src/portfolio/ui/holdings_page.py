@@ -353,7 +353,7 @@ class HoldingsPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.window = parent
+        self.main_window = parent
         self.analytics = None
         self.dimension = "person"
         self.view_mode = "dashboard"
@@ -776,8 +776,8 @@ class HoldingsPage(QWidget):
         if not ticker:
             return
         src_path = str(DATABASE_PATH)
-        if self.window and hasattr(self.window, "service") and self.window.service:
-            src_path = str(self.window.service.path)
+        if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
+            src_path = str(self.main_window.service.path)
         drawer_data = HoldingsManagementService.get_stock_drawer_data(
             src_path,
             self.analytics,

@@ -24,7 +24,13 @@ class MetricCard(QFrame):
         layout.addWidget(self.hint)
 
     def set_value(self, value, *, hint=None):
-        self.value.setText(f"{value:,}" if value is not None else "—")
+        from decimal import Decimal
+        if value is None:
+            self.value.setText("—")
+        elif isinstance(value, (int, float, Decimal)):
+            self.value.setText(f"{value:,}")
+        else:
+            self.value.setText(str(value))
         if hint is not None:
             self.hint.setText(hint)
 
