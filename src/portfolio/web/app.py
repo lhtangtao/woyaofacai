@@ -494,8 +494,10 @@ def index():
 
     csrf_token = getattr(g, "csrf_token", None) or request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token()
 
+    from portfolio.web.security.ownership_access import can_view_ownership
     return render_template(
         "mobile.html",
+        can_view_ownership=can_view_ownership(),
         lan_ip=net["lan_ip"],
         tailscale_ip=net["tailscale_ip"],
         all_lan_ips=net["all_lan_ips"],
@@ -898,6 +900,9 @@ def api_reports_list():
 @require_capability(CAP_VIEW_ASSETS)
 def api_report_detail(report_name: str):
     """Return tabular data for a specific financial report with pagination and search."""
+    if report_name=='股票归属':
+        from portfolio.web.security.ownership_access import can_view_ownership,denied
+        if not can_view_ownership():return denied()
     try:
         svc = get_analytics_service()
         scope = get_user_query_scope()

@@ -143,6 +143,7 @@ def get_current_user_scope() -> Tuple[Optional[int], Optional[str]]:
 @require_capability(CAP_VIEW_ASSETS)
 def api_bootstrap():
     """Return application bootstrap state, user profile, capabilities, database info and system preferences."""
+    from portfolio.web.security.ownership_access import can_view_ownership
     ctx: AuthContext = getattr(g, "auth_context", None)
     user_info = ctx.to_dict() if ctx else {
         "authenticated": False,
@@ -155,6 +156,7 @@ def api_bootstrap():
         "person_name": None,
         "person_id": None,
     }
+    user_info['can_view_ownership']=can_view_ownership()
 
     db_exists = DATABASE_PATH.is_file()
     db_size = DATABASE_PATH.stat().st_size if db_exists else 0
@@ -556,6 +558,8 @@ def api_reports_list():
         {"name": "Excel差异核对", "group": "系统与审计", "description": "与历史手工账 Excel 对比的对账一致性差异报告"},
         {"name": "指标说明", "group": "系统与审计", "description": "全部 18 项财务指标的标准计算公式与定义字典"},
     ]
+    from portfolio.web.security.ownership_access import can_view_ownership
+    if not can_view_ownership():report_groups=[r for r in report_groups if r['name']!='股票归属']
     return jsonify({"status": "ok", "reports": report_groups, "count": len(report_groups)})
 
 
@@ -611,6 +615,9 @@ def parse_sort_key(val, is_desc: bool, row=None, orig_idx: int = 0):
 @require_capability(CAP_VIEW_ASSETS)
 def api_reports_detail(report_name: str):
     """Deliver full column metadata, rows, totals and pagination for any requested report."""
+    if report_name=='股票归属':
+        from portfolio.web.security.ownership_access import can_view_ownership,denied
+        if not can_view_ownership():return denied()
     if report_name in ("今日盈亏", "当日盈亏"):
         return api_holdings_today()
     try:
@@ -996,73 +1003,38 @@ def api_broker_people():
 @require_capability(CAP_VIEW_ASSETS)
 def api_stock_ownership():
     """Retrieve stock ownership penetration across persons (AC-16)."""
+    from portfolio.web.security.ownership_access import can_view_ownership,denied
+    if not can_view_ownership():return denied()
     try:
-        from portfolio.engine.stock_ownership import (
-            ownership_alert_rows,
-            ownership_choices,
-            ownership_report,
-        )
-
-        svc = get_analytics_service()
-        scope = get_user_query_scope()
-        res = svc.calculate_people(scope)
-
-        choices = ownership_choices(res)
-        instrument_id = request.args.get("instrument_id", type=int)
-
-        if not instrument_id and choices:
-            instrument_id = choices[0][0]
-
-        report_data = []
-        broker_total = None
-        assigned_total = None
-        difference = None
-        note = ""
-
-        if instrument_id:
-            rep_tuple = ownership_report(res, instrument_id)
-            rep_obj, broker_total, assigned_total, difference = rep_tuple
-            note = getattr(rep_obj, "note", "")
-            for r in rep_obj.rows:
-                report_data.append({
-                    "person_name": r.values[0],
-                    "quantity": serialize_val(r.values[1]),
-                    "ratio": f"{float(r.values[2]) * 100:.2f}%" if r.values[2] is not None else "—",
-                    "person_id": r.metadata.get("person_id"),
-                })
-
-        # Calculate reconciliation alerts
-        alerts_raw = ownership_alert_rows(res)
-        alerts_data = [
-            {
-                "channel": a[0],
-                "symbol": a[1],
-                "broker_shares": serialize_val(a[2]),
-                "assigned_shares": serialize_val(a[3]),
-                "difference": serialize_val(a[4]),
-            }
-            for a in alerts_raw
-        ]
-
-        ctx: AuthContext = getattr(g, "auth_context", None)
-        if ctx and not ctx.is_lan_viewer() and not ctx.is_admin() and ctx.allowed_person_ids is not None:
-            report_data = [r for r in report_data if r.get("person_id") in ctx.allowed_person_ids]
-            alerts_data = []
-
-        return jsonify({
-            "status": "ok",
-            "choices": [{"id": c[0], "symbol": c[1]} for c in choices],
-            "selected_instrument_id": instrument_id,
-            "report": report_data,
-            "broker_total": serialize_val(broker_total),
-            "assigned_total": serialize_val(assigned_total),
-            "difference": serialize_val(difference),
-            "note": note,
-            "alerts": alerts_data,
-        })
-    except Exception as e:
-        logger.exception("Ownership error")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        from portfolio.domain.models import QueryScope
+        from portfolio.services.ownership_analysis import analyze,export_csv
+        from portfolio.db.connection import readonly_connection
+        from portfolio.db.repositories.analytics import instrument_catalog
+        from portfolio.domain.live_quotes import UTC
+        from portfolio.services.web_today import exact_json
+        cutoff=date.fromisoformat(request.args.get('as_of') or date.today().isoformat())
+        if cutoff>date.today():raise ValueError('统计截止日期不能晚于今天。')
+        # This page intentionally authorizes all historical owners, independently
+        # of the global/person scope used by every other endpoint.
+        scope=QueryScope(cutoff,person_ids=None,include_disabled=True,start_date=None)
+        bundle=get_analytics_service().calculate_people(scope)
+        with readonly_connection(DATABASE_PATH) as connection:instruments=instrument_catalog(connection)
+        now=datetime.now(UTC)
+        status,session,quotes=get_today_service().quote_snapshot(bundle.aggregate,instruments,True,now)
+        identifier=request.args.get('instrument_id',type=int)
+        if request.args.get('instrument_id') and identifier is None:raise ValueError('股票标识无效，请重新选择。')
+        data=analyze(bundle,identifier,instruments,quotes,session,now,request.args.get('person_search',''))
+        data['quote_status']=status
+        data['source']=dict(path=str(DATABASE_PATH),as_of=str(cutoff),scope='全部历史人员／全部渠道')
+        if request.args.get('export')=='csv':
+            from flask import Response
+            return Response(export_csv(data).encode('utf-8-sig'),mimetype='text/csv; charset=utf-8',
+                            headers={'Content-Disposition':'attachment; filename="ownership-cost.csv"'})
+        return jsonify(exact_json(dict(status='ok',**data)))
+    except ValueError as exc:return jsonify(status='error',message=str(exc)),400
+    except Exception:
+        logger.exception('Ownership analysis failed')
+        return jsonify(status='error',message='股票归属与成本数据读取失败，请检查数据源或稍后刷新。'),503
 
 
 # ------------------------------------------------------------------------------
@@ -1946,6 +1918,9 @@ def api_system_reconcile():
 @require_capability(CAP_VIEW_ASSETS)
 def api_export_report_csv(report_name: str):
     """Export any report to standard CSV."""
+    if report_name=='股票归属':
+        from portfolio.web.security.ownership_access import can_view_ownership,denied
+        if not can_view_ownership():return denied()
     if report_name in ("今日盈亏", "当日盈亏"):
         try:
             payload = today_payload(include_curve=False)

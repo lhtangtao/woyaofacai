@@ -39,8 +39,11 @@ class InteractionMixin:
     def today_snapshot(self):
         return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '今日盈亏'
 
+    def ownership_view(self):
+        return self.pages.currentIndex()==3 and self.asset_page.selector.currentText()=='股票归属'
+
     def broker_people_view(self):
-        return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() in ('渠道汇总', '股票归属')
+        return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '渠道汇总'
 
     def sync_date_granularity(self, *_):
         self.holding_date.setVisible(self.today_snapshot() or self.broker_people_view())
@@ -134,6 +137,8 @@ class InteractionMixin:
         self.filters_changed()
 
     def reset_asset_filters(self):
+        if self.ownership_view():
+            self.asset_page.ownership_page.reset();return
         if hasattr(self, "dashboard"):
             month = self.dashboard.month.findText(QDate.currentDate().toString("yyyy-MM"))
             year = self.dashboard.year.findText(QDate.currentDate().toString("yyyy"))
@@ -265,6 +270,12 @@ class InteractionMixin:
         self.heading.setText(title)
         if self.broker_people_view():
             self.heading.setText('股票归属' if self.asset_page.selector.currentText() == '股票归属' else '券商资产 · 人员盈亏')
+        if self.ownership_view():
+            self.heading.setText('股票归属与成本分析')
+            self.description.setText('查看单只股票在不同人员名下的持仓分布、成本与收益表现。')
+            self.filters_widget.hide();self.live_panel.hide();self.banner.hide()
+            self.asset_reset_button.show();self.asset_page.ownership_page.activate()
+            self.update_history_buttons();return
         self.sync_date_granularity()
         self.description.setText("按日期查看持仓、当日盈亏与累计盈亏；今天每10秒刷新行情，历史日期使用收盘数据。" if self.today_snapshot() else DESCRIPTIONS[page])
         if page == 17:
@@ -300,7 +311,7 @@ class InteractionMixin:
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             self.monthly_realtime_page.set_analytics(self.analytics)
         if page == 22 and hasattr(self, 'holdings_page') and self.analytics:
-            self.holdings_page.set_analytics(self.analytics)
+            self.holdings_page.set_analytics(self.get_holdings_analytics())
         self.ensure_analytics()
         if page == 0 and self.info is not None and (self.current_page is None or self.current_page.scope != self.make_scope()):
             self.refresh()
@@ -340,6 +351,8 @@ class InteractionMixin:
         target.selectAll()
 
     def ensure_analytics(self):
+        if self.ownership_view():
+            self.asset_page.ownership_page.activate();return
         if not self._filter_batch and self.pages.currentIndex() == 21:
             self.monitor_page.activate()
             return

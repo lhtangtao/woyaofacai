@@ -26,6 +26,7 @@ interface WorkspaceHeaderProps {
   user: UserProfile | null;
   persons: PersonItem[];
   currentPersonId: number | null;
+  hidePersonSelector?: boolean;
   onPersonChange: (personId: number | null) => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
@@ -43,6 +44,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onExport,
   dbName,
   user,
+  hidePersonSelector = false,
   persons,
   currentPersonId,
   onPersonChange,
@@ -131,7 +133,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         {/* Actions Right */}
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Person Selector */}
-          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          {!hidePersonSelector && <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <User size={14} color="var(--text-muted)" />
             <select
               value={currentPersonId == null ? "all" : String(currentPersonId)}
@@ -159,11 +161,11 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
                 );
               })}
             </select>
-          </div>
+          </div>}
 
           {onResetFilters && (
             <button onClick={onResetFilters} className="btn"
-              title="恢复个人 · 全部渠道 · 全部股票及默认日期" style={{ height: "32px" }}>
+              title={hidePersonSelector ? "仅重置本页面筛选" : "恢复个人 · 全部渠道 · 全部股票及默认日期"} style={{ height: "32px" }}>
               <RotateCcw size={14} />
               <span>重置筛选</span>
             </button>

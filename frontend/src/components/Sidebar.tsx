@@ -91,6 +91,7 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 interface SidebarProps {
+  canViewOwnership?: boolean;
   currentRoute: string;
   onRouteChange: (route: string) => void;
   collapsed: boolean;
@@ -98,6 +99,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  canViewOwnership = false,
   currentRoute,
   onRouteChange,
   collapsed,
@@ -179,7 +181,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {group.title}
               </div>
             )}
-            {group.entries.map((entry) => {
+            {group.entries.filter(entry => entry.id !== "ownership" || canViewOwnership).map((entry) => {
               const active = currentRoute === entry.id;
               return (
                 <button

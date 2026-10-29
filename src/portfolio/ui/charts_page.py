@@ -162,7 +162,7 @@ class ChartCanvas(QWidget):
                 painter.drawText(QRectF(10, y, label_width, h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
                 a, b = x(Decimal(0)), x(value)
                 rect = QRectF(min(a, b), y + h * .2, max(abs(b - a), 2), h * .58)
-                painter.fillRect(rect, QColor(t.profit if value >= 0 else t.loss))
+                painter.fillRect(rect, QColor(getattr(self,'bar_color',None) or (t.profit if value >= 0 else t.loss)))
                 val_text = get_text(label, value)
                 val_w = painter.fontMetrics().horizontalAdvance(val_text) + 8
                 val_rect = QRectF(b + 5, y, val_w, h) if value >= 0 else QRectF(b - val_w - 5, y, val_w, h)

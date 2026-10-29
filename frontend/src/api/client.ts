@@ -172,6 +172,7 @@ export const api = {
   people: () => requestApi("/api/v1/people"),
   brokers: () => requestApi("/api/v1/brokers"),
   ownership: () => requestApi("/api/v1/ownership"),
+  ownershipAnalysis: (filters: Record<string,string>) => requestApi("/api/v1/ownership?" + new URLSearchParams(filters).toString()),
   earningsCalendar: (year?: number, month?: number, sortDir?: string) => {
     const query = new URLSearchParams();
     if (year != null) query.set("year", String(year));

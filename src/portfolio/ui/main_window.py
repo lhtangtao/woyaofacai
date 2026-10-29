@@ -487,6 +487,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         )
 
     def refresh(self):
+        if self.ownership_view():
+            self.asset_page.ownership_page.activate(True);return
         if self._filter_batch or self.info is None or not self.filters_widget.isEnabled():
             return
         if hasattr(self, "live_panel") and self.live_panel:
@@ -577,6 +579,26 @@ class MainWindow(InteractionMixin, QMainWindow):
                 page.clear()
             self.reconcile_page.clear("选择 Excel 进行当前范围对账")
 
+    def get_holdings_analytics(self):
+        """Return analytics instance with all-people scope for modern HoldingsPage.
+
+        HoldingsPage operates with independent personnel selection (defaulting to all people)
+        and does not link with other pages' person filters.
+        """
+        if not self.analytics_service or self.info is None:
+            return None
+        # 如果当前全局 analytics 就是全部启用人员且为人员账本，直接复用
+        if self.analytics and getattr(self.analytics, "scope", None) and self.analytics.scope.person_ids is None and self.analytics.scope.ledger == Ledger.PERSON:
+            return self.analytics
+        try:
+            from dataclasses import replace
+            base_scope = self.make_scope()
+            all_scope = replace(base_scope, ledger=Ledger.PERSON, person_ids=None)
+            return self.analytics_service.calculate(all_scope)
+        except Exception as e:
+            logger.warning(f"[持仓管理] 获取全员分析对象失败，降级复用当前分析对象: {e}")
+            return self.analytics
+
     def preload_people_bundle(self):
         if self.info is None or not self.analytics_service or self.broker_people_view():
             return
@@ -659,7 +681,7 @@ class MainWindow(InteractionMixin, QMainWindow):
                 logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
         self.preload_people_bundle()
         if hasattr(self, "holdings_page"):
-            self.holdings_page.set_analytics(analytics)
+            self.holdings_page.set_analytics(self.get_holdings_analytics())
         self.stock_detail.set_analytics(analytics)
         for page in self.report_pages:
             page.set_reports(analytics.reports)

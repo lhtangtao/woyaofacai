@@ -1,3 +1,4 @@
+import { OwnershipAnalysisView } from "./views/OwnershipAnalysisView";
 import React, { useEffect, useState } from "react";
 import { Sidebar, NAV_GROUPS } from "./components/Sidebar";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
@@ -22,7 +23,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Navigation & History State
-  const [history, setHistory] = useState<string[]>(["overview"]);
+  const [history, setHistory] = useState<string[]>([window.location.hash === "#ownership" ? "ownership" : "overview"]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const currentRoute = history[historyIndex] || "overview";
 
@@ -122,7 +123,9 @@ export const App: React.FC = () => {
   };
 
   const assetRoute = NAV_GROUPS[0].entries.some((entry) => entry.id === currentRoute);
+  const [ownershipReset,setOwnershipReset]=useState(0);
   const resetAssetFilters = () => {
+    if(currentRoute === "ownership"){setOwnershipReset(v=>v+1);return;}
     const isolatedId = bootstrap?.user?.role === "user" ? bootstrap.user.person_id : null;
     const personalId = bootstrap?.persons?.find((person) => person.name === "个人")?.id ?? null;
     setSelectedPersonId(isolatedId ?? personalId);
@@ -199,7 +202,7 @@ export const App: React.FC = () => {
     }
     if (currentRoute === "people") return { title: "人员资产", subtitle: "各出资人权益账本穿透与份额占比" };
     if (currentRoute === "brokers") return { title: "券商资产", subtitle: "券商渠道真实持仓与现金分布汇总" };
-    if (currentRoute === "ownership") return { title: "股票归属", subtitle: "底层持仓标的股权归属与穿透" };
+    if (currentRoute === "ownership") return { title: "股票归属与成本分析", subtitle: "查看单只股票在不同人员名下的持仓分布、成本与收益表现。" };
     if (currentRoute === "earnings") return { title: "持仓财报日历", subtitle: "追踪持仓标的财报披露时间与 EPS 预期" };
     if (currentRoute === "monitor") return { title: "行情监控中心", subtitle: "实时行情、多周期均线系统与 Bark 预警规则" };
     if (currentRoute === "ai_chat") return { title: "AI 投资问答", subtitle: "基于账本真实财务数据的智能分析顾问" };
@@ -226,6 +229,7 @@ export const App: React.FC = () => {
     <div className="app-container">
       {/* Native-identical Sidebar */}
       <Sidebar
+        canViewOwnership={bootstrap?.user?.can_view_ownership === true}
         currentRoute={currentRoute}
         onRouteChange={navigate}
         collapsed={sidebarCollapsed}
@@ -246,6 +250,7 @@ export const App: React.FC = () => {
           onResetFilters={assetRoute ? resetAssetFilters : undefined}
           dbName={bootstrap?.database?.name || "money.sqlite3"}
           user={bootstrap?.user || null}
+          hidePersonSelector={currentRoute === "ownership"}
           persons={bootstrap?.persons || []}
           currentPersonId={selectedPersonId}
           onPersonChange={setSelectedPersonId}
@@ -266,11 +271,50 @@ export const App: React.FC = () => {
               />
             )}
 
-            {currentRoute === "holdings" && <HoldingsView key={assetResetKey} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} />}
-            {currentRoute === "reports:当前持仓" && <HoldingsView key={`open:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialStatus="持有中" />}
-            {currentRoute === "reports:股票汇总" && <HoldingsView key={`stock:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="stock" />}
-            {currentRoute === "people" && <HoldingsView key={`people:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="person" />}
-            {currentRoute === "brokers" && <HoldingsView key={`brokers:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="broker" />}
+            {currentRoute === "holdings" && (
+              <HoldingsView
+                key={assetResetKey}
+                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                persons={bootstrap?.persons || []}
+                initialMode="dashboard"
+              />
+            )}
+            {currentRoute === "reports:当前持仓" && (
+              <HoldingsView
+                key={`open:${assetResetKey}`}
+                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                persons={bootstrap?.persons || []}
+                initialMode="detail"
+                initialStatus="持有中"
+              />
+            )}
+            {currentRoute === "reports:股票汇总" && (
+              <HoldingsView
+                key={`stock:${assetResetKey}`}
+                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                persons={bootstrap?.persons || []}
+                initialMode="detail"
+                initialDimension="stock"
+              />
+            )}
+            {currentRoute === "people" && (
+              <HoldingsView
+                key={`people:${assetResetKey}`}
+                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                persons={bootstrap?.persons || []}
+                initialMode="detail"
+                initialDimension="person"
+              />
+            )}
+            {currentRoute === "brokers" && (
+              <HoldingsView
+                key={`brokers:${assetResetKey}`}
+                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                persons={bootstrap?.persons || []}
+                initialMode="detail"
+                initialDimension="broker"
+              />
+            )}
 
             {currentRoute.startsWith("reports:") &&
               !["reports:当前持仓", "reports:股票汇总"].includes(currentRoute) && (
@@ -284,7 +328,7 @@ export const App: React.FC = () => {
 
             {currentRoute === "monitor" && <MonitorView />}
 
-            {currentRoute === "ownership" && <EntitiesView key={`ownership:${assetResetKey}`} type="ownership" personId={selectedPersonId} />}
+            {currentRoute === "ownership" && (bootstrap?.user?.can_view_ownership ? <OwnershipAnalysisView refresh={refreshKey} reset={ownershipReset} /> : <div role="alert">当前设备或账号无权访问股票归属与成本分析。</div>)}
 
             {currentRoute === "earnings" && <EarningsView key={assetResetKey} />}
 

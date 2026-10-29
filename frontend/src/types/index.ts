@@ -1,4 +1,5 @@
 export interface UserProfile {
+  can_view_ownership?: boolean;
   access_mode: string;
   principal_type: string;
   user_id: number | null;

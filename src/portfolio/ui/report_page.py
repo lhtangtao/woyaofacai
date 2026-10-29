@@ -114,6 +114,10 @@ class ReportPage(QWidget):
             self.broker_page = BrokerPeoplePage()
             self.broker_page.hide()
             outer.addWidget(self.broker_page)
+            from portfolio.ui.ownership_analysis_page import OwnershipAnalysisPage
+            self.ownership_page=OwnershipAnalysisPage(self)
+            self.ownership_page.hide()
+            outer.addWidget(self.ownership_page)
         content = QWidget()
         self.scroll.setWidget(content)
         layout = QVBoxLayout(content)
@@ -267,6 +271,13 @@ class ReportPage(QWidget):
         self.update_ticker_completer()
 
     def select_report(self, name):
+        if hasattr(self,'ownership_page'):
+            self.ownership_page.setVisible(name=='股票归属')
+            if name=='股票归属':
+                self.scroll.hide();self.broker_page.hide()
+                self.report=self.reports.get(name)
+                self.ownership_page.activate()
+                return
         if self.broker_page:
             people = name in ('渠道汇总', '股票归属')
             self.scroll.setVisible(not people)

@@ -1096,10 +1096,9 @@
         <span class="icon">🏛</span>
         <span>券商资产</span>
       </div>
-      <div class="drawer-item" onclick="loadReport('股票归属')">
-        <span class="icon">🕒</span>
-        <span>股票归属</span>
-      </div>
+      {% if can_view_ownership %}
+      <a class="drawer-item" href="/#ownership"><span class="icon">🕒</span><span>股票归属与成本分析</span></a>
+      {% endif %}
       <div class="drawer-item" onclick="loadReport('收益日历')">
         <span class="icon">📅</span>
         <span>持仓财报日历</span>

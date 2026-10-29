@@ -984,6 +984,14 @@ class HoldingsPage(QWidget):
                 idx = self.person_tab_bar.addTab(p["name"])
                 self.person_tab_bar.setTabData(idx, p["id"])
 
+        # 默认高亮选中“全部启用人员”（独立过滤，不与其他页面联动）
+        cur_idx = 0
+        if self._selected_person_filter is not None:
+            for i in range(self.person_tab_bar.count()):
+                if self.person_tab_bar.tabData(i) == self._selected_person_filter:
+                    cur_idx = i
+                    break
+        self.person_tab_bar.setCurrentIndex(cur_idx)
         self.person_tab_bar.blockSignals(False)
 
     def _on_person_tab_changed(self, idx):
