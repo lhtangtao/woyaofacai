@@ -14,6 +14,14 @@ from portfolio.db.repositories.analytics import load_snapshot
 from portfolio.services.derived_store import ALGORITHM,digest,exclusive,utcnow
 from portfolio.services.derived_codec import dumps
 
+def financial_row(table,row):
+    # Synchronization freshness is audit metadata, not an economic event.
+    # Preserve fee amount, status, ownership links and provider evidence.
+    if table in ('broker_fee_records','person_trade_fees'):
+        return {key:value for key,value in row.items() if key!='checked_at'}
+    return row
+
+
 _TRACKERS={}
 _LOCK=RLock()
 
@@ -38,7 +46,11 @@ def source_identity(source, *, financial_only=False):
                 for table in tables:
                     h.update(table.encode())
                     quoted='"'+table.replace('"','""')+'"'
-                    for row in c.execute('SELECT * FROM '+quoted+' ORDER BY rowid'):h.update(repr(tuple(row)).encode())
+                    cursor=c.execute('SELECT * FROM '+quoted+' ORDER BY rowid')
+                    columns=[v[0] for v in cursor.description]
+                    for row in cursor:
+                        values=financial_row(table,dict(zip(columns,row)))
+                        h.update(repr(tuple(values.values())).encode())
                 if c.execute("SELECT 1 FROM sqlite_master WHERE name='history_fact_revisions'").fetchone():
                     if financial_only:
                         for r in c.execute("SELECT * FROM history_prices WHERE price_type='DAILY_CLOSE' ORDER BY instrument_id,trade_date,stamp_utc"):h.update(repr(tuple(r)).encode())
@@ -113,7 +125,7 @@ def check_changes(source,derived):
                 # Preserve existing single-column identities and encode every
                 # component of a composite key; never merge rows by a fallback.
                 row_key=str(row[primary_key[0]]) if len(primary_key)==1 else dumps(tuple((column,row[column]) for column in primary_key))
-                current[name,row_key]=(digest(row),*detail)
+                current[name,row_key]=(digest(financial_row(name,row)),*detail)
                 if row.get('source_record_id'):raw_dependencies.setdefault(row['source_record_id'],[]).append(detail)
         for r in c.execute('SELECT * FROM raw_records'):
             row=dict(r);refs=raw_dependencies.get(row['id'],[])

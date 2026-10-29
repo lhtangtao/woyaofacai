@@ -753,8 +753,8 @@ class MonthlyRealtimePnlPage(QWidget):
             months=state.get('months',{})
             coverage='；'.join(f"{month[5:]}月 {info['saved_days']}日/{info['complete_points']}个完整点" for month,info in sorted(months.items()) if month[5:]<='06')
             if coverage:self.status_label.setText(self.status_label.text()+' · 上半年已存明细：'+coverage+'；缺失/未确认部分不连线。')
-        if getattr(self,'_parent_filters',None) is not None and self.window and hasattr(self.window,'asset_page'):
-            self.window.asset_page.show_page()
+        # The parent owns its cards and table. Re-entering show_page here can
+        # call the wrong page after navigation/refactoring and abort rendering.
 
     def _load_month_data(self, month_str):
         return self._load_shared_period(month_str, False)
