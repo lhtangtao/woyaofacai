@@ -86,7 +86,9 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
         with _LOCK:
             cached=_TREND_ROWS.get(cache_key)
             if cached is not None:_TREND_ROWS.move_to_end(cache_key)
-    if cached is not None:output,incomplete_points=cached
+    if cached is not None:
+        output,incomplete_points=cached
+        if progress:progress('复用已读取五分钟数据',1,1)
     else:
         output,incomplete_points=_read_points(store,source,scope,ready,aggregate,channels,ticker,progress=progress)
         if aggregate:
@@ -214,6 +216,8 @@ def historical_analytics(source,scope,start,end,*,progress=None):
                 current_quotes=dict(q.execute('SELECT day,revision FROM quote_close_revisions'))
     if not store.available or not people:return SimpleNamespace(scope=scope,reports={'每日持仓收益':Report('每日持仓收益',DAILY_COLUMNS,())})
     with closing(store.connect()) as c:
+        # Count and stream the same snapshot while background reports publish.
+        c.execute('BEGIN')
         total_rows=sum(c.execute("SELECT count(*) FROM report_details WHERE ledger=? AND person_id=? AND report='每日持仓收益' AND period BETWEEN ? AND ?",(scope.ledger.value,p,str(start),str(end))).fetchone()[0] for p in people) if progress else 0
         read_rows=0
         if progress:progress('读取历史日报基准',0,total_rows)
