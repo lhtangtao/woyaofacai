@@ -82,6 +82,9 @@ from portfolio.web.security.sessions import (
     validate_session,
 )
 
+from portfolio.logging_config import configure_logging
+
+configure_logging(app_name="web")
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "money_session_id"

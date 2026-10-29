@@ -17,6 +17,7 @@ from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+import time
 from typing import Any
 
 from portfolio.domain.analytics import ZERO, ratio, strict_sum
@@ -43,6 +44,7 @@ class HoldingsManagementService:
     @staticmethod
     def get_dashboard_data(analytics, scope: QueryScope | None = None, person_id: int | None = None) -> dict[str, Any]:
         """Compute top 4 cards, person/broker/stock summaries, and distribution data."""
+        start_t = time.monotonic()
         if not analytics or not hasattr(analytics, "reports"):
             return {
                 "cards": {},
@@ -289,6 +291,11 @@ class HoldingsManagementService:
                         "percent": round(mv / float(total_market_value) * 100, 2),
                     })
 
+        elapsed_ms = (time.monotonic() - start_t) * 1000
+        logger.info(
+            f"[持仓管理主页] 仪表板数据就绪，耗时 {elapsed_ms:.1f}ms (人员汇总: {len(person_summary)} 条, 券商汇总: {len(broker_summary)} 条, 股票汇总: {len(stock_summary)} 条)"
+        )
+
         return {
             "cards": cards,
             "person_summary": person_summary,
@@ -303,18 +310,21 @@ class HoldingsManagementService:
 
     @staticmethod
     def get_trade_counts_map(db_path: str | Path | None = None) -> dict[tuple[int, int, int], tuple[int, int]] | None:
-        """Batch query historical valid buy and sell trade counts.
+        """Batch query historical valid buy and sell trade counts with read-only connection and busy timeout.
         
         Returns:
             Dict mapping (person_id, account_id, instrument_id) -> (buy_count, sell_count)
             or None if the query fails.
         """
+        start_t = time.monotonic()
         target_path = Path(db_path) if db_path else DATABASE_PATH
         if not target_path.exists():
-            logger.warning(f"Database path not found for trade counts: {target_path}")
+            logger.warning(f"[交易次数查询] 数据库路径不存在: {target_path}")
             return None
         try:
-            conn = sqlite3.connect(str(target_path))
+            # Connect in explicit read-only URI mode with 10s busy timeout
+            conn = sqlite3.connect(f"{target_path.as_uri()}?mode=ro", uri=True, timeout=10.0)
+            conn.execute("PRAGMA busy_timeout = 10000")
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -330,9 +340,12 @@ class HoldingsManagementService:
             )
             rows = cursor.fetchall()
             conn.close()
+            elapsed_ms = (time.monotonic() - start_t) * 1000
+            logger.info(f"[交易次数查询] 批量统计历史买卖次数成功，耗时 {elapsed_ms:.1f}ms，覆盖 {len(rows)} 组标的账户")
             return {(int(r[0]), int(r[1]), int(r[2])): (int(r[3] or 0), int(r[4] or 0)) for r in rows}
         except Exception as e:
-            logger.exception(f"Error querying trade counts from {target_path}: {e}")
+            elapsed_ms = (time.monotonic() - start_t) * 1000
+            logger.exception(f"[交易次数查询] 查询异常 (耗时 {elapsed_ms:.1f}ms, 目标路径: {target_path}): {e}")
             return None
 
     @staticmethod
@@ -347,6 +360,7 @@ class HoldingsManagementService:
         db_path: str | Path | None = None,
     ) -> list[dict[str, Any]]:
         """Return unified holdings detail rows matching filters with 13 required columns."""
+        start_t = time.monotonic()
         if not analytics or not hasattr(analytics, "reports"):
             return []
 
@@ -465,6 +479,11 @@ class HoldingsManagementService:
         elif dimension == "stock":
             rows.sort(key=lambda x: (x["ticker"], x["status"] != "持有中", -float(x["market_value"] or 0)))
 
+        elapsed_ms = (time.monotonic() - start_t) * 1000
+        logger.info(
+            f"[持仓明细] 计算完成，耗时 {elapsed_ms:.1f}ms，返回 {len(rows)} 条标的记录 (维度: {dimension}, 人员: {person_id}, 券商: {broker}, 状态: {status})"
+        )
+
         return rows
 
     @staticmethod
@@ -477,6 +496,7 @@ class HoldingsManagementService:
         as_of: date | None = None,
     ) -> dict[str, Any]:
         """Fetch all data required by the 4-tab stock drawer."""
+        start_t = time.monotonic()
         ticker = ticker.strip().upper()
         as_of = as_of or (analytics.scope.as_of if analytics and hasattr(analytics, "scope") else date.today())
 
@@ -652,6 +672,11 @@ class HoldingsManagementService:
                         "return_rate": serialize_val(m_rate),
                     })
         monthly_records.sort(key=lambda x: x["month"], reverse=True)
+
+        elapsed_ms = (time.monotonic() - start_t) * 1000
+        logger.info(
+            f"[股票抽屉] 标的 {ticker} 抽屉数据就绪，耗时 {elapsed_ms:.1f}ms (历史交易: {len(trade_records)} 笔, 月度记录: {len(monthly_records)} 条)"
+        )
 
         return {
             "summary": summary,

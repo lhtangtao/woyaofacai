@@ -9,7 +9,9 @@ Parity with Web:
    - 4 Tabs: 11-column trade history with cost changes, holding analysis, pnl analysis, monthly performance.
 """
 from decimal import Decimal
+import logging
 from pathlib import Path
+import time
 from typing import Any
 
 from PySide6.QtCore import QDate, QRectF, QSize, Qt, Signal
@@ -42,6 +44,8 @@ from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
+
+logger = logging.getLogger(__name__)
 
 
 class ModernMetricCard(QFrame):
@@ -1038,6 +1042,7 @@ class HoldingsPage(QWidget):
     def refresh_dashboard(self):
         if not self.analytics:
             return
+        t0 = time.monotonic()
         dash = HoldingsManagementService.get_dashboard_data(self.analytics, person_id=self._selected_person_filter)
         self._cached_dash_data = dash
 
@@ -1149,10 +1154,13 @@ class HoldingsPage(QWidget):
 
         # 3. Donut Ring Chart
         self._on_dist_tab_changed(self.dist_tabs.currentIndex())
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"[桌面端持仓] 仪表板总览刷新完成，耗时 {elapsed_ms:.1f}ms")
 
     def refresh_detail(self):
         if not self.analytics:
             return
+        t0 = time.monotonic()
         status = self.status_combo.currentData() or "持有中"
         status_filter = status
         broker_filter = self.broker_combo.currentData() or None
@@ -1201,6 +1209,8 @@ class HoldingsPage(QWidget):
             }))
 
         self.detail_model.replace(rows)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"[桌面端持仓] 明细表格刷新完成，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
         self.detail_info.setText(f"统一持仓明细 · 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
 
     def _on_person_table_clicked(self, index):
@@ -1238,6 +1248,7 @@ class HoldingsPage(QWidget):
     def open_stock_drawer(self, ticker: str):
         if not ticker:
             return
+        t0 = time.monotonic()
         src_path = str(DATABASE_PATH)
         if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
             src_path = str(self.main_window.service.path)
@@ -1251,6 +1262,8 @@ class HoldingsPage(QWidget):
         self.drawer.set_data(drawer_data)
         self.drawer.show()
         self.splitter.setSizes([self.width() - 520, 520])
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(f"[桌面端抽屉] 标的 {ticker} 抽屉展开就绪，耗时 {elapsed_ms:.1f}ms")
 
     def _close_drawer(self):
         self.drawer.hide()

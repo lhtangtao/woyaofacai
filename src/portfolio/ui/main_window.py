@@ -1,7 +1,10 @@
 import hashlib
 import json
+import logging
 from datetime import date
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QDate, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QKeySequence
@@ -236,6 +239,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.open_database(path)
 
     def open_database(self, path, *, restore=None):
+        logger.info(f"[桌面端] 正在打开数据库源: {path}")
         self.monitor_page.clear()
         self.live_panel.stop()
         self.live_panel.invalidate()
@@ -256,6 +260,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         self._submit("source", lambda cancel: service.source_info(cancel=cancel), self._source_ready)
 
     def _source_ready(self, info):
+        logger.info(f"[桌面端] 数据源校验就绪: {info.path.name} (大小: {info.bytes} 字节, 演示模式: {info.is_demo})")
         self.info = info
         self.live_panel.source_changed(info)
         if not info.is_demo:
@@ -626,6 +631,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         else:
             self.ownership_alert.hide()
         self.analytics = analytics
+        logger.info(f"[桌面端] 财务报表就绪: scope={analytics.scope}, 报表数={len(analytics.reports)}")
         if self._route == (2, "calendar"):
             QTimer.singleShot(0, lambda: self.dashboard.scroll.ensureWidgetVisible(self.dashboard.calendar_table))
         self._analytics_scope = analytics.scope

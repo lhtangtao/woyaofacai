@@ -27,6 +27,7 @@ reports/
 exports/
 cache/
 scratch/
+logs/
 .DS_Store
 # Note: references/个人投资总览.xlsx is intentionally in this local handoff bundle.
 # Never commit it to a public git remote.

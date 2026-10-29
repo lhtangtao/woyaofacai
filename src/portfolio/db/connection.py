@@ -19,7 +19,7 @@ def _read_authorizer(action, arg1, arg2, database, trigger):
     read_pragmas = {
         "table_info", "table_xinfo", "foreign_key_list", "index_list", "index_info",
         "integrity_check", "quick_check", "foreign_key_check", "user_version",
-        "database_list", "query_only", "journal_mode",
+        "database_list", "query_only", "journal_mode", "busy_timeout",
     }
     if action == sqlite3.SQLITE_PRAGMA and arg1 in read_pragmas:
         if arg1 in {"query_only", "journal_mode", "user_version"} and arg2 is not None:
@@ -40,6 +40,7 @@ def readonly_connection(path: str | Path, *, cancel: threading.Event | None = No
     try:
         connection = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=timeout)
         connection.row_factory = sqlite3.Row
+        connection.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
         connection.execute("PRAGMA query_only=ON")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA trusted_schema=OFF")

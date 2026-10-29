@@ -33,9 +33,9 @@ def main(argv=None):
     app.setOrganizationName("MoneyPortfolio")
     from portfolio.ui.icons import app_icon
     app.setWindowIcon(app_icon())
-    if not args.no_settings:
-        from portfolio.logging_config import configure_logging
-        configure_logging(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "logs")
+    from portfolio.logging_config import configure_logging
+    app_log_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "logs" if not args.no_settings else None
+    configure_logging(app_log_dir, app_name="money3")
     window = MainWindow(settings=not args.no_settings)
     temporary = tempfile.TemporaryDirectory(prefix="money3-demo-") if args.demo else None
     if temporary:
