@@ -10,16 +10,22 @@ Provides:
    - PnL analysis (cumulative return curve with buy/sell execution markers)
    - Monthly performance breakdown
 """
+import logging
+import sqlite3
 from collections import defaultdict
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from portfolio.domain.analytics import ZERO, ratio, strict_sum
 from portfolio.domain.models import QueryScope
+from portfolio.paths import DATABASE_PATH
 from portfolio.services.post_trade_positions import attach_post_trade_positions
 from portfolio.services.trades_service import TradesService
+
+logger = logging.getLogger(__name__)
 
 
 def serialize_val(val: Any) -> Any:
@@ -296,16 +302,51 @@ class HoldingsManagementService:
         }
 
     @staticmethod
+    def get_trade_counts_map(db_path: str | Path | None = None) -> dict[tuple[int, int, int], tuple[int, int]] | None:
+        """Batch query historical valid buy and sell trade counts.
+        
+        Returns:
+            Dict mapping (person_id, account_id, instrument_id) -> (buy_count, sell_count)
+            or None if the query fails.
+        """
+        target_path = Path(db_path) if db_path else DATABASE_PATH
+        if not target_path.exists():
+            logger.warning(f"Database path not found for trade counts: {target_path}")
+            return None
+        try:
+            conn = sqlite3.connect(str(target_path))
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT 
+                    po.person_id,
+                    po.account_id,
+                    po.instrument_id,
+                    SUM(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'BUY' THEN 1 ELSE 0 END) AS buy_count,
+                    SUM(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'SELL' THEN 1 ELSE 0 END) AS sell_count
+                FROM person_operations po
+                GROUP BY po.person_id, po.account_id, po.instrument_id
+                """
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {(int(r[0]), int(r[1]), int(r[2])): (int(r[3] or 0), int(r[4] or 0)) for r in rows}
+        except Exception as e:
+            logger.exception(f"Error querying trade counts from {target_path}: {e}")
+            return None
+
+    @staticmethod
     def get_holdings_detail_rows(
         analytics,
         dimension: str = "person",
         person_id: int | tuple[int, ...] | None = None,
         broker: str | None = None,
         ticker: str | None = None,
-        status: str | None = None,
+        status: str | None = "持有中",
         search: str | None = None,
+        db_path: str | Path | None = None,
     ) -> list[dict[str, Any]]:
-        """Return unified holdings detail rows matching filters."""
+        """Return unified holdings detail rows matching filters with 13 required columns."""
         if not analytics or not hasattr(analytics, "reports"):
             return []
 
@@ -313,15 +354,19 @@ class HoldingsManagementService:
         if not pa:
             return []
 
+        trade_counts_map = HoldingsManagementService.get_trade_counts_map(db_path=db_path)
+
         search_text = (search or "").strip().upper()
         ticker_filter = (ticker or "").strip().upper()
         broker_filter = (broker or "").strip().upper()
         person_ids = (person_id,) if isinstance(person_id, int) else tuple(person_id) if isinstance(person_id, (tuple, list)) else None
 
-        rows = []
+        filtered_items = []
         for r in pa.rows:
             p_name = r.values[0] or ""
             p_id = r.metadata.get("person_id")
+            acc_id = r.metadata.get("account_id")
+            inst_id = r.metadata.get("instrument_id")
             channel = r.values[1] or ""
             tk = r.values[2] or ""
             qty = r.values[3]
@@ -330,10 +375,6 @@ class HoldingsManagementService:
             curr_p = r.values[6]
             mv = r.values[7] or Decimal(0)
             pnl = r.values[8] or Decimal(0)
-            pnl_rate = r.values[9]
-            recovery = r.values[10]
-            weight = r.values[11]
-            net = r.values[12] or Decimal(0)
 
             # Filter checks
             if person_ids is not None and p_id not in person_ids:
@@ -342,7 +383,7 @@ class HoldingsManagementService:
                 continue
             if ticker_filter and ticker_filter != tk.upper():
                 continue
-            if status == "持有中" and st != "持有中":
+            if status in ("持有中", "当前持仓") and st != "持有中":
                 continue
             if status == "已清仓" and st != "已清仓":
                 continue
@@ -351,23 +392,69 @@ class HoldingsManagementService:
                 if search_text not in combined:
                     continue
 
-            rows.append({
+            # Calculate cost total amount (成本总额 = 数量 * 成本价)
+            cost_amount = (qty * cost_p) if (qty is not None and cost_p is not None) else None
+
+            # Calculate pnl rate = (当前最新价 - 成本价) / 成本价
+            if cost_p is not None and cost_p > Decimal(0) and curr_p is not None:
+                calc_pnl_rate = (curr_p - cost_p) / cost_p
+            else:
+                calc_pnl_rate = None
+
+            # Buy and Sell counts
+            if trade_counts_map is None:
+                buy_count = None
+                sell_count = None
+            else:
+                pair = trade_counts_map.get((p_id, acc_id, inst_id), (0, 0))
+                buy_count = pair[0]
+                sell_count = pair[1]
+
+            filtered_items.append({
                 "person_name": p_name,
                 "person_id": p_id,
+                "account_id": acc_id,
+                "instrument_id": inst_id,
                 "channel": channel,
                 "ticker": tk,
-                "quantity": serialize_val(qty),
+                "quantity": qty,
                 "status": st,
-                "cost_price": serialize_val(cost_p),
-                "current_price": serialize_val(curr_p),
-                "market_value": serialize_val(mv),
-                "pnl": serialize_val(pnl),
-                "pnl_rate": serialize_val(pnl_rate),
-                "recovery_or_exit": serialize_val(recovery),
+                "cost_price": cost_p,
+                "cost_amount": cost_amount,
+                "current_price": curr_p,
+                "market_value": mv,
+                "pnl_rate": calc_pnl_rate,
+                "total_pnl": pnl,
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+            })
+
+        # Calculate weight relative to the filtered scope's total market value
+        total_filtered_mv = sum((it["market_value"] for it in filtered_items if it["market_value"] and it["market_value"] > Decimal(0)), Decimal(0))
+
+        rows = []
+        for it in filtered_items:
+            mv_val = it["market_value"] or Decimal(0)
+            weight = (mv_val / total_filtered_mv) if total_filtered_mv > Decimal(0) else Decimal(0)
+            rows.append({
+                "person_name": it["person_name"],
+                "person_id": it["person_id"],
+                "channel": it["channel"],
+                "ticker": it["ticker"],
+                "quantity": serialize_val(it["quantity"]),
+                "cost_price": serialize_val(it["cost_price"]),
+                "cost_amount": serialize_val(it["cost_amount"]),
+                "current_price": serialize_val(it["current_price"]),
+                "market_value": serialize_val(it["market_value"]),
+                "pnl_rate": serialize_val(it["pnl_rate"]),
+                "total_pnl": serialize_val(it["total_pnl"]),
+                "pnl": serialize_val(it["total_pnl"]),  # Compatibility
+                "buy_count": it["buy_count"],
+                "sell_count": it["sell_count"],
                 "weight": serialize_val(weight),
-                "net_invested": serialize_val(net),
-                "account_id": r.metadata.get("account_id"),
-                "instrument_id": r.metadata.get("instrument_id"),
+                "status": it["status"],
+                "account_id": it["account_id"],
+                "instrument_id": it["instrument_id"],
             })
 
         # Sort according to selected dimension

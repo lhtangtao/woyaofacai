@@ -185,9 +185,11 @@ class StockFilter(QComboBox):
 class MonthlyRealtimePnlPage(QWidget):
     drill = Signal(str, str)
     error = Signal(str)
+    read_progress = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.read_progress.connect(self._show_read_progress,Qt.ConnectionType.QueuedConnection)
         self.window = parent
         self.analytics = None
 
@@ -667,23 +669,32 @@ class MonthlyRealtimePnlPage(QWidget):
         self.canvas.chart=None
         self.canvas.set_loading('正在读取并整理月度/年度历史曲线…')
         def task(cancel):
+            from time import monotonic
+            last_progress=[None,0.0]
+            def progress(stage,done,total):
+                if cancel.is_set():return
+                now=monotonic()
+                if stage!=last_progress[0] or (total and done==total) or now-last_progress[1]>=.1:
+                    last_progress[:]=[stage,now]
+                    self.read_progress.emit((request,stage,done,total))
             from portfolio.services.derived_store import DerivedStore
             if not DerivedStore(source).readiness()['ready']:
                 rows,state=load_history(source,self.window.quote_store,scope,first,last)
                 return None,rows,state,None
             from portfolio.services.derived_queries import historical_analytics, trend
-            result=historical_analytics(source,scope,first,last)
-            rows,state=load_history(source,self.window.quote_store,scope,first,last,aggregate=True,channels=channels,ticker=ticker)
-            chart,state=trend(source,self.window.quote_store,result,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+            result=historical_analytics(source,scope,first,last,progress=progress)
+            rows,state=load_history(source,self.window.quote_store,scope,first,last,aggregate=True,channels=channels,ticker=ticker,progress=progress)
+            chart,state=trend(source,self.window.quote_store,result,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state),progress=progress)
             if scope.person_ids and len(scope.person_ids) > 1 and not others_mode:
                 persons_map = {p['id']: p['name'] for p in self._get_persons()}
                 person_series = []
                 for pid in scope.person_ids:
                     pname = persons_map.get(pid, f"人员{pid}")
                     sub_scope = replace(scope, person_ids=(pid,))
-                    sub_res = historical_analytics(source, sub_scope, first, last)
-                    sub_rows, sub_st = load_history(source, self.window.quote_store, sub_scope, first, last, aggregate=True, channels=channels, ticker=ticker)
-                    sub_chart, _ = trend(source, self.window.quote_store, sub_res, period, year=year, channels=channels, ticker=ticker, mode=mode, history_data=(sub_rows, sub_st))
+                    person_progress=lambda stage,done,total:progress(pname+'：'+stage,done,total)
+                    sub_res = historical_analytics(source, sub_scope, first, last,progress=person_progress)
+                    sub_rows, sub_st = load_history(source, self.window.quote_store, sub_scope, first, last, aggregate=True, channels=channels, ticker=ticker,progress=person_progress)
+                    sub_chart, _ = trend(source, self.window.quote_store, sub_res, period, year=year, channels=channels, ticker=ticker, mode=mode, history_data=(sub_rows, sub_st),progress=person_progress)
                     if sub_chart.series:
                         person_series.append(Series(pname, sub_chart.series[0].points))
                 if person_series:
@@ -719,6 +730,11 @@ class MonthlyRealtimePnlPage(QWidget):
                 self.canvas.empty_message='历史曲线查询失败：'+message
                 self.canvas.update()
         self.window.jobs[lane].signals.error.connect(failed,Qt.ConnectionType.QueuedConnection)
+
+    def _show_read_progress(self,value):
+        request,stage,done,total=value
+        if getattr(self,'_shared_busy',None)!=request or getattr(self,'_shared_request',None)!=request:return
+        self.canvas.set_loading(stage+'…（当前阶段进度）',done,total)
 
     def set_parent_filters(self,channel,ticker):
         """Embedded Today charts share the parent channel/Ticker selection and hide redundant filter controls."""

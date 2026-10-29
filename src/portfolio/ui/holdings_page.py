@@ -290,17 +290,19 @@ class HoldingsTableModel(FinanceModel):
             if col_name == "操作" and not is_total:
                 return "🔍 查看明细"
             if isinstance(val, (int, float, Decimal)):
-                # 股票只数/数量等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
-                if col_name in ("已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
-                    ("股票" in col_name or "清仓" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金"))
+                # 股票只数/数量/买卖次数等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
+                if col_name in ("买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
+                    ("股票" in col_name or "清仓" in col_name or "次数" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金", "额"))
                 ):
                     return f"{int(round(float(val))):,d}"
                 if "数量" in col_name or "股数" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态"))):
                     return f"{val:,.0f}" if isinstance(val, (int, Decimal)) and val % 1 == 0 else f"{val:,.2f}"
-                if any(w in col_name for w in ("收益率", "比例", "占比", "涨幅")):
+                if col_name == "持仓占比":
+                    return f"{val * 100:.2f}%"
+                if any(w in col_name for w in ("收益率", "比例", "涨幅")):
                     sign = "+" if val > 0 else ""
                     return f"{sign}{val * 100:.2f}%"
-                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额")):
+                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额")):
                     sign = "+" if "盈亏" in col_name and val > 0 else ""
                     return f"{sign}${val:,.2f}"
                 return f"{val:,.2f}"
@@ -917,8 +919,8 @@ class HoldingsPage(QWidget):
         self.detail_table = FinanceTable(freeze=False)
         self.detail_model = HoldingsTableModel(self.detail_table)
         self.detail_model.columns = (
-            "归属人员", "券商渠道", "Ticker", "持仓状态", "持仓数量",
-            "持仓成本价", "当前最新价", "持仓市值", "浮动盈亏", "累计盈亏", "收益率", "持仓占比"
+            "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
+            "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
         )
         self.detail_table.setModel(self.detail_model)
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -1167,19 +1169,31 @@ class HoldingsPage(QWidget):
 
         rows = []
         for item in raw_rows:
+            qty = Decimal(str(item.get("quantity") or 0)) if item.get("quantity") is not None else None
+            cost_p = Decimal(str(item.get("cost_price") or 0)) if item.get("cost_price") is not None else None
+            cost_amt = Decimal(str(item.get("cost_amount") or 0)) if item.get("cost_amount") is not None else None
+            curr_p = Decimal(str(item.get("current_price") or 0)) if item.get("current_price") is not None else None
+            mv = Decimal(str(item.get("market_value") or 0)) if item.get("market_value") is not None else None
+            pnl_r = Decimal(str(item.get("pnl_rate") or 0)) if item.get("pnl_rate") is not None else None
+            tot_pnl = Decimal(str(item.get("total_pnl") or 0)) if item.get("total_pnl") is not None else None
+            buy_cnt = item.get("buy_count")
+            sell_cnt = item.get("sell_count")
+            weight = Decimal(str(item.get("weight") or 0)) if item.get("weight") is not None else None
+
             rows.append(ReportRow((
                 item.get("person_name"),
                 item.get("channel"),
                 item.get("ticker"),
-                item.get("status"),
-                Decimal(str(item.get("quantity") or 0)),
-                Decimal(str(item.get("cost_price") or 0)) if item.get("cost_price") is not None else None,
-                Decimal(str(item.get("current_price") or 0)) if item.get("current_price") is not None else None,
-                Decimal(str(item.get("market_value") or 0)),
-                Decimal(str(item.get("floating_pnl") or 0)),
-                Decimal(str(item.get("total_pnl") or 0)),
-                Decimal(str(item.get("pnl_rate") or 0)) if item.get("pnl_rate") is not None else None,
-                Decimal(str(item.get("weight") or 0)),
+                qty,
+                cost_p,
+                cost_amt,
+                curr_p,
+                mv,
+                pnl_r,
+                tot_pnl,
+                buy_cnt,
+                sell_cnt,
+                weight,
             ), {
                 "person_id": item.get("person_id"),
                 "account_id": item.get("account_id"),

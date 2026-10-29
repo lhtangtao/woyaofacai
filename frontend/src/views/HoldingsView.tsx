@@ -322,14 +322,15 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       "归属人员",
       "券商渠道",
       "Ticker",
-      "持仓状态",
-      "持仓数量",
-      "持仓成本价",
+      "数量",
+      "成本价",
+      "成本总额",
       "当前最新价",
-      "持仓市值",
-      "浮动盈亏",
-      "累计盈亏",
+      "市值",
       "收益率",
+      "累计盈亏",
+      "买入次数",
+      "卖出次数",
       "持仓占比",
     ];
     const lines = [headers.join(",")];
@@ -339,15 +340,16 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           `"${r.person_name || ""}"`,
           `"${r.channel || ""}"`,
           `"${r.ticker || ""}"`,
-          `"${r.status || ""}"`,
           r.quantity ?? "",
           r.cost_price ?? "",
+          r.cost_amount ?? "",
           r.current_price ?? "",
           r.market_value ?? "",
-          r.pnl ?? "",
+          r.pnl_rate != null ? `${(r.pnl_rate * 100).toFixed(2)}%` : "",
           r.total_pnl ?? "",
-          r.pnl_rate ?? "",
-          r.weight ?? "",
+          r.buy_count ?? "",
+          r.sell_count ?? "",
+          r.weight != null ? `${(r.weight * 100).toFixed(2)}%` : "",
         ].join(",")
       );
     }
@@ -972,33 +974,49 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <th onClick={() => { setSortField("ticker"); setSortAsc(!sortAsc); }} style={{ cursor: "pointer" }}>
                     Ticker {sortField === "ticker" ? (sortAsc ? "▲" : "▼") : ""}
                   </th>
-                  <th>持仓状态</th>
-                  <th style={{ textAlign: "right" }} onClick={() => { setSortField("quantity"); setSortAsc(!sortAsc); }}>
-                    持仓数量 {sortField === "quantity" ? (sortAsc ? "▲" : "▼") : ""}
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("quantity"); setSortAsc(!sortAsc); }}>
+                    数量 {sortField === "quantity" ? (sortAsc ? "▲" : "▼") : ""}
                   </th>
-                  <th style={{ textAlign: "right" }}>持仓成本价</th>
-                  <th style={{ textAlign: "right" }}>当前最新价</th>
-                  <th style={{ textAlign: "right" }} onClick={() => { setSortField("market_value"); setSortAsc(!sortAsc); }}>
-                    持仓市值 (USD) {sortField === "market_value" ? (sortAsc ? "▲" : "▼") : ""}
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("cost_price"); setSortAsc(!sortAsc); }}>
+                    成本价 {sortField === "cost_price" ? (sortAsc ? "▲" : "▼") : ""}
                   </th>
-                  <th style={{ textAlign: "right" }} onClick={() => { setSortField("pnl"); setSortAsc(!sortAsc); }}>
-                    浮动盈亏 {sortField === "pnl" ? (sortAsc ? "▲" : "▼") : ""}
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("cost_amount"); setSortAsc(!sortAsc); }}>
+                    成本总额 {sortField === "cost_amount" ? (sortAsc ? "▲" : "▼") : ""}
                   </th>
-                  <th style={{ textAlign: "right" }}>收益率</th>
-                  <th style={{ textAlign: "right" }}>持仓占比</th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("current_price"); setSortAsc(!sortAsc); }}>
+                    当前最新价 {sortField === "current_price" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("market_value"); setSortAsc(!sortAsc); }}>
+                    市值 {sortField === "market_value" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("pnl_rate"); setSortAsc(!sortAsc); }}>
+                    收益率 {sortField === "pnl_rate" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("total_pnl"); setSortAsc(!sortAsc); }}>
+                    累计盈亏 {sortField === "total_pnl" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("buy_count"); setSortAsc(!sortAsc); }}>
+                    买入次数 {sortField === "buy_count" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("sell_count"); setSortAsc(!sortAsc); }}>
+                    卖出次数 {sortField === "sell_count" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
+                  <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => { setSortField("weight"); setSortAsc(!sortAsc); }}>
+                    持仓占比 {sortField === "weight" ? (sortAsc ? "▲" : "▼") : ""}
+                  </th>
                   <th style={{ textAlign: "center" }}>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {detailLoading ? (
                   <tr>
-                    <td colSpan={12} style={{ textAlign: "center", padding: "30px", color: "var(--brand)" }}>
+                    <td colSpan={14} style={{ textAlign: "center", padding: "30px", color: "var(--brand)" }}>
                       正在加载持仓明细...
                     </td>
                   </tr>
                 ) : currentDetailRows.map((r, idx) => {
-                  const isOpen = r.status === "持有中";
-                  const pnl = Number(r.pnl || 0);
+                  const totalPnl = r.total_pnl != null ? Number(r.total_pnl) : (r.pnl != null ? Number(r.pnl) : null);
+                  const pnlRate = r.pnl_rate != null ? Number(r.pnl_rate) : null;
                   return (
                     <tr
                       key={idx}
@@ -1009,48 +1027,49 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       <td style={{ fontWeight: 600 }}>{r.person_name}</td>
                       <td>{r.channel}</td>
                       <td style={{ fontWeight: 700, color: "var(--brand)" }}>{r.ticker}</td>
-                      <td>
-                        <span
-                          className={`badge ${isOpen ? "badge-buy" : "badge-sell"}`}
-                          style={{ fontSize: "11px", padding: "2px 6px" }}
-                        >
-                          {r.status}
-                        </span>
-                      </td>
                       <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                        {formatNumber(r.quantity, 0)}
+                        {r.quantity != null ? formatNumber(r.quantity, 0) : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "right" }}>
-                        ${formatNumber(r.cost_price, 2)}
+                        {r.cost_price != null ? `$${formatNumber(r.cost_price, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.cost_amount != null ? `$${formatNumber(r.cost_amount, 2)}` : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
                         {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "right", fontWeight: 700 }}>
-                        ${formatNumber(r.market_value, 2)}
-                      </td>
-                      <td
-                        className="font-mono"
-                        style={{
-                          textAlign: "right",
-                          fontWeight: 700,
-                          color: pnl >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
-                        }}
-                      >
-                        {pnl >= 0 ? "+" : ""}${formatNumber(pnl, 2)}
+                        {r.market_value != null ? `$${formatNumber(r.market_value, 2)}` : "—"}
                       </td>
                       <td
                         className="font-mono"
                         style={{
                           textAlign: "right",
                           fontWeight: 600,
-                          color: (r.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          color: pnlRate != null && pnlRate > 0 ? "var(--profit-color, #16A34A)" : pnlRate != null && pnlRate < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
                         }}
                       >
-                        {formatPercent(r.pnl_rate)}
+                        {pnlRate != null ? `${pnlRate > 0 ? "+" : ""}${(pnlRate * 100).toFixed(2)}%` : "—"}
+                      </td>
+                      <td
+                        className="font-mono"
+                        style={{
+                          textAlign: "right",
+                          fontWeight: 700,
+                          color: totalPnl != null && totalPnl > 0 ? "var(--profit-color, #16A34A)" : totalPnl != null && totalPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                        }}
+                      >
+                        {totalPnl != null ? `${totalPnl > 0 ? "+" : ""}$${formatNumber(totalPnl, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.buy_count != null ? r.buy_count : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.sell_count != null ? r.sell_count : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "right", color: "var(--text-muted)" }}>
-                        {formatPercent(r.weight)}
+                        {r.weight != null ? `${(Number(r.weight) * 100).toFixed(2)}%` : "0.00%"}
                       </td>
                       <td style={{ textAlign: "center" }}>
                         <button
@@ -1070,7 +1089,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 })}
                 {!detailLoading && !currentDetailRows.length && (
                   <tr>
-                    <td colSpan={12} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                    <td colSpan={14} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
                       没有符合当前筛选条件的持仓明细记录
                     </td>
                   </tr>

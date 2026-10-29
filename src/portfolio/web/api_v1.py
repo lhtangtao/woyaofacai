@@ -480,6 +480,22 @@ def api_holdings_detail():
         return jsonify(status="error", message=str(e)), 500
 
 
+@api_v1.route("/holdings/trade_counts", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_holdings_trade_counts():
+    """Batch query trade counts (buy_count, sell_count) grouped by person, account, instrument."""
+    try:
+        counts_map = HoldingsManagementService.get_trade_counts_map()
+        if counts_map is None:
+            return jsonify(status="error", message="查询交易次数失败"), 500
+        # Convert tuple keys to string representation for JSON output: "personId_accountId_instrumentId"
+        result = {f"{k[0]}_{k[1]}_{k[2]}": {"buy_count": v[0], "sell_count": v[1]} for k, v in counts_map.items()}
+        return jsonify(status="ok", counts=result)
+    except Exception as e:
+        logger.exception("Failed to query trade counts")
+        return jsonify(status="error", message=str(e)), 500
+
+
 @api_v1.route("/holdings/stock_drawer", methods=["GET"])
 @require_capability(CAP_VIEW_ASSETS)
 def api_holdings_stock_drawer():
