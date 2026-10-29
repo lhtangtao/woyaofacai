@@ -171,6 +171,9 @@ class ReportPage(QWidget):
         for card in self.today_cards:
             card.setMinimumHeight(68)
             overview.addWidget(card, 1)
+        self.today_rank_card=MetricCard('今日盈亏历史排名\n—')
+        self.today_rank_card.setMinimumHeight(68)
+        overview.insertWidget(3,self.today_rank_card,1)
         self.today_overview.hide()
         layout.insertWidget(0, self.today_overview)
         from portfolio.ui.intraday_pnl import IntradayPnlChart
@@ -438,6 +441,13 @@ class ReportPage(QWidget):
                           ('上涨 / 下跌标的', f'{up} / {down}　平盘 {flat}　待报价 {unknown}', None),
                           ('累计盈亏（含已清仓）', f'{cumulative:+,.2f}' if cumulative is not None else '— 数据不完整', cumulative))
             t = tokens(self)
+            from portfolio.services.today_rank import today_rank
+            rank=today_rank(self.reports,pnl,report_day or snap_str,channel=selected,ticker=self.local_search.text())
+            self.today_rank_card.setVisible(trend_mode==0)
+            self.today_rank_card.setText(rank['title']+'\n'+rank['text'])
+            self.today_rank_card.setToolTip(rank['note'])
+            rank_color=t.profit if pnl is not None and pnl>0 else t.loss if pnl is not None and pnl<0 else t.heading
+            self.today_rank_card.setStyleSheet(f'QPushButton {{text-align:left;padding:12px;border:1px solid {t.border};border-radius:12px;background:{t.panel};color:{rank_color};font-size:15px;}}')
             for card, (title, text, number) in zip(self.today_cards, values):
                 card.setText(title + '\n' + text)
                 color = t.profit if number is not None and number > 0 else t.loss if number is not None and number < 0 else t.heading

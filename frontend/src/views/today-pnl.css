@@ -2,7 +2,7 @@
 .today-pnl > * { flex-shrink: 0; }
 .today-toolbar, .today-quote { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px; }
 .today-toolbar label, .today-quote label { display: flex; gap: 6px; align-items: center; }
-.today-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.today-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .today-card { min-height: 72px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .today-card strong { font-size: 19px; font-variant-numeric: tabular-nums; }
 .today-pnl h3 { font-size: 15px; color: var(--text-heading); margin-bottom: 8px; }

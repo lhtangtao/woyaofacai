@@ -278,6 +278,9 @@ class WebTodayService:
                       source=dict(path=str(self.path), identity=analytics.source_identity,
                                   selected_day=scope.as_of, profit_day=analytics.latest_profit_day,
                                   person_ids=scope.person_ids), curve=curve)
+        from portfolio.services.today_rank import today_rank
+        profit_day=next((r.metadata.get('trading_day') for r in rows if r.metadata.get('trading_day')),scope.as_of.isoformat())
+        result['summary']['history_rank']=today_rank(analytics.reports,pnl,profit_day,channel=channel,ticker=ticker)
         if source_version(self.path) != version:
             raise SourceError('源库在生成快照期间发生变化，请刷新重试。')
         return exact_json(result)

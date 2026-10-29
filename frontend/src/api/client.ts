@@ -24,7 +24,8 @@ export interface PnlPoint { time: string; pnl: Amount; session: string | null }
 export interface TodaySnapshot {
   status: string; name: string; columns: string[]; rows: (string | number | null)[][];
   items: Record<string, any>[]; total_rows: number; note: string;
-  summary: { pnl: Amount; rate: Amount; up: number; down: number; flat: number; unknown: number; cumulative: Amount };
+  summary: { pnl: Amount; rate: Amount; up: number; down: number; flat: number; unknown: number; cumulative: Amount;
+    history_rank?: { title: string; text: string; rank: number | null; direction: string | null; valid_days: number; excluded_days: number; note: string } };
   summary_row: (string | number | null)[];
   channels: { channel: string; pnl: Amount; asset: Amount; rate: Amount }[];
   selected_channels: { channel: string; pnl: Amount; asset: Amount; rate: Amount }[];

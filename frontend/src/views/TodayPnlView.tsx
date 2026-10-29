@@ -171,9 +171,10 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
         [day === beijingDate() ? "当前持仓当日盈亏" : "所选日持仓盈亏", money(summary?.pnl), summary?.pnl],
         ["当日收益率", money(summary?.rate, true), summary?.rate],
         ["上涨 / 下跌标的", summary ? `${summary.up} / ${summary.down}　平盘 ${summary.flat}　待报价 ${summary.unknown}` : "—", null],
+        ["今日盈亏历史排名", summary?.history_rank?.text || "—", summary?.pnl],
         ["累计盈亏（含已清仓）", money(summary?.cumulative), summary?.cumulative],
       ].map(([title, value, raw]) => <div className="card-panel today-card" key={String(title)}>
-        <span title={title === "累计盈亏（含已清仓）" ? "沿用桌面：当前人员、日期和渠道的全部历史盈亏；本表 Ticker 筛选不裁切此项。" : undefined}>{title}</span>
+        <span title={title === "今日盈亏历史排名" ? summary?.history_rank?.note : title === "累计盈亏（含已清仓）" ? "沿用桌面：当前人员、日期和渠道的全部历史盈亏；本表 Ticker 筛选不裁切此项。" : undefined}>{title}</span>
         <strong style={{ color: color(raw == null ? null : String(raw)) }}>{value}</strong>
       </div>)}
     </div>
