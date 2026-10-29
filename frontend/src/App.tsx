@@ -266,11 +266,11 @@ export const App: React.FC = () => {
               />
             )}
 
-            {currentRoute === "holdings" && <HoldingsView key={assetResetKey} personId={selectedPersonId} />}
-            {currentRoute === "reports:当前持仓" && <HoldingsView key={`open:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialStatus="持有中" />}
-            {currentRoute === "reports:股票汇总" && <HoldingsView key={`stock:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="stock" />}
-            {currentRoute === "people" && <HoldingsView key={`people:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="person" />}
-            {currentRoute === "brokers" && <HoldingsView key={`brokers:${assetResetKey}`} personId={selectedPersonId} initialMode="detail" initialDimension="broker" />}
+            {currentRoute === "holdings" && <HoldingsView key={assetResetKey} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} />}
+            {currentRoute === "reports:当前持仓" && <HoldingsView key={`open:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialStatus="持有中" />}
+            {currentRoute === "reports:股票汇总" && <HoldingsView key={`stock:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="stock" />}
+            {currentRoute === "people" && <HoldingsView key={`people:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="person" />}
+            {currentRoute === "brokers" && <HoldingsView key={`brokers:${assetResetKey}`} personId={selectedPersonId} persons={bootstrap?.persons || []} onPersonChange={setSelectedPersonId} initialMode="detail" initialDimension="broker" />}
 
             {currentRoute.startsWith("reports:") &&
               !["reports:当前持仓", "reports:股票汇总"].includes(currentRoute) && (

@@ -35,7 +35,7 @@ def serialize_val(val: Any) -> Any:
 
 class HoldingsManagementService:
     @staticmethod
-    def get_dashboard_data(analytics, scope: QueryScope | None = None) -> dict[str, Any]:
+    def get_dashboard_data(analytics, scope: QueryScope | None = None, person_id: int | None = None) -> dict[str, Any]:
         """Compute top 4 cards, person/broker/stock summaries, and distribution data."""
         if not analytics or not hasattr(analytics, "reports"):
             return {
@@ -53,6 +53,9 @@ class HoldingsManagementService:
         qh = analytics.reports.get("渠道汇总")
 
         pa_rows = pa.rows if pa else ()
+        if person_id is not None and pa_rows:
+            pa_rows = tuple(r for r in pa_rows if r.metadata.get("person_id") == person_id)
+
         th_rows = th.rows if th else ()
         ch_rows = ch.rows if ch else ()
         sh_rows = sh.rows if sh else ()
@@ -162,7 +165,7 @@ class HoldingsManagementService:
 
         # --- 2. 券商持仓汇总 ---
         broker_summary = []
-        if qh_rows:
+        if qh_rows and person_id is None:
             for r in qh_rows:
                 channel = r.values[0]
                 mv = r.values[1] or Decimal(0)

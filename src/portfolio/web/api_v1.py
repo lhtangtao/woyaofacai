@@ -442,7 +442,7 @@ def api_holdings_dashboard():
         person_id = request.args.get("person_id", type=int)
         scope = get_user_query_scope(person_id=person_id)
         analytics = svc.calculate(scope)
-        data = HoldingsManagementService.get_dashboard_data(analytics, scope)
+        data = HoldingsManagementService.get_dashboard_data(analytics, scope, person_id=person_id)
         return jsonify(status="ok", **data)
     except Exception as e:
         logger.exception("Holdings dashboard error")
