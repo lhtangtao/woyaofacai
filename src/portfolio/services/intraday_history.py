@@ -196,6 +196,11 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                 price = candles[index][2]
             else:
                 price = closes.get(group[1])
+            # During the regular session an older bar is not a current price.
+            # The valuation stamp is the end of its completed five-minute bar.
+            missing_bar = regular_start < stamp <= regular_end and (
+                index < 0 or candles[index][0] != stamp-timedelta(minutes=5)
+                or candles[index][1] != 'Intraday')
             applied = s[8] if len(s) > 8 else False
             ratio = s[7] if len(s) > 7 else Decimal(1)
             if not applied and ratio != Decimal(1):
@@ -223,6 +228,9 @@ def _rebuild(path, analytics, credentials_path, store, day, now, cancel, prepare
                     s[2 if event.incoming else 3] += event.amount
                 s[4] += 1
             s[0] = normalize_quantity(s[0])
+            if missing_bar and s[0] > 0:
+                price = None
+                missing_regular[group[1]].add(stamp-timedelta(minutes=5))
             # A security with no exposure yet needs no invented price. No
             # forward-looking bar is used even if the provider returns it.
             # Money2 policy: debt shares valued at zero.
@@ -314,8 +322,24 @@ def collect_day_prices(snapshot,day,now,store,credentials_path,*,instrument_ids=
                 store.save_intraday_candles(symbol,day,new,now)
                 saved+=len(new)
                 cached,_=store.intraday_candles(symbol,day)
-            except Exception:
+                remaining=regular_gaps(cached,regular_start,regular_end,cutoff+timedelta(seconds=60))
+                if remaining:
+                    from portfolio.services.quote_diagnostics import report
+                    report('history_coverage',symbol,ValueError(
+                        f'{day}: provider returned {len(found)} bars; saved {len(new)} missing bars; '
+                        f'{len(remaining)} completed regular-session bars still missing '
+                        f'({remaining[0].isoformat()} to {remaining[-1].isoformat()}); retry eligible in 60 seconds'))
+            except Exception as exc:
                 failed.add(identifier)
+                from portfolio.services.quote_diagnostics import describe_error
+                import logging
+                info=describe_error(exc)
+                logging.getLogger(__name__).warning('Five-minute recovery failed symbol=%s day=%s category=%s detail=%s',symbol,day,info['category'],info['detail'])
+        remaining=regular_gaps(cached,regular_start,regular_end,cutoff+timedelta(seconds=60))
+        if remaining:
+            failed.add(identifier)
+            import logging
+            logging.getLogger(__name__).warning('Five-minute recovery incomplete symbol=%s day=%s missing=%s first=%s last=%s',symbol,day,len(remaining),remaining[0].isoformat(),remaining[-1].isoformat())
         point=max((r[0]+timedelta(minutes=5) for r in cached),default=None)
         if point:latest=max(latest,point) if latest else point
     return {'saved':saved,'failed':failed,'latest_price':latest}
