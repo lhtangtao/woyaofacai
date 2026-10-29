@@ -316,10 +316,28 @@ class HoldingsManagementService:
             Dict mapping (person_id, account_id, instrument_id) -> (buy_count, sell_count)
             or None if the query fails.
         """
+        stats_map = HoldingsManagementService.get_trade_stats_map(db_path=db_path)
+        if stats_map is None:
+            return None
+        return {k: (v["buy_count"], v["sell_count"]) for k, v in stats_map.items()}
+
+    @staticmethod
+    def get_trade_stats_map(db_path: str | Path | None = None) -> dict[tuple[int, int, int], dict[str, Any]] | None:
+        """Batch query historical valid buy/sell trade counts and dates in one read-only SQL query.
+
+        Returns:
+            Dict mapping (person_id, account_id, instrument_id) -> {
+                "buy_count": int,
+                "sell_count": int,
+                "first_buy_date": str | None,
+                "last_sell_date": str | None,
+            }
+            or None if the query fails.
+        """
         start_t = time.monotonic()
         target_path = Path(db_path) if db_path else DATABASE_PATH
         if not target_path.exists():
-            logger.warning(f"[交易次数查询] 数据库路径不存在: {target_path}")
+            logger.warning(f"[交易统计查询] 数据库路径不存在: {target_path}")
             return None
         try:
             # Connect in explicit read-only URI mode with 10s busy timeout
@@ -333,7 +351,9 @@ class HoldingsManagementService:
                     po.account_id,
                     po.instrument_id,
                     SUM(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'BUY' THEN 1 ELSE 0 END) AS buy_count,
-                    SUM(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'SELL' THEN 1 ELSE 0 END) AS sell_count
+                    SUM(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'SELL' THEN 1 ELSE 0 END) AS sell_count,
+                    MIN(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'BUY' THEN po.business_date ELSE NULL END) AS first_buy_date,
+                    MAX(CASE WHEN po.operation_kind = 'MARKET_TRADE' AND po.side = 'SELL' THEN po.business_date ELSE NULL END) AS last_sell_date
                 FROM person_operations po
                 GROUP BY po.person_id, po.account_id, po.instrument_id
                 """
@@ -341,11 +361,19 @@ class HoldingsManagementService:
             rows = cursor.fetchall()
             conn.close()
             elapsed_ms = (time.monotonic() - start_t) * 1000
-            logger.info(f"[交易次数查询] 批量统计历史买卖次数成功，耗时 {elapsed_ms:.1f}ms，覆盖 {len(rows)} 组标的账户")
-            return {(int(r[0]), int(r[1]), int(r[2])): (int(r[3] or 0), int(r[4] or 0)) for r in rows}
+            logger.info(f"[交易统计查询] 批量统计历史买卖次数及日期成功，耗时 {elapsed_ms:.1f}ms，覆盖 {len(rows)} 组标的账户")
+            return {
+                (int(r[0]), int(r[1]), int(r[2])): {
+                    "buy_count": int(r[3] or 0),
+                    "sell_count": int(r[4] or 0),
+                    "first_buy_date": str(r[5])[:10] if r[5] else None,
+                    "last_sell_date": str(r[6])[:10] if r[6] else None,
+                }
+                for r in rows
+            }
         except Exception as e:
             elapsed_ms = (time.monotonic() - start_t) * 1000
-            logger.exception(f"[交易次数查询] 查询异常 (耗时 {elapsed_ms:.1f}ms, 目标路径: {target_path}): {e}")
+            logger.exception(f"[交易统计查询] 查询异常 (耗时 {elapsed_ms:.1f}ms, 目标路径: {target_path}): {e}")
             return None
 
     @staticmethod
@@ -359,7 +387,7 @@ class HoldingsManagementService:
         search: str | None = None,
         db_path: str | Path | None = None,
     ) -> list[dict[str, Any]]:
-        """Return unified holdings detail rows matching filters with 13 required columns."""
+        """Return unified holdings detail rows matching filters (13 cols for 持有中, 17 cols for 已清仓)."""
         start_t = time.monotonic()
         if not analytics or not hasattr(analytics, "reports"):
             return []
@@ -368,7 +396,8 @@ class HoldingsManagementService:
         if not pa:
             return []
 
-        trade_counts_map = HoldingsManagementService.get_trade_counts_map(db_path=db_path)
+        positions_map = getattr(analytics, "positions", {}) or {}
+        trade_stats_map = HoldingsManagementService.get_trade_stats_map(db_path=db_path)
 
         search_text = (search or "").strip().upper()
         ticker_filter = (ticker or "").strip().upper()
@@ -386,9 +415,9 @@ class HoldingsManagementService:
             qty = r.values[3]
             st = r.values[4] or "持有中"
             cost_p = r.values[5]
-            curr_p = r.values[6]
+            raw_curr_p = r.values[6]
             mv = r.values[7] or Decimal(0)
-            pnl = r.values[8] or Decimal(0)
+            pnl = r.values[8] if r.values[8] is not None else Decimal(0)
 
             # Filter checks
             if person_ids is not None and p_id not in person_ids:
@@ -406,6 +435,15 @@ class HoldingsManagementService:
                 if search_text not in combined:
                     continue
 
+            pos = positions_map.get((p_id, acc_id, inst_id))
+
+            # For closed positions, analytics_service falls back to p.last_price when quote is missing.
+            # Ensure current_price is strictly the latest market quote and None when quote is missing.
+            if st == "已清仓":
+                curr_p = raw_curr_p if r.metadata.get("valuation_date") is not None else None
+            else:
+                curr_p = raw_curr_p
+
             # Calculate cost total amount (成本总额 = 数量 * 成本价)
             cost_amount = (qty * cost_p) if (qty is not None and cost_p is not None) else None
 
@@ -415,14 +453,59 @@ class HoldingsManagementService:
             else:
                 calc_pnl_rate = None
 
-            # Buy and Sell counts
-            if trade_counts_map is None:
+            # Buy and Sell counts & dates from batch query
+            if trade_stats_map is None:
                 buy_count = None
                 sell_count = None
+                stats_first_buy = None
+                stats_last_sell = None
             else:
-                pair = trade_counts_map.get((p_id, acc_id, inst_id), (0, 0))
-                buy_count = pair[0]
-                sell_count = pair[1]
+                st_entry = trade_stats_map.get((p_id, acc_id, inst_id))
+                if st_entry:
+                    buy_count = st_entry["buy_count"]
+                    sell_count = st_entry["sell_count"]
+                    stats_first_buy = st_entry["first_buy_date"]
+                    stats_last_sell = st_entry["last_sell_date"]
+                else:
+                    buy_count = 0
+                    sell_count = 0
+                    stats_first_buy = None
+                    stats_last_sell = None
+
+            # Closed position specific fields (PRD 17 columns)
+            first_buy_date = stats_first_buy or (str(pos.first)[:10] if (pos and pos.first) else None)
+            last_close_date = (str(pos.last)[:10] if (pos and pos.last) else None) or stats_last_sell
+            closed_quantity = pos.sell_quantity if pos is not None else r.metadata.get("sell_quantity")
+            total_buy_amount = pos.buy if (pos is not None and pos.buy is not None) else None
+            total_sell_amount = pos.sell if (pos is not None and pos.sell is not None) else None
+
+            if pos is not None and pos.buy is not None and pos.buy_quantity and pos.buy_quantity > ZERO:
+                avg_buy_price = ratio(pos.buy, pos.buy_quantity)
+            else:
+                avg_buy_price = r.metadata.get("buy_cost")
+
+            if pos is not None and pos.sell is not None and pos.sell_quantity and pos.sell_quantity > ZERO:
+                avg_sell_price = ratio(pos.sell, pos.sell_quantity)
+            else:
+                avg_sell_price = r.metadata.get("sell_price")
+
+            # 清仓价：最近一次使持仓数量归零的有效卖出成交价格
+            if pos is not None and pos.last_price is not None and (sell_count is None or sell_count > 0 or (pos.sell_quantity and pos.sell_quantity > ZERO)):
+                close_price = pos.last_price
+            else:
+                close_price = None
+
+            # 清仓后涨跌幅 = (当前价 - 清仓价) ÷ 清仓价
+            if curr_p is not None and close_price is not None and close_price > ZERO:
+                post_close_change = (curr_p - close_price) / close_price
+            else:
+                post_close_change = None
+
+            realized_pnl = pnl if st == "已清仓" else None
+            if realized_pnl is not None and total_buy_amount is not None and total_buy_amount > ZERO:
+                realized_pnl_rate = ratio(realized_pnl, total_buy_amount)
+            else:
+                realized_pnl_rate = None
 
             filtered_items.append({
                 "person_name": p_name,
@@ -441,6 +524,18 @@ class HoldingsManagementService:
                 "total_pnl": pnl,
                 "buy_count": buy_count,
                 "sell_count": sell_count,
+                # Closed position fields
+                "first_buy_date": first_buy_date,
+                "last_close_date": last_close_date,
+                "closed_quantity": closed_quantity,
+                "avg_buy_price": avg_buy_price,
+                "avg_sell_price": avg_sell_price,
+                "close_price": close_price,
+                "post_close_change": post_close_change,
+                "total_buy_amount": total_buy_amount,
+                "total_sell_amount": total_sell_amount,
+                "realized_pnl": realized_pnl,
+                "realized_pnl_rate": realized_pnl_rate,
             })
 
         # Calculate weight relative to the filtered scope's total market value
@@ -469,10 +564,32 @@ class HoldingsManagementService:
                 "status": it["status"],
                 "account_id": it["account_id"],
                 "instrument_id": it["instrument_id"],
+                # Closed position 17-column fields
+                "first_buy_date": it["first_buy_date"],
+                "last_close_date": it["last_close_date"],
+                "closed_quantity": serialize_val(it["closed_quantity"]),
+                "avg_buy_price": serialize_val(it["avg_buy_price"]),
+                "avg_sell_price": serialize_val(it["avg_sell_price"]),
+                "close_price": serialize_val(it["close_price"]),
+                "post_close_change": serialize_val(it["post_close_change"]),
+                "total_buy_amount": serialize_val(it["total_buy_amount"]),
+                "total_sell_amount": serialize_val(it["total_sell_amount"]),
+                "realized_pnl": serialize_val(it["realized_pnl"]),
+                "realized_pnl_rate": serialize_val(it["realized_pnl_rate"]),
             })
 
-        # Sort according to selected dimension
-        if dimension == "person":
+        # Sort according to status and selected dimension
+        if status == "已清仓":
+            # PRD 五.2: 默认按最后清仓日期倒序排列
+            rows.sort(
+                key=lambda x: (
+                    x.get("last_close_date") or "",
+                    float(x.get("realized_pnl") or 0),
+                    x.get("ticker") or "",
+                ),
+                reverse=True,
+            )
+        elif dimension == "person":
             rows.sort(key=lambda x: (x["person_name"], x["status"] != "持有中", -float(x["market_value"] or 0)))
         elif dimension == "broker":
             rows.sort(key=lambda x: (x["channel"], x["status"] != "持有中", -float(x["market_value"] or 0)))

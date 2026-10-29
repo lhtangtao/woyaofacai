@@ -294,19 +294,19 @@ class HoldingsTableModel(FinanceModel):
             if col_name == "操作" and not is_total:
                 return "🔍 查看明细"
             if isinstance(val, (int, float, Decimal)):
-                # 股票只数/数量/买卖次数等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
-                if col_name in ("买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
-                    ("股票" in col_name or "清仓" in col_name or "次数" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金", "额"))
-                ):
-                    return f"{int(round(float(val))):,d}"
-                if "数量" in col_name or "股数" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态"))):
-                    return f"{val:,.0f}" if isinstance(val, (int, Decimal)) and val % 1 == 0 else f"{val:,.2f}"
                 if col_name == "持仓占比":
                     return f"{val * 100:.2f}%"
-                if any(w in col_name for w in ("收益率", "比例", "涨幅")):
+                # 股票只数/买卖次数等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
+                if col_name in ("买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
+                    ("股票" in col_name or "次数" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金", "额"))
+                ):
+                    return f"{int(round(float(val))):,d}"
+                if "数量" in col_name or "股数" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态", "占比", "比例"))):
+                    return f"{val:,.0f}" if isinstance(val, (int, Decimal)) and val % 1 == 0 else f"{val:,.2f}"
+                if any(w in col_name for w in ("收益率", "比例", "涨幅", "涨跌幅", "涨跌")):
                     sign = "+" if val > 0 else ""
                     return f"{sign}{val * 100:.2f}%"
-                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额")):
+                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价")):
                     sign = "+" if "盈亏" in col_name and val > 0 else ""
                     return f"{sign}${val:,.2f}"
                 return f"{val:,.2f}"
@@ -322,7 +322,7 @@ class HoldingsTableModel(FinanceModel):
         if role == Qt.ItemDataRole.FontRole:
             if is_total:
                 return numeric_font(12, bold=True)
-            if isinstance(val, (int, float, Decimal)) or "时间" in col_name or "Ticker" in col_name or col_name == "操作":
+            if isinstance(val, (int, float, Decimal)) or "时间" in col_name or "日期" in col_name or "Ticker" in col_name or col_name == "操作":
                 return numeric_font(12)
 
         if role == Qt.ItemDataRole.BackgroundRole:
@@ -1165,6 +1165,9 @@ class HoldingsPage(QWidget):
         status_filter = status
         broker_filter = self.broker_combo.currentData() or None
         search_filter = self.search_input.text().strip() or None
+        src_path = str(DATABASE_PATH)
+        if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
+            src_path = str(self.main_window.service.path)
 
         raw_rows = HoldingsManagementService.get_holdings_detail_rows(
             self.analytics,
@@ -1173,45 +1176,82 @@ class HoldingsPage(QWidget):
             broker=broker_filter,
             status=status_filter,
             search=search_filter,
+            db_path=src_path,
         )
 
-        rows = []
-        for item in raw_rows:
-            qty = Decimal(str(item.get("quantity") or 0)) if item.get("quantity") is not None else None
-            cost_p = Decimal(str(item.get("cost_price") or 0)) if item.get("cost_price") is not None else None
-            cost_amt = Decimal(str(item.get("cost_amount") or 0)) if item.get("cost_amount") is not None else None
-            curr_p = Decimal(str(item.get("current_price") or 0)) if item.get("current_price") is not None else None
-            mv = Decimal(str(item.get("market_value") or 0)) if item.get("market_value") is not None else None
-            pnl_r = Decimal(str(item.get("pnl_rate") or 0)) if item.get("pnl_rate") is not None else None
-            tot_pnl = Decimal(str(item.get("total_pnl") or 0)) if item.get("total_pnl") is not None else None
-            buy_cnt = item.get("buy_count")
-            sell_cnt = item.get("sell_count")
-            weight = Decimal(str(item.get("weight") or 0)) if item.get("weight") is not None else None
+        if status_filter == "已清仓":
+            target_cols = (
+                "归属人员", "券商渠道", "Ticker", "首次买入日期", "最后清仓日期", "清仓数量",
+                "买入均价", "卖出均价", "清仓价", "当前价", "清仓后涨跌幅",
+                "买入总额", "卖出总额", "已实现盈亏", "已实现收益率", "买入次数", "卖出次数"
+            )
+        else:
+            target_cols = (
+                "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
+                "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
+            )
 
-            rows.append(ReportRow((
-                item.get("person_name"),
-                item.get("channel"),
-                item.get("ticker"),
-                qty,
-                cost_p,
-                cost_amt,
-                curr_p,
-                mv,
-                pnl_r,
-                tot_pnl,
-                buy_cnt,
-                sell_cnt,
-                weight,
-            ), {
-                "person_id": item.get("person_id"),
-                "account_id": item.get("account_id"),
-                "ticker": item.get("ticker"),
-            }))
+        if self.detail_model.columns != target_cols:
+            self.detail_model.columns = target_cols
+            self.detail_model.sort_column = -1
+            self.detail_model.sort_order = Qt.SortOrder.DescendingOrder
+
+        def to_dec(val):
+            return Decimal(str(val)) if val is not None else None
+
+        rows = []
+        if status_filter == "已清仓":
+            for item in raw_rows:
+                rows.append(ReportRow((
+                    item.get("person_name"),
+                    item.get("channel"),
+                    item.get("ticker"),
+                    item.get("first_buy_date"),
+                    item.get("last_close_date"),
+                    to_dec(item.get("closed_quantity")),
+                    to_dec(item.get("avg_buy_price")),
+                    to_dec(item.get("avg_sell_price")),
+                    to_dec(item.get("close_price")),
+                    to_dec(item.get("current_price")),
+                    to_dec(item.get("post_close_change")),
+                    to_dec(item.get("total_buy_amount")),
+                    to_dec(item.get("total_sell_amount")),
+                    to_dec(item.get("realized_pnl")),
+                    to_dec(item.get("realized_pnl_rate")),
+                    item.get("buy_count"),
+                    item.get("sell_count"),
+                ), {
+                    "person_id": item.get("person_id"),
+                    "account_id": item.get("account_id"),
+                    "ticker": item.get("ticker"),
+                }))
+        else:
+            for item in raw_rows:
+                rows.append(ReportRow((
+                    item.get("person_name"),
+                    item.get("channel"),
+                    item.get("ticker"),
+                    to_dec(item.get("quantity")),
+                    to_dec(item.get("cost_price")),
+                    to_dec(item.get("cost_amount")),
+                    to_dec(item.get("current_price")),
+                    to_dec(item.get("market_value")),
+                    to_dec(item.get("pnl_rate")),
+                    to_dec(item.get("total_pnl")),
+                    item.get("buy_count"),
+                    item.get("sell_count"),
+                    to_dec(item.get("weight")),
+                ), {
+                    "person_id": item.get("person_id"),
+                    "account_id": item.get("account_id"),
+                    "ticker": item.get("ticker"),
+                }))
 
         self.detail_model.replace(rows)
         elapsed_ms = (time.monotonic() - t0) * 1000
-        logger.info(f"[桌面端持仓] 明细表格刷新完成，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
-        self.detail_info.setText(f"统一持仓明细 · 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
+        logger.info(f"[桌面端持仓] 明细表格刷新完成 (状态: {status_filter})，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
+        view_title = "已清仓明细" if status_filter == "已清仓" else "当前持仓明细"
+        self.detail_info.setText(f"{view_title} · 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
 
     def _on_person_table_clicked(self, index):
         if not index.isValid():
