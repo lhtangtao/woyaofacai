@@ -28,6 +28,11 @@ class FxStore:
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         c = sqlite3.connect(self.path, timeout=30)
+        # 启用 WAL：减少双端进程读写汇率缓存时的锁冲突；切换失败时保持原模式
+        try:
+            c.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.OperationalError:
+            pass
         c.execute('CREATE TABLE IF NOT EXISTS fx_rates (rate_date TEXT PRIMARY KEY, rate_e8 INTEGER NOT NULL CHECK(rate_e8>0), provider TEXT NOT NULL, source_url TEXT NOT NULL, payload_sha256 TEXT NOT NULL, fetched_at TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY, requested_start TEXT NOT NULL, requested_end TEXT NOT NULL, source_url TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL, fetched_at TEXT NOT NULL, record_count INTEGER NOT NULL)')
         return c

@@ -1,12 +1,19 @@
 """Read-only Longbridge earnings calendar with bounded daily memory caching."""
 import calendar
-from dataclasses import dataclass, replace
+import logging
+import time
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from threading import RLock
 from zoneinfo import ZoneInfo
 
 from portfolio.services.earnings_links import default_target
 from portfolio.services.live_quotes import credentials
+
+logger = logging.getLogger(__name__)
+
+# 财报子进程超时（秒）：长桥接口超过该时间未返回则终止子进程，保留本机缓存
+EARNINGS_SUBPROCESS_TIMEOUT = 25
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 MARKET_ZONES = {'US': 'America/New_York', 'HK': 'Asia/Hong_Kong', 'SH': 'Asia/Shanghai', 'SZ': 'Asia/Shanghai'}
@@ -287,6 +294,101 @@ def _fetch_day(context, category, market, day, first, last, cancel):
     return found, warnings
 
 
+def event_to_dict(event):
+    """EarningsEvent → 可 JSON 序列化的 dict（用于子进程回传）。"""
+    data = asdict(event)
+    data['day'] = event.day.isoformat()
+    data['session_checked_at'] = event.session_checked_at.isoformat() if event.session_checked_at else None
+    return data
+
+
+def event_from_dict(data):
+    """子进程回传的 dict → EarningsEvent。"""
+    data = dict(data)
+    data['day'] = date.fromisoformat(data['day'])
+    if data.get('session_checked_at'):
+        data['session_checked_at'] = datetime.fromisoformat(data['session_checked_at'])
+    return EarningsEvent(**data)
+
+
+def fetch_calendar_month_inprocess(path, year, month, markets, cancel=None):
+    """在当前进程内按天并发查询长桥财报日历。
+
+    注意：长桥 SDK 阻塞时不释放 GIL，只应在子进程（earnings_worker）中调用，
+    桌面端/Web 主进程请使用 fetch_calendar_month_subprocess。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from longbridge.openapi import CalendarCategory, CalendarContext, Config
+    key_value, secret, token = credentials(path)
+    context = CalendarContext(Config.from_apikey(key_value, secret, token, enable_print_quote_packages=False))
+    category = CalendarCategory.Report
+    first, last = date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1])
+    valid_markets = [m for m in markets if m in MARKET_ZONES]
+    days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
+    tasks = [(market, day) for market in valid_markets for day in days]
+    found, warnings = [], set()
+    if tasks:
+        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as executor:
+            futures = [executor.submit(_fetch_day, context, category, m, d, first, last, cancel) for m, d in tasks]
+            for future in as_completed(futures):
+                day_events, day_warnings = future.result()
+                found.extend(day_events)
+                warnings.update(day_warnings)
+    return found, warnings
+
+
+def fetch_calendar_month_subprocess(path, year, month, markets, cancel=None, timeout=EARNINGS_SUBPROCESS_TIMEOUT):
+    """在独立子进程中查询某月财报日历，避免长桥 SDK 持有 GIL 冻结主进程界面。
+
+    超时或取消时终止子进程并抛出 ValueError，由调用方保留本机缓存。
+    """
+    import json
+    import subprocess
+    import sys
+
+    start = time.monotonic()
+    request = json.dumps({'path': str(path), 'year': year, 'month': month, 'markets': list(markets)})
+    logger.info('[财报子进程] 开始查询 %04d-%02d 市场=%s', year, month, ','.join(markets))
+    proc = subprocess.Popen([sys.executable, '-m', 'portfolio.services.earnings_worker'],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        proc.stdin.write(request.encode('utf-8'))
+        proc.stdin.close()
+    except OSError:
+        pass
+    deadline = start + timeout
+    while True:
+        try:
+            proc.wait(timeout=0.3)
+            break
+        except subprocess.TimeoutExpired:
+            if cancel is not None and cancel.is_set():
+                proc.kill()
+                proc.wait()
+                logger.info('[财报子进程] %04d-%02d 查询已取消，耗时 %.1fs', year, month, time.monotonic() - start)
+                raise ValueError('财报查询已取消。')
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                logger.warning('[财报子进程] %04d-%02d 查询超时（>%ss），已终止子进程，保留本机缓存', year, month, timeout)
+                raise ValueError(f'财报查询超时（超过{timeout}秒），已保留本机缓存。')
+    stdout = proc.stdout.read().decode('utf-8', 'replace')
+    stderr = proc.stderr.read().decode('utf-8', 'replace')
+    elapsed = time.monotonic() - start
+    try:
+        payload = json.loads(stdout) if stdout.strip() else {}
+    except ValueError:
+        payload = {}
+    if proc.returncode != 0 or 'error' in payload or 'events' not in payload:
+        detail = payload.get('error') or stderr.strip()[-500:] or f'退出码 {proc.returncode}'
+        logger.warning('[财报子进程] %04d-%02d 查询失败，耗时 %.1fs：%s', year, month, elapsed, detail)
+        raise ValueError('财报查询失败：' + detail)
+    events = [event_from_dict(item) for item in payload['events']]
+    logger.info('[财报子进程] %04d-%02d 查询完成，耗时 %.1fs，返回 %d 项', year, month, elapsed, len(events))
+    return events, set(payload.get('warnings') or ())
+
+
 def fetch_session_change(quote_context, symbol, day, phase, is_macro=False, macro_ticker=''):
     from portfolio.services.live_quotes import _SDK_VALUES_LOCK
     with _SDK_VALUES_LOCK:
@@ -493,13 +595,9 @@ class EarningsService:
                     self._update_cache(key, path, year, month, markets, result)
                     return result
                 return cached
+        context = category = None
         if self.factory:
             context, category = self.factory(path)
-        else:
-            from longbridge.openapi import CalendarCategory, CalendarContext, Config
-            key_value, secret, token = credentials(path)
-            context = CalendarContext(Config.from_apikey(key_value, secret, token, enable_print_quote_packages=False))
-            category = CalendarCategory.Report
         found, warnings = {}, set()
         first, last = date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1])
         valid_markets = [m for m in markets if m in MARKET_ZONES]
@@ -516,23 +614,12 @@ class EarningsService:
                         found[(e.symbol, e.day, e.time_label)] = e
                     warnings.update(day_warnings)
                     day += timedelta(days=1)
-        else:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
-            tasks = [(market, day) for market in valid_markets for day in days]
-            if tasks:
-                with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as executor:
-                    futures = [
-                        executor.submit(_fetch_day, context, category, m, d, first, last, cancel)
-                        for m, d in tasks
-                    ]
-                    for future in as_completed(futures):
-                        if cancel and cancel.is_set():
-                            raise ValueError('财报查询已取消。')
-                        day_events, day_warnings = future.result()
-                        for e in day_events:
-                            found[(e.symbol, e.day, e.time_label)] = e
-                        warnings.update(day_warnings)
+        elif valid_markets:
+            # 真实长桥 SDK 调用放在子进程：SDK 阻塞时不释放 GIL，进程内调用会冻结整个界面
+            day_events, day_warnings = fetch_calendar_month_subprocess(path, year, month, valid_markets, cancel=cancel)
+            for e in day_events:
+                found[(e.symbol, e.day, e.time_label)] = e
+            warnings.update(day_warnings)
 
         incoming = reconciled_events(found.values(), year=year, month=month)
         finals = {(e.symbol, e.day, e.time_label): e for e in persisted.events

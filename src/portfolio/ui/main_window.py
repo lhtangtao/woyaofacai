@@ -161,7 +161,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.top_days_page.update_canvases()
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.canvas.update()
-        if hasattr(self, "holdings_page"):
+        if hasattr(self, "holdings_page") and hasattr(self.holdings_page, "dist_canvas"):
             self.holdings_page.dist_canvas.update()
         self.earnings_page.draw()
         self.monitor_page.draw_table()
@@ -651,7 +651,12 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.asset_trend.sync_person_from_main(self.person.currentData())
             QTimer.singleShot(0, lambda: self.asset_trend.set_analytics(analytics))
         if hasattr(self, "earnings_page"):
-            self.earnings_page.activate()
+            # 仅当前显示财报日历页时才刷新：后台顺带拉取长桥财报曾导致整个界面冻结
+            if self.pages.currentWidget() is self.earnings_page:
+                self.earnings_page.activate()
+            else:
+                self.earnings_page.signature = None
+                logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
         self.preload_people_bundle()
         if hasattr(self, "holdings_page"):
             self.holdings_page.set_analytics(analytics)

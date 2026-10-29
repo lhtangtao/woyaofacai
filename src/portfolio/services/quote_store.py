@@ -21,6 +21,12 @@ class QuoteStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         from portfolio.services.derived_store import ClosingConnection
         c = sqlite3.connect(self.path, timeout=30,factory=ClosingConnection)
+        # 启用 WAL：桌面端与 Web 端并发读写行情缓存时互不阻塞；切换失败（被占用）时保持原模式，下次连接再试
+        try:
+            c.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.OperationalError:
+            pass
+        c.execute('PRAGMA busy_timeout=30000')
         c.execute('CREATE TABLE IF NOT EXISTS latest_quotes (symbol TEXT NOT NULL, session TEXT NOT NULL, price TEXT NOT NULL, quoted_at TEXT NOT NULL, saved_at TEXT NOT NULL, provider TEXT NOT NULL, PRIMARY KEY(symbol,session))')
         c.execute('CREATE TABLE IF NOT EXISTS us_calendar (day TEXT PRIMARY KEY, half_day INTEGER NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS coverage (id INTEGER PRIMARY KEY CHECK(id=1), first_day TEXT NOT NULL, last_day TEXT NOT NULL)')

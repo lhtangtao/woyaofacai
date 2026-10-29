@@ -1,5 +1,18 @@
 [
   {
+    "title": "彻底解决长桥SDK占用GIL导致界面卡死无响应问题并优化缓存并发",
+    "time": "2026-10-29 21:37",
+    "author": "Antigravity",
+    "tag": "已隔离长桥SDK网络GIL锁；财报改为按需加载，行情汇率缓存升级WAL",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "根因锁定与进程级隔离：排查发现长桥SDK（PyO3 Rust底层）在调用finance_calendar阻塞等待网络时不会释放Python GIL，导致主线程和全部工作线程陷入take_gil等锁假死（卡死7分钟以上）；新建portfolio.services.earnings_worker子进程执行长桥SDK网络调用，将GIL完全隔离在子进程中，主界面彻底免受网络慢和超时影响。",
+      "按需惰性加载财报：在MainWindow财务报表就绪回调中，移除非当前页面下的盲目activate()；仅当用户切换到「财报日历」标签页时才触发拉取，避免在持仓管理、资产总览等高频切换时引发无谓的网络请求和卡顿。",
+      "硬超时保护与友好降级：子进程设置25秒严格超时；若长桥API超时或网络中断，主进程自动杀掉子进程并打印诊断日志，界面安全回退展示已有本地缓存，坚决不阻塞界面。",
+      "多库WAL模式升级：将行情缓存库live_quotes.sqlite3与汇率缓存库fx.sqlite3全量启用WAL模式与busy_timeout配置，彻底消除双端并发读写导致的database is locked告警。"
+    ]
+  },
+  {
     "title": "月年历史曲线加载增加真实分阶段百分比进度条",
     "time": "2026-10-29 21:34",
     "author": "Codex",
