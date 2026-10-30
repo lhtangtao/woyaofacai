@@ -14,7 +14,7 @@ import logging
 import sqlite3
 from collections import defaultdict
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import time
@@ -353,7 +353,8 @@ class HoldingsManagementService:
     def get_latest_quotes_map(quote_path: str | Path | None = None) -> dict[str, Decimal]:
         """Query latest available market quotes from live_quotes sqlite cache.
 
-        Prefers Intraday over Post, Pre, and Overnight.
+        Prioritizes the most recent quote by quoted_at timestamp across sessions
+        (Overnight / Pre / Intraday / Post), breaking ties by the natural trading session sequence.
         """
         try:
             from portfolio.paths import quote_cache_path
@@ -367,8 +368,9 @@ class HoldingsManagementService:
             rows = cursor.fetchall()
             conn.close()
 
-            session_priority = {"OVERNIGHT": 1, "PRE": 2, "POST": 3, "INTRADAY": 4}
-            latest_map: dict[str, tuple[int, str, Decimal]] = {}
+            # Session progression order when quoted_at timestamps are identical
+            session_order = {"PRE": 1, "INTRADAY": 2, "POST": 3, "OVERNIGHT": 4}
+            latest_map: dict[str, tuple[datetime, int, Decimal]] = {}
             for sym, session, val, stamp in rows:
                 clean_sym = sym.split(".")[0].upper()
                 try:
@@ -377,10 +379,26 @@ class HoldingsManagementService:
                         continue
                 except Exception:
                     continue
-                priority = session_priority.get(str(session).upper(), 0)
-                if clean_sym not in latest_map or priority > latest_map[clean_sym][0] or (priority == latest_map[clean_sym][0] and stamp >= latest_map[clean_sym][1]):
-                    latest_map[clean_sym] = (priority, stamp, p)
-            return {k: v[2] for k, v in latest_map.items()}
+                try:
+                    dt = datetime.fromisoformat(str(stamp))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                prio = session_order.get(str(session).upper(), 0)
+
+                if clean_sym not in latest_map:
+                    latest_map[clean_sym] = (dt, prio, p)
+                else:
+                    old_dt, old_prio, _ = latest_map[clean_sym]
+                    if dt > old_dt or (dt == old_dt and prio >= old_prio):
+                        latest_map[clean_sym] = (dt, prio, p)
+
+            result: dict[str, Decimal] = {}
+            for k, (_, _, price) in latest_map.items():
+                result[k] = price
+                result[f"{k}.US"] = price
+            return result
         except Exception as e:
             logger.debug(f"[实时行情查询] 读取本地行情缓存跳过: {e}")
             return {}
@@ -812,16 +830,27 @@ class HoldingsManagementService:
         total_pnl = sum((r.values[8] for r in pa_rows if isinstance(r.values[8], Decimal)), Decimal(0))
 
         # Current Price & Cost Price
-        current_price = None
-        for r in active_rows:
-            if isinstance(r.values[6], Decimal) and r.values[6] > 0:
-                current_price = r.values[6]
-                break
+        live_quotes_map = HoldingsManagementService.get_latest_quotes_map()
+        live_p = live_quotes_map.get(ticker)
+        current_price = live_p
+        if current_price is None:
+            for r in active_rows:
+                if isinstance(r.values[6], Decimal) and r.values[6] > 0:
+                    current_price = r.values[6]
+                    break
 
         cost_price = None
+        open_net = Decimal(0)
         if current_quantity > 0:
             open_net = sum((r.values[12] for r in active_rows if isinstance(r.values[12], Decimal)), Decimal(0))
             cost_price = open_net / current_quantity if open_net > 0 else (market_value - floating_pnl) / current_quantity
+
+        if live_p is not None and current_quantity > 0:
+            market_value = current_quantity * live_p
+            if open_net > 0:
+                floating_pnl = market_value - open_net
+            elif cost_price is not None:
+                floating_pnl = market_value - (current_quantity * cost_price)
 
         net_invested = sum((r.values[12] for r in pa_rows if isinstance(r.values[12], Decimal)), Decimal(0))
         base_invested = net_invested if net_invested > 0 else (market_value - total_pnl)
