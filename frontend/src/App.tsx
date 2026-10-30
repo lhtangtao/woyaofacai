@@ -100,6 +100,7 @@ export const App: React.FC = () => {
 
   // Navigation handlers
   const navigate = (newRoute: string) => {
+    if(newRoute === "reports:股票归属")newRoute="ownership";
     if (newRoute === currentRoute) return;
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newRoute);

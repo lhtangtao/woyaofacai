@@ -9,149 +9,20 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QComboBox,QDateEd
 from portfolio.domain.models import QueryScope
 from portfolio.domain.live_quotes import UTC
 from portfolio.services.ownership_analysis import analyze,export_csv,COLUMNS
+from portfolio.ui.charts_page import ChartCanvas
+from portfolio.services.charts_service import Chart,Series
 from portfolio.ui.metric_card import MetricCard
 from portfolio.ui.theme import tokens
 
 
-class OwnershipPie(QWidget):
-    selected = Signal(str, str)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.rows = []
-        self.total_qty = Decimal(0)
-        self.symbol = ''
-        self.selected_name = None
-        self.hits = []
-        self.setMouseTracking(True)
-        self.setMinimumHeight(240)
-
-    def set_data(self, symbol, rows, total_qty, selected_name=None):
-        self.symbol = symbol
-        self.rows = rows
-        self.total_qty = total_qty
-        self.selected_name = selected_name
-        self.update()
-
-    def mousePressEvent(self, event):
-        pos = event.position()
-        for rect, name in self.hits:
-            if rect.contains(pos):
-                self.selected.emit('', name)
-                return
-        super().mousePressEvent(event)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        t = tokens(self)
-        self.hits = []
-        w, h = self.width(), self.height()
-
-        p.setPen(QColor(t.heading))
-        font = p.font()
-        font.setBold(True)
-        font.setPointSize(12)
-        p.setFont(font)
-        p.drawText(QRectF(15, 10, 200, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, '人员持股分布')
-        font.setBold(False)
-        font.setPointSize(10)
-        p.setFont(font)
-
-        if not self.rows or not self.total_qty or self.total_qty <= 0:
-            p.setPen(QColor(t.muted))
-            p.drawText(QRectF(0, 36, w, h - 36), Qt.AlignmentFlag.AlignCenter, '当前无有效持股数据')
-            return
-
-        palette = ('#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EC4899', '#06B6D4', '#84CC16', '#6366F1', '#14B8A6')
-
-        content_top = 38
-        avail_h = h - content_top - 12
-        donut_size = min(avail_h, 175)
-        donut_rect = QRectF(25, content_top + (avail_h - donut_size) / 2, donut_size, donut_size)
-
-        start_angle = 90 * 16
-        used_angle = 0
-        total_float = float(self.total_qty)
-
-        for i, r in enumerate(self.rows):
-            qty = float(r.get('quantity') or 0)
-            if qty <= 0:
-                continue
-            if i == len(self.rows) - 1:
-                span_angle = -(360 * 16 - used_angle)
-            else:
-                span_angle = -int((qty / total_float) * 360 * 16)
-
-            color = QColor(palette[i % len(palette)])
-            p.setPen(QPen(QColor(t.panel), 2))
-            p.setBrush(color)
-
-            if r['person_name'] == self.selected_name:
-                p.setPen(QPen(QColor(t.heading), 2.5))
-
-            p.drawPie(donut_rect, start_angle, span_angle)
-            start_angle += span_angle
-            used_angle += abs(span_angle)
-
-        hole_size = donut_size * 0.58
-        hole_rect = QRectF(donut_rect.center().x() - hole_size / 2, donut_rect.center().y() - hole_size / 2, hole_size, hole_size)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(t.panel))
-        p.drawEllipse(hole_rect)
-
-        p.setPen(QColor(t.heading))
-        font.setBold(True)
-        font.setPointSize(11)
-        p.setFont(font)
-        p.drawText(QRectF(hole_rect.x(), hole_rect.y() + hole_size * 0.22, hole_rect.width(), 20), Qt.AlignmentFlag.AlignCenter, self.symbol)
-
-        p.setPen(QColor(t.muted))
-        font.setBold(False)
-        font.setPointSize(9)
-        p.setFont(font)
-        qty_str = f'{self.total_qty:,.8f}'.rstrip('0').rstrip('.') + ' 股'
-        p.drawText(QRectF(hole_rect.x(), hole_rect.y() + hole_size * 0.54, hole_rect.width(), 18), Qt.AlignmentFlag.AlignCenter, qty_str)
-
-        legend_left = donut_rect.right() + 30
-        legend_w = w - legend_left - 15
-        row_h = 32
-        legend_y = content_top + max(0, (avail_h - len(self.rows) * row_h) / 2)
-
-        for i, r in enumerate(self.rows):
-            name = r['person_name']
-            qty = r.get('quantity')
-            share = r.get('share')
-            color = palette[i % len(palette)]
-            row_rect = QRectF(legend_left, legend_y, legend_w, row_h)
-            self.hits.append((row_rect, name))
-
-            if name == self.selected_name:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(t.selected))
-                p.drawRoundedRect(row_rect.adjusted(0, 2, 0, -2), 6, 6)
-
-            dot_y = legend_y + (row_h - 10) / 2
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(color))
-            p.drawEllipse(QRectF(legend_left + 8, dot_y, 10, 10))
-
-            p.setPen(QColor(t.heading))
-            font.setPointSize(10)
-            font.setBold(name == self.selected_name)
-            p.setFont(font)
-            p.drawText(QRectF(legend_left + 26, legend_y, legend_w * 0.35, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
-
-            p.setPen(QColor(t.text))
-            font.setBold(False)
-            p.setFont(font)
-            q_text = f'{qty:,.8f}'.rstrip('0').rstrip('.') + ' 股' if qty is not None else '—'
-            p.drawText(QRectF(legend_left + 26 + legend_w * 0.35, legend_y, legend_w * 0.35, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, q_text)
-
-            p.setPen(QColor(t.muted))
-            s_text = f'{share:.2%}' if share is not None else '—'
-            p.drawText(QRectF(legend_left + legend_w * 0.72, legend_y, legend_w * 0.28, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, s_text)
-
-            legend_y += row_h
+class OwnershipBars(ChartCanvas):
+    selected_name=None
+    def paintEvent(self,event):
+        super().paintEvent(event)
+        if self.selected_name:
+            painter=QPainter(self);painter.setPen(QPen(QColor(tokens(self).brand),2));painter.setBrush(Qt.BrushStyle.NoBrush)
+            for rect,name,_,_ in self.hits:
+                if name==self.selected_name:painter.drawRoundedRect(rect.adjusted(1,1,-1,-1),4,4)
 
 
 class OwnershipAnalysisPage(QWidget):
@@ -174,13 +45,15 @@ class OwnershipAnalysisPage(QWidget):
         body.addLayout(row)
         self.check=QLabel();self.check.setWordWrap(True);body.addWidget(self.check)
         charts=QHBoxLayout()
-        self.chart=OwnershipPie();self.chart.setMinimumHeight(250);charts.addWidget(self.chart,2)
+        chart_column=QVBoxLayout();self.mode=QComboBox();self.mode.addItems(('持股数量','占比'));chart_column.addWidget(self.mode)
+        self.chart=OwnershipBars();self.chart.setMinimumHeight(250);chart_column.addWidget(self.chart);charts.addLayout(chart_column,2)
         self.cost=QLabel();self.cost.setWordWrap(True);charts.addWidget(self.cost,1);body.addLayout(charts)
         self.table=QTreeWidget();self.table.setColumnCount(10);self.table.setHeaderLabels(COLUMNS);self.table.setAlternatingRowColors(True);self.table.setMinimumHeight(330);self.table.setRootIsDecorated(True)
         self.table.header().setSectionsClickable(True);self.table.header().setSortIndicatorShown(True);self.table.header().setSortIndicator(1,Qt.SortOrder.DescendingOrder)
         body.addWidget(self.table)
         self.note=QLabel();self.note.setWordWrap(True);body.addWidget(self.note)
         self.stock.currentIndexChanged.connect(self.stock_changed);self.date.dateChanged.connect(lambda:self.activate(True));self.search.textChanged.connect(self.redraw)
+        self.mode.currentIndexChanged.connect(self.redraw)
         self.chart.selected.connect(lambda link,name:self.select_person(name))
         self.table.itemExpanded.connect(lambda item:self.expanded.add(item.data(0,Qt.ItemDataRole.UserRole)))
         self.table.itemCollapsed.connect(lambda item:self.expanded.discard(item.data(0,Qt.ItemDataRole.UserRole)))
@@ -251,7 +124,12 @@ class OwnershipAnalysisPage(QWidget):
         self.check.setStyleSheet('color:'+str(t.profit if rec['ok'] else t.loss))
         ca=d['cost_analysis'];self.cost.setText('成本分析摘要\n\n最低成本：'+(ca['lowest']['name']+' '+fmt(ca['lowest']['cost']) if ca['lowest'] else '—')+'\n最高成本：'+(ca['highest']['name']+' '+fmt(ca['highest']['cost']) if ca['highest'] else '—')+'\n加权平均成本：'+fmt(ca['weighted'])+('\n部分成本缺失，极值仅比较有效成本。' if not ca['complete'] else ''))
         rows=d['rows']
-        self.chart.set_data(d['symbol'],rows,d['summary']['broker_quantity'],self.selected)
+        bars=tuple((r['person_name'],r['quantity'] if self.mode.currentIndex()==0 else r['share']) for r in rows)
+        self.chart.chart=Chart(0,'人员持股分布','horizontal',(Series('人员',bars),),'占比以券商总股数为分母，未归一化。',ratio=self.mode.currentIndex()==1,
+                               point_labels={r['person_name']:fmt(r['quantity'],quantity=True)+' 股 · '+fmt(r['share'],True) for r in rows})
+        self.chart.selected_name=self.selected;self.chart.bar_color=t.brand
+        self.chart.empty_message='没有可绘制的有效股数或占比，请查看股数核对提示。'
+        self.chart.setFixedHeight(max(250,100+len(rows)*38));self.chart.update()
         rows=sorted(rows,key=lambda r:(r[self.sort_key] is None,-r[self.sort_key] if self.descending and r[self.sort_key] is not None else r[self.sort_key] or Decimal(0)))
         self.table.blockSignals(True);self.table.clear()
         keys=('quantity','share','cost','cost_total','price','market_value','rate','pnl')

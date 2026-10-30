@@ -16,7 +16,7 @@ export function OwnershipAnalysisView({refresh=0,reset=0}: {refresh?:number;rese
   const [instrument,setInstrument]=useState('');const [day,setDay]=useState(today());const [search,setSearch]=useState('');
   const [choices,setChoices]=useState<any[]>([]);const [stockSearch,setStockSearch]=useState('');
   const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [loading,setLoading]=useState(false);
-  const [revision,setRevision]=useState(0);
+  const [revision,setRevision]=useState(0);const [mode,setMode]=useState("quantity");
   const [selected,setSelected]=useState<number|null>(null);const [expanded,setExpanded]=useState<Set<number>>(new Set());
   const [sort,setSort]=useState({key:'quantity',desc:true});
   const resetLocal=()=>{setInstrument('');setStockSearch('');setDay(today());setSearch('');setSelected(null);setExpanded(new Set());setSort({key:'quantity',desc:true});setRevision(v=>v+1);};
@@ -39,7 +39,7 @@ export function OwnershipAnalysisView({refresh=0,reset=0}: {refresh?:number;rese
     <div className="card-panel ownership-controls">
       <input aria-label="Ticker搜索" placeholder="搜索 Ticker" value={stockSearch} onChange={e=>setStockSearch(e.target.value)}/>
       <label>股票 <select aria-label="选择股票" value={instrument||String(data?.instrument_id||'')} onChange={e=>{setInstrument(e.target.value);setSelected(null);setExpanded(new Set());}}><option value="">默认股票</option>{choices.filter((c:any)=>(c.label||c.symbol).toUpperCase().includes(stockSearch.toUpperCase())).map((c:any)=><option key={c.id} value={c.id}>{c.label||c.symbol}</option>)}</select></label>
-      <label>统计截止日期 <input type="date" aria-label="统计截止日期" max={today()} value={day} onChange={e=>setDay(e.target.value)}/></label>
+      <label>统计截止日期 <input type="date" aria-label="统计截止日期" max={today()} value={day} onChange={e=>{setDay(e.target.value);setInstrument('');setSelected(null);setExpanded(new Set());}}/></label>
       <input aria-label="人员搜索" placeholder="搜索人员" value={search} onChange={e=>setSearch(e.target.value)}/>
       <button className="btn" onClick={()=>setRevision(v=>v+1)}>刷新</button><button className="btn" onClick={resetLocal}>重置筛选</button>
       <a className="btn" href={data?`/api/v1/ownership?${query}`:undefined} aria-disabled={!data}>导出报表</a>
@@ -55,11 +55,8 @@ export function OwnershipAnalysisView({refresh=0,reset=0}: {refresh?:number;rese
       </div>
       <div className="ownership-middle">
         <div className="card-panel"><div className="ownership-controls"><strong>人员持股分布</strong></div>
-          <ReactECharts style={{height:260}} option={{
-            tooltip:{trigger:'item',formatter:(p:any)=>`${p.name}：${qty(p.value)} 股 (${pct(data.rows.find((x:any)=>x.person_name===p.name)?.share)})`},
-            legend:{orient:'vertical',right:20,top:'middle',formatter:(name:string)=>{const r=data.rows.find((x:any)=>x.person_name===name);return r?`${name}   ${qty(r.quantity)} 股 · ${pct(r.share)}`:name;}},
-            series:[{type:'pie',radius:['45%','70%'],center:['32%','50%'],itemStyle:{borderRadius:4,borderColor:'var(--panel-color,#fff)',borderWidth:2},label:{show:false},emphasis:{label:{show:true,fontSize:14,fontWeight:'bold',formatter:'{b}\n{d}%'}},data:data.rows.map((r:any)=>({name:r.person_name,value:Number(r.quantity),itemStyle:selected===r.person_id?{shadowBlur:12,shadowColor:'rgba(0,0,0,0.4)'}:undefined}))}]
-          }} onEvents={{click:(p:any)=>{const r=data.rows[p.dataIndex];setSelected(selected===r?.person_id?null:r?.person_id);}}}/>
+          <div className="ownership-controls"><button className="btn" aria-pressed={mode==='quantity'} onClick={()=>setMode('quantity')}>持股数量</button><button className="btn" aria-pressed={mode==='share'} onClick={()=>setMode('share')}>占比</button></div>
+          <ReactECharts style={{height:Math.max(240,(data.rows?.length||0)*38+60)}} option={{tooltip:{trigger:'axis',formatter:(params:any)=>{const r=data.rows[params[0].dataIndex];return `${r.person_name}：${qty(r.quantity)} 股 · ${pct(r.share)}`;}},grid:{left:75,right:150,top:18,bottom:20},xAxis:{type:'value',axisLabel:{formatter:(v:number)=>mode==='share'?`${(v*100).toFixed(0)}%`:v}},yAxis:{type:'category',inverse:true,data:data.rows.map((r:any)=>r.person_name)},series:[{type:'bar',barMaxWidth:18,data:data.rows.map((r:any)=>({value:r[mode]==null?null:Number(r[mode]),itemStyle:{color:'#3979f5',opacity:selected==null||selected===r.person_id?1:.35}})),label:{show:true,position:'right',formatter:(p:any)=>`${qty(data.rows[p.dataIndex].quantity)} 股 · ${pct(data.rows[p.dataIndex].share)}`}}]}} onEvents={{click:(p:any)=>setSelected(selected===data.rows[p.dataIndex].person_id?null:data.rows[p.dataIndex].person_id)}}/>
         </div>
         <div className="card-panel ownership-cost-summary"><h3>成本分析摘要</h3><p>最低成本：{costs?.lowest?`${costs.lowest.name} · ${money(costs.lowest.cost)}`:'—'}</p><p>最高成本：{costs?.highest?`${costs.highest.name} · ${money(costs.highest.cost)}`:'—'}</p><p>加权平均成本：{money(costs?.weighted)}</p>{!costs?.complete&&<p>部分成本缺失，极值仅比较有效成本。</p>}</div>
       </div>
