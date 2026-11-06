@@ -62,11 +62,22 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         import traceback
+        exc_str = str(exc)
         print(
             f"[ERROR] 同步失败 [{type(exc).__name__}]: {exc}",
             file=sys.stderr,
         )
         print("--- 详细报错堆栈 ---", file=sys.stderr)
         traceback.print_exc()
-        print("--- 请根据上方具体报错排查对应流水字段、行数据或数据库约束 ---", file=sys.stderr)
+
+        # 如果属于嘉信授权过期类错误，高亮打印直接复制可运行的解决方案
+        if "authorize_schwab" in exc_str or "嘉信刷新授权失效" in exc_str:
+            print("\n" + "=" * 68, file=sys.stderr)
+            print("  🚨【检测到嘉信理财 (Schwab) 授权已过期 (约7天周期)】", file=sys.stderr)
+            print("  👉 解决办法：在终端中直接复制并运行以下命令完成浏览器授权：", file=sys.stderr)
+            print("     cd /Users/tangtao/money3 && .venv/bin/python scripts/authorize_schwab.py", file=sys.stderr)
+            print("  👉 流程说明：登录嘉信 -> 复制浏览器跳转后的完整URL -> 粘回终端回车 -> 重新启动", file=sys.stderr)
+            print("=" * 68 + "\n", file=sys.stderr)
+        else:
+            print("--- 请根据上方具体报错排查对应流水字段、行数据或数据库约束 ---", file=sys.stderr)
         raise SystemExit(1)

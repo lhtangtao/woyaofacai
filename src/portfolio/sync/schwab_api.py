@@ -154,10 +154,13 @@ def describe_exception(exc: Exception, stage: str) -> str:
             marker in description for marker in ("expired", "revoked", "invalid")
         ):
             return (
-                f"{stage}失败 [嘉信刷新授权失效]：嘉信拒绝刷新 Token（已过期、撤销或无效）。"
-                "刷新授权通常约 7 天需要重新登录，反复重试不能恢复。请运行 "
-                "money3/.venv/bin/python money3/scripts/authorize_schwab.py，在本机浏览器重新授权后再运行Money3同步。"
-                "不要把 Token 或完整回调网址发送给他人。"
+                f"{stage}失败 [嘉信刷新授权失效]：嘉信拒绝刷新 Token（已过期、撤销或无效）。\n\n"
+                "💡【快速解决方案】嘉信官方刷新 Token 有效期约 7 天，现已过期。请按以下步骤重新授权：\n"
+                "  1. 打开终端执行以下命令：\n"
+                "     cd /Users/tangtao/money3 && .venv/bin/python scripts/authorize_schwab.py\n"
+                "  2. 浏览器将自动打开嘉信登录页面，输入账号密码完成登录。\n"
+                "  3. 授权成功后跳转，复制浏览器地址栏的完整网址（URL），粘贴回终端按回车。\n"
+                "  4. 看到 [OK] 提示后重新启动 Money3 即可。\n"
             )
     oauth_reasons = {
         "invalid_grant": "Refresh Token 已过期、撤销或不可用；若发生在首次授权，授权码也可能过期或已使用。请重新运行 --authorize，使用本次新链接完成授权。",
