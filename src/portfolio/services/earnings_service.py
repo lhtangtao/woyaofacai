@@ -136,6 +136,8 @@ def release_status(event, now=None):
 
     if event.confirmed_published:
         return '已发布（长桥实际财报确认）' if event.verification_source.startswith('longbridge:') else '已发布（公司公告确认）'
+    if event.session_change is not None and event.session_final:
+        return '已发布（行情时段已确认）'
     now = now or datetime.now(timezone.utc)
     market = event.symbol.rsplit('.', 1)[-1]
     local = now.astimezone(ZoneInfo(MARKET_ZONES.get(market, 'America/New_York')))
@@ -503,9 +505,27 @@ class EarningsService:
         events = tuple(e for result in results for e in result.events if e.symbol in targets)
         missing = sorted(set(targets)-{e.symbol for e in events})
         warning = '未缓存的公司日程正在后台补查：'+'、'.join(missing) if missing else ''
-        return replace(results[0], events=tuple(e for e in results[0].events if e.symbol in targets),
-                       fetched_at=min(result.fetched_at for result in results),
-                       coverage_events=events, coverage_warning=warning)
+        res = replace(results[0], events=tuple(e for e in results[0].events if e.symbol in targets),
+                      fetched_at=min(result.fetched_at for result in results),
+                      coverage_events=events, coverage_warning=warning)
+        # 对于已进入发布窗口或已结束的持仓标的，主动同步一次时段涨跌幅
+        if targets and any(session_refresh_due(e) for e in res.events):
+            try:
+                updated_events = self._with_session_changes(res.events, path, targets, year=year, month=month)
+                if updated_events != res.events:
+                    res = replace(res, events=updated_events)
+                    # 同步回写持久化缓存
+                    key = (str(path), year, month, tuple(sorted(markets)))
+                    full_cached = results[0]
+                    merged_full = []
+                    updated_dict = {(e.symbol, e.day): e for e in updated_events}
+                    for e in full_cached.events:
+                        merged_full.append(updated_dict.get((e.symbol, e.day), e))
+                    updated_month = EarningsMonth(tuple(merged_full), full_cached.fetched_at, full_cached.warning)
+                    self._update_cache(key, path, year, month, markets, updated_month)
+            except Exception as exc:
+                logger.debug('[财报行情补查] 本地缓存补查时段涨跌跳过: %s', exc)
+        return res
 
     def _get_quote_context(self, path):
         if self.quote_factory:
