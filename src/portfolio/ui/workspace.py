@@ -288,7 +288,11 @@ def build_workspace(self):
     self.next.clicked.connect(lambda: self.turn_page(1))
     paging.addWidget(self.next)
     trade_layout.addLayout(paging)
-    self.pages.addWidget(trades_page)
+    from portfolio.ui.trade_center_page import TradeCenterPage
+    self.trade_center = TradeCenterPage(self)
+    self.pages.addWidget(self.trade_center)
+    trades_page.hide()
+    self._legacy_trade_page = trades_page
     self.source_details = QPlainTextEdit()
     self.source_details.setReadOnly(True)
     self.source_details.setPlaceholderText("连接数据库后显示文件信息、结构检查和各类数据时间。")

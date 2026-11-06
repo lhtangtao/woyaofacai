@@ -120,7 +120,9 @@ export const App: React.FC = () => {
     }
   };
 
+  const [tradeRefresh,setTradeRefresh]=useState(0);
   const handleRefresh = () => {
+    if(currentRoute === "trades"){setTradeRefresh(v=>v+1);return;}
     if(currentRoute === "ownership"){setOwnershipRefresh(v=>v+1);return;}
     setRefreshKey((k) => k + 1);
   };
@@ -253,7 +255,7 @@ export const App: React.FC = () => {
           onResetFilters={assetRoute ? resetAssetFilters : undefined}
           dbName={bootstrap?.database?.name || "money.sqlite3"}
           user={bootstrap?.user || null}
-          hidePersonSelector={currentRoute === "ownership"}
+          hidePersonSelector={currentRoute === "ownership" || currentRoute === "trades"}
           persons={bootstrap?.persons || []}
           currentPersonId={selectedPersonId}
           onPersonChange={setSelectedPersonId}
@@ -268,7 +270,7 @@ export const App: React.FC = () => {
 
             {currentRoute === "trades" && (
               <TradesView
-                personId={selectedPersonId}
+                refreshKey={tradeRefresh}
                 persons={bootstrap?.persons || []}
                 accounts={bootstrap?.accounts || []}
               />

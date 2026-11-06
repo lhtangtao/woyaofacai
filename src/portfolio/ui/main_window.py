@@ -487,6 +487,10 @@ class MainWindow(InteractionMixin, QMainWindow):
         )
 
     def refresh(self):
+        if hasattr(self, "trade_center") and self.pages.currentIndex() == 0:
+            self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
+            self.side.hide();self.export_button.hide()
+            self.trade_center.activate(True);return
         if self.ownership_view():
             self.asset_page.ownership_page.activate(True);return
         if self._filter_batch or self.info is None or not self.filters_widget.isEnabled():
@@ -867,6 +871,8 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.choose_database()
 
     def export_current_page(self):
+        if self.pages.currentIndex() == 0 and hasattr(self, "trade_center"):
+            self.trade_center.export();return
         if self.current_page is None:
             return
         path, _ = QFileDialog.getSaveFileName(self, "导出当前已查询的一页（保留 Decimal 精度）", "交易明细.csv", "CSV (*.csv)")
@@ -878,6 +884,8 @@ class MainWindow(InteractionMixin, QMainWindow):
                 QMessageBox.warning(self, "导出未完成", "目标文件已存在或不可写。请选择新文件名；程序不会覆盖已有文件。")
 
     def closeEvent(self, event):
+        if hasattr(self, "trade_center"):
+            for worker in self.trade_center.jobs.values():worker.cancel.set()
         self.monitor_page.clear()
         self.live_panel.stop()
         for worker in self.jobs.values():

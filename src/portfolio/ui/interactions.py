@@ -276,6 +276,12 @@ class InteractionMixin:
             self.filters_widget.hide();self.live_panel.hide();self.banner.hide()
             self.asset_reset_button.show();self.asset_page.ownership_page.activate()
             self.update_history_buttons();return
+        if page == 0 and hasattr(self, "trade_center"):
+            self.heading.setText("交易明细")
+            self.description.setText("查询每笔交易，追踪历史持仓、成本变化与订单来源；金额按币种列示。")
+            self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
+            self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
+            self.trade_center.activate();self.update_history_buttons();return
         self.sync_date_granularity()
         self.description.setText("按日期查看持仓、当日盈亏与累计盈亏；今天每10秒刷新行情，历史日期使用收盘数据。" if self.today_snapshot() else DESCRIPTIONS[page])
         if page == 17:
