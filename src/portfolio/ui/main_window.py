@@ -457,7 +457,31 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.page_number = 0
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
+        if hasattr(self, "holdings_page"):
+            self.holdings_page.sync_person_from_main(self.person.currentData())
+            self.holdings_page.sync_broker_from_main(self.accounts.current_broker_name())
+        if hasattr(self, "earnings_page") and self.pages.currentIndex() == 14:
+            self.earnings_page.activate()
         self.refresh()
+
+    def sync_person_from_holdings(self, person_id):
+        """持仓管理切换人员时，反向同步主窗口全局人员筛选器。"""
+        if getattr(self, "_filter_batch", False):
+            return
+        curr = self.person.currentData()
+        if curr == person_id:
+            return
+        self.person.set_person_id(person_id)
+
+    def sync_broker_from_holdings(self, broker_name):
+        """持仓管理切换渠道时，反向同步主窗口全局渠道筛选器。"""
+        if getattr(self, "_filter_batch", False):
+            return
+        curr = self.accounts.current_broker_name()
+        clean = (broker_name or "").strip()
+        if curr == clean:
+            return
+        self.accounts.set_broker_name(clean)
 
     def make_scope(self):
         person = self.person.currentData()
@@ -586,23 +610,25 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.reconcile_page.clear("选择 Excel 进行当前范围对账")
 
     def get_holdings_analytics(self):
-        """Return analytics instance with all-people scope for modern HoldingsPage.
-
-        HoldingsPage operates with independent personnel selection (defaulting to all people)
-        and does not link with other pages' person filters.
-        """
+        """Return analytics instance with all-people and all-accounts scope for modern HoldingsPage."""
         if not self.analytics_service or self.info is None:
             return None
-        # 如果当前全局 analytics 就是全部启用人员且为人员账本，直接复用
-        if self.analytics and getattr(self.analytics, "scope", None) and self.analytics.scope.person_ids is None and self.analytics.scope.ledger == Ledger.PERSON:
+        # 如果当前全局 analytics 就是全部启用人员且为全渠道人员账本，直接复用
+        if (
+            self.analytics
+            and getattr(self.analytics, "scope", None)
+            and self.analytics.scope.person_ids is None
+            and self.analytics.scope.account_ids is None
+            and self.analytics.scope.ledger == Ledger.PERSON
+        ):
             return self.analytics
         try:
             from dataclasses import replace
             base_scope = self.make_scope()
-            all_scope = replace(base_scope, ledger=Ledger.PERSON, person_ids=None)
+            all_scope = replace(base_scope, ledger=Ledger.PERSON, person_ids=None, account_ids=None)
             return self.analytics_service.calculate(all_scope)
         except Exception as e:
-            logger.warning(f"[持仓管理] 获取全员分析对象失败，降级复用当前分析对象: {e}")
+            logger.warning(f"[持仓管理] 获取全员全渠道分析对象失败，降级复用当前分析对象: {e}")
             return self.analytics
 
     def preload_people_bundle(self):

@@ -42,7 +42,7 @@ def serialize_val(val: Any) -> Any:
 
 class HoldingsManagementService:
     @staticmethod
-    def get_dashboard_data(analytics, scope: QueryScope | None = None, person_id: int | None = None) -> dict[str, Any]:
+    def get_dashboard_data(analytics, scope: QueryScope | None = None, person_id: int | None = None, broker: str | None = None) -> dict[str, Any]:
         """Compute top 4 cards, person/broker/stock summaries, and distribution data."""
         start_t = time.monotonic()
         if not analytics or not hasattr(analytics, "reports"):
@@ -63,6 +63,9 @@ class HoldingsManagementService:
         pa_rows = pa.rows if pa else ()
         if person_id is not None and pa_rows:
             pa_rows = tuple(r for r in pa_rows if r.metadata.get("person_id") == person_id)
+        if broker and pa_rows:
+            clean_b = broker.strip().upper()
+            pa_rows = tuple(r for r in pa_rows if clean_b in (r.values[1] or "").strip().upper() or (r.values[1] or "").strip().upper() in clean_b)
 
         # 实时行情叠加：优先使用最新实时报价更新持有中标的的市值、浮动盈亏与浮动收益率
         latest_quotes_map = HoldingsManagementService.get_latest_quotes_map()
@@ -201,7 +204,7 @@ class HoldingsManagementService:
 
         # --- 2. 券商持仓汇总 ---
         broker_summary = []
-        if qh_rows and person_id is None:
+        if qh_rows and person_id is None and not broker:
             for r in qh_rows:
                 channel = r.values[0]
                 mv = r.values[1] or Decimal(0)

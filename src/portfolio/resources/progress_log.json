@@ -1,5 +1,21 @@
 [
   {
+    "title": "资产管理全模块筛选器双向联动：统一人员与券商渠道筛选状态",
+    "time": "2026-11-07 01:30",
+    "author": "Antigravity",
+    "tag": "代码已修改并通过全链路联动测试，待用户验收",
+    "details": [
+      "修改者：Antigravity（资产管理全页面筛选联动统一）",
+      "用户诉求：资产管理分类下的所有页面（资产总览、今日盈亏、持仓管理、股票归属、持仓财报日历）需要统一筛选逻辑。无论在哪个页面更改了券商渠道（如切到长桥或全部渠道）或更改了人员（如从全部启用人员切到个人或华），其他所有页面必须自动同步切换到对应的人员和渠道，杜绝各页面筛选状态割裂。",
+      "桌面端双向联动（Mac 原生）：",
+      "1) AccountFilter 与 PersonFilter 拓展（filters.py）：AccountFilter 增加 current_broker_name() 与 set_broker_name(broker_name) 单选/重置支持；PersonFilter 增加 set_person_id(person_id) 快捷设置支持；",
+      "2) 持仓管理双向同步（holdings_page.py）：提供 sync_person_from_main 与 sync_broker_from_main，接收主窗口全局人员及渠道切换；在人员药丸点击与明细表券商下拉框切换时，通过 sync_person_from_holdings 与 sync_broker_from_holdings 反向同步主窗口全局筛选器，且内置 _syncing 互斥锁防止递归死循环；",
+      "3) 主窗口调度与路由保持（main_window.py / interactions.py）：在 filters_changed() 中统一将人员与渠道派发至 holdings_page 与 earnings_calendar；在 route_changed 切入各页面时自动对齐状态；",
+      "4) 仪表板与明细表全层过滤（holdings_management_service.py）：get_dashboard_data 增加 broker 维度支持，切换渠道后顶部卡片、人员汇总、券商汇总、股票汇总及资产分布饼图全部同步按所选渠道过滤；",
+      "Web 端状态提升（frontend/src/）：App.tsx 增加全局 selectedBroker 状态，与 selectedPersonId 一并贯穿传递给 HoldingsView 与 ReportsView（TodayPnlView），在任何视图切换渠道或人员均双向回传并在全模块同步生效，前端生产构建完成（npm run build）。"
+    ]
+  },
+  {
     "title": "持仓财报日历：优化时段行情与发布状态确认，实时呈现已披露标的盘前盘后涨跌幅",
     "time": "2026-11-07 00:46",
     "author": "Antigravity",

@@ -22,6 +22,8 @@ interface HoldingsViewProps {
   personId?: number | null;
   persons?: { id: number; name: string; enabled?: boolean }[];
   onPersonChange?: (id: number | null) => void;
+  broker?: string;
+  onBrokerChange?: (broker: string) => void;
   initialDimension?: "person" | "broker" | "stock";
   initialStatus?: string;
   initialMode?: "dashboard" | "detail";
@@ -36,6 +38,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   personId,
   persons = [],
   onPersonChange,
+  broker,
+  onBrokerChange,
   initialDimension = "person",
   initialStatus = "持有中",
   initialMode = "dashboard",
@@ -50,7 +54,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(
     personId !== undefined ? personId : initialFilter.person_id ?? null
   );
-  const [selectedBroker, setSelectedBroker] = useState<string>(initialFilter.broker || "");
+  const [selectedBroker, setSelectedBroker] = useState<string>(
+    broker !== undefined ? broker : initialFilter.broker || ""
+  );
   const [selectedTicker, setSelectedTicker] = useState<string>(initialFilter.ticker || "");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
 
@@ -119,6 +125,13 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       setSelectedPersonId(personId);
     }
   }, [personId]);
+
+  // Sync external broker changes
+  useEffect(() => {
+    if (broker !== undefined) {
+      setSelectedBroker(broker);
+    }
+  }, [broker]);
 
   // Load Dashboard Data
   const loadDashboard = () => {
@@ -993,6 +1006,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 value={selectedBroker}
                 onChange={(e) => {
                   setSelectedBroker(e.target.value);
+                  if (onBrokerChange) onBrokerChange(e.target.value);
                   setDetailPage(1);
                 }}
                 className="input-control"

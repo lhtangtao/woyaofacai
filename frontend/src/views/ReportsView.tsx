@@ -9,12 +9,16 @@ interface ReportsViewProps {
   initialReportName?: string;
   personId: number | null;
   reportsList: ReportMeta[];
+  broker?: string;
+  onBrokerChange?: (broker: string) => void;
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({
   initialReportName = "当前持仓",
   personId,
   reportsList,
+  broker,
+  onBrokerChange,
 }) => {
   const [currentReport, setCurrentReport] = useState<string>(initialReportName);
   const [reportData, setReportData] = useState<ReportDetailData | null>(null);
@@ -125,7 +129,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const totalPages = reportData?.total_pages || Math.max(1, Math.ceil(totalRows / pageSize));
 
   if (currentReport === "今日盈亏") return (
-    <ErrorBoundary fallbackTitle="今日盈亏渲染异常"><TodayPnlView personId={personId} /></ErrorBoundary>
+    <ErrorBoundary fallbackTitle="今日盈亏渲染异常">
+      <TodayPnlView personId={personId} channel={broker} onChannelChange={onBrokerChange} />
+    </ErrorBoundary>
   );
 
   return (

@@ -311,13 +311,18 @@ class InteractionMixin:
             self.banner.hide()
         if page == 2 and target == "calendar":
             QTimer.singleShot(0, lambda: self.dashboard.scroll.ensureWidgetVisible(self.dashboard.calendar_table))
+        if page == 14 and hasattr(self, 'earnings_page'):
+            self.earnings_page.activate()
         if page == 17 and self.analytics:
             self.top_days_page.set_analytics(self.analytics)
         if page == 18 and hasattr(self, 'monthly_realtime_page'):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             self.monthly_realtime_page.set_analytics(self.analytics)
-        if page == 22 and hasattr(self, 'holdings_page') and self.analytics:
-            self.holdings_page.set_analytics(self.get_holdings_analytics())
+        if page == 22 and hasattr(self, 'holdings_page'):
+            self.holdings_page.sync_person_from_main(self.person.currentData())
+            self.holdings_page.sync_broker_from_main(self.accounts.current_broker_name())
+            if self.analytics:
+                self.holdings_page.set_analytics(self.get_holdings_analytics())
         self.ensure_analytics()
         if page == 0 and self.info is not None and (self.current_page is None or self.current_page.scope != self.make_scope()):
             self.refresh()

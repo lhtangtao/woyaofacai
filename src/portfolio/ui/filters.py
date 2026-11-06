@@ -121,6 +121,36 @@ class AccountFilter(QToolButton):
             action.blockSignals(False)
         self._changed()
 
+    def current_broker_name(self) -> str:
+        """返回当前单选的券商渠道名称（如 '长桥'、'BBAE'），若未选或多选则返回空字符串。"""
+        ids = self.selected_ids()
+        if ids and len(ids) == 1:
+            act = self.actions_by_id.get(ids[0])
+            if act:
+                return act.text().replace("（停用）", "").strip()
+        return ""
+
+    def set_broker_name(self, broker_name: str | None):
+        """按券商渠道名称设置选中；若为 None、空字符串或'全部渠道'，则重置为全部渠道。"""
+        clean = (broker_name or "").strip()
+        if not clean or clean == "全部渠道":
+            self.reset()
+            return
+        matched = False
+        for action in self.actions_by_id.values():
+            name = action.text().replace("（停用）", "").strip()
+            action.blockSignals(True)
+            if name == clean or clean.upper() in name.upper() or name.upper() in clean.upper():
+                action.setChecked(True)
+                matched = True
+            else:
+                action.setChecked(False)
+            action.blockSignals(False)
+        if not matched:
+            self.reset()
+        else:
+            self._changed()
+
     def _changed(self):
         ids = self.selected_ids()
         self.setText(self.actions_by_id[ids[0]].text() if ids and len(ids) == 1 else f"已选 {len(ids)} 个渠道" if ids else "全部渠道")
@@ -307,3 +337,14 @@ class PersonFilter(QToolButton):
         if not self.signalsBlocked():
             self.changed.emit()
             self.currentIndexChanged.emit(self.currentIndex())
+
+    def set_person_id(self, person_id):
+        """按人员 ID 设置选中；None 表示全部启用人员。"""
+        if person_id is None:
+            self.reset()
+            return
+        idx = self.findData(person_id)
+        if idx >= 0:
+            self.setCurrentIndex(idx)
+        else:
+            self.reset()

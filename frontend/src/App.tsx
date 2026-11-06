@@ -27,8 +27,9 @@ export const App: React.FC = () => {
   const [historyIndex, setHistoryIndex] = useState(0);
   const currentRoute = history[historyIndex] || "overview";
 
-  // Person Filter State
+  // Filter States (Unified across all Asset Management views)
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
+  const [selectedBroker, setSelectedBroker] = useState<string>("");
   const [assetResetKey, setAssetResetKey] = useState(0);
   const [ownershipRefresh,setOwnershipRefresh]=useState(0);
 
@@ -134,6 +135,7 @@ export const App: React.FC = () => {
     const isolatedId = bootstrap?.user?.role === "user" ? bootstrap.user.person_id : null;
     const personalId = bootstrap?.persons?.find((person) => person.name === "个人")?.id ?? null;
     setSelectedPersonId(isolatedId ?? personalId);
+    setSelectedBroker("");
     setAssetResetKey((key) => key + 1);
   };
 
@@ -279,7 +281,10 @@ export const App: React.FC = () => {
             {currentRoute === "holdings" && (
               <HoldingsView
                 key={assetResetKey}
-                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
                 initialMode="dashboard"
               />
@@ -287,7 +292,10 @@ export const App: React.FC = () => {
             {currentRoute === "reports:当前持仓" && (
               <HoldingsView
                 key={`open:${assetResetKey}`}
-                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
                 initialMode="detail"
                 initialStatus="持有中"
@@ -296,7 +304,10 @@ export const App: React.FC = () => {
             {currentRoute === "reports:股票汇总" && (
               <HoldingsView
                 key={`stock:${assetResetKey}`}
-                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
                 initialMode="detail"
                 initialDimension="stock"
@@ -305,7 +316,10 @@ export const App: React.FC = () => {
             {currentRoute === "people" && (
               <HoldingsView
                 key={`people:${assetResetKey}`}
-                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
                 initialMode="detail"
                 initialDimension="person"
@@ -314,7 +328,10 @@ export const App: React.FC = () => {
             {currentRoute === "brokers" && (
               <HoldingsView
                 key={`brokers:${assetResetKey}`}
-                personId={!bootstrap?.user?.person_id ? null : selectedPersonId}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
                 initialMode="detail"
                 initialDimension="broker"
@@ -327,6 +344,8 @@ export const App: React.FC = () => {
                 key={`${currentRoute}:${assetResetKey}`}
                 initialReportName={currentRoute.replace("reports:", "")}
                 personId={selectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
                 reportsList={bootstrap?.reports || []}
               />
             )}

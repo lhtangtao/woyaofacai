@@ -898,7 +898,7 @@ class HoldingsPage(QWidget):
         self.broker_combo.addItem("BBAE", "BBAE")
         self.broker_combo.addItem("第一证券", "第一证券")
         self.broker_combo.addItem("嘉信", "嘉信")
-        self.broker_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.broker_combo.currentIndexChanged.connect(self._on_broker_combo_changed)
         detail_bar.addWidget(self.broker_combo)
 
         # Search input
@@ -984,7 +984,12 @@ class HoldingsPage(QWidget):
                 idx = self.person_tab_bar.addTab(p["name"])
                 self.person_tab_bar.setTabData(idx, p["id"])
 
-        # 默认高亮选中“全部启用人员”（独立过滤，不与其他页面联动）
+        # 优先与主窗口全局人员筛选状态联动对齐
+        if self._selected_person_filter is None and self.main_window and hasattr(self.main_window, "person"):
+            p_val = self.main_window.person.currentData()
+            if isinstance(p_val, int):
+                self._selected_person_filter = p_val
+
         cur_idx = 0
         if self._selected_person_filter is not None:
             for i in range(self.person_tab_bar.count()):
@@ -994,6 +999,12 @@ class HoldingsPage(QWidget):
         self.person_tab_bar.setCurrentIndex(cur_idx)
         self.person_tab_bar.blockSignals(False)
 
+        # 首次初始化时也与主窗口全局渠道筛选状态联动对齐
+        if self.main_window and hasattr(self.main_window, "accounts"):
+            b_name = self.main_window.accounts.current_broker_name()
+            if b_name:
+                self.sync_broker_from_main(b_name)
+
     def _on_person_tab_changed(self, idx):
         p_id = self.person_tab_bar.tabData(idx)
         self._selected_person_filter = p_id
@@ -1001,6 +1012,69 @@ class HoldingsPage(QWidget):
             self.refresh_dashboard()
         else:
             self.refresh_detail()
+        # 双向联动：反向同步给主窗口全局人员筛选器
+        if not getattr(self, "_syncing_person", False) and self.main_window:
+            if hasattr(self.main_window, "sync_person_from_holdings"):
+                self.main_window.sync_person_from_holdings(p_id)
+
+    def _on_broker_combo_changed(self, *_):
+        if self.view_mode == "dashboard":
+            self.refresh_dashboard()
+        else:
+            self.refresh_detail()
+        # 双向联动：反向同步给主窗口全局渠道筛选器
+        if not getattr(self, "_syncing_broker", False) and self.main_window:
+            broker_name = self.broker_combo.currentData() or ""
+            if hasattr(self.main_window, "sync_broker_from_holdings"):
+                self.main_window.sync_broker_from_holdings(broker_name)
+
+    def sync_person_from_main(self, person_id: int | None):
+        """主窗口全局人员变更时，同步更新持仓管理的人员 Tab。"""
+        if getattr(self, "_syncing_person", False):
+            return
+        if self._selected_person_filter == person_id:
+            return
+        self._syncing_person = True
+        try:
+            self._selected_person_filter = person_id
+            cur_idx = 0
+            if person_id is not None:
+                for i in range(self.person_tab_bar.count()):
+                    if self.person_tab_bar.tabData(i) == person_id:
+                        cur_idx = i
+                        break
+            self.person_tab_bar.blockSignals(True)
+            self.person_tab_bar.setCurrentIndex(cur_idx)
+            self.person_tab_bar.blockSignals(False)
+            if self.view_mode == "dashboard":
+                self.refresh_dashboard()
+            else:
+                self.refresh_detail()
+        finally:
+            self._syncing_person = False
+
+    def sync_broker_from_main(self, broker_name: str | None):
+        """主窗口全局渠道变更时，同步更新持仓管理的渠道下拉框。"""
+        if getattr(self, "_syncing_broker", False):
+            return
+        clean = (broker_name or "").strip()
+        curr_b = self.broker_combo.currentData() or ""
+        if curr_b == clean:
+            return
+        self._syncing_broker = True
+        try:
+            idx = self.broker_combo.findData(clean)
+            if idx < 0 and clean:
+                idx = self.broker_combo.findText(clean)
+            self.broker_combo.blockSignals(True)
+            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.broker_combo.blockSignals(False)
+            if self.view_mode == "dashboard":
+                self.refresh_dashboard()
+            else:
+                self.refresh_detail()
+        finally:
+            self._syncing_broker = False
 
     def switch_view_mode(self, mode: str):
         self.view_mode = mode
@@ -1061,7 +1135,12 @@ class HoldingsPage(QWidget):
         if not self.analytics:
             return
         t0 = time.monotonic()
-        dash = HoldingsManagementService.get_dashboard_data(self.analytics, person_id=self._selected_person_filter)
+        broker_filter = self.broker_combo.currentData() or None
+        dash = HoldingsManagementService.get_dashboard_data(
+            self.analytics,
+            person_id=self._selected_person_filter,
+            broker=broker_filter,
+        )
         self._cached_dash_data = dash
 
         # 1. Cards

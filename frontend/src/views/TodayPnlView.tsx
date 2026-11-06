@@ -22,11 +22,26 @@ const signStyle = (value: string | number | null | undefined) => value == null ?
 // Native ReportPage's visual column order; raw engine columns stay unchanged.
 const order = [0, 1, 2, 9, 3, 4, 12, 11, 13, 5, 6, 10, 7, 8];
 
-export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }) => {
+export const TodayPnlView: React.FC<{
+  personId: number | null;
+  channel?: string;
+  onChannelChange?: (channel: string) => void;
+}> = ({ personId, channel: propChannel, onChannelChange }) => {
   const [curveKind, setCurveKind] = useState("day");
   const [day, setDay] = useState(beijingDate);
   const [ticker, setTicker] = useState("");
-  const [channel, setChannel] = useState("");
+  const [channel, setChannel] = useState(propChannel || "");
+
+  useEffect(() => {
+    if (propChannel !== undefined) {
+      setChannel(propChannel);
+    }
+  }, [propChannel]);
+
+  const handleChannelChange = (val: string) => {
+    setChannel(val);
+    if (onChannelChange) onChannelChange(val);
+  };
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [live, setLive] = useState(true);
@@ -93,7 +108,10 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
   const snapshot = dataKey === key ? data : null;
   const curve = savedCurveKey === curveKey ? savedCurve : snapshot?.curve;
   const visibleColumns = showQuoteColumns ? order : order.filter(i => i !== 7 && i !== 8);
-  const selectChannel = (name: string) => setChannel(current => current === name ? "" : name);
+  const selectChannel = (name: string) => {
+    const next = channel === name ? "" : name;
+    handleChannelChange(next);
+  };
   const channelEvents = { click: (p: any) => {
     if (p.componentType === "series" || p.componentType === "xAxis" || p.componentType === "yAxis") selectChannel(String(p.name || p.value));
   } };
@@ -138,7 +156,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
     <div className="card-panel today-toolbar">
       <label>持仓日期 <input aria-label="持仓日期" type="date" className="input-control" value={day} max={beijingDate()}
         onChange={e => { if (e.target.value) setDay(e.target.value); }} /></label>
-      <label>渠道 <select aria-label="渠道" className="input-control" value={channel} onChange={e => setChannel(e.target.value)}>
+      <label>渠道 <select aria-label="渠道" className="input-control" value={channel} onChange={e => handleChannelChange(e.target.value)}>
         <option value="">全部渠道</option>
         {[...new Set([...(snapshot?.available_channels || []), ...(channel ? [channel] : [])])].map(c => <option key={c}>{c}</option>)}
       </select></label>
@@ -232,7 +250,7 @@ export const TodayPnlView: React.FC<{ personId: number | null }> = ({ personId }
         {snapshot?.channels.filter(c => c.asset == null).map(c => <p key={c.channel} className="today-warning">{c.channel}：持仓市值数据缺失</p>)}
         <table className="finance-table"><thead><tr><th>当前范围</th><th>当日盈亏</th><th>持仓市值</th></tr></thead>
           <tbody>{snapshot?.selected_channels.map(c => <tr key={c.channel}><td>{c.channel}</td><td>{money(c.pnl)}</td><td>{money(c.asset)}</td></tr>)}</tbody></table>
-        {channel && <button className="btn" onClick={() => setChannel("")}>恢复全部渠道</button>}
+        {channel && <button className="btn" onClick={() => handleChannelChange("")}>恢复全部渠道</button>}
       </div>
     </section>
     <p className="today-note">{snapshot?.note || "正在读取今日盈亏，缺报价或基准的指标保持未知。"}</p>

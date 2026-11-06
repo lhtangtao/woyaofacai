@@ -1,6 +1,6 @@
 """Local trade-center controls; all query and financial work runs in workers."""
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal,localcontext,ROUND_HALF_UP
 from pathlib import Path
 import json
 from PySide6.QtCore import QDate,Qt,QEvent
@@ -11,6 +11,25 @@ from portfolio.ui.workers import Worker
 from portfolio.ui.finance_table import FinanceModel,FinanceTable
 
 
+MONEY_KEYS={'current_price','price','amount','fees','post_cost','pre_cost','post_net','realized_pnl'}
+MONEY_LABELS={'当前价','成交价','成交金额','手续费','成交前成本价','成交后成本价','本笔已实现盈亏'}
+
+
+def money_text(value):
+    if value is None:return '—'
+    with localcontext() as context:
+        context.prec=100
+        text=format(Decimal(str(value)).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP),'.2f')
+    return '0.00' if text=='-0.00' else text
+
+
+def cell_text(row,key):
+    if key=='cost_change' and row.get('cost_diff') is not None and row['cost_diff']!=0:
+        delta=row['cost_diff']
+        return ('降低' if delta<0 else '提高')+' '+money_text(delta.copy_abs())+'/股'
+    return money_text(row.get(key)) if key in MONEY_KEYS else exact_text(row.get(key))
+
+
 class CenterModel(FinanceModel):
     def columnCount(self,parent=None):return len(COLUMNS)
     def headerData(self,section,orientation,role=Qt.ItemDataRole.DisplayRole):
@@ -19,8 +38,8 @@ class CenterModel(FinanceModel):
         if not index.isValid():return None
         row=self.rows[index.row()];key=KEYS[index.column()];value=row.get(key)
         if role==Qt.ItemDataRole.DisplayRole:
-            text=exact_text(value) if value is not None else "—"
-            return text+" "+row["currency"] if value is not None and key in ("current_price","price","amount","fees","post_cost") else text
+            text=cell_text(row,key)
+            return text
         if role==Qt.ItemDataRole.ToolTipRole:
             return (row.get("quote_status","")+" · "+(row.get("quote_time") or "无报价时间")) if key=="current_price" else row.get("cost_note") if key in ("post_cost","cost_change","post_quantity") else exact_text(value)
         if role==Qt.ItemDataRole.TextAlignmentRole:return int(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignRight if isinstance(value,Decimal) else Qt.AlignmentFlag.AlignLeft))
@@ -152,7 +171,7 @@ class TradeCenterPage(QWidget):
         for col in range(len(KEYS)):self.table.setColumnWidth(col,min(250,max(85,self.table.columnWidth(col))))
         self.table._frozen_geometry()
         titles=('匹配交易总数','买入记录及金额','卖出记录及金额','手续费合计','待核查记录');s=data['stats']
-        amounts=lambda key:' / '.join(c['currency']+' '+(exact_text(c[key]) if c[key] is not None else '—（未完整核实）') for c in s['currencies']) or '—'
+        amounts=lambda key:' / '.join((c['currency']+'：' if len(s['currencies'])>1 else '')+(money_text(c[key]) if c[key] is not None else '—（未完整核实）') for c in s['currencies']) or '—'
         values=(str(s['matched']),str(s['buys'])+' 笔\n'+amounts('buy_amount'),str(s['sells'])+' 笔\n'+amounts('sell_amount'),amounts('fees'),str(s['review']))
         for card,title,value in zip(self.cards,titles,values):card.setText(title+'\n'+value)
         for key,column in (('broker','broker_code'),('category','category'),('kind','kind'),('side','side'),('source_kind','source_kind')):
@@ -233,7 +252,7 @@ class TradeCenterPage(QWidget):
         service=TradeCenterService(self.path);scope=self.scope();params=self.params();self.submit('detail',lambda cancel:service.detail(scope,params,record_id,cancel=cancel),self.show_detail)
     def show_detail(self,result):
         item=result['item'];self.detail_title.setText(item['symbol']+' · '+item['side']+'\n'+item['trade_date'])
-        for key,w in self.texts.items():w.setPlainText('\n\n'.join(name+'：'+(json.dumps(value,ensure_ascii=False,indent=2,default=exact_text) if isinstance(value,(dict,list)) else exact_text(value) if value is not None else '—') for name,value in result['sections'][key].items()))
+        for key,w in self.texts.items():w.setPlainText('\n\n'.join(name+'：'+(json.dumps(value,ensure_ascii=False,indent=2,default=exact_text) if isinstance(value,(dict,list)) else money_text(value) if name in MONEY_LABELS else cell_text(item,'cost_change') if name=='每股成本变化' else exact_text(value) if value is not None else '—') for name,value in result['sections'][key].items()))
         self.navigation=result['navigation'];self.prev.setEnabled(bool(self.navigation.get('previous_id')));self.next.setEnabled(bool(self.navigation.get('next_id')));self.nav_label.setText(f"{self.navigation.get('position','关联')} / {self.navigation.get('matched','—')}")
         self.related.setRowCount(len(result['related']))
         for i,r in enumerate(result['related']):
