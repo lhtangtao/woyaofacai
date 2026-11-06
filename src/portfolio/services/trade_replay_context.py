@@ -53,6 +53,12 @@ def context(connection,page,cancel=None):
             # cost independently. Position.cost supplies split-adjusted state.
             state[event.key]=Position(event.key,quantity=quantity,buy=net,sell=Decimal(0)) if quantity is not None else None
     cached=(positions,traces,dict(snapshot.extras.get('cost_diffs',{})),before)
+    try:
+        from portfolio.engine.scalping import scalping
+        _, _, micro_tags, _ = scalping(snapshot, cancel=cancel)
+    except Exception:
+        micro_tags = {}
+    cached = (*cached, micro_tags)
     with _LOCK:
         _CACHE[key]=cached;_CACHE.move_to_end(key)
         while len(_CACHE)>8:_CACHE.popitem(last=False)

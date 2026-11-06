@@ -12,7 +12,7 @@ from portfolio.ui.finance_table import FinanceModel,FinanceTable
 
 
 MONEY_KEYS={'current_price','price','amount','fees','post_cost','pre_cost','post_net','realized_pnl'}
-MONEY_LABELS={'当前价','成交价','成交金额','手续费','成交前成本价','成交后成本价','本笔已实现盈亏'}
+MONEY_LABELS={'当前价','成交价','成交金额','手续费','成交前成本价','成交后成本价','成交后净投入','本笔已实现盈亏'}
 
 
 def money_text(value):
@@ -185,7 +185,9 @@ class TradeCenterPage(QWidget):
         self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.frozen.horizontalHeader().setSortIndicatorShown(True)
         mapped=['trade_time' if k=='trade_date' else 'cost_diff' if k=='cost_change' else k for k in KEYS]
-        for header in (self.table.horizontalHeader(),self.table.frozen.horizontalHeader()):header.setSortIndicator(mapped.index(self.sort),Qt.SortOrder.DescendingOrder if self.direction=='desc' else Qt.SortOrder.AscendingOrder)
+        for header in (self.table.horizontalHeader(),self.table.frozen.horizontalHeader()):
+            if self.sort in mapped:
+                header.setSortIndicator(mapped.index(self.sort),Qt.SortOrder.DescendingOrder if self.direction=='desc' else Qt.SortOrder.AscendingOrder)
 
     def render_chips(self):
         while self.chip_layout.count():

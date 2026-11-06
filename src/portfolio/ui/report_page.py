@@ -536,7 +536,11 @@ class ReportPage(QWidget):
                     cur_mv = r.values[mv_idx] if len(r.values) > mv_idx else None
                     prop = (cur_mv / denom) if (isinstance(cur_mv, Decimal) and cur_mv > Decimal(0)) else None
                     new_vals = list(r.values)
-                    new_vals[ratio_idx] = prop
+                    if len(new_vals) > ratio_idx:
+                        new_vals[ratio_idx] = prop
+                    else:
+                        new_vals.extend([None] * (ratio_idx + 1 - len(new_vals)))
+                        new_vals[ratio_idx] = prop
                     updated.append(ReportRow(tuple(new_vals), r.metadata))
                 self.sorted_rows = tuple(updated)
         self.apply_saved_sort()

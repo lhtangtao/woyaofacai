@@ -3,9 +3,9 @@ from decimal import Decimal,localcontext
 from portfolio.db.repositories.trades import _base_query,has_fee_data
 
 REVIEW="(link_status='REVIEW_REQUIRED' OR parse_status IN ('PENDING','REVIEW_REQUIRED') OR batch_status<>'SUCCESS' OR fee_status IN ('UNMATCHED_ORDER','ORDER_QUANTITY_MISMATCH','ALLOCATION_MISMATCH'))"
-SORTS={'trade_time':'trade_time','broker':'broker_code','person_name':'person_name','symbol':'symbol','category':'category','side':'side','price':'price_e8','quantity':'quantity_e8','amount':'amount_e8','fees':'fees_e8','kind':'kind','order_id':'order_id','record_id':'id',
-       'current_price':'current_price COLLATE EXACT_DECIMAL','post_quantity':'post_quantity COLLATE EXACT_DECIMAL','post_cost':'post_cost COLLATE EXACT_DECIMAL','cost_diff':'cost_diff COLLATE EXACT_DECIMAL'}
-DERIVED_SORTS={'current_price','post_quantity','post_cost','cost_diff'}
+SORTS={'trade_time':'trade_time','broker':'broker_code','person_name':'person_name','symbol':'symbol','category':'category','side':'side','counterparty':'counterparty','price':'price_e8','quantity':'quantity_e8','amount':'amount_e8','fees':'fees_e8','kind':'kind','order_id':'order_id','record_id':'id',
+       'current_price':'current_price COLLATE EXACT_DECIMAL','post_quantity':'post_quantity COLLATE EXACT_DECIMAL','post_cost':'post_cost COLLATE EXACT_DECIMAL','post_net':'post_net COLLATE EXACT_DECIMAL','cost_diff':'cost_diff COLLATE EXACT_DECIMAL'}
+DERIVED_SORTS={'current_price','post_quantity','post_cost','post_net','cost_diff'}
 
 
 class ExactSum:

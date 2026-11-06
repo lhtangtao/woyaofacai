@@ -35,7 +35,9 @@ def current_quotes(connection,rows):
 
 def attach_post_trade_positions(connection,page,*,cancel=None):
     if not page.rows:return page
-    positions,traces,costs,before=context(connection,page,cancel)
+    res=context(connection,page,cancel)
+    positions,traces,costs,before=res[0],res[1],res[2],res[3]
+    micro_tags=res[4] if len(res)>4 else {}
     prices=current_quotes(connection,page.rows);rows=[]
     for row in page.rows:
         data=row.metadata;quantity,net,cost=traces.get(row.record_id,(None,None,None));pre_qty,pre_cost=before.get(row.record_id,(None,None))
@@ -56,6 +58,7 @@ def attach_post_trade_positions(connection,page,*,cancel=None):
         rows.append(replace(row,values=tuple(values),metadata={**data,'post_quantity':quantity,'post_net':net,'post_cost':cost,
                     'pre_quantity':pre_qty,'pre_cost':pre_cost,'post_quantity_status':state,'post_quantity_note':note,'post_cost_note':note,
                     'cost_diff':delta,'cost_change':change,'current_price':price,'quote_time':stamp,'quote_status':status,
+                    'micro_tag':micro_tags.get(row.record_id,''),
                     'affects_quantity':pre_qty!=quantity if pre_qty is not None and quantity is not None else None,
                     'realized_pnl':None,'realized_note':'现有净投入引擎未提供可信的逐笔已实现盈亏；不使用成交价与成本价自行推算。'}))
     return replace(page,rows=tuple(rows))

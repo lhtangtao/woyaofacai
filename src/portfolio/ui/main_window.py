@@ -757,8 +757,14 @@ class MainWindow(InteractionMixin, QMainWindow):
         if account is not None:
             for id, action in self.accounts.actions_by_id.items():
                 action.setChecked(id == account)
-        self.stock_detail.report.selector.setCurrentText("交易回放")
-        self.navigation.setCurrentRow(10)
+        symbol = metadata.get("symbol")
+        if not symbol and identifier is not None:
+            symbol = self.stock.currentText().split(" · ")[0]
+        if hasattr(self, "trade_center"):
+            if symbol:
+                self.trade_center.fields["symbol"].setText(symbol)
+            self.trade_center.query()
+        self.navigation.setCurrentRow(0)
 
     @batch_drill
     def drill_chart(self, kind, key):
@@ -788,8 +794,11 @@ class MainWindow(InteractionMixin, QMainWindow):
                 if self.stock.itemText(index).split(" · ")[0] == symbol:
                     self.stock.setCurrentIndex(index)
                     break
-            self.stock_detail.report.selector.setCurrentText("交易回放")
-            self.navigation.setCurrentRow(10)
+            if hasattr(self, "trade_center"):
+                if symbol:
+                    self.trade_center.fields["symbol"].setText(symbol)
+                self.trade_center.query()
+            self.navigation.setCurrentRow(0)
         elif kind == "category":
             self.category.setCurrentText(key)
         elif kind == "broker" or (kind == "contribution" and key.startswith("渠道")):

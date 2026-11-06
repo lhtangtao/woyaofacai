@@ -73,7 +73,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "top_months", label: "Top月汇总", icon: <BarChart3 size={16} /> },
       { id: "ranking", label: "收益排行榜", icon: <BarChart3 size={16} /> },
       { id: "reports:交易回放", label: "历史资产回放", icon: <Calendar size={16} /> },
-      { id: "reports:分类汇总", label: "证券详情", icon: <BarChart3 size={16} /> },
     ],
   },
   {

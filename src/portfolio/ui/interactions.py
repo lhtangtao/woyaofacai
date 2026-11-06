@@ -218,6 +218,10 @@ class InteractionMixin:
         self.update_filter_chips()
 
     def route_changed(self, page, target):
+        if page == 10:
+            # 证券详情已合并下线，平滑映射跳转至功能更完备的「交易明细」
+            page = 0
+            target = None
         if page == 3 and target in ('当前持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总'):
             # 兼容旧导航入口，自动映射跳转至统一「持仓管理」对应的视图与筛选
             page = 22
