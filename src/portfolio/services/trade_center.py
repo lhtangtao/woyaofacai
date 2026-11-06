@@ -22,7 +22,7 @@ def validate(params):
         if k in p:
             try:v=Decimal(str(p[k]))
             except InvalidOperation as exc:raise ValueError('数值筛选必须是有效十进制数。') from exc
-            if not v.is_finite() or len(str(p[k]))>60 or abs(v)>Decimal('90000000000'):raise ValueError('数值筛选范围无效。')
+            if not v.is_finite() or len(str(p[k]))>60 or v.copy_abs()>Decimal('90000000000') or v.adjusted() < -100:raise ValueError('数值筛选范围无效。')
             if not k.startswith('cost_') and v<0:raise ValueError('数量、价格、金额范围不可为负数。')
             p[k]=str(v)
     for name in ('quantity','price','amount','cost'):
@@ -47,7 +47,7 @@ def dto(row):
     if instant and not m.get('executed_at_utc'):
         display+='（日期型估算）' if str(m['book_time']).endswith(('00:00:00','00:00')) or len(str(m['book_time']))==10 else '（账务时钟换算）'
     return dict(id=row.record_id,record_id=row.record_id,source_record_id=row.source_record_id,trade_date=display,trade_time=instant,
-        broker=m['broker_code'],person_name=m['person_name'] or '券商真实账本',symbol=m['symbol'],category=m['category'],side=v[4],side_code=m['side'],kind=v[12],kind_code=m['kind'],
+        broker=m['broker_code'],person_name=m['person_name'] or '券商真实账本',symbol=m['symbol'],category=m['category'],side=v[4] if m['kind']=='MARKET_TRADE' else KINDS.get(m['kind'],m['kind'])+' / '+v[4],side_code=m['side'],kind=v[12],kind_code=m['kind'],
         current_price=m.get('current_price'),quote_time=m.get('quote_time'),quote_status=m.get('quote_status'),price=v[6],quantity=v[5],amount=v[7],currency=m['currency'],fees=from_e8(m.get('fees_e8')),
         post_quantity=m.get('post_quantity'),post_cost=m.get('post_cost'),pre_quantity=m.get('pre_quantity'),pre_cost=m.get('pre_cost'),post_net=m.get('post_net'),
         cost_diff=m.get('cost_diff'),cost_change=m.get('cost_change','—'),post_status=m.get('post_quantity_status'),cost_note=m.get('post_cost_note'),
@@ -77,7 +77,7 @@ class TradeCenterService:
             query,args=repo.filtered(query,args,{k:v for k,v in params.items() if k.startswith('cost_') or k=='affects_only'},derived=True)
         return query,args,repo.order_sql(sort,desc),enriched,params
 
-    def page(self,scope,params,*,cancel=None):
+    def page(self,scope,params,*,cancel=None,catalog_scope=None):
         with readonly_connection(self.path,cancel=cancel,timeout=60) as c:
             query,args,order,enriched,p=self.prepare(c,scope,params,cancel)
             page=int(p.get('page',1));size=int(p.get('size',200))
@@ -90,7 +90,7 @@ class TradeCenterService:
             rows=tuple(enriched[r.record_id] for r in rows) if enriched else attach_post_trade_positions(c,batch,cancel=cancel).rows
             base,base_args=repo.base(c,replace(scope,search='',category=None),None)
             options=[dict(r) for r in c.execute('SELECT DISTINCT broker_code,category,kind,side,source_kind FROM ('+base+')',base_args)]
-            return dict(status='ok',columns=COLUMNS,keys=KEYS,items=[dto(r) for r in rows],total=stats['matched'],page=page,size=size,total_pages=total_pages,stats=stats,options=options,
+            return dict(status='ok',persons=repo.people(c,(catalog_scope or scope).person_ids),columns=COLUMNS,keys=KEYS,items=[dto(r) for r in rows],total=stats['matched'],page=page,size=size,total_pages=total_pages,stats=stats,options=options,
                         sort_col=p.get('sort_col','trade_time'),sort_dir=p.get('sort_dir','desc'),
                         note='统计覆盖全部匹配记录；人员权益操作账本不与券商真实成交账本混加，总数为操作记录数。金额和手续费按币种列示。北京时间展示，保留原账务时钟及真实UTC。历史成本按现有净投入引擎回放；微操逐笔标记与逐笔已实现盈亏没有可靠证据时不展示。',source=str(self.path))
 
@@ -112,11 +112,11 @@ class TradeCenterService:
             clause=order.removeprefix(' ORDER BY ')
             nav=c.execute('SELECT * FROM (SELECT id,lag(id) OVER (ORDER BY '+clause+') AS previous_id,lead(id) OVER (ORDER BY '+clause+') AS next_id,row_number() OVER (ORDER BY '+clause+') AS position,count(*) OVER () AS matched FROM ('+query+')) WHERE id=?',args+[int(record_id)]).fetchone()
             sections={
-                '交易概览':{'交易时间':item['trade_date'],'真实成交UTC':m.get('executed_at_utc'),'时间说明':'真实UTC优先；无精确UTC时按既有渠道时钟解析，纯日期使用既定美东09:30估算，原账务时间完整保留。','原账务时间':m['book_time'],'账务日期':m['business_date'],'订单编号':m.get('order_id'),'交易记录ID':row.record_id,'人员':item['person_name'],'券商/账户':item['broker']+' / '+item['account'],'Ticker':item['symbol'],'分类':item['category'],'方向/类型':item['side']+' / '+item['kind'],'当前价':item['current_price'],'报价时间':item['quote_time'],'行情状态':item['quote_status'],'成交价':item['price'],'数量':item['quantity'],'成交金额':item['amount'],'手续费':item['fees'],'币种':item['currency'],'记录粒度':m.get('record_granularity'),'关联说明':'订单号用于关联，交易记录ID标识本账本记录；同一订单可对应多笔成交。'},
+                '交易概览':{'交易时间':item['trade_date'],'真实成交UTC':m.get('executed_at_utc'),'时间说明':'真实UTC优先；无精确UTC时按既有渠道时钟解析，纯日期使用既定美东09:30估算，原账务时间完整保留。','原账务时间':m['book_time'],'账务日期':m['business_date'],'订单编号':m.get('order_id'),'交易记录ID':row.record_id,'人员':item['person_name'],'券商/账户':item['broker']+' / '+item['account'],'Ticker':item['symbol'],'分类':item['category'],'方向/类型':item['side']+' / '+item['kind'],'当前价':item['current_price'],'报价时间':item['quote_time'],'行情状态':item['quote_status'],'成交价':item['price'],'数量':item['quantity'],'成交金额':item['amount'],'金额口径':m.get('amount_basis'),'手续费':item['fees'],'币种':item['currency'],'记录粒度':m.get('record_granularity'),'关联说明':'订单号用于关联，交易记录ID标识本账本记录；同一订单可对应多笔成交。'},
                 '成本变化':{'成交前持仓':item['pre_quantity'],'成交后持仓':item['post_quantity'],'成交前成本价':item['pre_cost'],'成交后成本价':item['post_cost'],'每股成本变化':item['cost_change'],'成本状态':item['post_status'],'计算说明':item['cost_note'],'本笔已实现盈亏':None,'已实现盈亏说明':m['realized_note']},
                 '来源追溯':{'数据来源':m.get('source_kind'),'原始记录ID':row.source_record_id,'订单编号':m.get('order_id'),'成交编号':m.get('broker_execution_id'),'导入批次':provenance.get('batch_id'),'来源文件':Path(m['source_path']).name if m.get('source_path') else None,'工作表':m.get('source_sheet'),'原始行号':m.get('source_row'),'解析/审计说明':provenance.get('parse_message'),'归属关联状态':m.get('link_status'),'费用来源':m.get('fee_source'),'费用核实状态':m.get('fee_status'),'解析状态':m.get('parse_status'),'记录状态':m.get('record_state'),'账务角色':m.get('accounting_role'),'原始证据':provenance},
             }
-            return dict(status='ok',item=item,sections=redact(sections),related=[dict(record_id=r['id'],source_record_id=r['source_record_id'],symbol=r['symbol'],person_name=r['person_name'],side=SIDES.get(r['side'],r['side']),book_time=r['book_time'],order_id=r.get('order_id')) for r in related[:200] if r['id']!=row.record_id],related_truncated=len(related)>200,navigation=dict(nav) if nav else {})
+            return dict(status='ok',item=item,sections=redact(sections),related=[dict(record_id=r['id'],source_record_id=r['source_record_id'],symbol=r['symbol'],person_name=r['person_name'],side=dto(raw_trade(r))['side'],trade_date=dto(raw_trade(r))['trade_date'],book_time=r['book_time'],order_id=r.get('order_id')) for r in related[:200] if r['id']!=row.record_id],related_truncated=len(related)>200,navigation=dict(nav) if nav else {})
 
     def export(self,scope,params,*,cancel=None):
         import csv,io

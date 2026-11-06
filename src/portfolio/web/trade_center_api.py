@@ -29,7 +29,9 @@ def register(api):
     @require_capability(CAP_VIEW_ASSETS)
     def center_list():
         try:
-            service,scope,params=inputs();return jsonify(exact(service.page(scope,params)))
+            service,scope,params=inputs();ctx=getattr(g,'auth_context',None)
+            allowed=None if ctx and (ctx.is_admin() or ctx.is_lan_viewer()) else tuple(ctx.allowed_person_ids or (-99999,)) if ctx else (-99999,)
+            return jsonify(exact(service.page(scope,params,catalog_scope=replace(scope,person_ids=allowed))))
         except ValueError as exc:return jsonify(status='error',message=str(exc)),400
     @api.get('/trade-center/<int:record_id>')
     @require_capability(CAP_VIEW_ASSETS)

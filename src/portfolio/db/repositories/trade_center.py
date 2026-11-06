@@ -48,7 +48,7 @@ def filtered(query,args,params,*,derived=False):
             value=params.get(name+'_'+suffix)
             if value not in (None,''):
                 with localcontext() as ctx:
-                    ctx.prec=50;scaled=Decimal(str(value))*100000000
+                    ctx.prec=80;scaled=Decimal(str(value))*100000000
                     # SQLite raw e8 values compare to exact integral boundaries.
                     boundary=int(scaled.to_integral_value(rounding='ROUND_CEILING' if suffix=='min' else 'ROUND_FLOOR'))
                 where.append(f'{column}{operator}?');args.append(boundary)
@@ -84,3 +84,9 @@ def related(connection,scope,meta):
     if meta.get('order_id'):clauses.append('(order_id=? AND account_id=? AND instrument_id=?)');values.extend((meta['order_id'],meta['account_id'],meta['instrument_id']))
     if meta.get('kind')=='OWNER_TRANSFER':clauses.append('(source_record_id=? AND kind=?)');values.extend((meta['source_record_id'],'OWNER_TRANSFER'))
     return [dict(r) for r in connection.execute('SELECT * FROM ('+query+') WHERE ('+' OR '.join(clauses)+') ORDER BY book_time,id LIMIT 201',args+values)]
+
+
+def people(connection,ids):
+    if ids is None:return [dict(r) for r in connection.execute('SELECT id,name,enabled FROM persons ORDER BY id')]
+    if not ids:return []
+    return [dict(r) for r in connection.execute('SELECT id,name,enabled FROM persons WHERE id IN ('+','.join('?' for _ in ids)+') ORDER BY id',ids)]

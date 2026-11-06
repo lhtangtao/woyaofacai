@@ -229,6 +229,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.clear_analytics()
 
     def cancel_queries(self):
+        if hasattr(self, "trade_center"):self.trade_center.cancel_queries()
         for worker in self.jobs.values():
             worker.cancel.set()
         self._error("查询已取消。可调整条件后刷新重试。")
@@ -244,6 +245,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.live_panel.stop()
         self.live_panel.invalidate()
         self.cancel_queries()
+        if hasattr(self, "trade_center"):self.trade_center.invalidate()
         self._fx_attempt = None
         self.sensitive.setChecked(False)
         self.service = TradesService(path)

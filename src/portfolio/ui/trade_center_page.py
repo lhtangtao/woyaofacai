@@ -103,6 +103,16 @@ class TradeCenterPage(QWidget):
         else:self.status.setText('查询/导出失败：'+message)
         self.previous_page.setEnabled(True);self.next_page.setEnabled(True)
 
+    def cancel_queries(self):
+        for worker in self.jobs.values():worker.cancel.set()
+        self.status.setText('查询已取消。可调整条件后重新查询。')
+        self.previous_page.setEnabled(True);self.next_page.setEnabled(True)
+
+    def invalidate(self):
+        self.cancel_queries();self.path=None;self.data=None;self.close_drawer();self.table.finance_model.replace(())
+        for card,title in zip(self.cards,('匹配交易总数','买入记录及金额','卖出记录及金额','手续费合计','待核查记录')):card.setText(title+'\n—')
+        self.count.clear();self.note.clear();self.status.setText('正在连接新数据源；旧结果已清除。')
+
     def activate(self,force=False):
         if self.host.info is None or self.host.service is None:return
         path=self.host.service.path
@@ -227,7 +237,7 @@ class TradeCenterPage(QWidget):
         self.navigation=result['navigation'];self.prev.setEnabled(bool(self.navigation.get('previous_id')));self.next.setEnabled(bool(self.navigation.get('next_id')));self.nav_label.setText(f"{self.navigation.get('position','关联')} / {self.navigation.get('matched','—')}")
         self.related.setRowCount(len(result['related']))
         for i,r in enumerate(result['related']):
-            for col,value in enumerate((r['book_time'],r['symbol']+' / '+(r['person_name'] or '')+' / '+r['side'],str(r['record_id']))):self.related.setItem(i,col,QTableWidgetItem(value))
+            for col,value in enumerate((r['trade_date'],r['symbol']+' / '+(r['person_name'] or '')+' / '+r['side'],str(r['record_id']))):self.related.setItem(i,col,QTableWidgetItem(value))
         self.related.resizeColumnsToContents()
         if not result['related']:self.related.setToolTip('没有可靠关联记录。')
     def close_drawer(self):
