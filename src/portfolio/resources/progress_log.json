@@ -1,5 +1,19 @@
 [
   {
+    "title": "持仓管理：人员筛选统一改用下拉框选择，与全局统一风格",
+    "time": "2026-11-07 01:55",
+    "author": "Antigravity",
+    "tag": "代码已修改并通过全链路联动测试，待用户验收",
+    "details": [
+      "修改者：Antigravity（持仓管理人员筛选器改造）",
+      "用户诉求：将持仓管理页面顶部的一排人员药丸标签（全部启用人员、个人、华、巴小...）替换为与前面页面（资产总览、今日盈亏、持仓财报日历）完全一致的人员下拉选择框，保持统一视觉与交互风格。",
+      "桌面端改造（Mac 原生 holdings_page.py）：",
+      "1) 替换顶层控件：移除原 QTabBar 药丸标签，引入与全局一模一样的 PersonFilter 下拉框控件（self.person_filter），设置统一最小宽度与瞬时弹窗风格；",
+      "2) 统一事件与联动：更新 _populate_persons、_on_person_filter_changed、sync_person_from_main、set_view 及 set_analytics，支持与主窗口全局人员筛选器的双向互相同步及单选/多选/全部启用人员状态保持；",
+      "Web 端改造（HoldingsView.tsx）：同步将顶部的横向人员药丸替换为统一的 select 下拉选择框，保持桌面端与 Web 端交互一致性，前端生产构建完成（npm run build）。"
+    ]
+  },
+  {
     "title": "资产管理全模块筛选器双向联动：统一人员与券商渠道筛选状态",
     "time": "2026-11-07 01:30",
     "author": "Antigravity",

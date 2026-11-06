@@ -456,54 +456,23 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           gap: "10px",
         }}
       >
-        {/* Left: Person Filter Tabs (Horizontal Pills) */}
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", overflowX: "auto", flex: 1, minWidth: "280px" }}>
-          <button
-            onClick={() => {
-              setSelectedPersonId(null);
-              if (onPersonChange) onPersonChange(null);
+        {/* Left: Person Filter Dropdown (与前面页面统一的下拉选择框风格) */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <select
+            value={selectedPersonId == null ? "" : String(selectedPersonId)}
+            onChange={(e) => {
+              const val = e.target.value ? Number(e.target.value) : null;
+              setSelectedPersonId(val);
+              if (onPersonChange) onPersonChange(val);
             }}
-            style={{
-              padding: "5px 14px",
-              borderRadius: "16px",
-              border: "none",
-              background: selectedPersonId == null ? "var(--brand, #2563eb)" : "var(--bg-app, #f1f5f9)",
-              color: selectedPersonId == null ? "#fff" : "var(--text-muted, #64748b)",
-              fontWeight: selectedPersonId == null ? 700 : 500,
-              fontSize: "12px",
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              transition: "all 0.15s ease",
-            }}
+            className="input-control"
+            style={{ fontSize: "13px", padding: "6px 12px", minWidth: "140px", borderRadius: "8px" }}
           >
-            全部启用人员
-          </button>
-          {enabledPersons.map((p) => {
-            const isSelected = selectedPersonId === p.id;
-            return (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setSelectedPersonId(p.id);
-                  if (onPersonChange) onPersonChange(p.id);
-                }}
-                style={{
-                  padding: "5px 14px",
-                  borderRadius: "16px",
-                  border: "none",
-                  background: isSelected ? "var(--brand, #2563eb)" : "var(--bg-app, #f1f5f9)",
-                  color: isSelected ? "#fff" : "var(--text-muted, #64748b)",
-                  fontWeight: isSelected ? 700 : 500,
-                  fontSize: "12px",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                {p.name}
-              </button>
-            );
-          })}
+            <option value="">全部启用人员</option>
+            {enabledPersons.map((p) => (
+              <option key={p.id} value={String(p.id)}>{p.name}</option>
+            ))}
+          </select>
         </div>
 
         {/* Right: View Mode Toggle (仪表板总览 vs 持仓明细页) */}

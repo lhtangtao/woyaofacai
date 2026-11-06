@@ -41,6 +41,7 @@ from portfolio.paths import DATABASE_PATH
 from portfolio.services.charts_service import Chart, Series
 from portfolio.services.holdings_management_service import HoldingsManagementService
 from portfolio.ui.charts_page import ChartCanvas
+from portfolio.ui.filters import PersonFilter
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
@@ -629,31 +630,12 @@ class HoldingsPage(QWidget):
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
 
-        # Left: Person Filter Tabs (Horizontal Pills)
-        self.person_tab_bar = QTabBar(self)
-        self.person_tab_bar.setDrawBase(False)
-        self.person_tab_bar.setStyleSheet("""
-            QTabBar::tab {
-                background: #F1F5F9;
-                color: #475569;
-                padding: 6px 14px;
-                margin-right: 6px;
-                border-radius: 14px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-            QTabBar::tab:selected {
-                background: #2563EB;
-                color: #FFFFFF;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #E2E8F0;
-                color: #1E293B;
-            }
-        """)
-        self.person_tab_bar.currentChanged.connect(self._on_person_tab_changed)
-        top_bar.addWidget(self.person_tab_bar, 1)
+        # Left: Person Filter Dropdown (与主界面统一风格的下拉选择框)
+        self.person_filter = PersonFilter(self)
+        self.person_filter.setMinimumWidth(136)
+        self.person_filter.changed.connect(self._on_person_filter_changed)
+        top_bar.addWidget(self.person_filter)
+        top_bar.addStretch(1)
 
         # Right: Mode Switcher (仪表板总览 vs 持仓明细页)
         mode_box = QFrame()
@@ -972,17 +954,12 @@ class HoldingsPage(QWidget):
 
     def _populate_persons(self):
         persons = self._get_persons()
-        self.person_tab_bar.blockSignals(True)
-        while self.person_tab_bar.count() > 0:
-            self.person_tab_bar.removeTab(0)
-
-        idx = self.person_tab_bar.addTab("全部启用人员")
-        self.person_tab_bar.setTabData(idx, None)
-
+        self.person_filter.blockSignals(True)
+        self.person_filter.clear()
+        self.person_filter.addItem("全部启用人员", None)
         for p in persons:
             if p.get("enabled", True):
-                idx = self.person_tab_bar.addTab(p["name"])
-                self.person_tab_bar.setTabData(idx, p["id"])
+                self.person_filter.addItem(p["name"], p["id"])
 
         # 优先与主窗口全局人员筛选状态联动对齐
         if self._selected_person_filter is None and self.main_window and hasattr(self.main_window, "person"):
@@ -990,14 +967,11 @@ class HoldingsPage(QWidget):
             if isinstance(p_val, int):
                 self._selected_person_filter = p_val
 
-        cur_idx = 0
         if self._selected_person_filter is not None:
-            for i in range(self.person_tab_bar.count()):
-                if self.person_tab_bar.tabData(i) == self._selected_person_filter:
-                    cur_idx = i
-                    break
-        self.person_tab_bar.setCurrentIndex(cur_idx)
-        self.person_tab_bar.blockSignals(False)
+            self.person_filter.set_person_id(self._selected_person_filter)
+        else:
+            self.person_filter.reset()
+        self.person_filter.blockSignals(False)
 
         # 首次初始化时也与主窗口全局渠道筛选状态联动对齐
         if self.main_window and hasattr(self.main_window, "accounts"):
@@ -1005,8 +979,8 @@ class HoldingsPage(QWidget):
             if b_name:
                 self.sync_broker_from_main(b_name)
 
-    def _on_person_tab_changed(self, idx):
-        p_id = self.person_tab_bar.tabData(idx)
+    def _on_person_filter_changed(self):
+        p_id = self.person_filter.currentData()
         self._selected_person_filter = p_id
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
@@ -1029,7 +1003,7 @@ class HoldingsPage(QWidget):
                 self.main_window.sync_broker_from_holdings(broker_name)
 
     def sync_person_from_main(self, person_id: int | None):
-        """主窗口全局人员变更时，同步更新持仓管理的人员 Tab。"""
+        """主窗口全局人员变更时，同步更新持仓管理的人员下拉框。"""
         if getattr(self, "_syncing_person", False):
             return
         if self._selected_person_filter == person_id:
@@ -1037,15 +1011,9 @@ class HoldingsPage(QWidget):
         self._syncing_person = True
         try:
             self._selected_person_filter = person_id
-            cur_idx = 0
-            if person_id is not None:
-                for i in range(self.person_tab_bar.count()):
-                    if self.person_tab_bar.tabData(i) == person_id:
-                        cur_idx = i
-                        break
-            self.person_tab_bar.blockSignals(True)
-            self.person_tab_bar.setCurrentIndex(cur_idx)
-            self.person_tab_bar.blockSignals(False)
+            self.person_filter.blockSignals(True)
+            self.person_filter.set_person_id(person_id)
+            self.person_filter.blockSignals(False)
             if self.view_mode == "dashboard":
                 self.refresh_dashboard()
             else:
@@ -1101,12 +1069,9 @@ class HoldingsPage(QWidget):
             self.search_input.setText(ticker)
         if person_id is not None:
             self._selected_person_filter = person_id
-            for i in range(self.person_tab_bar.count()):
-                if self.person_tab_bar.tabData(i) == person_id:
-                    self.person_tab_bar.blockSignals(True)
-                    self.person_tab_bar.setCurrentIndex(i)
-                    self.person_tab_bar.blockSignals(False)
-                    break
+            self.person_filter.blockSignals(True)
+            self.person_filter.set_person_id(person_id)
+            self.person_filter.blockSignals(False)
         self.switch_view_mode(mode)
 
     def _on_filter_changed(self):
@@ -1124,7 +1089,7 @@ class HoldingsPage(QWidget):
 
     def set_analytics(self, analytics):
         self.analytics = analytics
-        if self.person_tab_bar.count() <= 1:
+        if self.person_filter.count() <= 1:
             self._populate_persons()
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
