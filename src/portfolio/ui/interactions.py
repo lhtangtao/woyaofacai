@@ -239,7 +239,7 @@ class InteractionMixin:
             self._history_index = len(self._history) - 1
         self._route = route
         self.pages.setCurrentIndex(page)
-        if page in (5, 16, 17, 18) and self.start_enabled.isChecked() and self.start.date() == self.as_of.date():
+        if self.fixed_asset_period() and self.start_enabled.isChecked():
             self._filter_batch = True
             self.start_enabled.setChecked(False)
             self.start.setDate(QDate(2025, 1, 1))

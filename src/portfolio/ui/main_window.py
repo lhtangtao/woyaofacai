@@ -502,12 +502,13 @@ class MainWindow(InteractionMixin, QMainWindow):
             end = QDate.currentDate()
             if self.today_snapshot() or self.broker_people_view():
                 end = self.holding_date.date()
+        effective_start = None if self.fixed_asset_period() else (start.toPython() if self.start_enabled.isChecked() else None)
         return QueryScope(
             as_of=end.toPython(), ledger=ledger,
             person_ids=person_ids,
             account_ids=self.accounts.selected_ids(), instrument_ids=(stock,) if stock is not None else None,
             category=self.category.currentData(),
-            start_date=start.toPython() if self.start_enabled.isChecked() else None,
+            start_date=effective_start,
             search=self.search.text().strip(), include_disabled=self.disabled.isChecked(), audit=self.audit.isChecked(),
             reporting_currency=self.currency.currentData(),
         )
