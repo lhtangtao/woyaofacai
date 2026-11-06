@@ -1,107 +1,61 @@
-"""Enrich a raw trade page with quantities and net costs from historical replay."""
+"""Enrich one batch with authoritative historical traces and timestamped quotes."""
 from dataclasses import replace
-
-from portfolio.db.repositories.analytics import load_snapshot
+from datetime import datetime,time
+from decimal import Decimal
 from portfolio.domain.models import Ledger
-from portfolio.engine.replay import replay
+from portfolio.domain.live_quotes import UTC,NY
+from portfolio.services.trade_replay_context import context
 
 
-def attach_post_trade_positions(connection, page, *, cancel=None):
-    if not page.rows:
-        return page
-    # Page/search/side/date-start filters affect display only. Replay all earlier
-    # operations for these people/accounts/securities within the same DB snapshot.
-    people = tuple(sorted({r.metadata['person_id'] for r in page.rows if r.metadata['person_id'] is not None}))
-    accounts = tuple(sorted({r.metadata['account_id'] for r in page.rows}))
-    securities = tuple(sorted({r.metadata['instrument_id'] for r in page.rows}))
-    scope = replace(page.scope, person_ids=people if page.scope.ledger == Ledger.PERSON else None,
-                    account_ids=accounts, instrument_ids=securities, start_date=None, search='',
-                    audit=False, include_disabled=True, reporting_currency='USD')
-    snapshot = load_snapshot(connection, scope, with_prices=False, cancel=cancel)
-    snapshot.extras['broker_trades'] = [r for r in snapshot.extras['broker_trades']
-                                        if r['business_date'] <= scope.as_of.isoformat()]
-    positions, traces, _ = replay(snapshot, cancel=cancel)
-    cost_diffs = snapshot.extras.get("cost_diffs", {})
+def current_quotes(connection,rows):
+    from portfolio.services.web_today import desktop_quote_store
+    now=datetime.now(UTC);result={}
+    try:cached=desktop_quote_store().load(now)[0]
+    except Exception:cached={}
+    instruments={(r.metadata['symbol'],r.metadata.get('market','US')) for r in rows}
+    for symbol,market in instruments:
+        candidates=[q for (s,_),q in cached.items() if s==symbol+'.'+market and q.timestamp<=now and q.price.is_finite() and q.price>0]
+        if candidates:
+            q=max(candidates,key=lambda q:q.timestamp)
+            status='实时缓存' if (now-q.timestamp).total_seconds()<=180 else '延迟/旧报价'
+            result[symbol,market]=(q.price,q.timestamp.isoformat(),status);continue
+        raw=connection.execute("SELECT price_e8,trade_date,quoted_at_utc,price_type,price_status FROM market_prices WHERE symbol IN (?,?) AND price_e8>0 AND trade_date<=? AND price_type IN ('LATEST','DAILY_CLOSE') ORDER BY trade_date DESC,quoted_at_utc DESC LIMIT 8",(symbol,symbol+'.'+market,now.astimezone(NY).date().isoformat())).fetchall()
+        valid=[]
+        for value,day,stamp,kind,price_status in raw:
+            try:
+                instant=datetime.fromisoformat(stamp.replace('Z','+00:00')) if stamp else datetime.combine(datetime.fromisoformat(day).date(),time(16),NY)
+                if instant.tzinfo is None:instant=instant.replace(tzinfo=UTC)
+                if instant<=now:valid.append((instant,Decimal(value)/Decimal(100000000),kind,stamp,day,price_status))
+            except (ValueError,TypeError):continue
+        if valid:
+            instant,value,kind,stamp,day,price_status=max(valid,key=lambda r:r[0]);result[symbol,market]=(value,stamp or day+'（缺报价时刻）',('收盘参考' if kind=='DAILY_CLOSE' else '数据库参考报价')+' / '+price_status)
+        else:result[symbol,market]=(None,None,'缺少有效行情')
+    return result
 
-    # Resolve latest market/cached quote for each symbol in page.rows
-    symbols = tuple(sorted({r.metadata['symbol'] for r in page.rows if r.metadata.get('symbol')}))
-    current_prices = {}
-    if symbols:
-        try:
-            from datetime import datetime
-            from decimal import Decimal
-            from portfolio.domain.live_quotes import UTC
-            from portfolio.services.web_today import desktop_quote_store
-            store = desktop_quote_store()
-            now = datetime.now(UTC)
-            quotes = store.load(now)[0] if store and store.path.exists() else {}
-        except Exception:
-            quotes = {}
 
-        db_prices = {}
-        try:
-            placeholders = ','.join('?' for _ in symbols)
-            query = f"""
-                SELECT symbol, price_e8 FROM market_prices 
-                WHERE (symbol IN ({placeholders}) OR symbol IN ({','.join('?' for _ in symbols)}))
-                  AND price_type IN ('LATEST', 'DAILY_CLOSE')
-                ORDER BY trade_date ASC
-            """
-            params = list(symbols) + [f"{s}.US" for s in symbols]
-            for sym, p_e8 in connection.execute(query, params).fetchall():
-                clean_sym = sym.removesuffix('.US')
-                db_prices[clean_sym] = Decimal(p_e8) / Decimal(100_000_000)
-        except Exception:
-            pass
-
-        for s in symbols:
-            cands = [q for (sym, _), q in quotes.items() if sym in (s, f'{s}.US') and q.price.is_finite() and q.price > 0]
-            if cands:
-                current_prices[s] = max(cands, key=lambda q: q.timestamp).price
-            elif s in db_prices:
-                current_prices[s] = db_prices[s]
-            else:
-                current_prices[s] = None
-
-    rows = []
+def attach_post_trade_positions(connection,page,*,cancel=None):
+    if not page.rows:return page
+    positions,traces,costs,before=context(connection,page,cancel)
+    prices=current_quotes(connection,page.rows);rows=[]
     for row in page.rows:
-        quantity, net, cost = traces.get(row.record_id, (None, None, None))
-        cost_diff = cost_diffs.get(row.record_id)
-        current_price = current_prices.get(row.metadata.get('symbol'))
-        key = (row.metadata['person_id'] if scope.ledger == Ledger.PERSON else None,
-               row.metadata['account_id'], row.metadata['instrument_id'])
-        if key in positions and '成交粒度冲突' in positions[key].warnings:
-            quantity = net = cost = None
-        if quantity is None or cost is None:
-            cost_diff = None
-        if quantity is None:
-            state = 'UNAVAILABLE'
-            note = '该记录未进入有效回放或存在成交粒度冲突，操作后数量无法确认。撤销、参考和开账基准之前的记录不会作为有效成交重复计入。'
-        elif quantity < 0:
-            state = 'NEGATIVE'
-            note = '该人员/账户/证券在此操作后回放为负数持仓，需要核对交易或期初数量。'
-        elif row.metadata['link_status'] == 'REVIEW_REQUIRED':
-            state = 'REVIEW_REQUIRED'
-            note = '人员归属或成交关联待审核，此值是按现有账本回放的候选数量。'
-        else:
-            state = 'AVAILABLE'
-            note = '该操作完成当时的持仓数量，按归属人员、券商账户和证券分别回放；已包含此前交易、拆股和划转。券商账本按真实账户独立回放。'
-        values = list(row.values)
-        values[9] = quantity
-        values[10] = net
-        values[11] = cost
-        if quantity is None:
-            cost_note = '该记录没有可信的操作后持仓状态，成本无法确认。'
-        elif quantity <= 0:
-            cost_note = '已清仓或持仓数量异常，不计算每股成本；累计净投入仍保留原值。'
-        elif net is None:
-            cost_note = '历史成交金额或划转成本缺失，不能用零代替，操作后成本无法确认。'
-        else:
-            cost_note = '净投入成本价＝（累计买入金额－累计卖出金额）÷操作后持仓数量；沿用账本金额口径，包含可信开账/划转成本。卖出收入超过投入时可为负数。'
-            if state == 'REVIEW_REQUIRED':
-                cost_note += '人员归属或成交关联待审核，此值为候选值。'
-        rows.append(replace(row, values=tuple(values), metadata={**row.metadata,
-                            'post_quantity': quantity, 'post_quantity_status': state, 'post_quantity_note': note,
-                            'post_net': net, 'post_cost': cost, 'post_cost_note': cost_note,
-                            'cost_diff': cost_diff, 'current_price': current_price}))
-    return replace(page, rows=tuple(rows))
+        data=row.metadata;quantity,net,cost=traces.get(row.record_id,(None,None,None));pre_qty,pre_cost=before.get(row.record_id,(None,None))
+        key=(data['person_id'] if page.scope.ledger==Ledger.PERSON else None,data['account_id'],data['instrument_id'])
+        bad=data.get('link_status')=='REVIEW_REQUIRED' or key in positions and '成交粒度冲突' in positions[key].warnings
+        if bad or data['currency']!='USD':quantity=net=cost=pre_qty=pre_cost=None
+        delta=costs.get(row.record_id) if quantity is not None and cost is not None and not bad else None
+        if quantity is None:state='UNAVAILABLE';note='记录未进入有效回放、归属待核查或币种不在现有USD成本引擎范围；未知不补零。'
+        elif quantity<0:state='NEGATIVE';note='该操作后为负仓，需要核对历史交易或期初持仓。'
+        else:state='AVAILABLE';note='按人员、账户、证券独立回放，包含原开账基准、此前事件、拆股及划转；净投入成本沿用EXCEL_COMPAT。'
+        if data['kind']!='MARKET_TRADE':change='—（非普通买卖）';delta=None
+        elif pre_qty==0 and quantity is not None and quantity>0:change='建仓'
+        elif delta is None:change='—'
+        elif delta==0:change='不变'
+        else:change=('降低' if delta<0 else '提高')+f' {abs(delta):,.4f}/股'
+        price,stamp,status=prices.get((data['symbol'],data.get('market','US')),(None,None,'缺少有效行情'))
+        values=list(row.values);values[9:12]=[quantity,net,cost]
+        rows.append(replace(row,values=tuple(values),metadata={**data,'post_quantity':quantity,'post_net':net,'post_cost':cost,
+                    'pre_quantity':pre_qty,'pre_cost':pre_cost,'post_quantity_status':state,'post_quantity_note':note,'post_cost_note':note,
+                    'cost_diff':delta,'cost_change':change,'current_price':price,'quote_time':stamp,'quote_status':status,
+                    'affects_quantity':pre_qty!=quantity if pre_qty is not None and quantity is not None else None,
+                    'realized_pnl':None,'realized_note':'现有净投入引擎未提供可信的逐笔已实现盈亏；不使用成交价与成本价自行推算。'}))
+    return replace(page,rows=tuple(rows))

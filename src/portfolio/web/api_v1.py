@@ -2165,3 +2165,7 @@ def api_derived_progress():
     _,days,halves,_=desktop_quote_store().load(datetime.now(UTC))
     return jsonify({'status':'ok',**status,'market_day':market_trade_day(datetime.now(UTC),days,halves).isoformat(),
                     'intraday':pipeline_status(DATABASE_PATH)})
+
+# Isolated read-only query center. Legacy /trades clients remain compatible.
+from portfolio.web.trade_center_api import register as register_trade_center
+register_trade_center(api_v1)

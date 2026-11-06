@@ -24,12 +24,14 @@ def has_fee_data(connection):
     return len(names) == 2
 
 
-def _base_query(scope: QueryScope, filters: TradeFilters | None = None, *, fees_available=False):
-    values = [scope.as_of.isoformat(), "USD"]
+def _base_query(scope: QueryScope, filters: TradeFilters | None = None, *, fees_available=False,all_currencies=False):
+    values = [scope.as_of.isoformat()]
     person = scope.ledger == Ledger.PERSON
     audit = scope.audit or bool(filters and (filters.include_reversed or filters.include_reference))
     alias = "o" if person else "t"
-    where = [f"{alias}.business_date<=?", f"{alias}.currency=?"]
+    where = [f"{alias}.business_date<=?"]
+    if not all_currencies:
+        where.append(f"{alias}.currency=?");values.append('USD')
     if person:
         query = """SELECT o.id, o.source_record_id, o.book_time, o.business_date, coalesce(o.executed_at_utc,t.executed_at_utc) AS executed_at_utc,
             t.market_trade_date,
@@ -72,6 +74,8 @@ def _base_query(scope: QueryScope, filters: TradeFilters | None = None, *, fees_
             JOIN raw_records r ON r.id=t.source_record_id JOIN import_batches b ON b.id=r.import_batch_id"""
         if not audit:
             where.extend(["t.record_state='ACTIVE'", "t.accounting_role='ACCOUNT_LEDGER'", "a.enabled=1"])
+    if all_currencies:
+        query=query.replace("i.symbol,i.market,i.currency",f"i.symbol,i.market,{alias}.currency")
     if fees_available:
         from portfolio.sync.trade_fees import TRADE_FIELDS
         signature = 'json_array('+','.join('t.'+field for field in TRADE_FIELDS)+')'
@@ -105,6 +109,8 @@ def _base_query(scope: QueryScope, filters: TradeFilters | None = None, *, fees_
         # LIKE 的通配符按字面匹配，不能扩大用户搜索范围。
         search = scope.search.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
         fields = ["i.symbol", "a.broker_code", "b.source_path", f"{alias}.side"]
+        if all_currencies:
+            fields += [f"cast({alias}.id AS TEXT)",f"cast({alias}.source_record_id AS TEXT)",'t.broker_execution_id','t.broker_order_id','r.source_locator','r.source_sheet']
         fields += ["p.name", "o.legacy_order_id"] if person else ["t.broker_order_id"]
         where.append("(" + " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for field in fields) + ")")
         values.extend([f"%{search}%"] * len(fields))
