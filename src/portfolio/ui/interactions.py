@@ -218,8 +218,8 @@ class InteractionMixin:
         self.update_filter_chips()
 
     def route_changed(self, page, target):
-        if page == 10:
-            # 证券详情已合并下线，平滑映射跳转至功能更完备的「交易明细」
+        if page == 10 or (page == 3 and target in ('replay', '交易回放')):
+            # 证券详情/历史资产回放已合并下线，平滑映射跳转至功能更完备的「交易明细」
             page = 0
             target = None
         if page == 3 and target in ('当前持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总'):
