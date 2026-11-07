@@ -656,8 +656,8 @@ class DailyPerformancePage(QWidget):
             ("avg", "日均收益"),
             ("up", "上涨天数"),
             ("down", "下跌天数"),
-            ("max_profit", "单日最大收益"),
-            ("max_loss", "单日最大亏损"),
+            ("avg_profit", "平均收益"),
+            ("avg_loss", "平均亏损"),
         ]
         for col_idx, (key, title) in enumerate(kpi_defs):
             card = KpiMetricCard(key, title, self)
@@ -1194,6 +1194,8 @@ class DailyPerformancePage(QWidget):
                 base_init = date_map[d]["end"]
                 break
 
+        up_pnl_sum = 0.0
+        down_pnl_sum = 0.0
         for d in dates_asc:
             data = date_map[d]
             d_pnl = data["pnl"]
@@ -1203,8 +1205,10 @@ class DailyPerformancePage(QWidget):
             total_pnl += d_pnl
             if d_pnl > 0:
                 up_days += 1
+                up_pnl_sum += d_pnl
             elif d_pnl < 0:
                 down_days += 1
+                down_pnl_sum += d_pnl
 
             if d_pnl > max_pnl:
                 max_pnl = d_pnl
@@ -1232,6 +1236,8 @@ class DailyPerformancePage(QWidget):
 
         total_days = len(dates_asc)
         avg_pnl = (total_pnl / total_days) if total_days > 0 else 0.0
+        avg_up_pnl = (up_pnl_sum / up_days) if up_days > 0 else 0.0
+        avg_down_pnl = (down_pnl_sum / down_days) if down_days > 0 else 0.0
 
         # Update 7 KPI Cards
         tot_rate_str = fmt_percent(total_pnl / base_init) if base_init > 0 else "—"
@@ -1259,14 +1265,14 @@ class DailyPerformancePage(QWidget):
             f"占比 {(down_days / total_days * 100):.1f}%" if total_days > 0 else "—",
             "loss",
         )
-        self.kpi_cards["max_profit"].set_data(
-            fmt_signed_money(max_pnl if max_pnl != -float("inf") else 0),
-            max_pnl_d,
+        self.kpi_cards["avg_profit"].set_data(
+            fmt_signed_money(avg_up_pnl),
+            f"上涨日均值 ({up_days}天)",
             "profit",
         )
-        self.kpi_cards["max_loss"].set_data(
-            fmt_signed_money(max_loss if max_loss != float("inf") else 0),
-            max_loss_d,
+        self.kpi_cards["avg_loss"].set_data(
+            fmt_signed_money(avg_down_pnl),
+            f"下跌日均值 ({down_days}天)",
             "loss",
         )
 
@@ -1576,22 +1582,14 @@ class DailyPerformancePage(QWidget):
             self.recalculate_and_refresh()
         elif key == "avg":
             self.trend_canvas.setFocus()
-        elif key == "up":
+        elif key in ("up", "avg_profit"):
             self.active_kpi_filter = "up" if self.active_kpi_filter != "up" else None
             self.tab_bar.setCurrentIndex(0)
             self.recalculate_and_refresh()
-        elif key == "down":
+        elif key in ("down", "avg_loss"):
             self.active_kpi_filter = "down" if self.active_kpi_filter != "down" else None
             self.tab_bar.setCurrentIndex(0)
             self.recalculate_and_refresh()
-        elif key == "max_profit":
-            target = self.kpi_cards["max_profit"].sub_label.text()
-            if target and target != "—":
-                self.select_date(target)
-        elif key == "max_loss":
-            target = self.kpi_cards["max_loss"].sub_label.text()
-            if target and target != "—":
-                self.select_date(target)
 
     def on_table_row_clicked(self, index):
         if not index.isValid():

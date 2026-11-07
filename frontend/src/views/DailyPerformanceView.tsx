@@ -370,29 +370,26 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
   const kpiStats = useMemo(() => {
     const totalTradingDays = dateSummariesAsc.length;
     let totalProfit = 0;
+    let upProfitSum = 0;
+    let downLossSum = 0;
     let upDays = 0;
     let downDays = 0;
-    let maxProfit = -Infinity;
-    let maxProfitDate = "—";
-    let maxLoss = Infinity;
-    let maxLossDate = "—";
 
     dateSummariesAsc.forEach((ds) => {
       totalProfit += ds.dailyProfit;
-      if (ds.dailyProfit > 0) upDays++;
-      else if (ds.dailyProfit < 0) downDays++;
-
-      if (ds.dailyProfit > maxProfit) {
-        maxProfit = ds.dailyProfit;
-        maxProfitDate = ds.date;
-      }
-      if (ds.dailyProfit < maxLoss) {
-        maxLoss = ds.dailyProfit;
-        maxLossDate = ds.date;
+      if (ds.dailyProfit > 0) {
+        upDays++;
+        upProfitSum += ds.dailyProfit;
+      } else if (ds.dailyProfit < 0) {
+        downDays++;
+        downLossSum += ds.dailyProfit;
       }
     });
 
     const avgDailyProfit = totalTradingDays > 0 ? totalProfit / totalTradingDays : 0;
+    const avgUpProfit = upDays > 0 ? upProfitSum / upDays : 0;
+    const avgDownLoss = downDays > 0 ? downLossSum / downDays : 0;
+
     let initialBase = 0;
     for (const ds of dateSummariesAsc) {
       if (ds.initValue > 0) {
@@ -419,10 +416,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       upRatio,
       downDays,
       downRatio,
-      maxProfit: maxProfit === -Infinity ? 0 : maxProfit,
-      maxProfitDate,
-      maxLoss: maxLoss === Infinity ? 0 : maxLoss,
-      maxLossDate,
+      avgUpProfit,
+      avgDownLoss,
     };
   }, [dateSummariesAsc]);
 
@@ -826,26 +821,12 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     } else if (type === "avg") {
       const el = document.getElementById("trend-chart-card");
       if (el) el.scrollIntoView({ behavior: "smooth" });
-    } else if (type === "up") {
+    } else if (type === "up" || type === "avg_profit") {
       setActiveTab("date");
       setActiveKpiFilter(activeKpiFilter === "up" ? null : "up");
-    } else if (type === "down") {
+    } else if (type === "down" || type === "avg_loss") {
       setActiveTab("date");
       setActiveKpiFilter(activeKpiFilter === "down" ? null : "down");
-    } else if (type === "max_profit") {
-      if (kpiStats.maxProfitDate && kpiStats.maxProfitDate !== "—") {
-        setSelectedDate(kpiStats.maxProfitDate);
-        setDrawerTargetDate(kpiStats.maxProfitDate);
-        setDrawerMode("date");
-        setDrawerOpen(true);
-      }
-    } else if (type === "max_loss") {
-      if (kpiStats.maxLossDate && kpiStats.maxLossDate !== "—") {
-        setSelectedDate(kpiStats.maxLossDate);
-        setDrawerTargetDate(kpiStats.maxLossDate);
-        setDrawerMode("date");
-        setDrawerOpen(true);
-      }
     }
   };
 
@@ -1221,33 +1202,33 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           </div>
         </div>
 
-        {/* Card 6: 单日最大收益 */}
-        <div className="kpi-card" onClick={() => handleKpiClick("max_profit")}>
+        {/* Card 6: 平均收益 */}
+        <div className="kpi-card" onClick={() => handleKpiClick("avg_profit")}>
           <div className="kpi-card-header">
             <div className="kpi-title-wrap">
-              <BarChart2 size={15} color="#2563EB" />
-              <span>单日最大收益</span>
+              <TrendingUp size={15} color="#10B981" />
+              <span>平均收益</span>
             </div>
             <span className="kpi-arrow">&gt;</span>
           </div>
-          <div className="kpi-value color-profit">{fmtSignedMoney(kpiStats.maxProfit)}</div>
+          <div className="kpi-value color-profit">{fmtSignedMoney(kpiStats.avgUpProfit)}</div>
           <div className="kpi-sub">
-            <span>{kpiStats.maxProfitDate}</span>
+            <span>上涨日均值 ({kpiStats.upDays}天)</span>
           </div>
         </div>
 
-        {/* Card 7: 单日最大亏损 */}
-        <div className="kpi-card" onClick={() => handleKpiClick("max_loss")}>
+        {/* Card 7: 平均亏损 */}
+        <div className="kpi-card" onClick={() => handleKpiClick("avg_loss")}>
           <div className="kpi-card-header">
             <div className="kpi-title-wrap">
-              <BarChart2 size={15} color="#EF4444" />
-              <span>单日最大亏损</span>
+              <TrendingDown size={15} color="#EF4444" />
+              <span>平均亏损</span>
             </div>
             <span className="kpi-arrow">&gt;</span>
           </div>
-          <div className="kpi-value color-loss">{fmtSignedMoney(kpiStats.maxLoss)}</div>
+          <div className="kpi-value color-loss">{fmtSignedMoney(kpiStats.avgDownLoss)}</div>
           <div className="kpi-sub">
-            <span>{kpiStats.maxLossDate}</span>
+            <span>下跌日均值 ({kpiStats.downDays}天)</span>
           </div>
         </div>
       </div>

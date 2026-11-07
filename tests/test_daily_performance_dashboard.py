@@ -32,16 +32,16 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     # 3. Verify 7 KPI Cards
     kpis = page.kpi_cards
     assert "total" in kpis and "days" in kpis and "avg" in kpis
-    assert "up" in kpis and "down" in kpis and "max_profit" in kpis and "max_loss" in kpis
+    assert "up" in kpis and "down" in kpis and "avg_profit" in kpis and "avg_loss" in kpis
 
     # Total trading days should be > 400
     assert "天" in kpis["days"].value_label.text()
     days_cnt = int(kpis["days"].value_label.text().replace(" 天", ""))
     assert days_cnt > 400
 
-    # Max profit / loss date should not be empty
-    assert kpis["max_profit"].sub_label.text() != "—"
-    assert kpis["max_loss"].sub_label.text() != "—"
+    # Average profit / loss sub label should not be empty
+    assert kpis["avg_profit"].sub_label.text() != "—"
+    assert kpis["avg_loss"].sub_label.text() != "—"
 
     # 4. Verify Trend Canvas
     assert len(page.trend_canvas.data_points) == days_cnt
