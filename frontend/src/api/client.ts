@@ -276,8 +276,11 @@ export const api = {
     }),
 
   // Unified Holdings Management
-  holdingsDashboard: (person_id?: number | null) => {
-    const q = person_id != null ? `?person_id=${person_id}` : "";
+  holdingsDashboard: (person_id?: number | null, broker?: string) => {
+    const params = new URLSearchParams();
+    if (person_id != null) params.set("person_id", String(person_id));
+    if (broker) params.set("broker", broker);
+    const q = params.size ? `?${params}` : "";
     return requestApi(`/api/v1/holdings/dashboard${q}`);
   },
   holdingsDetail: (params: {

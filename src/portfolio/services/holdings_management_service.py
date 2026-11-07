@@ -558,6 +558,9 @@ class HoldingsManagementService:
         broker_filter = (broker or "").strip().upper()
         person_ids = (person_id,) if isinstance(person_id, int) else tuple(person_id) if isinstance(person_id, (tuple, list)) else None
 
+        stock_report = analytics.reports.get('股票汇总')
+        categories = {(r.metadata.get('account_id'), r.metadata.get('instrument_id')): r.values[1]
+                      for r in (stock_report.rows if stock_report else ()) if len(r.values)>1}
         filtered_items = []
         for r in pa.rows:
             p_name = r.values[0] or ""
@@ -700,6 +703,7 @@ class HoldingsManagementService:
                 realized_pnl_rate = None
 
             filtered_items.append({
+                "category": categories.get((acc_id, inst_id)),
                 "person_name": p_name,
                 "person_id": p_id,
                 "account_id": acc_id,
@@ -742,6 +746,7 @@ class HoldingsManagementService:
             mv_val = it["market_value"] or Decimal(0)
             weight = (mv_val / total_filtered_mv) if total_filtered_mv > Decimal(0) else Decimal(0)
             rows.append({
+                "category": it.get("category"),
                 "person_name": it["person_name"],
                 "person_id": it["person_id"],
                 "channel": it["channel"],

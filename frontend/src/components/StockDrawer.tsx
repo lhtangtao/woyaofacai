@@ -8,9 +8,10 @@ interface StockDrawerProps {
   personId?: number | null;
   broker?: string | null;
   onClose: () => void;
+  className?: string;
 }
 
-export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, broker, onClose }) => {
+export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, broker, onClose, className="" }) => {
   const [activeTab, setActiveTab] = useState<"trades" | "holdings" | "pnl" | "monthly">("trades");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -29,9 +30,11 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
     setLoading(true);
     setError(null);
     setPage(1);
+    let active=true;
     api
       .stockDrawer(ticker, personId, broker || undefined)
       .then((res) => {
+        if(!active)return;
         if (res.status === "ok") {
           setData(res);
         } else {
@@ -39,14 +42,17 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
         }
       })
       .catch((err) => {
-        setError(err.message || "请求异常");
+        if(active)setError(err.message || "请求异常");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {if(active)setLoading(false)});
+    return()=>{active=false};
   }, [ticker, personId, broker]);
 
   if (!ticker) return null;
 
   const summary = data?.summary || {};
+  const colors=getComputedStyle(document.documentElement);
+  const profit=colors.getPropertyValue("--profit-color").trim(),loss=colors.getPropertyValue("--loss-color").trim();
   const trades: any[] = data?.trades || [];
   const holdingAnalysis = data?.holding_analysis || { dates: [], quantities: [], costs: [] };
   const pnlAnalysis = data?.pnl_analysis || {};
@@ -174,7 +180,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
         itemStyle: {
           color: (param: any) => {
             const item = (pnlAnalysis.markers || [])[param.dataIndex];
-            return item?.side?.includes("买") ? "var(--loss-color, #DC2626)" : "var(--profit-color, #10B981)";
+            return item?.side?.includes("买") ? loss : profit;
           },
         },
       },
@@ -182,7 +188,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
   };
 
   return (
-    <div
+    <div className={className}
       style={{
         position: "fixed",
         top: 0,
@@ -239,7 +245,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
                 {ticker}
               </span>
               <span style={{ fontSize: "13px", color: "var(--text-muted, #64748b)" }}>
-                {summary.company_name || `${ticker} Corporation`}
+                {summary.company_name && summary.company_name!==`${ticker} Corporation`?summary.company_name:"股票详情"}
               </span>
             </div>
             <div style={{ display: "flex", gap: "6px", marginTop: "3px" }}>
@@ -273,7 +279,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
       </div>
 
       {/* 2. Top Summary Metrics (6 Items) */}
-      <div
+      <div className="hp-drawer-metrics"
         style={{
           padding: "14px 20px",
           borderBottom: "1px solid var(--border-color, #e2e8f0)",
@@ -286,7 +292,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
         <div>
           <div style={{ fontSize: "11px", color: "var(--text-muted, #64748b)", marginBottom: "3px" }}>当前持仓</div>
           <div style={{ fontSize: "15px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>
-            {formatNumber(summary.current_quantity, 0)} <span style={{ fontSize: "11px", fontWeight: 400 }}>股</span>
+            {summary.current_quantity==null?"—":Number(summary.current_quantity).toLocaleString("en-US",{maximumFractionDigits:8})} <span style={{ fontSize: "11px", fontWeight: 400 }}>股</span>
           </div>
         </div>
         <div>
@@ -443,7 +449,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
                               </span>
                             </td>
                             <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                              {formatNumber(t.quantity, 0)}
+                              {t.quantity==null?"—":Number(t.quantity).toLocaleString("en-US",{maximumFractionDigits:8})}
                             </td>
                             <td className="font-mono" style={{ textAlign: "right", color: "var(--brand, #2563eb)" }}>
                               {t.current_price != null ? `$${formatNumber(t.current_price, 2)}` : "—"}
@@ -458,7 +464,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
                               ${formatNumber(t.fee, 2)}
                             </td>
                             <td className="font-mono" style={{ textAlign: "right", fontWeight: 700 }}>
-                              {formatNumber(t.post_quantity, 0)}
+                              {t.post_quantity==null?"—":Number(t.post_quantity).toLocaleString("en-US",{maximumFractionDigits:8})}
                             </td>
                             <td>
                               <span

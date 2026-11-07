@@ -18,6 +18,9 @@ from PySide6.QtCore import QDate, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
+    QGridLayout,
+    QMenu,
+    QSizePolicy,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -45,6 +48,8 @@ from portfolio.ui.filters import PersonFilter
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
+from portfolio.ui.holdings_style import STYLE
+from portfolio.ui.components import FlowLayout
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +59,13 @@ class ModernMetricCard(QFrame):
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
+        self.setMinimumHeight(104)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
         self.setStyleSheet("""
             QFrame#card {
                 background: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 10px;
+                border: 1px solid #E8EDF5;
+                border-radius: 12px;
             }
         """)
         layout = QVBoxLayout(self)
@@ -69,7 +76,7 @@ class ModernMetricCard(QFrame):
         self.title_lbl.setStyleSheet("color: #64748B; font-size: 12px; font-weight: 500;")
 
         self.val_lbl = QLabel("—")
-        self.val_lbl.setFont(numeric_font(22, bold=True))
+        self.val_lbl.setFont(numeric_font(26, bold=True))
         self.val_lbl.setStyleSheet("color: #0F172A;")
 
         self.sub_lbl = QLabel("—")
@@ -81,7 +88,10 @@ class ModernMetricCard(QFrame):
 
     def set_content(self, main_val: str, sub_val: str, sub_color: str | None = None):
         self.val_lbl.setText(main_val)
+        self.val_lbl.setStyleSheet("color:"+(sub_color if sub_color and "盈亏" in self.title_lbl.text() else "#1E293B")+";")
         self.sub_lbl.setText(sub_val)
+        self.sub_lbl.setWordWrap(True)
+        self.val_lbl.setToolTip(main_val)
         if sub_color:
             self.sub_lbl.setStyleSheet(f"color: {sub_color}; font-size: 11px; font-weight: 600;")
         else:
@@ -303,7 +313,7 @@ class HoldingsTableModel(FinanceModel):
                 ):
                     return f"{int(round(float(val))):,d}"
                 if "数量" in col_name or "股数" in col_name or ("持仓" in col_name and not any(k in col_name for k in ("市值", "盈亏", "成本", "状态", "占比", "比例"))):
-                    return f"{val:,.0f}" if isinstance(val, (int, Decimal)) and val % 1 == 0 else f"{val:,.2f}"
+                    return f"{val:,.0f}" if val % 1 == 0 else format(val,",.8f").rstrip("0").rstrip(".")
                 if any(w in col_name for w in ("收益率", "比例", "涨幅", "涨跌幅", "涨跌")):
                     sign = "+" if val > 0 else ""
                     return f"{sign}{val * 100:.2f}%"
@@ -334,7 +344,7 @@ class HoldingsTableModel(FinanceModel):
             if is_total:
                 return numeric_font(12, bold=True)
             if isinstance(val, (int, float, Decimal)) or "时间" in col_name or "日期" in col_name or "Ticker" in col_name or col_name == "操作":
-                return numeric_font(12)
+                return numeric_font(13,bold=col_name=="Ticker")
 
         if role == Qt.ItemDataRole.BackgroundRole:
             if is_total:
@@ -355,6 +365,19 @@ class HoldingsTableModel(FinanceModel):
         return None
 
 
+class PagedHoldingsModel(HoldingsTableModel):
+    def __init__(self,parent=None):
+        super().__init__(parent);self.page=1;self.page_size=25;self.all_rows=()
+    def replace(self,rows):
+        self._raw_rows=list(rows);self._apply_sort()
+    def _apply_sort(self):
+        super()._apply_sort();self.all_rows=tuple(self.rows)
+        self.page=max(1,min(self.page,max(1,(len(self.all_rows)+self.page_size-1)//self.page_size)))
+        self.beginResetModel();self.rows=self.all_rows[(self.page-1)*self.page_size:self.page*self.page_size];self.endResetModel()
+    def set_page(self,page):
+        self.page=page;self._apply_sort()
+
+
 class StockDrawerWidget(QFrame):
     """Slide-out drawer on the right side of the screen."""
     closed = Signal()
@@ -363,8 +386,8 @@ class StockDrawerWidget(QFrame):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setObjectName("filterCard")
-        self.setMinimumWidth(480)
-        self.setMaximumWidth(700)
+        self.setMinimumWidth(420)
+        self.setMaximumWidth(500)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -372,7 +395,7 @@ class StockDrawerWidget(QFrame):
 
         # 1. Header (Badge, Ticker, Company Name, Close button)
         header = QHBoxLayout()
-        self.badge_label = QLabel("NV")
+        self.badge_label = QLabel("—")
         self.badge_label.setFixedSize(36, 36)
         self.badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.badge_label.setStyleSheet("background: #1E293B; color: #fff; font-weight: bold; border-radius: 6px; font-size: 14px;")
@@ -380,9 +403,9 @@ class StockDrawerWidget(QFrame):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        self.ticker_title = QLabel("NVDA")
+        self.ticker_title = QLabel("—")
         self.ticker_title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        self.name_title = QLabel("NVIDIA Corporation · 美股 标的")
+        self.name_title = QLabel("股票详情")
         self.name_title.setObjectName("secondary")
         self.name_title.setStyleSheet("font-size: 11px;")
         title_box.addWidget(self.ticker_title)
@@ -399,8 +422,8 @@ class StockDrawerWidget(QFrame):
 
         # 2. Top 6 Metrics
         metrics_frame = QFrame()
-        metrics_frame.setStyleSheet("background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 4px;")
-        m_layout = QHBoxLayout(metrics_frame)
+        metrics_frame.setStyleSheet("background: #fff; border: 1px solid #E8EDF5; border-radius: 8px; padding: 4px;")
+        m_layout = QGridLayout(metrics_frame)
         m_layout.setContentsMargins(6, 6, 6, 6)
         m_layout.setSpacing(8)
 
@@ -410,8 +433,8 @@ class StockDrawerWidget(QFrame):
         self.m_mv = ModernMetricCard("持仓市值")
         self.m_fpnl = ModernMetricCard("浮动盈亏")
         self.m_cpnl = ModernMetricCard("累计盈亏")
-        for m in (self.m_qty, self.m_cost, self.m_curr, self.m_mv, self.m_fpnl, self.m_cpnl):
-            m_layout.addWidget(m, 1)
+        for i,m in enumerate((self.m_qty, self.m_cost, self.m_curr, self.m_mv, self.m_fpnl, self.m_cpnl)):
+            m.setMinimumHeight(70);m.val_lbl.setFont(numeric_font(16,bold=True));m_layout.addWidget(m,i//2,i%2)
         layout.addWidget(metrics_frame)
 
         # 3. Tab Bar (4 Tabs)
@@ -504,15 +527,15 @@ class StockDrawerWidget(QFrame):
 
     def set_data(self, drawer_data: dict[str, Any]):
         summary = drawer_data.get("summary", {})
-        ticker = summary.get("ticker", "NVDA")
+        ticker = summary.get("ticker") or "—"
         self.current_ticker = ticker
         self.badge_label.setText(ticker[:2])
         self.ticker_title.setText(ticker)
-        self.name_title.setText(f"{summary.get('company_name', ticker)} · {' '.join(summary.get('tags', []))}")
+        self.name_title.setText("股票详情" if summary.get("company_name")==f"{ticker} Corporation" else summary.get("company_name") or "股票详情")
 
         # Metrics
         qty = summary.get("current_quantity") or 0
-        self.m_qty.set_content(f"{qty:,.0f} 股", "当前剩余持仓")
+        self.m_qty.set_content(f"{qty:,} 股", "当前剩余持仓")
 
         cost = summary.get("cost_price")
         self.m_cost.set_content(f"${cost:,.2f}" if cost else "—", "净投入每股成本")
@@ -525,13 +548,13 @@ class StockDrawerWidget(QFrame):
 
         fpnl = summary.get("floating_pnl")
         frate = summary.get("floating_pnl_rate")
-        fpnl_color = "#16A34A" if (fpnl or 0) > 0 else "#DC2626" if (fpnl or 0) < 0 else "#64748B"
+        fpnl_color = tokens(self).profit if (fpnl or 0) > 0 else tokens(self).loss if (fpnl or 0) < 0 else tokens(self).muted
         sub_f = f"{frate*100:+.2f}%" if frate is not None else "—"
         self.m_fpnl.set_content(f"${fpnl:,.2f}" if fpnl is not None else "—", sub_f, fpnl_color)
 
         cpnl = summary.get("cumulative_pnl")
         crate = summary.get("cumulative_pnl_rate")
-        cpnl_color = "#16A34A" if (cpnl or 0) > 0 else "#DC2626" if (cpnl or 0) < 0 else "#64748B"
+        cpnl_color = tokens(self).profit if (cpnl or 0) > 0 else tokens(self).loss if (cpnl or 0) < 0 else tokens(self).muted
         sub_c = f"{crate*100:+.2f}%" if crate is not None else "—"
         self.m_cpnl.set_content(f"${cpnl:,.2f}" if cpnl is not None else "—", sub_c, cpnl_color)
 
@@ -543,10 +566,10 @@ class StockDrawerWidget(QFrame):
         h_data = drawer_data.get("holding_analysis", {})
         h_series = []
         if h_data.get("quantities"):
-            pts = tuple((p["date"], Decimal(str(p["quantity"]))) for p in h_data["quantities"])
+            pts = tuple((day,Decimal(str(value)) if value is not None else None) for day,value in zip(h_data.get("dates",[]),h_data["quantities"]))
             h_series.append(Series("持仓股数", pts))
         if h_data.get("costs"):
-            pts = tuple((p["date"], Decimal(str(p["cost"]))) for p in h_data["costs"])
+            pts = tuple((day,Decimal(str(value)) if value is not None else None) for day,value in zip(h_data.get("dates",[]),h_data["costs"]))
             h_series.append(Series("持仓成本价", pts))
         if h_series:
             self.holdings_canvas.chart = Chart(89, "持仓与成本轨迹", "trend", tuple(h_series), "数量与成本历史变化")
@@ -568,8 +591,8 @@ class StockDrawerWidget(QFrame):
             m_rows.append(ReportRow((
                 mr.get("month"),
                 Decimal(str(mr.get("market_value") or 0)),
-                Decimal(str(mr.get("pnl") or 0)),
-                Decimal(str(mr.get("pnl_rate") or 0)) if mr.get("pnl_rate") is not None else None,
+                Decimal(str(mr["monthly_pnl"])) if mr.get("monthly_pnl") is not None else None,
+                Decimal(str(mr["return_rate"])) if mr.get("return_rate") is not None else None,
             ), {}))
         self.monthly_model.replace(m_rows)
 
@@ -585,14 +608,14 @@ class StockDrawerWidget(QFrame):
             rows.append(ReportRow((
                 t.get("trade_time"),
                 t.get("person_name"),
-                t.get("broker_channel"),
-                t.get("direction"),
-                Decimal(str(t.get("quantity") or 0)),
+                t.get("channel"),
+                t.get("side"),
+                Decimal(str(t["quantity"])) if t.get("quantity") is not None else None,
                 Decimal(str(t.get("current_price") or 0)) if t.get("current_price") is not None else None,
-                Decimal(str(t.get("price") or 0)),
-                Decimal(str(t.get("amount") or 0)),
-                Decimal(str(t.get("fee") or 0)),
-                Decimal(str(t.get("post_holding") or 0)),
+                Decimal(str(t["price"])) if t.get("price") is not None else None,
+                Decimal(str(t["amount"])) if t.get("amount") is not None else None,
+                Decimal(str(t["fee"])) if t.get("fee") is not None else None,
+                Decimal(str(t["post_quantity"])) if t.get("post_quantity") is not None else None,
                 t.get("cost_change"),
             ), {}))
         self.trade_model.replace(rows)
@@ -616,11 +639,13 @@ class HoldingsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = parent
+        self.setObjectName("holdingsManager");self.setStyleSheet(STYLE)
         self.analytics = None
         self.dimension = "person"
         self.view_mode = "dashboard"
         self._selected_person_filter = None
         self._cached_dash_data = None
+        self._hidden_detail_names=set()
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(16, 12, 16, 16)
@@ -634,7 +659,7 @@ class HoldingsPage(QWidget):
         self.person_filter = PersonFilter(self)
         self.person_filter.setMinimumWidth(136)
         self.person_filter.changed.connect(self._on_person_filter_changed)
-        top_bar.addWidget(self.person_filter)
+        # The existing global-linked selector is moved into the shared filter card.
         top_bar.addStretch(1)
 
         # Right: Mode Switcher (仪表板总览 vs 持仓明细页)
@@ -644,7 +669,7 @@ class HoldingsPage(QWidget):
         mb_layout.setContentsMargins(2, 2, 2, 2)
         mb_layout.setSpacing(4)
 
-        self.mode_dash_btn = QPushButton("仪表板总览")
+        self.mode_dash_btn = QPushButton("总览")
         self.mode_dash_btn.setCheckable(True)
         self.mode_dash_btn.setChecked(True)
         self.mode_dash_btn.setStyleSheet("""
@@ -654,7 +679,7 @@ class HoldingsPage(QWidget):
         self.mode_dash_btn.clicked.connect(lambda: self.switch_view_mode("dashboard"))
         mb_layout.addWidget(self.mode_dash_btn)
 
-        self.mode_detail_btn = QPushButton("持仓明细页")
+        self.mode_detail_btn = QPushButton("持仓明细")
         self.mode_detail_btn.setCheckable(True)
         self.mode_detail_btn.setStyleSheet("""
             QPushButton { border: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748B; background: transparent; }
@@ -663,7 +688,9 @@ class HoldingsPage(QWidget):
         self.mode_detail_btn.clicked.connect(lambda: self.switch_view_mode("detail"))
         mb_layout.addWidget(self.mode_detail_btn)
 
-        top_bar.addWidget(mode_box)
+        top_bar.insertWidget(0,mode_box)
+        refresh=QPushButton("刷新");refresh.clicked.connect(self._refresh_active);top_bar.addWidget(refresh)
+        self.export_btn=QPushButton("导出明细");self.export_btn.setObjectName("primary");self.export_btn.clicked.connect(self._export_detail);top_bar.addWidget(self.export_btn)
         root_layout.addLayout(top_bar)
 
         # 2. Main Stack (Dashboard vs Detail)
@@ -685,12 +712,12 @@ class HoldingsPage(QWidget):
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(12)
         self.card_mv = ModernMetricCard("持仓总市值 (USD)")
-        self.card_count = ModernMetricCard("持仓股票")
+        self.card_count = ModernMetricCard("持仓股票数量")
         self.card_pnl = ModernMetricCard("累计盈亏 (含已清仓)")
-        self.card_invest = ModernMetricCard("总投入 (USD)")
+        self.card_invest = ModernMetricCard("总投入 · 既定净投入口径")
         for c in (self.card_mv, self.card_count, self.card_pnl, self.card_invest):
             cards_layout.addWidget(c, 1)
-        dash_layout.addLayout(cards_layout)
+        root_layout.addLayout(cards_layout)
 
         # =====================================================================
         # 上下两层结构：
@@ -725,10 +752,12 @@ class HoldingsPage(QWidget):
         self.p_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
         self.p_table.horizontalHeader().sectionClicked.connect(self.p_model.toggle_sort)
         p_layout.addWidget(self.p_table)
-        dash_layout.addWidget(p_card)
+        self.p_table.clicked.connect(self._on_person_table_clicked)
 
         # 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (等高并列)
-        lower_row = QHBoxLayout()
+        lower_row = QGridLayout()
+        self.summary_grid=lower_row;self.summary_cards=(p_card,)
+        lower_row.addWidget(p_card,0,0)
         lower_row.setSpacing(12)
 
         # 1. 券商持仓汇总
@@ -762,7 +791,7 @@ class HoldingsPage(QWidget):
         self.b_table.clicked.connect(self._on_broker_table_clicked)
         self.b_table.horizontalHeader().sectionClicked.connect(self.b_model.toggle_sort)
         b_layout.addWidget(self.b_table)
-        lower_row.addWidget(b_card, 1)
+        lower_row.addWidget(b_card,0,1)
 
         # 2. 股票持仓汇总
         s_card = QFrame()
@@ -795,7 +824,8 @@ class HoldingsPage(QWidget):
         self.s_table.clicked.connect(self._on_stock_table_clicked)
         self.s_table.horizontalHeader().sectionClicked.connect(self.s_model.toggle_sort)
         s_layout.addWidget(self.s_table)
-        lower_row.addWidget(s_card, 1)
+        lower_row.addWidget(s_card,0,2)
+        self.summary_cards=(p_card,b_card,s_card)
 
         # 3. 资产分布 (Donut Ring Chart)
         right_card = QFrame()
@@ -850,9 +880,11 @@ class HoldingsPage(QWidget):
         # Custom Donut Chart Ring Widget
         self.dist_donut = DonutChartWidget(self)
         right_layout.addWidget(self.dist_donut, 1)
-        lower_row.addWidget(right_card, 1)
+        right_card.setMinimumHeight(230)
+        self.dist_donut.setMinimumSize(320,190)
 
         dash_layout.addLayout(lower_row)
+        dash_layout.addWidget(right_card)
         dash_scroll.setWidget(dash_widget)
         self.stack.addWidget(dash_scroll)
 
@@ -866,16 +898,20 @@ class HoldingsPage(QWidget):
 
         # Detail toolbar (Placed exclusively in Detail View!)
         detail_bar = QHBoxLayout()
+        filter_card=QFrame();filter_card.setObjectName("filterCard");filter_layout=QVBoxLayout(filter_card);filter_layout.setContentsMargins(16,12,16,12);filter_layout.setSpacing(10)
+        def field(title,widget):
+            box=QWidget();vertical=QVBoxLayout(box);vertical.setContentsMargins(0,0,0,0);vertical.setSpacing(5);label=QLabel(title);label.setObjectName("fieldCaption");vertical.addWidget(label);vertical.addWidget(widget);widget.setMinimumWidth(0);return box
+        detail_bar.addWidget(field("归属人员",self.person_filter),2)
         detail_bar.setSpacing(10)
 
         # Status filter (仅持仓与已清仓两种状态，默认持仓)
         status_lbl = QLabel("状态：")
-        detail_bar.addWidget(status_lbl)
+        status_lbl.hide()
         self.status_combo = QComboBox()
         self.status_combo.addItem("当前持仓", "持有中")
         self.status_combo.addItem("已清仓", "已清仓")
         self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
-        detail_bar.addWidget(self.status_combo)
+        detail_bar.addWidget(field("持仓状态",self.status_combo),1)
 
         # Broker filter
         self.broker_combo = QComboBox()
@@ -885,49 +921,60 @@ class HoldingsPage(QWidget):
         self.broker_combo.addItem("第一证券", "第一证券")
         self.broker_combo.addItem("嘉信", "嘉信")
         self.broker_combo.currentIndexChanged.connect(self._on_broker_combo_changed)
-        detail_bar.addWidget(self.broker_combo)
+        detail_bar.insertWidget(1,field("券商渠道",self.broker_combo),1)
 
         # Search input
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索人员、券商或股票代码…")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_filter_changed)
-        detail_bar.addWidget(self.search_input)
+        detail_bar.insertWidget(2,field("Ticker / 组合搜索",self.search_input),2)
+        self.category_combo=QComboBox();self.category_combo.addItem("全部分类","");self.category_combo.currentIndexChanged.connect(self._on_filter_changed);detail_bar.addWidget(field("股票分类",self.category_combo),1)
 
-        detail_bar.addStretch()
-
-        self.export_btn = QPushButton("导出明细…")
-        self.export_btn.setIcon(icon("download", self))
-        self.export_btn.clicked.connect(self._export_detail)
-        detail_bar.addWidget(self.export_btn)
-
-        dc_layout.addLayout(detail_bar)
+        for title,slot,name in (("查询",self._query_filters,"primary"),("重置",self._reset_filters,""),("高级筛选",self._toggle_advanced,"quietAction")):
+            button=QPushButton(title);button.setObjectName(name);button.clicked.connect(slot);detail_bar.addWidget(button,0,Qt.AlignmentFlag.AlignBottom)
+        filter_layout.addLayout(detail_bar)
+        self.advanced_hint=QLabel("总览统计沿用当前人员及渠道范围；股票、分类及状态用于持仓明细。支持组合搜索人员、券商和股票代码。");self.advanced_hint.setWordWrap(True);self.advanced_hint.hide();filter_layout.addWidget(self.advanced_hint)
+        self.filter_chips=QWidget();self.filter_chip_layout=FlowLayout(self.filter_chips);filter_layout.addWidget(self.filter_chips)
+        root_layout.addWidget(filter_card)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
 
         # Left: Unified Detail Table
-        left_table_widget = QWidget()
+        left_table_widget = QFrame();left_table_widget.setObjectName("holdingSurface")
         lt_layout = QVBoxLayout(left_table_widget)
         lt_layout.setContentsMargins(0, 0, 0, 0)
         lt_layout.setSpacing(6)
 
+        self.dimension_combo=QComboBox()
+        for value,label in (("person","按人员"),("broker","按券商"),("stock","按股票")):self.dimension_combo.addItem(label,value)
+        self.dimension_combo.currentIndexChanged.connect(self._dimension_changed)
         self.detail_info = QLabel("统一持仓明细 · 点击任意标的行在右侧抽屉查看交易流水与收益分析")
         self.detail_info.setObjectName("secondary")
-        lt_layout.addWidget(self.detail_info)
+        table_title=QHBoxLayout();table_title.setContentsMargins(12,10,12,6);table_title.addWidget(self.detail_info,1)
+        back=QPushButton("返回总览");back.setObjectName("quietAction");back.clicked.connect(lambda:self.switch_view_mode("dashboard"));table_title.addWidget(back);table_title.addWidget(self.dimension_combo)
+        columns=QPushButton("显示列");columns.clicked.connect(self._column_menu);table_title.addWidget(columns);lt_layout.addLayout(table_title)
 
         self.detail_table = FinanceTable(freeze=False)
-        self.detail_model = HoldingsTableModel(self.detail_table)
+        self.detail_model = PagedHoldingsModel(self.detail_table)
         self.detail_model.columns = (
             "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
             "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
         )
         self.detail_table.setModel(self.detail_model)
+        self.detail_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.detail_model.modelReset.connect(self._update_pager)
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.detail_table.horizontalHeader().sectionClicked.connect(self.detail_model.toggle_sort)
         self.detail_table.clicked.connect(self._on_detail_row_clicked)
         lt_layout.addWidget(self.detail_table, 1)
 
+        pager=QHBoxLayout();pager.setContentsMargins(12,8,12,8);self.page_label=QLabel();pager.addWidget(self.page_label,1)
+        self.page_size=QComboBox()
+        for n in (25,50,100,200):self.page_size.addItem(f"每页 {n} 条",n)
+        self.page_size.currentIndexChanged.connect(self._page_size_changed);pager.addWidget(self.page_size)
+        self.prev_page=QPushButton("上一页");self.next_page=QPushButton("下一页");self.prev_page.clicked.connect(lambda:self.detail_model.set_page(self.detail_model.page-1));self.next_page.clicked.connect(lambda:self.detail_model.set_page(self.detail_model.page+1));pager.addWidget(self.prev_page);pager.addWidget(self.next_page);lt_layout.addLayout(pager)
         self.splitter.addWidget(left_table_widget)
 
         # Right: Stock Drawer
@@ -941,7 +988,72 @@ class HoldingsPage(QWidget):
         dc_layout.addWidget(self.splitter, 1)
         self.stack.addWidget(detail_container)
 
+        for table in (self.p_table,self.b_table,self.s_table,self.detail_table,self.drawer.trade_table,self.drawer.monthly_table):
+            table.finance_model=table.model()
+            table.setStyleSheet("");table.horizontalHeader().setStyleSheet("");table.verticalHeader().setDefaultSectionSize(40)
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        for col in (4,6):self.p_table.setColumnHidden(col,True)
+        for card in self.summary_cards:card.setMinimumHeight(300)
         root_layout.addWidget(self.stack, 1)
+
+    def _dimension_changed(self):
+        self.dimension=self.dimension_combo.currentData();self.detail_model.page=1;self.refresh_detail()
+
+    def _refresh_active(self):
+        self.refresh_dashboard()
+        if self.view_mode=="detail":self.refresh_detail()
+        self._render_filter_chips()
+
+    def _query_filters(self):
+        if self.search_input.text() or self.category_combo.currentData():self.switch_view_mode("detail")
+        self._refresh_active()
+
+    def _toggle_advanced(self):self.advanced_hint.setVisible(not self.advanced_hint.isVisible())
+
+    def _reset_filters(self):
+        self.search_input.blockSignals(True);self.search_input.clear();self.search_input.blockSignals(False)
+        self.category_combo.blockSignals(True);self.category_combo.setCurrentIndex(0);self.category_combo.blockSignals(False)
+        self.status_combo.blockSignals(True);self.status_combo.setCurrentIndex(0);self.status_combo.blockSignals(False)
+        self.person_filter.set_person_id(None);self._on_person_filter_changed();self.broker_combo.setCurrentIndex(0);self._on_broker_combo_changed();self._refresh_active()
+
+    def _render_filter_chips(self):
+        if not hasattr(self,"filter_chip_layout"):return
+        while self.filter_chip_layout.count():
+            item=self.filter_chip_layout.takeAt(0)
+            if item.widget():item.widget().deleteLater()
+        def chip(text,action):
+            button=QPushButton(text);button.setObjectName("holdingChip");button.clicked.connect(action);self.filter_chip_layout.addWidget(button)
+        if self._selected_person_filter is not None:chip("人员："+self.person_filter.currentText()+" ×",lambda:self.person_filter.set_person_id(None))
+        if self.broker_combo.currentData():chip("渠道："+self.broker_combo.currentText()+" ×",lambda:self.broker_combo.setCurrentIndex(0))
+        if self.search_input.text():chip("搜索："+self.search_input.text()+" ×",self.search_input.clear)
+        if self.category_combo.currentData():chip("分类："+self.category_combo.currentText()+" ×",lambda:self.category_combo.setCurrentIndex(0))
+        chip("状态："+self.status_combo.currentText(),lambda:self.status_combo.setCurrentIndex(0))
+
+    def _column_menu(self):
+        menu=QMenu(self)
+        for i,title in enumerate(self.detail_model.columns):
+            action=menu.addAction(title);action.setCheckable(True);action.setChecked(not self.detail_table.isColumnHidden(i));action.toggled.connect(lambda checked,col=i:self._set_detail_column(col,checked))
+        menu.exec(self.mapToGlobal(self.rect().center()))
+
+    def _set_detail_column(self,column,visible):
+        name=self.detail_model.columns[column]
+        if visible:self._hidden_detail_names.discard(name)
+        else:self._hidden_detail_names.add(name)
+        self.detail_table.setColumnHidden(column,not visible)
+
+    def _page_size_changed(self):
+        self.detail_model.page_size=self.page_size.currentData();self.detail_model.set_page(1)
+
+    def _update_pager(self):
+        if not hasattr(self,"page_label"):return
+        count=len(self.detail_model.all_rows);pages=max(1,(count+self.detail_model.page_size-1)//self.detail_model.page_size)
+        self.page_label.setText(f"共 {count} 条 · 第 {self.detail_model.page} / {pages} 页");self.prev_page.setEnabled(self.detail_model.page>1);self.next_page.setEnabled(self.detail_model.page<pages)
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if hasattr(self,"summary_cards"):
+            columns=3 if self.width()>=1150 else 2 if self.width()>=780 else 1
+            for i,card in enumerate(self.summary_cards):self.summary_grid.addWidget(card,i//columns,i%columns)
 
     def _get_persons(self) -> list[dict[str, Any]]:
         if self.main_window and hasattr(self.main_window, "info") and self.main_window.info:
@@ -989,7 +1101,7 @@ class HoldingsPage(QWidget):
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
         else:
-            self.refresh_detail()
+            self.refresh_dashboard();self.refresh_detail()
         # 双向联动：反向同步给主窗口全局人员筛选器
         if not getattr(self, "_syncing_person", False) and self.main_window:
             if hasattr(self.main_window, "sync_person_from_holdings"):
@@ -999,7 +1111,7 @@ class HoldingsPage(QWidget):
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
         else:
-            self.refresh_detail()
+            self.refresh_dashboard();self.refresh_detail()
         # 双向联动：反向同步给主窗口全局渠道筛选器
         if not getattr(self, "_syncing_broker", False) and self.main_window:
             broker_name = self.broker_combo.currentData() or ""
@@ -1021,7 +1133,7 @@ class HoldingsPage(QWidget):
             if self.view_mode == "dashboard":
                 self.refresh_dashboard()
             else:
-                self.refresh_detail()
+                self.refresh_dashboard();self.refresh_detail()
         finally:
             self._syncing_person = False
 
@@ -1044,12 +1156,14 @@ class HoldingsPage(QWidget):
             if self.view_mode == "dashboard":
                 self.refresh_dashboard()
             else:
-                self.refresh_detail()
+                self.refresh_dashboard();self.refresh_detail()
         finally:
             self._syncing_broker = False
 
     def switch_view_mode(self, mode: str):
         self.view_mode = mode
+        self.export_btn.setEnabled(mode=="detail")
+        self._render_filter_chips()
         self.mode_dash_btn.setChecked(mode == "dashboard")
         self.mode_detail_btn.setChecked(mode == "detail")
         self.stack.setCurrentIndex(0 if mode == "dashboard" else 1)
@@ -1060,6 +1174,7 @@ class HoldingsPage(QWidget):
 
     def set_view(self, mode: str, dimension: str = "person", status: str = "持有中", person_id: int | None = None, broker: str | None = None, ticker: str | None = None):
         self.dimension = dimension
+        self.dimension_combo.blockSignals(True);self.dimension_combo.setCurrentIndex(max(0,self.dimension_combo.findData(dimension)));self.dimension_combo.blockSignals(False)
         s_idx = self.status_combo.findData(status)
         if s_idx >= 0:
             self.status_combo.setCurrentIndex(s_idx)
@@ -1073,12 +1188,8 @@ class HoldingsPage(QWidget):
                     idx = i
                     break
             self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        else:
-            self.broker_combo.setCurrentIndex(0)
         if ticker:
             self.search_input.setText(ticker)
-        else:
-            self.search_input.clear()
         if person_id is not None:
             self._selected_person_filter = person_id
             self.person_filter.blockSignals(True)
@@ -1087,7 +1198,10 @@ class HoldingsPage(QWidget):
         self.switch_view_mode(mode)
 
     def _on_filter_changed(self):
-        self.refresh_detail()
+        self._render_filter_chips()
+        if hasattr(self,"category_combo") and (self.search_input.text() or self.category_combo.currentData() or self.status_combo.currentData()=="已清仓"):
+            self.switch_view_mode("detail")
+        elif self.view_mode=="detail":self.refresh_detail()
 
     def _on_dist_tab_changed(self, idx):
         if not hasattr(self, "_cached_dash_data") or not self._cached_dash_data:
@@ -1106,7 +1220,7 @@ class HoldingsPage(QWidget):
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
         else:
-            self.refresh_detail()
+            self.refresh_dashboard();self.refresh_detail()
 
     def refresh_dashboard(self):
         if not self.analytics:
@@ -1119,29 +1233,37 @@ class HoldingsPage(QWidget):
             broker=broker_filter,
         )
         self._cached_dash_data = dash
+        selected_category=self.category_combo.currentData() or ""
+        stocks=self.analytics.reports.get("股票汇总")
+        categories=sorted({r.values[1] for r in (stocks.rows if stocks else ()) if r.values[1]})
+        self.category_combo.blockSignals(True);self.category_combo.clear();self.category_combo.addItem("全部分类","")
+        for category in categories:self.category_combo.addItem(category,category)
+        if selected_category and selected_category not in categories:self.category_combo.addItem(selected_category,selected_category)
+        self.category_combo.setCurrentIndex(max(0,self.category_combo.findData(selected_category)));self.category_combo.blockSignals(False)
+        self._render_filter_chips()
 
         # 1. Cards
         cards = dash.get("cards", {})
         mv = float(cards.get("total_market_value") or 0)
         fpnl = float(cards.get("floating_pnl") or 0)
         frate = float(cards.get("floating_pnl_rate") or 0)
-        fpnl_color = "#16A34A" if fpnl > 0 else "#DC2626" if fpnl < 0 else "#64748B"
+        fpnl_color = tokens(self).profit if fpnl > 0 else tokens(self).loss if fpnl < 0 else tokens(self).muted
         sub_mv = f"{fpnl:+,.2f} ({frate*100:+.2f}%)" if fpnl != 0 else "—"
-        self.card_mv.set_content(f"${mv:,.2f}", sub_mv, fpnl_color)
+        self.card_mv.set_content((f"{mv:,.2f}" if cards.get("total_market_value") is not None else "—"), sub_mv, fpnl_color)
 
         tot_s = cards.get("total_stock_count") or 0
         op_s = cards.get("open_stock_count") or 0
         cl_s = cards.get("closed_stock_count") or 0
-        self.card_count.set_content(f"{tot_s}", f"当前持仓 {op_s} | 已清仓 {cl_s}")
+        self.card_count.set_content((f"{op_s}" if cards.get("open_stock_count") is not None else "—"), f"历史标的 {tot_s} | 已清仓 {cl_s}")
 
         cpnl = float(cards.get("cumulative_pnl") or 0)
         crate = float(cards.get("cumulative_pnl_rate") or 0)
-        cpnl_color = "#16A34A" if cpnl > 0 else "#DC2626" if cpnl < 0 else "#64748B"
-        self.card_pnl.set_content(f"${cpnl:+,.2f}", f"收益率 {crate*100:+.2f}%", cpnl_color)
+        cpnl_color = tokens(self).profit if cpnl > 0 else tokens(self).loss if cpnl < 0 else tokens(self).muted
+        self.card_pnl.set_content((f"{cpnl:+,.2f}" if cards.get("cumulative_pnl") is not None else "—"), (f"收益率 {crate*100:+.2f}%" if cards.get("cumulative_pnl_rate") is not None else "收益率 —"), cpnl_color)
 
         inv = float(cards.get("total_invested") or 0)
         rpnl = float(cards.get("realized_pnl") or 0)
-        self.card_invest.set_content(f"${inv:,.2f}", f"已实现 ${rpnl:,.2f} | 浮动 ${fpnl:,.2f}")
+        self.card_invest.set_content((f"{inv:,.2f}" if cards.get("total_invested") is not None else "—"), (f"已实现 {rpnl:,.2f} | 浮动 {fpnl:,.2f}" if cards.get("realized_pnl") is not None else "已实现 —"))
 
         # 2. Tables
         # 人员持仓明细
@@ -1218,7 +1340,7 @@ class HoldingsPage(QWidget):
         # 股票持仓汇总
         s_recs = dash.get("stock_summary", [])
         s_rows = []
-        for sr in s_recs[:10]:
+        for sr in s_recs:
             s_rows.append(ReportRow((
                 sr.get("ticker"),
                 Decimal(str(sr.get("market_value") or 0)),
@@ -1261,6 +1383,12 @@ class HoldingsPage(QWidget):
             db_path=src_path,
         )
 
+        chosen=self.category_combo.currentData() or ""
+        options=sorted({r.get("category") for r in raw_rows if r.get("category")} | ({chosen} if chosen else set()))
+        self.category_combo.blockSignals(True);self.category_combo.clear();self.category_combo.addItem("全部分类","")
+        for category in options:self.category_combo.addItem(category,category)
+        self.category_combo.setCurrentIndex(max(0,self.category_combo.findData(chosen)));self.category_combo.blockSignals(False)
+        if chosen:raw_rows=[r for r in raw_rows if r.get("category")==chosen]
         if status_filter == "已清仓":
             target_cols = (
                 "归属人员", "券商渠道", "Ticker", "首次买入日期", "最后清仓日期", "清仓数量",
@@ -1277,6 +1405,7 @@ class HoldingsPage(QWidget):
             self.detail_model.columns = target_cols
             self.detail_model.sort_column = -1
             self.detail_model.sort_order = Qt.SortOrder.DescendingOrder
+            for col,name in enumerate(target_cols):self.detail_table.setColumnHidden(col,name in self._hidden_detail_names)
 
         def to_dec(val):
             return Decimal(str(val)) if val is not None else None
@@ -1336,6 +1465,7 @@ class HoldingsPage(QWidget):
         v_scroll = self.detail_table.verticalScrollBar().value()
         h_scroll = self.detail_table.horizontalScrollBar().value()
         self.detail_model.replace(rows)
+        self._render_filter_chips()
         self.detail_table.verticalScrollBar().setValue(v_scroll)
         self.detail_table.horizontalScrollBar().setValue(h_scroll)
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -1393,7 +1523,7 @@ class HoldingsPage(QWidget):
         )
         self.drawer.set_data(drawer_data)
         self.drawer.show()
-        self.splitter.setSizes([self.width() - 520, 520])
+        self.splitter.setSizes([max(200,self.width() - 480), 480])
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(f"[桌面端抽屉] 标的 {ticker} 抽屉展开就绪，耗时 {elapsed_ms:.1f}ms")
 
@@ -1401,13 +1531,13 @@ class HoldingsPage(QWidget):
         self.drawer.hide()
 
     def _export_detail(self):
-        if not self.detail_model.rows:
+        if not self.detail_model.all_rows:
             return
         path, _ = QFileDialog.getSaveFileName(self, "导出持仓明细", "持仓明细.csv", "CSV 文件 (*.csv)")
         if not path:
             return
         headers = self.detail_model.columns
         lines = [",".join(headers)]
-        for r in self.detail_model.rows:
+        for r in self.detail_model.all_rows:
             lines.append(",".join(f'"{v}"' if v is not None else '""' for v in r.values))
         Path(path).write_text("\ufeff" + "\n".join(lines), encoding="utf-8")
