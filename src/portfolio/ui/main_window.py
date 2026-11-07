@@ -460,6 +460,9 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "holdings_page"):
             self.holdings_page.sync_person_from_main(self.person.currentData())
             self.holdings_page.sync_broker_from_main(self.accounts.current_broker_name())
+        if hasattr(self, "daily_performance_page"):
+            self.daily_performance_page.sync_person_from_main(self.person.currentData())
+            self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
         if hasattr(self, "earnings_page") and self.pages.currentIndex() == 14:
             self.earnings_page.activate()
         self.refresh()

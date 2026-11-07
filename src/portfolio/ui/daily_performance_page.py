@@ -463,6 +463,7 @@ class DailyPerformancePage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.main_window = parent
         self.analytics = None
         self.raw_rows: List[Tuple] = []
 
@@ -477,6 +478,8 @@ class DailyPerformancePage(QWidget):
         self.stock_pnl_filter: str = "all"
         self.selected_date: str = ""
         self.max_as_of_date: str = ""
+        self._syncing_person = False
+        self._syncing_broker = False
 
         # Root Layout
         main_layout = QVBoxLayout(self)
@@ -892,7 +895,13 @@ class DailyPerformancePage(QWidget):
         lower_splitter.setStretchFactor(1, 1)
         main_layout.addWidget(lower_splitter)
 
-        # 5. Right Side Detail Drawer
+        # 5. Right Side Detail Drawer & Transparent Overlay
+        self.drawer_overlay = QWidget(self)
+        self.drawer_overlay.setStyleSheet("background-color: rgba(15, 23, 42, 0.20);")
+        self.drawer_overlay.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drawer_overlay.hide()
+        self.drawer_overlay.mousePressEvent = lambda e: self.close_drawer()
+
         self.drawer_frame = QFrame(self)
         self.drawer_frame.setStyleSheet("""
             QFrame {
@@ -993,11 +1002,46 @@ class DailyPerformancePage(QWidget):
 
         self.recalculate_and_refresh()
 
+    def sync_person_from_main(self, person_id: Optional[int]):
+        """主窗口全局人员切换时，同步更新本地下拉框。"""
+        if getattr(self, "_syncing_person", False):
+            return
+        self._syncing_person = True
+        try:
+            self.selected_person_id = person_id
+            self.person_combo.blockSignals(True)
+            idx = self.person_combo.findData(person_id)
+            self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.person_combo.blockSignals(False)
+            self.recalculate_and_refresh()
+        finally:
+            self._syncing_person = False
+
+    def sync_broker_from_main(self, broker_name: Optional[str]):
+        """主窗口全局渠道切换时，同步更新本地下拉框。"""
+        if getattr(self, "_syncing_broker", False):
+            return
+        self._syncing_broker = True
+        try:
+            clean = (broker_name or "").strip()
+            self.selected_broker = clean
+            self.broker_combo.blockSignals(True)
+            idx = self.broker_combo.findText(clean) if clean else 0
+            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.broker_combo.blockSignals(False)
+            self.recalculate_and_refresh()
+        finally:
+            self._syncing_broker = False
+
     def apply_filter(self):
-        self.selected_person_id = self.person_combo.currentData()
-        self.selected_broker = self.broker_combo.currentText()
-        if self.selected_broker == "全部渠道":
-            self.selected_broker = ""
+        p_id = self.person_combo.currentData()
+        b_name = self.broker_combo.currentText()
+        if b_name == "全部渠道":
+            b_name = ""
+
+        person_changed = (p_id != self.selected_person_id)
+        self.selected_person_id = p_id
+        self.selected_broker = b_name
         self.search_ticker = self.ticker_input.text().strip().upper()
         self.selected_category = self.category_combo.currentText()
         if self.selected_category == "全部分类":
@@ -1005,6 +1049,16 @@ class DailyPerformancePage(QWidget):
         self.start_date = self.start_date_edit.date().toString("yyyy-MM-dd")
         self.end_date = self.end_date_edit.date().toString("yyyy-MM-dd")
         self.table_model.page = 1
+
+        # 反向同步全局人员和渠道，确保全局统一
+        main_win = getattr(self, "main_window", None) or self.parent()
+        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+            self._syncing_person = True
+            try:
+                main_win.sync_person_from_holdings(p_id)
+            finally:
+                self._syncing_person = False
+
         self.recalculate_and_refresh()
 
     def reset_filters(self):
@@ -1017,6 +1071,8 @@ class DailyPerformancePage(QWidget):
             self.end_date_edit.setDate(QDate.fromString(self.max_as_of_date, "yyyy-MM-dd"))
         else:
             self.end_date_edit.setDate(QDate.currentDate())
+        
+        person_changed = (self.selected_person_id is not None)
         self.selected_person_id = None
         self.selected_broker = ""
         self.search_ticker = ""
@@ -1026,6 +1082,15 @@ class DailyPerformancePage(QWidget):
         self.active_kpi_filter = None
         self.stock_pnl_filter = "all"
         self.table_model.page = 1
+
+        main_win = getattr(self, "main_window", None) or self.parent()
+        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+            self._syncing_person = True
+            try:
+                main_win.sync_person_from_holdings(None)
+            finally:
+                self._syncing_person = False
+
         self.recalculate_and_refresh()
 
     def recalculate_and_refresh(self):
@@ -1449,7 +1514,10 @@ class DailyPerformancePage(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        for r in day_rows:
+        # Sort by daily profit descending
+        sorted_rows = sorted(day_rows, key=lambda x: float(x[19] or 0), reverse=True)
+
+        for r in sorted_rows:
             card = QFrame()
             card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
             c_lay = QHBoxLayout(card)
@@ -1466,10 +1534,24 @@ class DailyPerformancePage(QWidget):
             c_lay.addLayout(info_v)
             c_lay.addStretch()
 
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
             pnl = float(r[19] or 0)
             pnl_lbl = QLabel(fmt_signed_money(pnl))
-            pnl_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
-            c_lay.addWidget(pnl_lbl)
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+
+            init_v = float(r[15] or 0)
+            buy_v = float(r[16] or 0)
+            base_v = init_v if init_v > 0 else buy_v
+            rate = (pnl / base_v) if base_v > 0 else (float(r[13] or 0) if r[13] else 0.0)
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
 
             self.drawer_list_layout.addWidget(card)
 
@@ -1500,18 +1582,23 @@ class DailyPerformancePage(QWidget):
         self.show_drawer()
 
     def show_drawer(self):
-        w = 420
+        w = 440
+        self.drawer_overlay.setGeometry(self.rect())
+        self.drawer_overlay.show()
+        self.drawer_overlay.raise_()
         self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
         self.drawer_frame.show()
         self.drawer_frame.raise_()
 
     def close_drawer(self):
+        self.drawer_overlay.hide()
         self.drawer_frame.hide()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.drawer_frame.isVisible():
-            w = 420
+            w = 440
+            self.drawer_overlay.setGeometry(self.rect())
             self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
 
     def switch_trend_mode(self, mode: str):

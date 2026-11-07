@@ -494,6 +494,10 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     return filteredRawData.filter((r) => r.date === curDate);
   }, [filteredRawData, selectedDate, dataAsOf]);
 
+  const sortedSelectedDateRows = useMemo(() => {
+    return [...selectedDateRows].sort((a, b) => b.dailyProfit - a.dailyProfit);
+  }, [selectedDateRows]);
+
   const selectedDateDistribution = useMemo(() => {
     let profitCount = 0;
     let profitAmount = 0;
@@ -1688,7 +1692,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
 
                   {drawerTab === "stock" ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {selectedDateRows.map((r, i) => (
+                      {sortedSelectedDateRows.map((r, i) => (
                         <div
                           key={i}
                           style={{
@@ -1730,6 +1734,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                             <div
                               style={{
                                 fontSize: 11,
+                                fontWeight: 500,
                                 color: r.profitRate >= 0 ? "#10B981" : "#EF4444",
                               }}
                             >

@@ -291,6 +291,8 @@ class InteractionMixin:
             self.description.setText("查看历史每日的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
+            self.daily_performance_page.sync_person_from_main(self.person.currentData())
+            self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
             self.daily_performance_page.activate()
             if self.analytics:
                 self.daily_performance_page.update_data(self.analytics)

@@ -72,13 +72,24 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert "操作" not in page.table_model.columns
     assert "Ticker" in page.table_model.columns
 
-    # 8. Verify Selected Date Donut Distribution
+    # 8. Verify Selected Date Donut Distribution & Drawer
     page.select_date("2026-11-06")
     assert "2026-11-06" in page.dist_title.text()
     assert page.donut_canvas.total_profit != 0
     assert page.drawer_frame.isVisible()
+    assert page.drawer_overlay.isVisible()
     assert "2026-11-06" in page.drawer_title.text()
 
-    # 9. Verify Drawer close
-    page.close_drawer()
+    # 9. Verify Drawer sorting (descending by profit) & rate display
+    assert page.drawer_list_layout.count() > 0
+    first_item = page.drawer_list_layout.itemAt(0).widget()
+    assert first_item is not None
+
+    # 10. Click overlay to close drawer
+    page.drawer_overlay.mousePressEvent(None)
     assert not page.drawer_frame.isVisible()
+    assert not page.drawer_overlay.isVisible()
+
+    # 11. Verify sync_person_from_main
+    page.sync_person_from_main(1)
+    assert page.selected_person_id == 1
