@@ -1300,8 +1300,10 @@ class MonthlyPerformancePage(QWidget):
 
         # 7. Slide-out Drawer Frame (Floating Overlay)
         self.drawer_overlay = QWidget(self)
-        self.drawer_overlay.setStyleSheet("background-color: rgba(15, 23, 42, 0.25);")
+        self.drawer_overlay.setStyleSheet("background-color: rgba(15, 23, 42, 0.20);")
+        self.drawer_overlay.setCursor(Qt.CursorShape.PointingHandCursor)
         self.drawer_overlay.hide()
+        self.drawer_overlay.mousePressEvent = lambda e: self.close_drawer()
 
         self.drawer_frame = QFrame(self)
         self.drawer_frame.setStyleSheet("""
@@ -1449,6 +1451,8 @@ class MonthlyPerformancePage(QWidget):
             w = 440
             self.drawer_overlay.setGeometry(self.rect())
             self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
+            self.drawer_overlay.raise_()
+            self.drawer_frame.raise_()
         self.adjust_current_table_columns()
 
     # -------------------------------------------------------------------------
@@ -2614,6 +2618,7 @@ class MonthlyPerformancePage(QWidget):
         w = 440
         self.drawer_overlay.setGeometry(self.rect())
         self.drawer_overlay.show()
+        self.drawer_overlay.raise_()
         self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
         self.drawer_frame.show()
         self.drawer_frame.raise_()
