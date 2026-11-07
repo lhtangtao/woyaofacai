@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from portfolio.domain.models import QueryScope
@@ -127,3 +128,36 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert "2026-11-05" in page.dist_title.text()
     assert "2026-11-05" in page.drawer_title.text()
     assert page.trend_canvas.selected_date == "2026-11-05"
+
+    # 13. Verify Header Click Sorting (first click: ascending, second click: descending)
+    page.tab_bar.setCurrentIndex(0)
+    page.on_table_tab_changed(0)
+    # Click Date column header (col 0): first click -> ascending (earliest first)
+    page.on_header_section_clicked(0)
+    assert page.table_model.sort_column == 0
+    assert page.table_model.sort_order == Qt.SortOrder.AscendingOrder
+    assert "▲" in page.table_model.headerData(0, Qt.Orientation.Horizontal)
+    first_date_asc = page.table_model.rows[0][0]
+    last_date_asc = page.table_model.all_rows[-1][0]
+    assert first_date_asc <= last_date_asc
+
+    # Second click -> descending (latest first)
+    page.on_header_section_clicked(0)
+    assert page.table_model.sort_order == Qt.SortOrder.DescendingOrder
+    assert "▼" in page.table_model.headerData(0, Qt.Orientation.Horizontal)
+    first_date_desc = page.table_model.rows[0][0]
+    assert first_date_desc >= first_date_asc
+
+    # Click col 6 (当日收益): first click -> ascending (worst loss first)
+    page.on_header_section_clicked(6)
+    assert page.table_model.sort_column == 6
+    assert page.table_model.sort_order == Qt.SortOrder.AscendingOrder
+    pnl_first_asc = float(page.table_model.rows[0][6].replace("$", "").replace(",", "").replace("+", ""))
+    pnl_last_asc = float(page.table_model.all_rows[-1][6].replace("$", "").replace(",", "").replace("+", ""))
+    assert pnl_first_asc <= pnl_last_asc
+
+    # Click col 6 again -> descending (best profit first)
+    page.on_header_section_clicked(6)
+    assert page.table_model.sort_order == Qt.SortOrder.DescendingOrder
+    pnl_first_desc = float(page.table_model.rows[0][6].replace("$", "").replace(",", "").replace("+", ""))
+    assert pnl_first_desc >= pnl_first_asc

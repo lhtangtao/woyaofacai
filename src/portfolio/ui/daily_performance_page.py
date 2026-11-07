@@ -396,8 +396,45 @@ class DailyDistributionDonut(QWidget):
                          Qt.AlignmentFlag.AlignCenter, "当日收益")
 
 
+def _parse_sort_val(val: Any) -> Tuple[bool, Any]:
+    """解析单元格数据用于表头排序：返回 (has_value, normalized_value)。"""
+    if val is None:
+        return (False, 0)
+    s = str(val).strip()
+    if s in ("", "—", "-"):
+        return (False, 0)
+
+    # 尝试提取只数，如 "19 只"
+    if s.endswith("只"):
+        num_str = s[:-1].strip()
+        try:
+            return (True, float(num_str.replace(",", "")))
+        except ValueError:
+            pass
+
+    # 尝试提取百分比，如 "+4.90%"
+    if s.endswith("%"):
+        num_str = s[:-1].replace("+", "").strip()
+        try:
+            return (True, float(num_str.replace(",", "")))
+        except ValueError:
+            pass
+
+    # 尝试提取金额或数字，如 "$2,113.71", "+$103.55", "-$440.88"
+    clean_num = s.replace("$", "").replace(",", "").replace("+", "").strip()
+    if clean_num.startswith("−"):  # Unicode minus
+        clean_num = "-" + clean_num[1:]
+    try:
+        return (True, float(clean_num))
+    except ValueError:
+        pass
+
+    # 日期或普通文本
+    return (True, s.lower())
+
+
 class ModernTableModel(QAbstractTableModel):
-    """Clean, dedicated table model for daily performance views with correct headers and colors."""
+    """Clean, dedicated table model for daily performance views with correct headers, sorting and colors."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.columns: Tuple[str, ...] = ()
@@ -405,6 +442,8 @@ class ModernTableModel(QAbstractTableModel):
         self.rows: List[List[Any]] = []
         self.page = 1
         self.page_size = 20
+        self.sort_column: int = -1
+        self.sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -413,9 +452,13 @@ class ModernTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self.columns)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+        if orientation == Qt.Orientation.Horizontal and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             if 0 <= section < len(self.columns):
-                return self.columns[section]
+                col_name = self.columns[section]
+                if self.sort_column == section:
+                    arrow = " ▲" if self.sort_order == Qt.SortOrder.AscendingOrder else " ▼"
+                    return f"{col_name}{arrow}"
+                return col_name
         if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
             return str((self.page - 1) * self.page_size + section + 1)
         return None
@@ -470,10 +513,49 @@ class ModernTableModel(QAbstractTableModel):
 
         return None
 
+    def toggle_sort(self, column: int):
+        """点击表头：首次点击正排，再次点击倒排。"""
+        if column < 0 or column >= len(self.columns):
+            return
+        if self.sort_column == column:
+            if self.sort_order == Qt.SortOrder.AscendingOrder:
+                self.sort_order = Qt.SortOrder.DescendingOrder
+            else:
+                self.sort_order = Qt.SortOrder.AscendingOrder
+        else:
+            self.sort_column = column
+            self.sort_order = Qt.SortOrder.AscendingOrder
+        self._apply_sort()
+
+    def _apply_sort(self):
+        if self.sort_column < 0 or not self.all_rows:
+            self._apply_pagination()
+            return
+
+        col = self.sort_column
+        reverse = (self.sort_order == Qt.SortOrder.DescendingOrder)
+
+        def sort_key(row):
+            if col >= len(row):
+                return (-1 if reverse else 1, 0)
+            val = row[col]
+            has_val, v = _parse_sort_val(val)
+            if not has_val:
+                return (-1 if reverse else 1, 0)
+            return (1 if reverse else 0, v)
+
+        self.all_rows.sort(key=sort_key, reverse=reverse)
+        self.page = 1
+        self._apply_pagination()
+        self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self.columns) - 1)
+
     def set_columns_and_rows(self, columns: Tuple[str, ...], rows: List[List[Any]]):
         self.columns = columns
         self.all_rows = list(rows)
-        self._apply_pagination()
+        if 0 <= self.sort_column < len(self.columns):
+            self._apply_sort()
+        else:
+            self._apply_pagination()
 
     def set_page(self, page: int):
         self.page = max(1, page)
@@ -821,6 +903,8 @@ class DailyPerformancePage(QWidget):
         self.table_view.verticalHeader().setDefaultSectionSize(36)
         self.table_view.horizontalHeader().setFixedHeight(36)
         self.table_view.horizontalHeader().setHighlightSections(False)
+        self.table_view.horizontalHeader().setSectionsClickable(True)
+        self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
@@ -843,6 +927,10 @@ class DailyPerformancePage(QWidget):
                 border: none;
                 border-bottom: 1px solid #E2E8F0;
                 padding: 4px 8px;
+            }
+            QHeaderView::section:hover {
+                background-color: #F1F5F9;
+                color: #2563EB;
             }
         """)
         self.table_view.clicked.connect(self.on_table_row_clicked)
@@ -1446,7 +1534,12 @@ class DailyPerformancePage(QWidget):
 
     def on_table_tab_changed(self, idx: int):
         self.table_model.page = 1
+        self.table_model.sort_column = -1
         self.recalculate_and_refresh()
+
+    def on_header_section_clicked(self, logical_index: int):
+        self.table_model.toggle_sort(logical_index)
+        self.update_pagination_ui()
 
     def refresh_table_view(self, filtered_rows: List[Tuple], date_summaries: List[List[Any]]):
         current_tab = self.tab_bar.currentIndex()
