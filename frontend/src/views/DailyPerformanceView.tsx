@@ -135,7 +135,14 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
   const [endDate, setEndDate] = useState<string>("");
 
   // Filter Applied State
-  const [appliedFilters, setAppliedFilters] = useState({
+  const [appliedFilters, setAppliedFilters] = useState<{
+    personId: number | null;
+    broker: string;
+    ticker: string;
+    category: string;
+    startDate: string;
+    endDate: string;
+  }>({
     personId: personId,
     broker: broker,
     ticker: "",

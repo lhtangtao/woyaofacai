@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from portfolio.paths import DATABASE_PATH
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
 
@@ -544,7 +545,8 @@ class DailyPerformancePage(QWidget):
         # Person Filter
         self.person_combo = QComboBox()
         self.person_combo.setFixedWidth(105)
-        self.person_combo.addItem("全部人员", None)
+        self._populate_persons()
+        self.person_combo.currentIndexChanged.connect(self._on_person_combo_changed)
         filter_h.addWidget(self.person_combo)
 
         # Broker Filter
@@ -991,6 +993,53 @@ class DailyPerformancePage(QWidget):
         self.drawer_scroll.setWidget(self.drawer_list_widget)
         drawer_vbox.addWidget(self.drawer_scroll)
 
+    def _get_persons(self) -> List[Dict[str, Any]]:
+        main_win = getattr(self, "main_window", None) or self.parent()
+        if main_win and hasattr(main_win, "info") and main_win.info:
+            persons = getattr(main_win.info, "persons", None)
+            if persons:
+                return persons
+        import sqlite3
+        try:
+            with sqlite3.connect(DATABASE_PATH) as conn:
+                rows = conn.execute("SELECT id, name, enabled FROM persons ORDER BY id").fetchall()
+                return [{"id": r[0], "name": r[1], "enabled": bool(r[2])} for r in rows]
+        except Exception:
+            return [{"id": 1, "name": "个人", "enabled": True}]
+
+    def _populate_persons(self):
+        main_win = getattr(self, "main_window", None) or self.parent()
+        self.person_combo.blockSignals(True)
+        cur_data = self.selected_person_id if self.selected_person_id is not None else self.person_combo.currentData()
+        self.person_combo.clear()
+
+        # 优先复用全局人员筛选器中的选项（保持完全一致的名称和顺序）
+        if main_win and hasattr(main_win, "person") and main_win.person.count() > 0:
+            for i in range(main_win.person.count()):
+                text = main_win.person.itemText(i)
+                data = main_win.person.itemData(i)
+                label = "全部人员" if "全部" in text else text
+                self.person_combo.addItem(label, data)
+        else:
+            self.person_combo.addItem("全部人员", None)
+            self.person_combo.addItem("他人", "OTHERS")
+            persons = self._get_persons()
+            for p in persons:
+                if p.get("enabled", True):
+                    self.person_combo.addItem(p["name"], p["id"])
+
+        idx = self.person_combo.findData(cur_data)
+        if idx >= 0:
+            self.person_combo.setCurrentIndex(idx)
+        else:
+            self.person_combo.setCurrentIndex(0)
+        self.person_combo.blockSignals(False)
+
+    def _on_person_combo_changed(self):
+        if getattr(self, "_syncing_person", False):
+            return
+        self.apply_filter()
+
     def activate(self):
         self.show()
 
@@ -1003,13 +1052,7 @@ class DailyPerformancePage(QWidget):
         self.raw_rows = [tuple(r.values) for r in report.rows]
 
         # Update person dropdown
-        self.person_combo.blockSignals(True)
-        self.person_combo.clear()
-        self.person_combo.addItem("全部人员", None)
-        if hasattr(analytics, "people") and analytics.people:
-            for p in analytics.people:
-                self.person_combo.addItem(p.name, p.id)
-        self.person_combo.blockSignals(False)
+        self._populate_persons()
 
         # Update broker & category dropdowns
         brokers = sorted({r[1] for r in self.raw_rows if r[1]})
@@ -1039,13 +1082,15 @@ class DailyPerformancePage(QWidget):
 
         self.recalculate_and_refresh()
 
-    def sync_person_from_main(self, person_id: Optional[int]):
+    def sync_person_from_main(self, person_id: Any):
         """主窗口全局人员切换时，同步更新本地下拉框。"""
         if getattr(self, "_syncing_person", False):
             return
         self._syncing_person = True
         try:
             self.selected_person_id = person_id
+            if self.person_combo.count() <= 1:
+                self._populate_persons()
             self.person_combo.blockSignals(True)
             idx = self.person_combo.findData(person_id)
             self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)

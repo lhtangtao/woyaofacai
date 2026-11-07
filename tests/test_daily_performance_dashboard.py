@@ -107,7 +107,17 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert not page.drawer_frame.isVisible()
     assert not page.drawer_overlay.isVisible()
 
-    # 11. Verify sync_person_from_main
+    # 11. Verify person combo population & switching (including "他人")
+    assert page.person_combo.count() > 1
+    person_texts = [page.person_combo.itemText(i) for i in range(page.person_combo.count())]
+    assert "全部人员" in person_texts
+    assert "他人" in person_texts
+    # Switch to "他人"
+    others_idx = page.person_combo.findData("OTHERS")
+    assert others_idx >= 0
+    page.person_combo.setCurrentIndex(others_idx)
+    assert page.selected_person_id == "OTHERS"
+
     page.sync_person_from_main(1)
     assert page.selected_person_id == 1
 
