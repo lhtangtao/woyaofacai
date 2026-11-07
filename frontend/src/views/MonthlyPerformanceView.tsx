@@ -169,6 +169,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   const [drawerMonth, setDrawerMonth] = useState<string>("");
   const [drawerSymbol, setDrawerSymbol] = useState<string>("");
   const [drawerBroker, setDrawerBroker] = useState<string>("");
+  const [drawerTab, setDrawerTab] = useState<"channel" | "stock">("stock");
 
   // Sync external person/broker changes
   useEffect(() => {
@@ -1626,125 +1627,383 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       </div>
 
       {/* 7. Slide-out Right Drawer */}
-      {drawerOpen && (
-        <div className="drawer-overlay" onClick={() => setDrawerOpen(false)}>
-          <div className="drawer-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-head">
-              <span className="drawer-title">{drawerTitle}</span>
-              <button
-                className="drawer-close-btn"
-                onClick={() => setDrawerOpen(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="drawer-body">
-              {drawerType === "month" && (
-                <div>
-                  <h4 style={{ margin: "0 0 10px 0", color: "#1E293B" }}>资金与收益概览</h4>
-                  <p>当月月份：<b>{drawerMonth}</b></p>
-                  <p>
-                    当月总收益：
-                    <b
-                      className={
-                        attributionStructure.totPnl >= 0
-                          ? "color-profit"
-                          : "color-loss"
-                      }
-                    >
-                      {fmtSignedMoney(attributionStructure.totPnl)}
-                    </b>
-                  </p>
-                  <p>盈利股票总计：<b className="color-profit">{fmtSignedMoney(attributionStructure.pAmt)}</b> ({attributionStructure.pCnt} 只)</p>
-                  <p>亏损股票总计：<b className="color-loss">{fmtSignedMoney(attributionStructure.lAmt)}</b> ({attributionStructure.lCnt} 只)</p>
-                  <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid #E2E8F0" }} />
-                  <h4 style={{ margin: "0 0 10px 0", color: "#1E293B" }}>持仓标的清单</h4>
-                  {selectedMonthRows.map((r, i) => (
+      {drawerOpen && (() => {
+        const curDrawerMonth = drawerMonth || targetMonth;
+        const curDrawerMonthIdx = availableMonths.indexOf(curDrawerMonth);
+        const canDrawerPrev = curDrawerMonthIdx > 0;
+        const canDrawerNext = curDrawerMonthIdx >= 0 && curDrawerMonthIdx < availableMonths.length - 1;
+
+        const handleDrawerNav = (direction: -1 | 1) => {
+          const nextIdx = curDrawerMonthIdx + direction;
+          if (nextIdx >= 0 && nextIdx < availableMonths.length) {
+            const nextMonth = availableMonths[nextIdx];
+            setSelectedMonth(nextMonth);
+            setDrawerMonth(nextMonth);
+          }
+        };
+
+        const drawerMonthRows = rawData.filter((r) => r.month === curDrawerMonth);
+        const sortedDrawerMonthRows = [...drawerMonthRows].sort((a, b) => b.monthlyProfit - a.monthlyProfit);
+        const ms = monthSummaries.find((d) => d.month === curDrawerMonth);
+
+        return (
+          <div className="detail-drawer-overlay" onClick={() => setDrawerOpen(false)}>
+            <div className="detail-drawer" onClick={(e) => e.stopPropagation()}>
+              <div className="drawer-header">
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {drawerType === "month" && (
+                    <div className="drawer-nav">
+                      <button
+                        className="drawer-nav-btn"
+                        onClick={() => handleDrawerNav(-1)}
+                        disabled={!canDrawerPrev}
+                        title="前一月"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <button
+                        className="drawer-nav-btn"
+                        onClick={() => handleDrawerNav(1)}
+                        disabled={!canDrawerNext}
+                        title="后一月"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#1E293B" }}>
+                    {drawerType === "month" && `单月收益详情 · ${curDrawerMonth}`}
+                    {drawerType === "channel" && `渠道收益详情 · ${fmtBrokerCn(drawerBroker)}`}
+                    {drawerType === "stock" && `标的历史收益 · ${drawerSymbol}`}
+                  </div>
+                </div>
+                <button className="drawer-close-btn" onClick={() => setDrawerOpen(false)}>
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="drawer-body">
+                {drawerType === "month" && (
+                  <>
+                    {/* Month Summary Header in Drawer */}
+                    {ms && (
+                      <div
+                        style={{
+                          background: "#F8FAFC",
+                          padding: "14px 16px",
+                          borderRadius: 8,
+                          border: "1px solid #E2E8F0",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: 12, color: "#64748B" }}>当月总收益</div>
+                          <div
+                            style={{
+                              fontSize: 20,
+                              fontWeight: 700,
+                              color: ms.monthlyProfit >= 0 ? "#10B981" : "#EF4444",
+                            }}
+                          >
+                            {fmtSignedMoney(ms.monthlyProfit)}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 12, color: "#64748B" }}>当月收益率</div>
+                          <div
+                            style={{
+                              fontSize: 15,
+                              fontWeight: 600,
+                              color: ms.profitRate >= 0 ? "#10B981" : "#EF4444",
+                            }}
+                          >
+                            {fmtPercent(ms.profitRate)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sub-tabs in Month Drawer: By Stock / By Channel */}
+                    <div style={{ display: "flex", gap: 8, borderBottom: "1px solid #E2E8F0", paddingBottom: 6 }}>
+                      <button
+                        className={`table-tab-btn ${drawerTab === "stock" ? "active" : ""}`}
+                        onClick={() => setDrawerTab("stock")}
+                      >
+                        按股票 ({drawerMonthRows.length})
+                      </button>
+                      <button
+                        className={`table-tab-btn ${drawerTab === "channel" ? "active" : ""}`}
+                        onClick={() => setDrawerTab("channel")}
+                      >
+                        按渠道
+                      </button>
+                    </div>
+
+                    {drawerTab === "stock" ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {sortedDrawerMonthRows.map((r, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              padding: "10px 12px",
+                              borderRadius: 8,
+                              background: "#F8FAFC",
+                              border: "1px solid #E2E8F0",
+                              cursor: "pointer",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                            }}
+                            onClick={() => {
+                              openStockDetail(r.symbol, curDrawerMonth, r.channel);
+                            }}
+                          >
+                            <div>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ fontWeight: 700, color: "#2563EB", fontSize: 13 }}>
+                                  {r.symbol}
+                                </span>
+                                <span style={{ fontSize: 11, color: "#64748B" }}>({fmtBrokerCn(r.channel)})</span>
+                              </div>
+                              <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
+                                持仓: {fmtMoney(r.endQty)} 股 · 月末价: {fmtMoney(r.closePrice)}
+                              </div>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                              <div
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: r.monthlyProfit >= 0 ? "#10B981" : "#EF4444",
+                                }}
+                              >
+                                {fmtSignedMoney(r.monthlyProfit)}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 500,
+                                  color: r.profitRate >= 0 ? "#10B981" : "#EF4444",
+                                }}
+                              >
+                                {fmtPercent(r.profitRate)}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {channelSummaries.map((c) => {
+                          const cRows = drawerMonthRows.filter((r) => r.channel === c.channel);
+                          const cProfit = cRows.reduce((acc, cur) => acc + cur.monthlyProfit, 0);
+                          return (
+                            <div
+                              key={c.channel}
+                              style={{
+                                padding: "10px 12px",
+                                borderRadius: 8,
+                                background: "#F8FAFC",
+                                border: "1px solid #E2E8F0",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                              }}
+                            >
+                              <span style={{ fontWeight: 600, fontSize: 13 }}>{fmtBrokerCn(c.channel)}</span>
+                              <span
+                                style={{
+                                  fontWeight: 600,
+                                  fontSize: 13,
+                                  color: cProfit >= 0 ? "#10B981" : "#EF4444",
+                                }}
+                              >
+                                {fmtSignedMoney(cProfit)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {drawerType === "channel" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     <div
-                      key={i}
                       style={{
-                        padding: "8px 0",
-                        borderBottom: "1px solid #F1F5F9",
-                        display: "flex",
-                        justifyContent: "space-between",
+                        background: "#F8FAFC",
+                        padding: "14px 16px",
+                        borderRadius: 8,
+                        border: "1px solid #E2E8F0",
                       }}
                     >
-                      <span>
-                        <b>{r.symbol}</b> ({fmtBrokerCn(r.channel)})
-                      </span>
-                      <span className={r.monthlyProfit >= 0 ? "color-profit" : "color-loss"}>
-                        {fmtSignedMoney(r.monthlyProfit)}
-                      </span>
+                      <div style={{ fontSize: 13, color: "#64748B" }}>渠道累计收益</div>
+                      <div
+                        style={{
+                          fontSize: 22,
+                          fontWeight: 700,
+                          marginTop: 4,
+                          color:
+                            (channelSummaries.find((c) => c.channel === drawerBroker)?.cumProfit || 0) >= 0
+                              ? "#10B981"
+                              : "#EF4444",
+                        }}
+                      >
+                        {fmtSignedMoney(
+                          channelSummaries.find((c) => c.channel === drawerBroker)?.cumProfit || 0
+                        )}
+                      </div>
                     </div>
-                  ))}
-                </div>
-              )}
 
-              {drawerType === "channel" && (
-                <div>
-                  <h4 style={{ margin: "0 0 10px 0", color: "#1E293B" }}>渠道概览</h4>
-                  <p>券商渠道：<b>{fmtBrokerCn(drawerBroker)}</b></p>
-                  <p>当前月份：<b>{drawerMonth}</b></p>
-                  <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid #E2E8F0" }} />
-                  <h4 style={{ margin: "0 0 10px 0", color: "#1E293B" }}>该渠道持仓标的</h4>
-                  {rawData
-                    .filter((r) => r.month === drawerMonth && r.channel === drawerBroker)
-                    .map((r, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          padding: "8px 0",
-                          borderBottom: "1px solid #F1F5F9",
-                          display: "flex",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <span>
-                          <b>{r.symbol}</b> ({r.category})
-                        </span>
-                        <span className={r.monthlyProfit >= 0 ? "color-profit" : "color-loss"}>
-                          {fmtSignedMoney(r.monthlyProfit)}
-                        </span>
-                      </div>
-                    ))}
-                </div>
-              )}
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#1E293B" }}>近期每月表现</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {channelMonthlyList
+                        .filter((cd) => cd.channel === drawerBroker)
+                        .slice(0, 18)
+                        .map((cd, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: 6,
+                              background: "#F8FAFC",
+                              border: "1px solid #E2E8F0",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              fontSize: 12,
+                            }}
+                          >
+                            <span style={{ color: "#475569" }}>{cd.month}</span>
+                            <span
+                              style={{
+                                fontWeight: 600,
+                                color: cd.monthlyProfit >= 0 ? "#10B981" : "#EF4444",
+                              }}
+                            >
+                              {fmtSignedMoney(cd.monthlyProfit)} ({fmtPercent(cd.profitRate)})
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
-              {drawerType === "stock" && (
-                <div>
-                  <h4 style={{ margin: "0 0 10px 0", color: "#1E293B" }}>标的历史月度明细</h4>
-                  <p>股票代码：<b>{drawerSymbol}</b></p>
-                  <p>券商渠道：<b>{fmtBrokerCn(drawerBroker)}</b></p>
-                  <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid #E2E8F0" }} />
-                  {rawData
-                    .filter(
-                      (r) =>
-                        r.symbol === drawerSymbol &&
-                        (!drawerBroker || r.channel === drawerBroker)
-                    )
-                    .sort((a, b) => b.month.localeCompare(a.month))
-                    .map((r, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          padding: "8px 0",
-                          borderBottom: "1px solid #F1F5F9",
-                          display: "flex",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <span>{r.month}</span>
-                        <span className={r.monthlyProfit >= 0 ? "color-profit" : "color-loss"}>
-                          {fmtSignedMoney(r.monthlyProfit)} (持仓 {r.endQty} 股)
-                        </span>
-                      </div>
-                    ))}
-                </div>
-              )}
+                {drawerType === "stock" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {(() => {
+                      const stockRows = rawData
+                        .filter(
+                          (r) =>
+                            r.symbol === drawerSymbol &&
+                            (!drawerBroker || r.channel === drawerBroker)
+                        )
+                        .sort((a, b) => b.month.localeCompare(a.month));
+                      const latest = stockRows[0];
+                      const stockCumProfit = stockRows.reduce((acc, cur) => acc + cur.monthlyProfit, 0);
+
+                      return (
+                        <>
+                          <div
+                            style={{
+                              background: "#F8FAFC",
+                              padding: "14px 16px",
+                              borderRadius: 8,
+                              border: "1px solid #E2E8F0",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between" }}>
+                              <span style={{ fontSize: 18, fontWeight: 700, color: "#2563EB" }}>
+                                {drawerSymbol}
+                              </span>
+                              <span style={{ fontSize: 12, color: "#64748B" }}>
+                                分类: {latest?.category || "—"}
+                              </span>
+                            </div>
+                            <div style={{ marginTop: 8, fontSize: 12, color: "#475569" }}>
+                              期间累计贡献:{" "}
+                              <strong
+                                style={{
+                                  color: stockCumProfit >= 0 ? "#10B981" : "#EF4444",
+                                }}
+                              >
+                                {fmtSignedMoney(stockCumProfit)}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#1E293B" }}>
+                            历史每月收益记录
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {stockRows.slice(0, 36).map((r, i) => {
+                              const isCurMonth = curDrawerMonth && r.month === curDrawerMonth;
+                              return (
+                                <div
+                                  key={i}
+                                  style={{
+                                    padding: "8px 10px",
+                                    borderRadius: 6,
+                                    background: isCurMonth ? "#EFF6FF" : "#F8FAFC",
+                                    border: isCurMonth ? "1.5px solid #3B82F6" : "1px solid #E2E8F0",
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                    fontSize: 12,
+                                  }}
+                                >
+                                  <div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                      <span style={{ fontWeight: 600, color: isCurMonth ? "#1D4ED8" : "#475569" }}>
+                                        {r.month}
+                                      </span>
+                                      <span style={{ color: "#94A3B8" }}>({fmtBrokerCn(r.channel)})</span>
+                                      {isCurMonth && (
+                                        <span style={{ fontSize: 10, background: "#3B82F6", color: "#FFFFFF", padding: "1px 4px", borderRadius: 3, fontWeight: 600 }}>
+                                          选中月
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
+                                      持仓: {fmtMoney(r.endQty)} 股 · 月末价: {fmtMoney(r.closePrice)}
+                                    </div>
+                                  </div>
+                                  <div style={{ textAlign: "right" }}>
+                                    <div
+                                      style={{
+                                        fontSize: 12,
+                                        fontWeight: 600,
+                                        color: r.monthlyProfit >= 0 ? "#10B981" : "#EF4444",
+                                      }}
+                                    >
+                                      {fmtSignedMoney(r.monthlyProfit)}
+                                    </div>
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 500,
+                                        color: r.profitRate >= 0 ? "#10B981" : "#EF4444",
+                                      }}
+                                    >
+                                      {fmtPercent(r.profitRate)}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

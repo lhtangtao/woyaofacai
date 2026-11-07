@@ -1282,33 +1282,49 @@ class MonthlyPerformancePage(QWidget):
         """)
         self.drawer_frame.hide()
 
-        drawer_layout = QVBoxLayout(self.drawer_frame)
-        drawer_layout.setContentsMargins(20, 20, 20, 20)
-        drawer_layout.setSpacing(12)
+        drawer_vbox = QVBoxLayout(self.drawer_frame)
+        drawer_vbox.setContentsMargins(16, 16, 16, 16)
+        drawer_vbox.setSpacing(10)
 
         drawer_top = QHBoxLayout()
         self.drawer_title = QLabel("月度详情")
-        self.drawer_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #0F172A;")
+        self.drawer_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #1E293B;")
+        self.drawer_close_btn = QPushButton("✕")
+        self.drawer_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drawer_close_btn.setFixedSize(26, 26)
+        self.drawer_close_btn.setStyleSheet("""
+            QPushButton {
+                background: #F1F5F9;
+                border: none;
+                border-radius: 4px;
+                color: #64748B;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #E2E8F0;
+                color: #1E293B;
+            }
+        """)
+        self.drawer_close_btn.clicked.connect(self.close_drawer)
         drawer_top.addWidget(self.drawer_title)
         drawer_top.addStretch()
+        drawer_top.addWidget(self.drawer_close_btn)
+        drawer_vbox.addLayout(drawer_top)
 
-        close_btn = QPushButton("✕")
-        close_btn.setStyleSheet("border: none; font-size: 16px; color: #94A3B8; font-weight: bold;")
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.clicked.connect(self.close_drawer)
-        drawer_top.addWidget(close_btn)
-        drawer_layout.addLayout(drawer_top)
+        self.drawer_content_lbl = QLabel("")
+        self.drawer_content_lbl.setStyleSheet("font-size: 12px; color: #475569;")
+        self.drawer_content_lbl.setWordWrap(True)
+        drawer_vbox.addWidget(self.drawer_content_lbl)
 
-        self.drawer_content = QLabel("加载中…")
-        self.drawer_content.setWordWrap(True)
-        self.drawer_content.setStyleSheet("font-size: 12px; color: #334155; line-height: 1.5;")
-        self.drawer_content.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        drawer_layout.addWidget(self.drawer_content)
-
-        self.drawer_table = QTableView()
-        self.drawer_table.setStyleSheet("border: 1px solid #E2E8F0; border-radius: 4px;")
-        self.drawer_table.hide()
-        drawer_layout.addWidget(self.drawer_table, 1)
+        self.drawer_scroll = QScrollArea()
+        self.drawer_scroll.setWidgetResizable(True)
+        self.drawer_scroll.setStyleSheet("border: none; background: transparent;")
+        self.drawer_list_widget = QWidget()
+        self.drawer_list_layout = QVBoxLayout(self.drawer_list_widget)
+        self.drawer_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.drawer_list_layout.setSpacing(6)
+        self.drawer_scroll.setWidget(self.drawer_list_widget)
+        drawer_vbox.addWidget(self.drawer_scroll)
 
     # -------------------------------------------------------------------------
     # Column Widths Proportional Distribution
@@ -2164,86 +2180,198 @@ class MonthlyPerformancePage(QWidget):
                 self.open_stock_drawer(sym_val, month_val, broker_val)
 
     # -------------------------------------------------------------------------
-    # Drawers
+    # Drawers (Aligning 100% with DailyPerformancePage Card-based Drawer)
     # -------------------------------------------------------------------------
-    def open_month_drawer(self, month_str: str):
-        self.drawer_title.setText(f"📅 月度详情 · {month_str}")
-        m_rows = [r for r in self.raw_rows if r[0] == month_str]
+    def open_month_drawer(self, target_month: str):
+        self.selected_month = target_month
+        rows = getattr(self, "current_filtered_rows", self.raw_rows)
+        self.update_month_distribution(rows)
+        self.trend_canvas.selected_month = target_month
+        self.trend_canvas.update()
 
+        self.drawer_title.setText(f"单月收益详情 · {target_month}")
+        m_rows = [r for r in rows if r[0] == target_month]
+        if not m_rows:
+            m_rows = [r for r in self.raw_rows if r[0] == target_month]
         tot_pnl = sum(float(r[20] or 0) for r in m_rows)
-        tot_buy = sum(float(r[16] or 0) for r in m_rows)
-        tot_sell = sum(float(r[17] or 0) for r in m_rows)
-        tot_end = sum(float(r[11] or 0) for r in m_rows)
 
-        summary_txt = (
-            f"<b>资金与收益概览</b><br>"
-            f"当月总收益：{fmt_signed_money(tot_pnl)}<br>"
-            f"当月买入：{fmt_money(tot_buy)}<br>"
-            f"当月卖出：{fmt_money(tot_sell)}<br>"
-            f"净现金额：{fmt_signed_money(tot_buy - tot_sell)}<br>"
-            f"月末总市值：{fmt_money(tot_end)}<br><br>"
-            f"<b>持仓标的明细（共 {len(m_rows)} 只）</b><br>"
+        self.drawer_content_lbl.setText(
+            f"收盘月份：{target_month}\n"
+            f"当月总收益：{fmt_signed_money(tot_pnl)}\n"
+            f"持仓标的数：{len(m_rows)} 只"
         )
 
-        p_list = sorted([r for r in m_rows if float(r[20] or 0) > 0], key=lambda x: float(x[20] or 0), reverse=True)
-        l_list = sorted([r for r in m_rows if float(r[20] or 0) < 0], key=lambda x: float(x[20] or 0))
+        while self.drawer_list_layout.count():
+            item = self.drawer_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-        if p_list:
-            summary_txt += "<br><b style='color:#10B981;'>盈利标的：</b><br>"
-            for r in p_list:
-                summary_txt += f"• {r[3]} ({fmt_broker_cn(r[1])}): {fmt_signed_money(r[20])}<br>"
+        sorted_rows = sorted(m_rows, key=lambda x: float(x[20] or 0), reverse=True)
+        for r in sorted_rows:
+            card = QFrame()
+            card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
 
-        if l_list:
-            summary_txt += "<br><b style='color:#EF4444;'>亏损标的：</b><br>"
-            for r in l_list:
-                summary_txt += f"• {r[3]} ({fmt_broker_cn(r[1])}): {fmt_signed_money(r[20])}<br>"
+            info_v = QVBoxLayout()
+            info_v.setSpacing(2)
+            sym_lbl = QLabel(f"{r[3]} ({fmt_broker_cn(r[1])})")
+            sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            info_v.addWidget(sym_lbl)
+            info_v.addWidget(sub_lbl)
+            c_lay.addLayout(info_v)
+            c_lay.addStretch()
 
-        self.drawer_content.setText(summary_txt)
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            pnl = float(r[20] or 0)
+            pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+
+            init_v = float(r[15] or 0)
+            buy_v = float(r[16] or 0)
+            base_v = init_v if init_v > 0 else buy_v
+            rate = (pnl / base_v) if base_v > 0 else (float(r[13] or 0) if r[13] else 0.0)
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
+
+            self.drawer_list_layout.addWidget(card)
+
         self.show_drawer()
 
-    def open_channel_drawer(self, broker_name: str, month_str: str):
-        self.drawer_title.setText(f"🏛️ 渠道月度明细 · {fmt_broker_cn(broker_name)}")
-        b_rows = [r for r in self.raw_rows if (r[1] == broker_name or fmt_broker_cn(r[1]) == broker_name)]
+    def open_channel_drawer(self, channel: str, month_str: str = ""):
+        if month_str:
+            self.selected_month = month_str
+            rows = getattr(self, "current_filtered_rows", self.raw_rows)
+            self.update_month_distribution(rows)
+            self.trend_canvas.selected_month = month_str
+            self.trend_canvas.update()
 
-        tot_pnl = sum(float(r[20] or 0) for r in b_rows)
-        summary_txt = (
-            f"<b>渠道信息</b><br>"
-            f"券商渠道：{fmt_broker_cn(broker_name)}<br>"
-            f"期间累计收益：{fmt_signed_money(tot_pnl)}<br>"
-            f"记录月数：{len({r[0] for r in b_rows})} 个月<br><br>"
-            f"<b>该渠道近期持仓月度：</b><br>"
+        ch_cn = fmt_broker_cn(channel)
+        self.drawer_title.setText(f"渠道月度明细 · {ch_cn}")
+        c_rows = [r for r in self.raw_rows if r[1] == channel or fmt_broker_cn(r[1]) == ch_cn]
+        tot_pnl = sum(float(r[20] or 0) for r in c_rows)
+
+        self.drawer_content_lbl.setText(
+            f"券商渠道：{ch_cn}\n"
+            f"期间累计收益：{fmt_signed_money(tot_pnl)}\n"
+            f"历史持仓记录数：{len(c_rows)} 条"
         )
-        months_desc = sorted({r[0] for r in b_rows}, reverse=True)[:10]
-        for m in months_desc:
-            m_sub = [r for r in b_rows if r[0] == m]
-            sub_pnl = sum(float(r[20] or 0) for r in m_sub)
-            summary_txt += f"• {m}: {fmt_signed_money(sub_pnl)} (持仓 {len(m_sub)} 只)<br>"
 
-        self.drawer_content.setText(summary_txt)
+        while self.drawer_list_layout.count():
+            item = self.drawer_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        sorted_c_rows = sorted(c_rows, key=lambda x: x[0], reverse=True)[:50]
+        for r in sorted_c_rows:
+            card = QFrame()
+            card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
+
+            info_v = QVBoxLayout()
+            info_v.setSpacing(2)
+            sym_lbl = QLabel(f"{r[0]} · {r[3]}")
+            sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            info_v.addWidget(sym_lbl)
+            info_v.addWidget(sub_lbl)
+            c_lay.addLayout(info_v)
+            c_lay.addStretch()
+
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            pnl = float(r[20] or 0)
+            pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+            rate = float(r[13] or 0) if r[13] else 0.0
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
+
+            self.drawer_list_layout.addWidget(card)
+
         self.show_drawer()
 
-    def open_stock_drawer(self, symbol: str, month_str: str, broker_name: str = ""):
-        self.drawer_title.setText(f"📈 股票收益详情 · {symbol}")
+    def open_stock_drawer(self, symbol: str, month_str: str = "", broker_name: str = ""):
+        if month_str:
+            self.selected_month = month_str
+            rows = getattr(self, "current_filtered_rows", self.raw_rows)
+            self.update_month_distribution(rows)
+            self.trend_canvas.selected_month = month_str
+            self.trend_canvas.update()
+
+        self.drawer_title.setText(f"标的历史收益 · {symbol}")
         s_rows = [r for r in self.raw_rows if r[3] == symbol]
         if broker_name:
             s_rows = [r for r in s_rows if r[1] == broker_name or fmt_broker_cn(r[1]) == broker_name]
-
         tot_pnl = sum(float(r[20] or 0) for r in s_rows)
-        summary_txt = (
-            f"<b>标的概况</b><br>"
-            f"代码：<b>{symbol}</b><br>"
-            f"渠道：{fmt_broker_cn(broker_name) if broker_name else '全部渠道'}<br>"
-            f"期间累计收益：{fmt_signed_money(tot_pnl)}<br>"
-            f"持有记录月份：{len(s_rows)} 个月<br><br>"
-            f"<b>历史月份明细：</b><br>"
-        )
-        for r in sorted(s_rows, key=lambda x: x[0], reverse=True)[:12]:
-            pnl = float(r[20] or 0)
-            end_v = float(r[11] or 0)
-            qty = float(r[8] or 0)
-            summary_txt += f"• {r[0]}: 收益 {fmt_signed_money(pnl)} | 月末持仓 {qty:g} 股 | 市值 {fmt_money(end_v)}<br>"
 
-        self.drawer_content.setText(summary_txt)
+        self.drawer_content_lbl.setText(
+            f"Ticker 代码：{symbol}\n"
+            f"期间累计收益：{fmt_signed_money(tot_pnl)}\n"
+            f"历史交易月数：{len(s_rows)} 个月"
+        )
+
+        while self.drawer_list_layout.count():
+            item = self.drawer_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        sorted_s_rows = sorted(s_rows, key=lambda x: x[0], reverse=True)[:50]
+        for r in sorted_s_rows:
+            is_cur_month = (month_str and r[0] == month_str)
+            card = QFrame()
+            if is_cur_month:
+                card.setStyleSheet("background: #EFF6FF; border: 1.5px solid #3B82F6; border-radius: 6px;")
+            else:
+                card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
+
+            info_v = QVBoxLayout()
+            info_v.setSpacing(2)
+            sym_lbl = QLabel(f"{r[0]} ({fmt_broker_cn(r[1])}) {'[选中月]' if is_cur_month else ''}")
+            sym_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {'#1D4ED8' if is_cur_month else '#2563EB'};")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            info_v.addWidget(sym_lbl)
+            info_v.addWidget(sub_lbl)
+            c_lay.addLayout(info_v)
+            c_lay.addStretch()
+
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            pnl = float(r[20] or 0)
+            pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+            rate = float(r[13] or 0) if r[13] else 0.0
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
+
+            self.drawer_list_layout.addWidget(card)
+
         self.show_drawer()
 
     def show_drawer(self):
