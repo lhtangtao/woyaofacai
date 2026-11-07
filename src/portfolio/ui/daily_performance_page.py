@@ -556,14 +556,16 @@ class ModernTableModel(QAbstractTableModel):
                 return QColor("#EFF6FF")
             return None
 
+        is_text_col = col_name in ("券商渠道", "Ticker", "分类", "股票分类")
+        is_center_col = col_name in ("日期 (收盘)", "日期", "上涨股票数", "下跌股票数") or ("只" in val_str)
+
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            # First column date is centered, count columns are centered
-            if col_idx == 0 or "数" in col_name or "只" in val_str:
+            if is_center_col:
                 return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            # Numbers / Amounts / Percentages align right
-            if any(c in val_str for c in ("$", "%", "+", "-")) and not ("|" in val_str):
-                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            if is_text_col:
+                return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            # 期初/期末市值、当日买入/卖出、当日净投入、当日收益/收益率、累计收益、持仓数量、成本价、收盘价等所有数值一律靠右对齐
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         if role == Qt.ItemDataRole.ForegroundRole:
             if col_name == "上涨股票数":
@@ -575,6 +577,9 @@ class ModernTableModel(QAbstractTableModel):
                     return QColor("#10B981")
                 elif val_str.startswith("-") or val_str.startswith("−"):
                     return QColor("#EF4444")
+            if val_str in ("0.00", "0", "—"):
+                if col_name in ("当日净投入", "当日收益", "当日收益率", "持仓盈亏率"):
+                    return QColor("#64748B")
             if val_str == "—":
                 return QColor("#94A3B8")
             if col_name == "Ticker":
@@ -582,11 +587,10 @@ class ModernTableModel(QAbstractTableModel):
             return QColor("#1E293B")
 
         if role == Qt.ItemDataRole.FontRole:
-            if "数" in col_name or "只" in val_str:
-                return numeric_font(12, bold=True)
-            if not ("|" in val_str) and any(c in val_str for c in ("$", "%", "+", "-")):
-                return numeric_font(12, bold=True)
-            return QFont(".AppleSystemUIFont", 12)
+            if is_text_col or col_name in ("日期 (收盘)", "日期"):
+                return QFont(".AppleSystemUIFont", 12)
+            # 所有金额、数值、百分比及只数列统一采用等宽数字字体，保证数字对齐
+            return numeric_font(12, bold=True)
 
         return None
 
