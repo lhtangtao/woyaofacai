@@ -16,9 +16,14 @@ export function tradeMoney(value:any):string {
   if(scale>0){const divisor=10n**BigInt(scale),rest=cents%divisor;cents/=divisor;if(rest*2n>=divisor)cents+=1n;}
   else cents*=10n**BigInt(-scale);
   const digits=cents.toString().padStart(3,'0');
-  return (match[1]==='-'&&cents!==0n?'-':'')+digits.slice(0,-2)+'.'+digits.slice(-2);
+  return (match[1]==='-'&&cents!==0n?'-':'')+digits.slice(0,-2).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+digits.slice(-2);
 }
 export function tradeCell(item:Record<string,any>,key:string):string {
-  if(key==='cost_change'&&item.cost_diff!=null&&Number(item.cost_diff)!==0)return `${String(item.cost_diff).startsWith('-')?'降低':'提高'} ${tradeMoney(String(item.cost_diff).replace(/^[-+]/,''))}/股`;
+  if(key==='cost_change'&&item.cost_change==='清仓')return '清仓';
+  if(key==='cost_change'&&item.cost_diff!=null){const value=tradeMoney(item.cost_diff);return value==='0.00'?'不变':`${value.startsWith('-')?'降低':'提高'} ${value.replace(/^-/,'')}/股`;}
   return tradeMoneyKeys.has(key)?tradeMoney(item[key]):item[key]==null?'—':String(item[key]);
 }
+
+export const tradeBroker=(code:string)=>({LONGBRIDGE:'长桥',SCHWAB:'嘉信',FIRSTRADE:'第一证券'}[code]||code);
+export const tradeCount=(value:any)=>value==null?'—':String(value).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+export const tradeTone=(value:any)=>value==null?'':String(value).startsWith('-')?'down':Number(value)>0?'up':'';

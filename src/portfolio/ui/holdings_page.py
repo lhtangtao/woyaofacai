@@ -758,6 +758,8 @@ class HoldingsPage(QWidget):
         self.b_table.horizontalHeader().setStretchLastSection(True)
         self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
+        self.b_table.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_table.clicked.connect(self._on_broker_table_clicked)
         self.b_table.horizontalHeader().sectionClicked.connect(self.b_model.toggle_sort)
         b_layout.addWidget(self.b_table)
         lower_row.addWidget(b_card, 1)
@@ -789,6 +791,7 @@ class HoldingsPage(QWidget):
         self.s_table.horizontalHeader().setStretchLastSection(True)
         self.s_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
         self.s_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
+        self.s_table.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         self.s_table.clicked.connect(self._on_stock_table_clicked)
         self.s_table.horizontalHeader().sectionClicked.connect(self.s_model.toggle_sort)
         s_layout.addWidget(self.s_table)
@@ -835,6 +838,7 @@ class HoldingsPage(QWidget):
         self.dist_tabs.addTab("按人员")
         self.dist_tabs.addTab("按券商")
         self.dist_tabs.addTab("按股票")
+        self.dist_tabs.setCurrentIndex(2)
         self.dist_tabs.currentChanged.connect(self._on_dist_tab_changed)
         right_hdr.addWidget(self.dist_tabs)
         right_layout.addLayout(right_hdr)
@@ -1062,11 +1066,19 @@ class HoldingsPage(QWidget):
         else:
             self.status_combo.setCurrentIndex(0)
         if broker:
-            b_idx = self.broker_combo.findText(broker)
-            if b_idx >= 0:
-                self.broker_combo.setCurrentIndex(b_idx)
+            clean = broker.strip()
+            idx = -1
+            for i in range(self.broker_combo.count()):
+                if self.broker_combo.itemText(i).casefold() == clean.casefold() or (self.broker_combo.itemData(i) and str(self.broker_combo.itemData(i)).casefold() == clean.casefold()):
+                    idx = i
+                    break
+            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            self.broker_combo.setCurrentIndex(0)
         if ticker:
             self.search_input.setText(ticker)
+        else:
+            self.search_input.clear()
         if person_id is not None:
             self._selected_person_filter = person_id
             self.person_filter.blockSignals(True)
@@ -1347,14 +1359,16 @@ class HoldingsPage(QWidget):
         if row.values[0] == "合计":
             return
         broker_name = str(row.values[0])
-        self.set_view("detail", dimension="broker", broker=broker_name)
+        self.set_view("detail", dimension="broker", broker=broker_name, ticker=None)
 
     def _on_stock_table_clicked(self, index):
         if not index.isValid():
             return
         row = self.s_model.rows[index.row()]
+        if row.values[0] == "合计":
+            return
         ticker = str(row.values[0])
-        self.open_stock_drawer(ticker)
+        self.set_view("detail", dimension="stock", broker=None, ticker=ticker)
 
     def _on_detail_row_clicked(self, index):
         if not index.isValid():

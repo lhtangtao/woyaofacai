@@ -48,11 +48,16 @@ def attach_post_trade_positions(connection,page,*,cancel=None):
         if quantity is None:state='UNAVAILABLE';note='记录未进入有效回放、归属待核查或币种不在现有USD成本引擎范围；未知不补零。'
         elif quantity<0:state='NEGATIVE';note='该操作后为负仓，需要核对历史交易或期初持仓。'
         else:state='AVAILABLE';note='按人员、账户、证券独立回放，包含原开账基准、此前事件、拆股及划转；净投入成本沿用EXCEL_COMPAT。'
-        if data['kind']!='MARKET_TRADE':change='—（非普通买卖）';delta=None
+        # Ownership transfers already carry authoritative before/after costs in
+        # replay; retain their event type while exposing the same cost projection.
+        if data['kind'] not in ('MARKET_TRADE','OWNER_TRANSFER'):change='—（非普通买卖）';delta=None
+        elif data['side'] in ('SELL','TRANSFER_OUT') and quantity==0:change='清仓'
         elif pre_qty==0 and quantity is not None and quantity>0:change='建仓'
         elif delta is None:change='—'
         elif delta==0:change='不变'
         else:change=('降低' if delta<0 else '提高')+f' {abs(delta):,.4f}/股'
+        if data['kind']=='OWNER_TRANSFER' and quantity is not None and quantity>0 and cost is None:
+            note+=' 划转成本缺少可信金额或前序成本依据，暂不展示每股成本变化。'
         price,stamp,status=prices.get((data['symbol'],data.get('market','US')),(None,None,'缺少有效行情'))
         values=list(row.values);values[9:12]=[quantity,net,cost]
         rows.append(replace(row,values=tuple(values),metadata={**data,'post_quantity':quantity,'post_net':net,'post_cost':cost,

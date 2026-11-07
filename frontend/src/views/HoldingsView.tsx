@@ -63,7 +63,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   // Dashboard Data State
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [dashLoading, setDashLoading] = useState(false);
-  const [distTab, setDistTab] = useState<"by_person" | "by_broker" | "by_stock">("by_person");
+  const [distTab, setDistTab] = useState<"by_person" | "by_broker" | "by_stock">("by_stock");
 
   // Detail Data State
   const [detailRows, setDetailRows] = useState<any[]>([]);
@@ -208,13 +208,21 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   const drillToBroker = (brokerName: string) => {
     setSelectedBroker(brokerName);
+    if (onBrokerChange) onBrokerChange(brokerName);
+    setSelectedTicker("");
+    setSearchKeyword("");
     setDimension("broker");
+    setDetailPage(1);
     setViewMode("detail");
   };
 
   const drillToStock = (tk: string) => {
-    setSelectedTicker(tk);
+    setSelectedBroker("");
+    if (onBrokerChange) onBrokerChange("");
+    setSelectedTicker("");
+    setSearchKeyword(tk);
     setDimension("stock");
+    setDetailPage(1);
     setViewMode("detail");
   };
 
@@ -816,9 +824,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         <tr
                           key={idx}
                           style={{ cursor: "pointer" }}
-                          onClick={() => {
-                            setDrawerTicker(s.ticker);
-                          }}
+                          onClick={() => drillToStock(s.ticker)}
                         >
                           <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
                           <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(s.market_value, 2)}</td>

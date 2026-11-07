@@ -1,17 +1,16 @@
 """Shared read-only trade center, SQL summaries, lazy details and CSV stream."""
 from dataclasses import replace
-from datetime import datetime,date
+from datetime import date
 from decimal import Decimal,InvalidOperation
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from portfolio.db.connection import readonly_connection
 from portfolio.db.repositories import trade_center as repo
 from portfolio.db.repositories.provenance import get_provenance,redact
 from portfolio.domain.models import TradeFilters,TradePage,TradeRow,from_e8
 from portfolio.services.post_trade_positions import attach_post_trade_positions
 
-COLUMNS=('交易时间','券商渠道','归属人员','Ticker','分类','交易方向','划转对象','微操标记','当前价','成交价','成交数量','成交金额','手续费','成交后持仓','成交后成本价','成交后净投入','成本变化','操作')
-KEYS=('trade_date','broker','person_name','symbol','category','side','counterparty','micro_tag','current_price','price','quantity','amount','fees','post_quantity','post_cost','post_net','cost_change','action')
+COLUMNS=('交易时间','券商渠道','归属人员','Ticker','分类','交易方向','微操标记','当前价','成交价','成交数量','成交金额','手续费','成交后持仓','成交后成本价','成交后净投入','成本变化')
+KEYS=('trade_date','broker','person_name','symbol','category','side','micro_tag','current_price','price','quantity','amount','fees','post_quantity','post_cost','post_net','cost_change')
 SIDES={'BUY':'买入','SELL':'卖出','TRANSFER_IN':'转入','TRANSFER_OUT':'转出'}
 KINDS={'MARKET_TRADE':'市场交易','OWNER_TRANSFER':'人员划转','EXTERNAL_TRANSFER':'外部划转','BOOK_SETTLEMENT':'账务结算'}
 
@@ -40,14 +39,22 @@ def raw_trade(data):
     return TradeRow(d['id'],d['source_record_id'],values,d)
 
 
+def direction_text(metadata):
+    side=metadata['side'];kind=metadata['kind']
+    person=metadata.get('person_name');other=metadata.get('counterparty') or ''
+    if kind=='OWNER_TRANSFER' and side in ('TRANSFER_IN','TRANSFER_OUT'):
+        sender,receiver=(person,other) if side=='TRANSFER_OUT' else (other,person)
+        if sender=='个人' and receiver and receiver!='个人':return '划他人'
+        if receiver=='个人' and sender and sender!='个人':return '划个人'
+        return SIDES.get(side,side)+(('（'+other+'）') if other else '')
+    return SIDES.get(side,side) if kind=='MARKET_TRADE' else KINDS.get(kind,kind)+' / '+SIDES.get(side,side)
+
+
 def dto(row):
     m=row.metadata;v=row.values;instant=m.get('trade_time')
-    try:display=datetime.fromisoformat(instant).astimezone(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')+' 北京时间' if instant else m['book_time']+'（原账务时钟）'
-    except (ValueError,TypeError):display=m['book_time']+'（原账务时钟）'
-    if instant and not m.get('executed_at_utc'):
-        display+='（日期型估算）' if str(m['book_time']).endswith(('00:00:00','00:00')) or len(str(m['book_time']))==10 else '（账务时钟换算）'
+    display=m['book_time']
     return dict(id=row.record_id,record_id=row.record_id,source_record_id=row.source_record_id,trade_date=display,trade_time=instant,
-        broker=m['broker_code'],person_name=m['person_name'] or '券商真实账本',symbol=m['symbol'],category=m['category'],side=v[4] if m['kind']=='MARKET_TRADE' else KINDS.get(m['kind'],m['kind'])+' / '+v[4],side_code=m['side'],kind=v[12],kind_code=m['kind'],
+        broker={'LONGBRIDGE':'长桥','SCHWAB':'嘉信','FIRSTRADE':'第一证券'}.get(m['broker_code'],m['broker_code']),broker_code=m['broker_code'],person_name=m['person_name'] or '券商真实账本',symbol=m['symbol'],category=m['category'],side=direction_text(m),side_code=m['side'],kind=v[12],kind_code=m['kind'],
         counterparty=m.get('counterparty') or '',micro_tag=m.get('micro_tag') or '',
         current_price=m.get('current_price'),quote_time=m.get('quote_time'),quote_status=m.get('quote_status'),price=v[6],quantity=v[5],amount=v[7],currency=m['currency'],fees=from_e8(m.get('fees_e8')),
         post_quantity=m.get('post_quantity'),post_cost=m.get('post_cost'),pre_quantity=m.get('pre_quantity'),pre_cost=m.get('pre_cost'),post_net=m.get('post_net'),
@@ -93,7 +100,7 @@ class TradeCenterService:
             options=[dict(r) for r in c.execute('SELECT DISTINCT broker_code,category,kind,side,source_kind FROM ('+base+')',base_args)]
             return dict(status='ok',persons=repo.people(c,(catalog_scope or scope).person_ids),columns=COLUMNS,keys=KEYS,items=[dto(r) for r in rows],total=stats['matched'],page=page,size=size,total_pages=total_pages,stats=stats,options=options,
                         sort_col=p.get('sort_col','trade_time'),sort_dir=p.get('sort_dir','desc'),
-                        note='统计覆盖全部匹配记录；人员权益操作账本不与券商真实成交账本混加，总数为操作记录数。金额和手续费按币种列示。北京时间展示，保留原账务时钟及真实UTC。历史成本与净投入按现有引擎回放，包含划转对象与微操配对标记。',source=str(self.path))
+                        note='统计覆盖全部匹配记录；人员权益操作账本不与券商真实成交账本混加，总数为操作记录数。金额和手续费按币种列示。交易时间展示数据库原账务时间（各渠道时区不同），详情保留真实UTC及时间说明。历史成本与净投入按现有引擎回放，包含划转对象与微操配对标记。',source=str(self.path))
 
     def detail(self,scope,params,record_id,*,restricted=False,cancel=None):
         with readonly_connection(self.path,cancel=cancel,timeout=60) as c:
@@ -125,8 +132,8 @@ class TradeCenterService:
         with readonly_connection(self.path,cancel=cancel,timeout=300) as c:
             query,args,order,enriched,p=self.prepare(c,scope,params,cancel)
             stream=io.StringIO();writer=csv.writer(stream)
-            extra=('currency','record_id','source_record_id','order_id','execution_id','source','quote_time','quote_status','pre_quantity','pre_cost','post_status')
-            writer.writerow((*COLUMNS[:-1],*extra));yield '\ufeff'+stream.getvalue();stream.seek(0);stream.truncate(0)
+            extra=('counterparty','broker_code','currency','record_id','source_record_id','order_id','execution_id','source','quote_time','quote_status','pre_quantity','pre_cost','post_status')
+            writer.writerow((*COLUMNS,*extra));yield '\ufeff'+stream.getvalue();stream.seek(0);stream.truncate(0)
             cursor=c.execute(query+order,args)
             while True:
                 records=cursor.fetchmany(500)
@@ -135,5 +142,5 @@ class TradeCenterService:
                 batch=TradePage(raw,len(raw),0,len(raw),scope,'')
                 rows=tuple(enriched[r.record_id] for r in raw) if enriched else attach_post_trade_positions(c,batch,cancel=cancel).rows
                 for row in rows:
-                    item=dto(row);writer.writerow([safe_text(item.get(k)) for k in (*KEYS[:-1],*extra)])
+                    item=dto(row);writer.writerow([safe_text(item.get(k)) for k in (*KEYS,*extra)])
                 yield stream.getvalue();stream.seek(0);stream.truncate(0)
