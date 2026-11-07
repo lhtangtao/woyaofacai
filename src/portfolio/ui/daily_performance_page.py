@@ -514,6 +514,7 @@ class ModernTableModel(QAbstractTableModel):
         self.page_size = 20
         self.sort_column: int = -1
         self.sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
+        self.highlight_date: str = ""
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -548,6 +549,11 @@ class ModernTableModel(QAbstractTableModel):
             return val_str
 
         col_name = self.columns[col_idx] if (self.columns and col_idx < len(self.columns)) else ""
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if getattr(self, "highlight_date", "") and len(self.rows[row_idx]) > 0 and self.rows[row_idx][0] == self.highlight_date:
+                return QColor("#EFF6FF")
+            return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             # First column date is centered, count columns are centered
@@ -658,6 +664,7 @@ class DailyPerformancePage(QWidget):
         self.end_date: str = ""
         self.active_kpi_filter: Optional[str] = None
         self.stock_pnl_filter: str = "all"
+        self.stock_filter_date: str = ""
         self.selected_date: str = ""
         self.max_as_of_date: str = ""
         self._syncing_person = False
@@ -895,6 +902,23 @@ class DailyPerformancePage(QWidget):
         b_header.addWidget(b_detail_link)
         broker_vbox.addLayout(b_header)
 
+        # Broker column headers
+        b_th = QHBoxLayout()
+        b_th.setContentsMargins(6, 2, 6, 2)
+        th_b_name = QLabel("券商渠道")
+        th_b_name.setFixedWidth(75)
+        th_b_name.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        th_b_bar = QLabel("收益率 (占总收益)")
+        th_b_bar.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        th_b_pnl = QLabel("累计收益")
+        th_b_pnl.setFixedWidth(85)
+        th_b_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th_b_pnl.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        b_th.addWidget(th_b_name)
+        b_th.addWidget(th_b_bar)
+        b_th.addWidget(th_b_pnl)
+        broker_vbox.addLayout(b_th)
+
         self.broker_scroll = QScrollArea()
         self.broker_scroll.setWidgetResizable(True)
         self.broker_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -910,10 +934,234 @@ class DailyPerformancePage(QWidget):
         mid_splitter.setStretchFactor(1, 2)
         main_layout.addWidget(mid_splitter)
 
-        # 4. Lower Section: Clean Table (Left) + Selected Date Donut Distribution (Right)
-        lower_splitter = QSplitter(Qt.Orientation.Horizontal)
-        lower_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
+        # 4. Full-Width Daily Attribution Section (单日收益归因)
+        self.attr_card = QFrame()
+        self.attr_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        attr_main_vbox = QVBoxLayout(self.attr_card)
+        attr_main_vbox.setContentsMargins(14, 10, 14, 10)
+        attr_main_vbox.setSpacing(8)
 
+        # Header: Icon + Title + "点击联动" Badge + Subtitle + Stretch + Prev/Next Date Buttons
+        attr_hdr = QHBoxLayout()
+        attr_hdr.setSpacing(8)
+
+        attr_icon_lbl = QLabel("📊")
+        attr_icon_lbl.setStyleSheet("font-size: 15px;")
+        attr_hdr.addWidget(attr_icon_lbl)
+
+        self.attr_title = QLabel("单日收益归因 (—)")
+        self.attr_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #1E293B;")
+        attr_hdr.addWidget(self.attr_title)
+
+        badge_lbl = QLabel("点击联动")
+        badge_lbl.setStyleSheet("""
+            background-color: #EFF6FF;
+            color: #2563EB;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            border: 1px solid #BFDBFE;
+        """)
+        attr_hdr.addWidget(badge_lbl)
+
+        attr_sub_lbl = QLabel("深度拆解单日收益构成：亏损/盈利贡献排行、盈亏结构与股票明细。")
+        attr_sub_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        attr_hdr.addWidget(attr_sub_lbl)
+
+        attr_hdr.addStretch()
+
+        self.prev_date_btn = QPushButton("◀ 上一日")
+        self.next_date_btn = QPushButton("下一日 ▶")
+        for btn in (self.prev_date_btn, self.next_date_btn):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(28)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #F8FAFC;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 4px;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 10px;
+                }
+                QPushButton:hover:!disabled {
+                    background-color: #EFF6FF;
+                    border-color: #3B82F6;
+                    color: #2563EB;
+                }
+                QPushButton:disabled {
+                    background-color: #F1F5F9;
+                    border-color: #E2E8F0;
+                    color: #94A3B8;
+                }
+            """)
+        self.prev_date_btn.clicked.connect(lambda: self.navigate_date(-1))
+        self.next_date_btn.clicked.connect(lambda: self.navigate_date(1))
+        attr_hdr.addWidget(self.prev_date_btn)
+        attr_hdr.addWidget(self.next_date_btn)
+        attr_main_vbox.addLayout(attr_hdr)
+
+        # Three-Column Horizontal Layout
+        attr_cols_layout = QHBoxLayout()
+        attr_cols_layout.setSpacing(10)
+
+        # Column 1: 当日盈亏结构
+        col1_card = QFrame()
+        col1_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col1_vbox = QVBoxLayout(col1_card)
+        col1_vbox.setContentsMargins(10, 8, 10, 8)
+        col1_vbox.setSpacing(6)
+
+        c1_hdr = QLabel("当日盈亏结构 <span style='color:#94A3B8; font-size:11px;'>ⓘ</span>")
+        c1_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
+        col1_vbox.addWidget(c1_hdr)
+
+        c1_body = QHBoxLayout()
+        c1_body.setContentsMargins(0, 0, 0, 0)
+        c1_body.setSpacing(8)
+
+        self.donut_canvas = DailyDistributionDonut(self)
+        self.donut_canvas.setFixedSize(130, 130)
+        c1_body.addWidget(self.donut_canvas)
+
+        c1_btn_vbox = QVBoxLayout()
+        c1_btn_vbox.setSpacing(6)
+        c1_btn_vbox.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.donut_p_btn = QPushButton("● 盈利股票   0 只   +$0.00")
+        self.donut_l_btn = QPushButton("● 亏损股票   0 只   -$0.00")
+        self.donut_f_btn = QPushButton("● 持平股票   0 只    $0.00")
+
+        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444"), (self.donut_f_btn, "#64748B")):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(30)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #FFFFFF;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 5px;
+                    padding: 3px 8px;
+                    text-align: left;
+                    font-size: 11.5px;
+                    font-weight: 500;
+                    color: #1E293B;
+                }}
+                QPushButton:hover {{
+                    background-color: #F1F5F9;
+                    border-color: #CBD5E1;
+                    color: {hover_color};
+                }}
+            """)
+        self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("profit"))
+        self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("loss"))
+        self.donut_f_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("flat"))
+
+        c1_btn_vbox.addWidget(self.donut_p_btn)
+        c1_btn_vbox.addWidget(self.donut_l_btn)
+        c1_btn_vbox.addWidget(self.donut_f_btn)
+        c1_body.addLayout(c1_btn_vbox)
+        col1_vbox.addLayout(c1_body)
+        attr_cols_layout.addWidget(col1_card, 1)
+
+        # Column 2: 亏损贡献排行 Top 5
+        col2_card = QFrame()
+        col2_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col2_vbox = QVBoxLayout(col2_card)
+        col2_vbox.setContentsMargins(10, 8, 10, 8)
+        col2_vbox.setSpacing(4)
+
+        c2_hdr = QLabel("↓ 亏损贡献排行 Top 5")
+        c2_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #EF4444;")
+        col2_vbox.addWidget(c2_hdr)
+
+        c2_th = QHBoxLayout()
+        c2_th.setContentsMargins(4, 2, 4, 2)
+        th_rank = QLabel("排名")
+        th_rank.setFixedWidth(24)
+        th_rank.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_sym = QLabel("股票 (Ticker)")
+        th_sym.setFixedWidth(65)
+        th_sym.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_broker = QLabel("券商渠道")
+        th_broker.setFixedWidth(55)
+        th_broker.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_pnl = QLabel("当日收益")
+        th_pnl.setFixedWidth(70)
+        th_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th_pnl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_bar = QLabel("贡献度")
+        th_bar.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; padding-left: 8px;")
+        c2_th.addWidget(th_rank)
+        c2_th.addWidget(th_sym)
+        c2_th.addWidget(th_broker)
+        c2_th.addWidget(th_pnl)
+        c2_th.addWidget(th_bar)
+        col2_vbox.addLayout(c2_th)
+
+        self.loss_top_vbox = QVBoxLayout()
+        self.loss_top_vbox.setSpacing(3)
+        col2_vbox.addLayout(self.loss_top_vbox)
+        col2_vbox.addStretch()
+        attr_cols_layout.addWidget(col2_card, 1)
+
+        # Column 3: 盈利贡献排行 Top 5
+        col3_card = QFrame()
+        col3_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col3_vbox = QVBoxLayout(col3_card)
+        col3_vbox.setContentsMargins(10, 8, 10, 8)
+        col3_vbox.setSpacing(4)
+
+        c3_hdr = QLabel("↑ 盈利贡献排行 Top 5")
+        c3_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #10B981;")
+        col3_vbox.addWidget(c3_hdr)
+
+        c3_th = QHBoxLayout()
+        c3_th.setContentsMargins(4, 2, 4, 2)
+        th3_rank = QLabel("排名")
+        th3_rank.setFixedWidth(24)
+        th3_rank.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_sym = QLabel("股票 (Ticker)")
+        th3_sym.setFixedWidth(65)
+        th3_sym.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_broker = QLabel("券商渠道")
+        th3_broker.setFixedWidth(55)
+        th3_broker.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_pnl = QLabel("当日收益")
+        th3_pnl.setFixedWidth(70)
+        th3_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th3_pnl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_bar = QLabel("贡献度")
+        th3_bar.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; padding-left: 8px;")
+        c3_th.addWidget(th3_rank)
+        c3_th.addWidget(th3_sym)
+        c3_th.addWidget(th3_broker)
+        c3_th.addWidget(th3_pnl)
+        c3_th.addWidget(th3_bar)
+        col3_vbox.addLayout(c3_th)
+
+        self.profit_top_vbox = QVBoxLayout()
+        self.profit_top_vbox.setSpacing(3)
+        col3_vbox.addLayout(self.profit_top_vbox)
+        col3_vbox.addStretch()
+        attr_cols_layout.addWidget(col3_card, 1)
+
+        attr_main_vbox.addLayout(attr_cols_layout)
+
+        # Footer Hint
+        hint_bar = QFrame()
+        hint_bar.setStyleSheet("background-color: #F8FAFC; border-radius: 4px; padding: 2px 8px;")
+        hb_layout = QHBoxLayout(hint_bar)
+        hb_layout.setContentsMargins(6, 3, 6, 3)
+        hint_lbl = QLabel("ⓘ 点击日期走势、渠道概览或股票排行可联动下方明细与右侧抽屉。")
+        hint_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+        hb_layout.addWidget(hint_lbl)
+        attr_main_vbox.addWidget(hint_bar)
+
+        main_layout.addWidget(self.attr_card)
+
+        # 5. Full-Width Multi-dimensional Table
         table_card = QFrame()
         table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         table_vbox = QVBoxLayout(table_card)
@@ -1037,93 +1285,7 @@ class DailyPerformancePage(QWidget):
         page_h.addWidget(self.next_page_btn)
         table_vbox.addLayout(page_h)
 
-        lower_splitter.addWidget(table_card)
-
-        # Selected Date Distribution Card
-        dist_card = QFrame()
-        dist_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
-        dist_vbox = QVBoxLayout(dist_card)
-        dist_vbox.setContentsMargins(12, 8, 12, 8)
-        dist_vbox.setSpacing(6)
-
-        self.dist_title = QLabel("当日收益分布 (—)")
-        self.dist_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
-        dist_vbox.addWidget(self.dist_title)
-
-        self.donut_canvas = DailyDistributionDonut(self)
-        dist_vbox.addWidget(self.donut_canvas)
-
-        self.donut_p_btn = QPushButton("盈利股票 0 只   +$0.00")
-        self.donut_l_btn = QPushButton("亏损股票 0 只   -$0.00")
-
-        for btn in (self.donut_p_btn, self.donut_l_btn):
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(34)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #F8FAFC;
-                    border: 1px solid #E2E8F0;
-                    border-radius: 6px;
-                    padding: 4px 10px;
-                    text-align: left;
-                    font-size: 11.5px;
-                    font-weight: 500;
-                    color: #1E293B;
-                }
-                QPushButton:hover {
-                    background-color: #EFF6FF;
-                    border-color: #BFDBFE;
-                    color: #1D4ED8;
-                }
-            """)
-        self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl("profit"))
-        self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl("loss"))
-
-        dist_vbox.addWidget(self.donut_p_btn)
-        dist_vbox.addWidget(self.donut_l_btn)
-        dist_vbox.addStretch()
-
-        # Date Navigation Buttons (与左侧分页组件底对齐)
-        date_nav_h = QHBoxLayout()
-        date_nav_h.setContentsMargins(0, 0, 0, 0)
-        date_nav_h.setSpacing(8)
-
-        self.prev_date_btn = QPushButton("◀ 前一日")
-        self.next_date_btn = QPushButton("后一日 ▶")
-        for btn in (self.prev_date_btn, self.next_date_btn):
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(28)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #F8FAFC;
-                    border: 1px solid #CBD5E1;
-                    border-radius: 4px;
-                    color: #334155;
-                    font-size: 11px;
-                    font-weight: 600;
-                    padding: 0 10px;
-                }
-                QPushButton:hover:!disabled {
-                    background-color: #EFF6FF;
-                    border-color: #3B82F6;
-                    color: #2563EB;
-                }
-                QPushButton:disabled {
-                    background-color: #F1F5F9;
-                    border-color: #E2E8F0;
-                    color: #94A3B8;
-                }
-            """)
-        self.prev_date_btn.clicked.connect(lambda: self.navigate_date(-1))
-        self.next_date_btn.clicked.connect(lambda: self.navigate_date(1))
-        date_nav_h.addWidget(self.prev_date_btn)
-        date_nav_h.addWidget(self.next_date_btn)
-        dist_vbox.addLayout(date_nav_h)
-
-        lower_splitter.addWidget(dist_card)
-        lower_splitter.setStretchFactor(0, 3)
-        lower_splitter.setStretchFactor(1, 1)
-        main_layout.addWidget(lower_splitter)
+        main_layout.addWidget(table_card)
 
         # 5. Right Side Detail Drawer & Transparent Overlay
         self.drawer_overlay = QWidget(self)
@@ -1590,19 +1752,41 @@ class DailyPerformancePage(QWidget):
                     }
                 """)
             r_layout = QHBoxLayout(row_frame)
-            r_layout.setContentsMargins(6, 3, 6, 3)
+            r_layout.setContentsMargins(6, 4, 6, 4)
+            r_layout.setSpacing(6)
 
             b_name = QLabel(b_cn)
+            b_name.setFixedWidth(75)
             b_name.setStyleSheet(f"font-size: 12px; font-weight: {'700' if is_selected else '600'}; color: {'#1D4ED8' if is_selected else '#1E293B'};")
             r_layout.addWidget(b_name)
-            r_layout.addStretch()
 
-            contrib = (abs(pnl) / total_abs) * 100
+            contrib = (abs(pnl) / total_abs) * 100.0
+
+            # 蓝色条形进度条
+            bar_container = QFrame()
+            bar_container.setFixedHeight(7)
+            bar_container.setStyleSheet("background-color: #E2E8F0; border-radius: 3px;")
+            bc_lay = QHBoxLayout(bar_container)
+            bc_lay.setContentsMargins(0, 0, 0, 0)
+            bc_lay.setSpacing(0)
+            bar_fill = QFrame()
+            bar_fill.setStyleSheet("background-color: #3B82F6; border-radius: 3px;")
+            fill_weight = int(max(1, min(100, contrib)))
+            empty_weight = int(max(0, 100 - fill_weight))
+            bc_lay.addWidget(bar_fill, fill_weight)
+            if empty_weight > 0:
+                bc_lay.addStretch(empty_weight)
+            r_layout.addWidget(bar_container, 1)
+
             contrib_lbl = QLabel(f"{contrib:.1f}%")
+            contrib_lbl.setFixedWidth(42)
+            contrib_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             contrib_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
             r_layout.addWidget(contrib_lbl)
 
             pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setFixedWidth(85)
+            pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             pnl_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
             r_layout.addWidget(pnl_lbl)
 
@@ -1669,6 +1853,8 @@ class DailyPerformancePage(QWidget):
         if 0 <= new_idx < len(dates):
             new_date = dates[new_idx]
             self.selected_date = new_date
+            self.table_model.highlight_date = new_date
+            self.table_model.layoutChanged.emit()
             self.update_date_distribution(self.current_filtered_rows or self.raw_rows)
             self.trend_canvas.selected_date = new_date
             self.trend_canvas.update()
@@ -1678,15 +1864,28 @@ class DailyPerformancePage(QWidget):
 
     def update_date_distribution(self, filtered_rows: List[Tuple]):
         target_d = self.selected_date or self.max_as_of_date
-        self.dist_title.setText(f"当日收益分布 ({target_d})")
+        self.update_attribution_section(target_d, filtered_rows)
+
+    def update_attribution_section(self, target_d: str, filtered_rows: Optional[List[Tuple]] = None):
+        if not target_d:
+            target_d = self.selected_date or self.max_as_of_date
+        if filtered_rows is None:
+            filtered_rows = self.current_filtered_rows or self.raw_rows
+
+        if not hasattr(self, "attr_title"):
+            return
+
+        self.attr_title.setText(f"单日收益归因 ({target_d})")
 
         p_cnt, p_amt = 0, 0.0
         l_cnt, l_amt = 0, 0.0
         f_cnt, f_amt = 0, 0.0
         tot = 0.0
 
+        day_rows = []
         for r in filtered_rows:
             if r[0] == target_d:
+                day_rows.append(r)
                 pnl = float(r[19] or 0)
                 tot += pnl
                 if pnl > 0:
@@ -1699,19 +1898,233 @@ class DailyPerformancePage(QWidget):
                     f_cnt += 1
                     f_amt += pnl
 
+        # 1. 更新左侧 Donut 与盈亏概览按钮
         self.donut_canvas.set_data(tot, p_amt, l_amt)
-        self.donut_p_btn.setText(f"盈利股票 {p_cnt} 只    {fmt_signed_money(p_amt)}")
-        self.donut_l_btn.setText(f"亏损股票 {l_cnt} 只    {fmt_signed_money(l_amt)}")
+        self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只    {fmt_signed_money(p_amt)}")
+        self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只    {fmt_signed_money(l_amt)}")
+        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只     $0.00")
+
+        # 2. 清空并填充中栏：亏损贡献排行 Top 5
+        while self.loss_top_vbox.count():
+            item = self.loss_top_vbox.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        loss_rows = [r for r in day_rows if float(r[19] or 0) < 0]
+        loss_rows.sort(key=lambda x: float(x[19] or 0))  # 亏损金额最大的排在最前
+        top5_loss = loss_rows[:5]
+        total_loss_abs = max(1e-5, abs(l_amt))
+
+        if not top5_loss:
+            empty_lbl = QLabel("当日无亏损标的")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet("font-size: 12px; color: #94A3B8; padding: 24px 0;")
+            self.loss_top_vbox.addWidget(empty_lbl)
+        else:
+            rank_bg_colors = ["#EF4444", "#F97316", "#FB923C", "#94A3B8", "#CBD5E1"]
+            for idx, r in enumerate(top5_loss):
+                rank = idx + 1
+                sym = r[3]
+                broker = fmt_broker_cn(r[1])
+                pnl = float(r[19] or 0)
+                contrib = (abs(pnl) / total_loss_abs) * 100.0
+
+                item_frame = QFrame()
+                item_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                item_frame.setStyleSheet("""
+                    QFrame {
+                        background: #FFFFFF;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 4px;
+                        padding: 1px 4px;
+                    }
+                    QFrame:hover {
+                        background: #FEF2F2;
+                        border-color: #FECACA;
+                    }
+                """)
+                i_lay = QHBoxLayout(item_frame)
+                i_lay.setContentsMargins(4, 2, 4, 2)
+                i_lay.setSpacing(6)
+
+                r_lbl = QLabel(str(rank))
+                r_lbl.setFixedSize(18, 18)
+                r_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                bg_col = rank_bg_colors[idx] if idx < len(rank_bg_colors) else "#E2E8F0"
+                txt_col = "#FFFFFF" if idx < 3 else "#475569"
+                r_lbl.setStyleSheet(f"background: {bg_col}; color: {txt_col}; border-radius: 9px; font-size: 10px; font-weight: 700;")
+                i_lay.addWidget(r_lbl)
+
+                sym_lbl = QLabel(sym)
+                sym_lbl.setFixedWidth(65)
+                sym_lbl.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #1E293B;")
+                i_lay.addWidget(sym_lbl)
+
+                b_lbl = QLabel(broker)
+                b_lbl.setFixedWidth(55)
+                b_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+                i_lay.addWidget(b_lbl)
+
+                pnl_lbl = QLabel(fmt_signed_money(pnl))
+                pnl_lbl.setFixedWidth(70)
+                pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #EF4444;")
+                i_lay.addWidget(pnl_lbl)
+
+                bar_bg = QFrame()
+                bar_bg.setFixedHeight(6)
+                bar_bg.setStyleSheet("background-color: #FEE2E2; border-radius: 3px;")
+                bb_lay = QHBoxLayout(bar_bg)
+                bb_lay.setContentsMargins(0, 0, 0, 0)
+                bb_lay.setSpacing(0)
+                bar_fill = QFrame()
+                bar_fill.setStyleSheet("background-color: #EF4444; border-radius: 3px;")
+                fill_w = int(max(1, min(100, contrib)))
+                bb_lay.addWidget(bar_fill, fill_w)
+                if 100 - fill_w > 0:
+                    bb_lay.addStretch(100 - fill_w)
+                i_lay.addWidget(bar_bg, 1)
+
+                c_lbl = QLabel(f"{contrib:.1f}%")
+                c_lbl.setFixedWidth(40)
+                c_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                c_lbl.setStyleSheet("font-size: 10.5px; color: #64748B;")
+                i_lay.addWidget(c_lbl)
+
+                def make_click_handler(s=sym, d=target_d):
+                    return lambda e: self.open_stock_drawer(s, d)
+                item_frame.mousePressEvent = make_click_handler(sym, target_d)
+
+                self.loss_top_vbox.addWidget(item_frame)
+
+        # 3. 清空并填充右栏：盈利贡献排行 Top 5
+        while self.profit_top_vbox.count():
+            item = self.profit_top_vbox.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        profit_rows = [r for r in day_rows if float(r[19] or 0) > 0]
+        profit_rows.sort(key=lambda x: float(x[19] or 0), reverse=True)  # 盈利金额最大的排在最前
+        top5_profit = profit_rows[:5]
+        total_profit_abs = max(1e-5, p_amt)
+
+        if not top5_profit:
+            empty_box = QFrame()
+            empty_box.setStyleSheet("background: transparent; border: none;")
+            eb_lay = QVBoxLayout(empty_box)
+            eb_lay.setContentsMargins(10, 18, 10, 18)
+            eb_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            eb_lay.setSpacing(4)
+
+            icon_lbl = QLabel("📊")
+            icon_lbl.setStyleSheet("font-size: 26px;")
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            t_lbl = QLabel("当日无盈利标的")
+            t_lbl.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #1E293B;")
+            t_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sub_lbl = QLabel("当日所有股票均为亏损或持平，暂无盈利贡献。")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8;")
+            sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            eb_lay.addWidget(icon_lbl)
+            eb_lay.addWidget(t_lbl)
+            eb_lay.addWidget(sub_lbl)
+            self.profit_top_vbox.addWidget(empty_box)
+        else:
+            rank_bg_colors = ["#10B981", "#34D399", "#6EE7B7", "#94A3B8", "#CBD5E1"]
+            for idx, r in enumerate(top5_profit):
+                rank = idx + 1
+                sym = r[3]
+                broker = fmt_broker_cn(r[1])
+                pnl = float(r[19] or 0)
+                contrib = (pnl / total_profit_abs) * 100.0
+
+                item_frame = QFrame()
+                item_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                item_frame.setStyleSheet("""
+                    QFrame {
+                        background: #FFFFFF;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 4px;
+                        padding: 1px 4px;
+                    }
+                    QFrame:hover {
+                        background: #ECFDF5;
+                        border-color: #A7F3D0;
+                    }
+                """)
+                i_lay = QHBoxLayout(item_frame)
+                i_lay.setContentsMargins(4, 2, 4, 2)
+                i_lay.setSpacing(6)
+
+                r_lbl = QLabel(str(rank))
+                r_lbl.setFixedSize(18, 18)
+                r_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                bg_col = rank_bg_colors[idx] if idx < len(rank_bg_colors) else "#E2E8F0"
+                txt_col = "#FFFFFF" if idx < 3 else "#475569"
+                r_lbl.setStyleSheet(f"background: {bg_col}; color: {txt_col}; border-radius: 9px; font-size: 10px; font-weight: 700;")
+                i_lay.addWidget(r_lbl)
+
+                sym_lbl = QLabel(sym)
+                sym_lbl.setFixedWidth(65)
+                sym_lbl.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #1E293B;")
+                i_lay.addWidget(sym_lbl)
+
+                b_lbl = QLabel(broker)
+                b_lbl.setFixedWidth(55)
+                b_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+                i_lay.addWidget(b_lbl)
+
+                pnl_lbl = QLabel(fmt_signed_money(pnl))
+                pnl_lbl.setFixedWidth(70)
+                pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #10B981;")
+                i_lay.addWidget(pnl_lbl)
+
+                bar_bg = QFrame()
+                bar_bg.setFixedHeight(6)
+                bar_bg.setStyleSheet("background-color: #D1FAE5; border-radius: 3px;")
+                bb_lay = QHBoxLayout(bar_bg)
+                bb_lay.setContentsMargins(0, 0, 0, 0)
+                bb_lay.setSpacing(0)
+                bar_fill = QFrame()
+                bar_fill.setStyleSheet("background-color: #10B981; border-radius: 3px;")
+                fill_w = int(max(1, min(100, contrib)))
+                bb_lay.addWidget(bar_fill, fill_w)
+                if 100 - fill_w > 0:
+                    bb_lay.addStretch(100 - fill_w)
+                i_lay.addWidget(bar_bg, 1)
+
+                c_lbl = QLabel(f"{contrib:.1f}%")
+                c_lbl.setFixedWidth(40)
+                c_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                c_lbl.setStyleSheet("font-size: 10.5px; color: #64748B;")
+                i_lay.addWidget(c_lbl)
+
+                def make_click_handler(s=sym, d=target_d):
+                    return lambda e: self.open_stock_drawer(s, d)
+                item_frame.mousePressEvent = make_click_handler(sym, target_d)
+
+                self.profit_top_vbox.addWidget(item_frame)
+
         self.update_date_nav_buttons()
 
-    def filter_stock_pnl(self, mode: str):
+    def filter_stock_pnl_by_date(self, mode: str):
         self.stock_pnl_filter = mode
+        self.stock_filter_date = self.selected_date or self.max_as_of_date
         self.tab_bar.setCurrentIndex(2)
         self.recalculate_and_refresh()
+
+    def filter_stock_pnl(self, mode: str):
+        self.filter_stock_pnl_by_date(mode)
 
     def on_table_tab_changed(self, idx: int):
         self.table_model.page = 1
         self.table_model.sort_column = -1
+        # 如果切出股票明细且并非点击归因卡片进入，恢复全部日期
+        if idx != 2:
+            self.stock_filter_date = ""
+            self.stock_pnl_filter = "all"
         self.recalculate_and_refresh()
 
     def on_header_section_clicked(self, logical_index: int):
@@ -1719,6 +2132,7 @@ class DailyPerformancePage(QWidget):
         self.update_pagination_ui()
 
     def refresh_table_view(self, filtered_rows: List[Tuple], date_summaries: List[List[Any]]):
+        self.table_model.highlight_date = self.selected_date
         current_tab = self.tab_bar.currentIndex()
         header = self.table_view.horizontalHeader()
 
@@ -1835,6 +2249,8 @@ class DailyPerformancePage(QWidget):
             cols = ("日期", "券商渠道", "Ticker", "分类", "持仓数量", "成本价", "收盘价", "当日收益", "收益率", "日末市值")
             s_rows = []
             for r in filtered_rows:
+                if self.stock_filter_date and r[0] != self.stock_filter_date:
+                    continue
                 pnl = float(r[19] or 0)
                 if self.stock_pnl_filter == "profit" and pnl <= 0:
                     continue
@@ -2019,8 +2435,50 @@ class DailyPerformancePage(QWidget):
         self.drawer_content_lbl.setText(
             f"券商渠道：{ch_cn}\n"
             f"期间累计收益：{fmt_signed_money(tot_pnl)}\n"
-            f"历史交易记录数：{len(c_rows)} 条"
+            f"历史持仓记录数：{len(c_rows)} 条"
         )
+
+        while self.drawer_list_layout.count():
+            item = self.drawer_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # 按日期降序展示该渠道最近收益记录
+        sorted_c_rows = sorted(c_rows, key=lambda x: x[0], reverse=True)[:50]
+        for r in sorted_c_rows:
+            card = QFrame()
+            card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
+
+            info_v = QVBoxLayout()
+            info_v.setSpacing(2)
+            sym_lbl = QLabel(f"{r[0]} · {r[3]}")
+            sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            info_v.addWidget(sym_lbl)
+            info_v.addWidget(sub_lbl)
+            c_lay.addLayout(info_v)
+            c_lay.addStretch()
+
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            pnl = float(r[19] or 0)
+            pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+            rate = float(r[13] or 0) if r[13] else 0.0
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
+
+            self.drawer_list_layout.addWidget(card)
+
         self.show_drawer()
 
     def open_stock_drawer(self, symbol: str, date_str: str = ""):
@@ -2040,6 +2498,52 @@ class DailyPerformancePage(QWidget):
             f"期间累计收益：{fmt_signed_money(tot_pnl)}\n"
             f"历史交易天数：{len(s_rows)} 天"
         )
+
+        while self.drawer_list_layout.count():
+            item = self.drawer_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # 按日期降序展示该股票的历史持仓记录
+        sorted_s_rows = sorted(s_rows, key=lambda x: x[0], reverse=True)[:50]
+        for r in sorted_s_rows:
+            is_cur_date = (date_str and r[0] == date_str)
+            card = QFrame()
+            if is_cur_date:
+                card.setStyleSheet("background: #EFF6FF; border: 1.5px solid #3B82F6; border-radius: 6px;")
+            else:
+                card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
+
+            info_v = QVBoxLayout()
+            info_v.setSpacing(2)
+            sym_lbl = QLabel(f"{r[0]} ({fmt_broker_cn(r[1])}) {'[选中日]' if is_cur_date else ''}")
+            sym_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {'#1D4ED8' if is_cur_date else '#2563EB'};")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
+            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            info_v.addWidget(sym_lbl)
+            info_v.addWidget(sub_lbl)
+            c_lay.addLayout(info_v)
+            c_lay.addStretch()
+
+            pnl_v = QVBoxLayout()
+            pnl_v.setSpacing(2)
+            pnl_v.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+            pnl = float(r[19] or 0)
+            pnl_lbl = QLabel(fmt_signed_money(pnl))
+            pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
+            rate = float(r[13] or 0) if r[13] else 0.0
+            rate_lbl = QLabel(fmt_percent(rate))
+            rate_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {'#10B981' if rate >= 0 else '#EF4444'};")
+
+            pnl_v.addWidget(pnl_lbl)
+            pnl_v.addWidget(rate_lbl)
+            c_lay.addLayout(pnl_v)
+
+            self.drawer_list_layout.addWidget(card)
+
         self.show_drawer()
 
     def show_drawer(self):

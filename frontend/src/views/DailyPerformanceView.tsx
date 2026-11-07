@@ -159,6 +159,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
   const [activeTab, setActiveTab] = useState<"date" | "channel" | "stock">("date");
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [stockPnlFilter, setStockPnlFilter] = useState<"all" | "profit" | "loss" | "flat">("all");
+  const [stockFilterDate, setStockFilterDate] = useState<string>("");
 
   // Pagination
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -258,6 +259,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     setSelectedCategory("");
     setStartDate("2025-01-01");
     setEndDate(dataAsOf);
+    setStockFilterDate("");
+    setStockPnlFilter("all");
     setActiveKpiFilter(null);
     setStockPnlFilter("all");
     setAppliedFilters({
@@ -636,6 +639,9 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
   // Tab 3 Stock list with filters
   const stockTableRows = useMemo(() => {
     let list = filteredRawData;
+    if (stockFilterDate) {
+      list = list.filter((r) => r.date === stockFilterDate);
+    }
     if (activeKpiFilter === "up") {
       list = list.filter((r) => r.dailyProfit > 0);
     } else if (activeKpiFilter === "down") {
@@ -654,7 +660,39 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       if (b.date !== a.date) return b.date.localeCompare(a.date);
       return b.dailyProfit - a.dailyProfit;
     });
-  }, [filteredRawData, activeKpiFilter, stockPnlFilter]);
+  }, [filteredRawData, stockFilterDate, activeKpiFilter, stockPnlFilter]);
+
+  // Top 5 Losses & Profits for Attribution Module
+  const top5Losses = useMemo(() => {
+    const losses = selectedDateRows.filter((r) => r.dailyProfit < 0);
+    losses.sort((a, b) => a.dailyProfit - b.dailyProfit);
+    return losses.slice(0, 5);
+  }, [selectedDateRows]);
+
+  const top5Profits = useMemo(() => {
+    const profits = selectedDateRows.filter((r) => r.dailyProfit > 0);
+    profits.sort((a, b) => b.dailyProfit - a.dailyProfit);
+    return profits.slice(0, 5);
+  }, [selectedDateRows]);
+
+  const availableDates = useMemo(() => {
+    return dateSummariesAsc.map((d) => d.date);
+  }, [dateSummariesAsc]);
+
+  const curAttributionDate = selectedDate || dataAsOf || (availableDates.length > 0 ? availableDates[availableDates.length - 1] : "");
+  const curDateIdx = availableDates.indexOf(curAttributionDate);
+  const isPrevDisabled = curDateIdx <= 0;
+  const isNextDisabled = curDateIdx === -1 || curDateIdx >= availableDates.length - 1;
+
+  const handleNavigateDate = (direction: number) => {
+    if (!availableDates.length) return;
+    let idx = curDateIdx;
+    if (idx === -1) idx = availableDates.length - 1;
+    const newIdx = idx + direction;
+    if (newIdx >= 0 && newIdx < availableDates.length) {
+      setSelectedDate(availableDates[newIdx]);
+    }
+  };
 
   // Tab 1 Date list with KPI filters
   const filteredDateSummariesDesc = useMemo(() => {
@@ -1325,94 +1363,291 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
             </div>
           </div>
 
+          {/* Broker Column Headers */}
+          <div className="channel-th-row">
+            <span className="channel-th-name">券商渠道</span>
+            <span className="channel-th-bar">收益率 (占总收益)</span>
+            <span className="channel-th-pnl">累计收益</span>
+          </div>
+
           <div className="channel-overview-list">
-            {channelSummaries.map((c) => (
-              <div
-                key={c.channel}
-                className="channel-row"
-                onClick={() => {
-                  setSelectedBroker(c.channel);
-                  setAppliedFilters((f) => ({ ...f, broker: c.channel }));
-                  setActiveTab("channel");
-                }}
-              >
-                <div className="channel-info">
-                  <span className="channel-name">{fmtBrokerCn(c.channel)}</span>
-                  <span
-                    className={`channel-rate ${
-                      c.profitRate >= 0 ? "color-profit" : "color-loss"
+            {channelSummaries.map((c) => {
+              const isSelected = selectedBroker && (c.channel === selectedBroker || fmtBrokerCn(c.channel) === selectedBroker);
+              return (
+                <div
+                  key={c.channel}
+                  className={`channel-row ${isSelected ? "channel-row-selected" : ""}`}
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedBroker("");
+                      setAppliedFilters((f) => ({ ...f, broker: "" }));
+                    } else {
+                      setSelectedBroker(c.channel);
+                      setAppliedFilters((f) => ({ ...f, broker: c.channel }));
+                    }
+                    setActiveTab("channel");
+                  }}
+                >
+                  <div className="channel-info">
+                    <span className="channel-name">{fmtBrokerCn(c.channel)}</span>
+                  </div>
+                  <div className="channel-bar-wrap">
+                    <div className="channel-bar-bg">
+                      <div
+                        className="channel-bar-fill"
+                        style={{ width: `${Math.min(100, Math.max(1, Math.round(c.contributionRatio * 100)))}%` }}
+                      />
+                    </div>
+                    <span className="channel-bar-text">
+                      {(c.contributionRatio * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div
+                    className={`channel-profit ${
+                      c.cumProfit >= 0 ? "color-profit" : "color-loss"
                     }`}
                   >
-                    {fmtPercent(c.profitRate)}
-                  </span>
-                </div>
-                <div className="channel-bar-wrap">
-                  <div className="channel-bar-bg">
-                    <div
-                      className="channel-bar-fill"
-                      style={{ width: `${Math.min(100, Math.round(c.contributionRatio * 100))}%` }}
-                    />
+                    {fmtSignedMoney(c.cumProfit)}
                   </div>
-                  <span className="channel-bar-text">
-                    {(c.contributionRatio * 100).toFixed(1)}% 贡献
-                  </span>
                 </div>
-                <div
-                  className={`channel-profit ${
-                    c.cumProfit >= 0 ? "color-profit" : "color-loss"
-                  }`}
-                >
-                  {fmtSignedMoney(c.cumProfit)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* 5. Main Multi-dimensional Table & Selected Date Distribution */}
-      <div className="details-split-section">
-        {/* Left Multi-dimensional Table */}
-        <div className="daily-perf-card">
-          <div className="table-tabs-header">
-            <div className="table-tab-btns">
-              <button
-                className={`table-tab-btn ${activeTab === "date" ? "active" : ""}`}
-                onClick={() => {
-                  setActiveTab("date");
-                  setCurrentPage(1);
-                }}
-              >
-                <Calendar size={14} />
-                <span>按日期汇总</span>
-              </button>
-              <button
-                className={`table-tab-btn ${activeTab === "channel" ? "active" : ""}`}
-                onClick={() => {
-                  setActiveTab("channel");
-                  setCurrentPage(1);
-                }}
-              >
-                <BarChart2 size={14} />
-                <span>按渠道明细</span>
-              </button>
-              <button
-                className={`table-tab-btn ${activeTab === "stock" ? "active" : ""}`}
-                onClick={() => {
-                  setActiveTab("stock");
-                  setCurrentPage(1);
-                }}
-              >
-                <TrendingUp size={14} />
-                <span>按股票明细</span>
-              </button>
+      {/* 4. Full-Width Daily Attribution Section (单日收益归因) */}
+      <div className="daily-perf-card daily-attribution-card">
+        <div className="attribution-header">
+          <div className="attribution-title-wrap">
+            <span className="attribution-icon">📊</span>
+            <span className="attribution-title">单日收益归因 ({curAttributionDate || "—"})</span>
+            <span className="attribution-badge">点击联动</span>
+            <span className="attribution-subtitle">深度拆解单日收益构成：亏损/盈利贡献排行、盈亏结构与股票明细。</span>
+          </div>
+          <div className="attribution-date-nav">
+            <button
+              className="attr-date-btn"
+              onClick={() => handleNavigateDate(-1)}
+              disabled={isPrevDisabled}
+            >
+              ◀ 上一日
+            </button>
+            <button
+              className="attr-date-btn"
+              onClick={() => handleNavigateDate(1)}
+              disabled={isNextDisabled}
+            >
+              下一日 ▶
+            </button>
+          </div>
+        </div>
+
+        {/* Three Columns Grid */}
+        <div className="attribution-grid">
+          {/* Col 1: 当日盈亏结构 */}
+          <div className="attribution-col-card">
+            <div className="attr-col-header">
+              <span className="attr-col-title">当日盈亏结构 <span className="attr-info-icon" title="当日持仓标的的盈亏分布统计">ⓘ</span></span>
             </div>
-            <div style={{ fontSize: 12, color: "#64748B" }}>
-              {activeTab === "date" && `共 ${filteredDateSummariesDesc.length} 条记录`}
-              {activeTab === "channel" && `共 ${channelDailyList.length} 条记录`}
-              {activeTab === "stock" && `共 ${stockTableRows.length} 条记录`}
+            <div className="attr-col-body donut-layout">
+              <div className="donut-chart-box">
+                <ReactECharts
+                  option={donutChartOption}
+                  style={{ height: 130, width: 130 }}
+                  notMerge={true}
+                />
+              </div>
+              <div className="donut-btn-group">
+                <button
+                  className="attr-donut-btn hover-profit"
+                  onClick={() => {
+                    setActiveTab("stock");
+                    setStockPnlFilter("profit");
+                    setStockFilterDate(curAttributionDate);
+                  }}
+                >
+                  <span className="dot dot-profit">●</span>
+                  <span className="btn-label">盈利股票</span>
+                  <span className="btn-count">{selectedDateDistribution.profitCount} 只</span>
+                  <span className="btn-amt color-profit">{fmtSignedMoney(selectedDateDistribution.profitAmount)}</span>
+                </button>
+                <button
+                  className="attr-donut-btn hover-loss"
+                  onClick={() => {
+                    setActiveTab("stock");
+                    setStockPnlFilter("loss");
+                    setStockFilterDate(curAttributionDate);
+                  }}
+                >
+                  <span className="dot dot-loss">●</span>
+                  <span className="btn-label">亏损股票</span>
+                  <span className="btn-count">{selectedDateDistribution.lossCount} 只</span>
+                  <span className="btn-amt color-loss">{fmtSignedMoney(selectedDateDistribution.lossAmount)}</span>
+                </button>
+                <button
+                  className="attr-donut-btn hover-flat"
+                  onClick={() => {
+                    setActiveTab("stock");
+                    setStockPnlFilter("flat");
+                    setStockFilterDate(curAttributionDate);
+                  }}
+                >
+                  <span className="dot dot-flat">●</span>
+                  <span className="btn-label">持平股票</span>
+                  <span className="btn-count">{selectedDateDistribution.flatCount} 只</span>
+                  <span className="btn-amt">$0.00</span>
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Col 2: 亏损贡献排行 Top 5 */}
+          <div className="attribution-col-card">
+            <div className="attr-col-header">
+              <span className="attr-col-title color-loss">↓ 亏损贡献排行 Top 5</span>
+            </div>
+            <div className="attr-rank-table">
+              <div className="attr-table-th">
+                <span className="th-cell th-rank">排名</span>
+                <span className="th-cell th-sym">股票 (Ticker)</span>
+                <span className="th-cell th-broker">券商渠道</span>
+                <span className="th-cell th-pnl">当日收益</span>
+                <span className="th-cell th-bar">贡献度</span>
+              </div>
+              <div className="attr-table-rows">
+                {top5Losses.length === 0 ? (
+                  <div className="attr-empty-state">当日无亏损标的</div>
+                ) : (
+                  top5Losses.map((r, idx) => {
+                    const totalLossAbs = Math.max(1e-5, Math.abs(selectedDateDistribution.lossAmount));
+                    const contrib = ((Math.abs(r.dailyProfit) / totalLossAbs) * 100).toFixed(1);
+                    return (
+                      <div
+                        key={`${r.symbol}-${r.channel}-${idx}`}
+                        className="attr-item-row"
+                        onClick={() => openStockDetail(r.symbol, r.date)}
+                        title="点击查看该标的收益详情"
+                      >
+                        <span className={`rank-badge rank-${idx + 1}`}>{idx + 1}</span>
+                        <span className="td-sym">{r.symbol}</span>
+                        <span className="td-broker">{fmtBrokerCn(r.channel)}</span>
+                        <span className="td-pnl color-loss">{fmtSignedMoney(r.dailyProfit)}</span>
+                        <div className="td-bar-wrap">
+                          <div className="bar-bg bg-loss">
+                            <div className="bar-fill fill-loss" style={{ width: `${Math.min(100, Math.max(2, parseFloat(contrib)))}%` }} />
+                          </div>
+                          <span className="td-contrib-text">{contrib}%</span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Col 3: 盈利贡献排行 Top 5 */}
+          <div className="attribution-col-card">
+            <div className="attr-col-header">
+              <span className="attr-col-title color-profit">↑ 盈利贡献排行 Top 5</span>
+            </div>
+            {top5Profits.length === 0 ? (
+              <div className="attr-empty-profit">
+                <div className="empty-profit-icon">📊</div>
+                <div className="empty-profit-title">当日无盈利标的</div>
+                <div className="empty-profit-desc">当日所有股票均为亏损或持平，暂无盈利贡献。</div>
+              </div>
+            ) : (
+              <div className="attr-rank-table">
+                <div className="attr-table-th">
+                  <span className="th-cell th-rank">排名</span>
+                  <span className="th-cell th-sym">股票 (Ticker)</span>
+                  <span className="th-cell th-broker">券商渠道</span>
+                  <span className="th-cell th-pnl">当日收益</span>
+                  <span className="th-cell th-bar">贡献度</span>
+                </div>
+                <div className="attr-table-rows">
+                  {top5Profits.map((r, idx) => {
+                    const totalProfitAbs = Math.max(1e-5, selectedDateDistribution.profitAmount);
+                    const contrib = ((r.dailyProfit / totalProfitAbs) * 100).toFixed(1);
+                    return (
+                      <div
+                        key={`${r.symbol}-${r.channel}-${idx}`}
+                        className="attr-item-row"
+                        onClick={() => openStockDetail(r.symbol, r.date)}
+                        title="点击查看该标的收益详情"
+                      >
+                        <span className={`rank-badge rank-profit-${idx + 1}`}>{idx + 1}</span>
+                        <span className="td-sym">{r.symbol}</span>
+                        <span className="td-broker">{fmtBrokerCn(r.channel)}</span>
+                        <span className="td-pnl color-profit">{fmtSignedMoney(r.dailyProfit)}</span>
+                        <div className="td-bar-wrap">
+                          <div className="bar-bg bg-profit">
+                            <div className="bar-fill fill-profit" style={{ width: `${Math.min(100, Math.max(2, parseFloat(contrib)))}%` }} />
+                          </div>
+                          <span className="td-contrib-text">{contrib}%</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer Hint */}
+        <div className="attr-footer-hint">
+          <span>ⓘ 点击日期走势、渠道概览或股票排行可联动下方明细与右侧抽屉。</span>
+        </div>
+      </div>
+
+      {/* 5. Main Multi-dimensional Table (Full-Width) */}
+      <div className="daily-perf-card">
+        <div className="table-tabs-header">
+          <div className="table-tab-btns">
+            <button
+              className={`table-tab-btn ${activeTab === "date" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("date");
+                setStockFilterDate("");
+                setStockPnlFilter("all");
+                setCurrentPage(1);
+              }}
+            >
+              <Calendar size={14} />
+              <span>按日期汇总</span>
+            </button>
+            <button
+              className={`table-tab-btn ${activeTab === "channel" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("channel");
+                setStockFilterDate("");
+                setStockPnlFilter("all");
+                setCurrentPage(1);
+              }}
+            >
+              <BarChart2 size={14} />
+              <span>按渠道明细</span>
+            </button>
+            <button
+              className={`table-tab-btn ${activeTab === "stock" ? "active" : ""}`}
+              onClick={() => {
+                setActiveTab("stock");
+                setCurrentPage(1);
+              }}
+            >
+              <TrendingUp size={14} />
+              <span>按股票明细</span>
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: "#64748B" }}>
+            {activeTab === "date" && `共 ${filteredDateSummariesDesc.length} 条记录`}
+            {activeTab === "channel" && `共 ${channelDailyList.length} 条记录`}
+            {activeTab === "stock" && `共 ${stockTableRows.length} 条记录`}
+          </div>
+        </div>
 
           {/* Table Container - NO OPERATION COLUMN */}
           <div className="modern-table-wrap">
@@ -1661,75 +1896,6 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Right Selected Date Distribution Card */}
-        <div className="daily-perf-card">
-          <div className="trend-card-header">
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
-              当日收益分布{" "}
-              <span style={{ fontSize: 12, color: "#2563EB" }}>({selectedDate || dataAsOf})</span>
-            </div>
-          </div>
-
-          <div style={{ height: 180 }}>
-            <ReactECharts
-              option={donutChartOption}
-              style={{ height: "100%", width: "100%" }}
-              notMerge={true}
-            />
-          </div>
-
-          <div className="donut-stat-row">
-            <div
-              className="donut-stat-item"
-              onClick={() => {
-                setActiveTab("stock");
-                setStockPnlFilter("profit");
-              }}
-            >
-              <div className="donut-stat-left">
-                <span className="donut-badge-dot" style={{ background: "#10B981" }} />
-                <span>盈利股票 {selectedDateDistribution.profitCount} 只</span>
-              </div>
-              <div className="donut-stat-right color-profit">
-                {fmtSignedMoney(selectedDateDistribution.profitAmount)}
-              </div>
-            </div>
-
-            <div
-              className="donut-stat-item"
-              onClick={() => {
-                setActiveTab("stock");
-                setStockPnlFilter("loss");
-              }}
-            >
-              <div className="donut-stat-left">
-                <span className="donut-badge-dot" style={{ background: "#EF4444" }} />
-                <span>亏损股票 {selectedDateDistribution.lossCount} 只</span>
-              </div>
-              <div className="donut-stat-right color-loss">
-                {fmtSignedMoney(selectedDateDistribution.lossAmount)}
-              </div>
-            </div>
-
-            <div
-              className="donut-stat-item"
-              onClick={() => {
-                setActiveTab("stock");
-                setStockPnlFilter("flat");
-              }}
-            >
-              <div className="donut-stat-left">
-                <span className="donut-badge-dot" style={{ background: "#94A3B8" }} />
-                <span>持平股票 {selectedDateDistribution.flatCount} 只</span>
-              </div>
-              <div className="donut-stat-right" style={{ color: "#64748B" }}>
-                ${fmtMoney(selectedDateDistribution.flatAmount)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* 6. Right Side Detail Drawer */}
       {drawerOpen && (

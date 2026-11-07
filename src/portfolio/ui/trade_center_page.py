@@ -85,12 +85,6 @@ class TradeCenterPage(QWidget):
         super().__init__();self.host=host;self.jobs={};self.path=None;self.data=None;self.applied={};self.page=1;self.size=200;self.sort='trade_time';self.direction='desc';self.selected=None
         self.setObjectName('tradeCenter');self.setStyleSheet(STYLE)
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.setSpacing(12)
-        toolbar=QHBoxLayout();toolbar.addStretch()
-        for title,slot,primary in (('刷新',lambda:self.activate(True),False),('导出报表',self.export,True)):
-            button=QPushButton(title);button.clicked.connect(slot)
-            if primary:button.setObjectName('primary')
-            toolbar.addWidget(button)
-        layout.addLayout(toolbar)
         stats=QHBoxLayout();stats.setSpacing(12);self.cards=[]
         for i,(title,icon,accent) in enumerate((('匹配交易总数','≡','#2563EB'),('买入记录','↗','#16A34A'),('卖出记录','↘','#DC2626'),('手续费合计','◇','#64748B'),('待核查记录','◷','#64748B'))):
             card=StatCard(title,icon,accent);card.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed);card.clicked.connect(lambda _,index=i:self.quick(index));stats.addWidget(card,1);self.cards.append(card)
@@ -161,21 +155,25 @@ class TradeCenterPage(QWidget):
         w.signals.error.connect(lambda message:self.failed(name,message) if self.jobs.get(name) is w and not w.cancel.is_set() else None,Qt.ConnectionType.QueuedConnection)
         self.host.pool.start(w)
 
+    def set_status(self,text):
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+
     def failed(self,name,message):
         if name=='detail':self.detail_title.setText('详情读取失败：'+message)
-        else:self.status.setText('查询/导出失败：'+message)
+        else:self.set_status('查询/导出失败：'+message)
         self.previous_page.setEnabled(True);self.next_page.setEnabled(True)
 
     def cancel_queries(self):
         for worker in self.jobs.values():worker.cancel.set()
-        self.status.setText('查询已取消。可调整条件后重新查询。')
+        self.set_status('查询已取消。可调整条件后重新查询。')
         self.previous_page.setEnabled(True);self.next_page.setEnabled(True)
 
     def invalidate(self):
         self.cancel_queries();self.path=None;self.data=None;self.close_drawer();self.table.finance_model.replace(())
         for card,title in zip(self.cards,('匹配交易总数','买入记录','卖出记录','手续费合计','待核查记录')):card.setText(title+'\n—');card.setChecked(False)
         self.table_count.clear()
-        self.count.clear();self.note.clear();self.status.setText('正在连接新数据源；旧结果已清除。')
+        self.count.clear();self.note.clear();self.set_status('正在连接新数据源；旧结果已清除。')
 
     def activate(self,force=False):
         if self.host.info is None or self.host.service is None:return
@@ -206,8 +204,8 @@ class TradeCenterPage(QWidget):
     def fetch(self):
         if self.path is None:return
         try:scope=self.scope()
-        except ValueError as exc:self.status.setText(str(exc));return
-        service=TradeCenterService(self.path);params=self.params();self.status.setText('正在读取全部匹配统计与本页历史成本…');self.previous_page.setEnabled(False);self.next_page.setEnabled(False)
+        except ValueError as exc:self.set_status(str(exc));return
+        service=TradeCenterService(self.path);params=self.params();self.set_status('正在读取全部匹配统计与本页历史成本…');self.previous_page.setEnabled(False);self.next_page.setEnabled(False)
         self.submit('list',lambda cancel:service.page(scope,params,cancel=cancel),self.show_page)
 
     def show_page(self,data):
@@ -226,7 +224,7 @@ class TradeCenterPage(QWidget):
         w=self.fields['link_status']
         if w.count()==1:
             for value in ('LINKED','LEGACY_UNLINKED','REVIEW_REQUIRED','NOT_APPLICABLE'):w.addItem(value,value)
-        self.status.setText('只读数据源：'+data['source']);self.note.setText(data['note']);self.count.setText(f"共 {data['total']} 条 · 第 {self.page} / {data['total_pages']} 页");self.previous_page.setEnabled(self.page>1);self.next_page.setEnabled(self.page<data['total_pages'])
+        self.set_status('');self.note.setText(data['note']);self.count.setText(f"共 {data['total']} 条 · 第 {self.page} / {data['total_pages']} 页");self.previous_page.setEnabled(self.page>1);self.next_page.setEnabled(self.page<data['total_pages'])
         self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.frozen.horizontalHeader().setSortIndicatorShown(True)
         mapped=['trade_time' if k=='trade_date' else 'cost_diff' if k=='cost_change' else k for k in KEYS]
@@ -323,7 +321,7 @@ class TradeCenterPage(QWidget):
         if self.path is None:return
         path,_=QFileDialog.getSaveFileName(self,'导出全部匹配交易（不覆盖已有文件）','交易明细.csv','CSV (*.csv)')
         if not path:return
-        service=TradeCenterService(self.path);scope=self.scope();params=self.params();self.status.setText('正在分批导出全部匹配记录…')
+        service=TradeCenterService(self.path);scope=self.scope();params=self.params();self.set_status('正在分批导出全部匹配记录…')
         def task(cancel):
             created=False
             try:
@@ -338,4 +336,4 @@ class TradeCenterPage(QWidget):
                 if created:Path(path).unlink(missing_ok=True)
                 raise
             return path
-        self.submit('export',task,lambda p:self.status.setText('已导出全部匹配记录：'+p))
+        self.submit('export',task,lambda p:self.set_status('已导出全部匹配记录：'+p))

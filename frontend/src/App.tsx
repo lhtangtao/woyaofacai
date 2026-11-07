@@ -203,7 +203,7 @@ export const App: React.FC = () => {
   const getHeaderMeta = () => {
     if (currentRoute === "overview") return { title: "资产总览", subtitle: "全时期投资组合资产、净投入与全周期盈亏看板" };
     if (currentRoute === "holdings") return { title: "持仓管理", subtitle: "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选" };
-    if (currentRoute === "trades") return { title: "交易明细", subtitle: "查看每笔交易，追溯原始记录与人员归属" };
+    if (currentRoute === "trades") return { title: "交易明细", subtitle: "" };
     if (currentRoute.startsWith("reports:")) {
       const repName = currentRoute.replace("reports:", "");
       return { title: repName, subtitle: `专业量化分析报表 · ${repName}` };
@@ -250,6 +250,7 @@ export const App: React.FC = () => {
         <WorkspaceHeader
           title={headerMeta.title}
           subtitle={headerMeta.subtitle}
+          compactTradeHeader={currentRoute === "trades"}
           canGoBack={historyIndex > 0}
           canGoForward={historyIndex < history.length - 1}
           onGoBack={goBack}

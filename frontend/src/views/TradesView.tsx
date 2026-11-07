@@ -27,7 +27,7 @@ export function TradesView({persons,refreshKey=0}:{persons:any[];accounts?:any[]
   const remove=(key:string)=>{const next={...applied};if(key==='start_date'||key==='end_date')next[key]=tradeDefaults()[key];else delete next[key];setDraft(next);run(next)};
   const chipValue=(key:string,value:any)=>key==='person_id'?(data?.persons||persons).find((p:any)=>String(p.id)===String(value))?.name||String(value):key==='broker'?tradeBroker(value):({BUY:'买入',SELL:'卖出',TRANSFER_IN:'转入',TRANSFER_OUT:'转出',MARKET_TRADE:'市场交易',OWNER_TRANSFER:'人员划转',EXTERNAL_TRANSFER:'外部划转',BOOK_SETTLEMENT:'账务结算',true:'是'}[String(value)]||String(value));
   return <section className="tc-page">
-    <div className="tc-page-actions"><span>查询每笔交易，追踪持仓、成本变化与订单来源。</span><button className="btn" onClick={()=>setReload(n=>n+1)}>↻ 刷新</button><button className="btn tc-primary" disabled={loading||!data} onClick={()=>window.open(`/api/v1/trade-center/export?${tradeQuery(query)}`,'_blank')}>↓ 导出报表</button></div>
+    <div className="tc-page-actions"><button className="btn tc-primary" disabled={loading||!data} onClick={()=>window.open(`/api/v1/trade-center/export?${tradeQuery(query)}`,'_blank')}>↓ 导出报表</button></div>
     <div className="tc-stats">
       {[
         {title:'匹配交易总数',value:tradeCount(data?.stats?.matched),hint:'当前筛选 · 全部匹配记录',icon:'≡',tone:'blue',key:'',target:''},
@@ -64,6 +64,6 @@ export function TradesView({persons,refreshKey=0}:{persons:any[];accounts?:any[]
       </tbody></table></div>
       <footer><span>共 {tradeCount(data?.total??0)} 条 · 第 {data?.page??page} / {data?.total_pages??1} 页</span><div><select aria-label="每页条数" value={size} onChange={e=>{setSize(Number(e.target.value));setPage(1)}}>{[25,50,100,200,500,1000].map(n=><option key={n} value={n}>每页 {n} 条</option>)}</select><button className="btn" disabled={loading||page<=1} onClick={()=>setPage(p=>p-1)}>上一页</button><button className="btn" disabled={loading||page>=(data?.total_pages||1)} onClick={()=>setPage(p=>p+1)}>下一页</button></div></footer>
     </div>{selected!=null&&<TradeDrawer recordId={selected} query={query} onSelect={setSelected} onClose={()=>setSelected(null)}/>}</div>
-    <small className="tc-source">只读数据源：{data?.source||'等待连接'}<br/>{data?.note}</small>
+    <small className="tc-source">{data?.note}</small>
   </section>;
 }

@@ -15,6 +15,7 @@ import { PersonItem, UserProfile } from "../types";
 interface WorkspaceHeaderProps {
   title: string;
   subtitle?: string;
+  compactTradeHeader?: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   onGoBack: () => void;
@@ -35,6 +36,7 @@ interface WorkspaceHeaderProps {
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   title,
   subtitle,
+  compactTradeHeader = false,
   canGoBack,
   canGoForward,
   onGoBack,
@@ -74,7 +76,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <div style={{ display: "flex", gap: "2px" }}>
+          {!compactTradeHeader && <div style={{ display: "flex", gap: "2px" }}>
             <button
               onClick={onGoBack}
               disabled={!canGoBack}
@@ -103,7 +105,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             >
               <ArrowRight size={16} />
             </button>
-          </div>
+          </div>}
 
           <div>
             <h1
@@ -218,9 +220,11 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <Database size={13} color="var(--brand)" />
-          <span>源库: {dbName || "money.sqlite3"} · 只读保全</span>
-          <span style={{ color: "var(--text-subtle)" }}>|</span>
+          {!compactTradeHeader && <>
+            <Database size={13} color="var(--brand)" />
+            <span>源库: {dbName || "money.sqlite3"} · 只读保全</span>
+            <span style={{ color: "var(--text-subtle)" }}>|</span>
+          </>}
           <span>当前身份: {user?.person_name || user?.username || "访客"}</span>
           {isIsolatedUser && (
             <span

@@ -243,6 +243,13 @@ class InteractionMixin:
             self._history_index = len(self._history) - 1
         self._route = route
         self.pages.setCurrentIndex(page)
+        trade_page = page == 0 and hasattr(self, "trade_center")
+        self.description.setVisible(not trade_page)
+        self.source_toolbar.setVisible(not trade_page)
+        self.trade_refresh_button.setVisible(trade_page)
+        self.refresh_button.setText("重连数据源" if trade_page else "刷新")
+        self.refresh_button.setToolTip("重新打开当前数据库并检查结构 · ⌘R" if trade_page else "刷新当前数据源 · ⌘R")
+        self.heading.setToolTip(str(self.info.path) if trade_page and self.info else "")
         if self.fixed_asset_period() and self.start_enabled.isChecked():
             self._filter_batch = True
             self.start_enabled.setChecked(False)
@@ -282,9 +289,9 @@ class InteractionMixin:
             self.update_history_buttons();return
         if page == 0 and hasattr(self, "trade_center"):
             self.heading.setText("交易明细")
-            self.description.setText("查询每笔交易，追踪历史持仓、成本变化与订单来源；金额按币种列示。")
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
-            self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
+            self.side.hide();self.export_button.show();self.asset_reset_button.hide()
+            self.export_button.setToolTip("导出当前筛选的全部匹配交易")
             self.trade_center.activate();self.update_history_buttons();return
         if page == 23 and hasattr(self, "daily_performance_page"):
             self.heading.setText("每日持仓收益")

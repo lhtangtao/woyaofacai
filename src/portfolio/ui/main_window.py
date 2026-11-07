@@ -519,7 +519,7 @@ class MainWindow(InteractionMixin, QMainWindow):
     def refresh(self):
         if hasattr(self, "trade_center") and self.pages.currentIndex() == 0:
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
-            self.side.hide();self.export_button.hide()
+            self.side.hide();self.export_button.show()
             self.trade_center.activate(True);return
         if self.ownership_view():
             self.asset_page.ownership_page.activate(True);return
