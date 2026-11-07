@@ -2201,9 +2201,6 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, rows)
             self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
 
-            # 均称填充整张表格，无单独拉伸的大片空白
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
         elif current_tab == 1:
             # 🏛️ 按渠道明细（与按日期汇总展示相同结构的资金流动与收益指标）
             cols = ("日期", "券商渠道", "期初市值", "期末市值", "当日买入", "当日卖出", "当日净投入", "当日收益", "当日收益率", "累计收益", "上涨股票数", "下跌股票数")
@@ -2272,9 +2269,6 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, c_rows)
             self.table_count_lbl.setText(f"共 {len(c_rows)} 条记录")
 
-            # 均称填充整张表格
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
         else:
             # 📈 按股票明细
             cols = ("日期", "券商渠道", "Ticker", "分类", "持仓数量", "成本价", "收盘价", "当日收益", "当日收益率", "累计收益", "持仓盈亏率", "日末市值")
@@ -2324,9 +2318,7 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, s_rows)
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
 
-            # 12列均称填充整张表格，彻底消除右侧大片空白
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-
+        self.adjust_current_table_columns()
         self.update_pagination_ui()
 
     def change_page(self, delta: int):
@@ -2591,12 +2583,56 @@ class DailyPerformancePage(QWidget):
         self.drawer_overlay.hide()
         self.drawer_frame.hide()
 
+    def apply_proportional_column_widths(self, base_widths: List[int]):
+        """均称自适应分配表格列宽，按内容基准宽度平摊视口剩余空间，杜绝最后一列孤立拉长产生大片空白"""
+        if not hasattr(self, "table_view") or not self.table_view:
+            return
+        header = self.table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+
+        n = len(base_widths)
+        if n == 0 or self.table_model.columnCount() != n:
+            return
+
+        viewport_w = self.table_view.viewport().width()
+        if viewport_w <= 20:
+            viewport_w = self.table_view.width() - 4
+        if viewport_w <= 20:
+            viewport_w = 1260
+
+        base_sum = sum(base_widths)
+        extra = max(0, viewport_w - base_sum)
+        per_col = extra // n
+        rem = extra % n
+
+        for i, w in enumerate(base_widths):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+            extra_px = per_col + (1 if i < rem else 0)
+            self.table_view.setColumnWidth(i, w + extra_px)
+
+    def adjust_current_table_columns(self):
+        """根据当前 Tab 重新计算并应用平摊列宽"""
+        if not hasattr(self, "tab_bar"):
+            return
+        current_tab = self.tab_bar.currentIndex()
+        if current_tab == 0:
+            self.apply_proportional_column_widths([135, 115, 115, 105, 105, 110, 115, 95, 115, 90, 90])
+        elif current_tab == 1:
+            self.apply_proportional_column_widths([115, 100, 110, 110, 100, 100, 105, 110, 90, 110, 85, 85])
+        else:
+            self.apply_proportional_column_widths([115, 95, 85, 80, 85, 85, 85, 105, 90, 105, 90, 110])
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(50, self.adjust_current_table_columns)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.drawer_frame.isVisible():
             w = 440
             self.drawer_overlay.setGeometry(self.rect())
             self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
+        self.adjust_current_table_columns()
 
     def switch_trend_mode(self, mode: str):
         self.trend_tab_daily.setChecked(mode == "daily")

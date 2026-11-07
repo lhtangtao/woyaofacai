@@ -1669,17 +1669,17 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
               <table className="modern-table">
                 <thead>
                   <tr>
-                    <th>日期 (收盘)</th>
-                    <th className="col-right">期初市值</th>
-                    <th className="col-right">期末市值</th>
-                    <th className="col-right">当日买入</th>
-                    <th className="col-right">当日卖出</th>
-                    <th className="col-right">当日净投入</th>
-                    <th className="col-right">当日收益</th>
-                    <th className="col-right">当日收益率</th>
-                    <th className="col-right">累计收益</th>
-                    <th className="col-center">上涨股票数</th>
-                    <th className="col-center">下跌股票数</th>
+                    <th style={{ width: "11%" }}>日期 (收盘)</th>
+                    <th className="col-right" style={{ width: "9%" }}>期初市值</th>
+                    <th className="col-right" style={{ width: "9%" }}>期末市值</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>当日买入</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>当日卖出</th>
+                    <th className="col-right" style={{ width: "9%" }}>当日净投入</th>
+                    <th className="col-right" style={{ width: "9.5%" }}>当日收益</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>当日收益率</th>
+                    <th className="col-right" style={{ width: "9.5%" }}>累计收益</th>
+                    <th className="col-center" style={{ width: "8.5%" }}>上涨股票数</th>
+                    <th className="col-center" style={{ width: "9%" }}>下跌股票数</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1748,18 +1748,18 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
               <table className="modern-table">
                 <thead>
                   <tr>
-                    <th>日期</th>
-                    <th>券商渠道</th>
-                    <th className="col-right">期初市值</th>
-                    <th className="col-right">期末市值</th>
-                    <th className="col-right">当日买入</th>
-                    <th className="col-right">当日卖出</th>
-                    <th className="col-right">当日净投入</th>
-                    <th className="col-right">当日收益</th>
-                    <th className="col-right">当日收益率</th>
-                    <th className="col-right">累计收益</th>
-                    <th className="col-center">上涨股票数</th>
-                    <th className="col-center">下跌股票数</th>
+                    <th style={{ width: "10%" }}>日期</th>
+                    <th style={{ width: "8.5%" }}>券商渠道</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>期初市值</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>期末市值</th>
+                    <th className="col-right" style={{ width: "8%" }}>当日买入</th>
+                    <th className="col-right" style={{ width: "8%" }}>当日卖出</th>
+                    <th className="col-right" style={{ width: "8%" }}>当日净投入</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>当日收益</th>
+                    <th className="col-right" style={{ width: "8%" }}>当日收益率</th>
+                    <th className="col-right" style={{ width: "8.5%" }}>累计收益</th>
+                    <th className="col-center" style={{ width: "7.5%" }}>上涨股票数</th>
+                    <th className="col-center" style={{ width: "7.5%" }}>下跌股票数</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1829,18 +1829,18 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
               <table className="modern-table">
                 <thead>
                   <tr>
-                    <th>日期</th>
-                    <th>券商渠道</th>
-                    <th>Ticker</th>
-                    <th>股票分类</th>
-                    <th className="col-right">持仓数量</th>
-                    <th className="col-right">成本价</th>
-                    <th className="col-right">收盘价</th>
-                    <th className="col-right">当日收益</th>
-                    <th className="col-right">当日收益率</th>
-                    <th className="col-right">累计收益</th>
-                    <th className="col-right">持仓盈亏率</th>
-                    <th className="col-right">日末市值</th>
+                    <th style={{ width: "9.5%" }}>日期</th>
+                    <th style={{ width: "8.5%" }}>券商渠道</th>
+                    <th style={{ width: "7%" }}>Ticker</th>
+                    <th style={{ width: "7%" }}>股票分类</th>
+                    <th className="col-right" style={{ width: "8%" }}>持仓数量</th>
+                    <th className="col-right" style={{ width: "8%" }}>成本价</th>
+                    <th className="col-right" style={{ width: "8%" }}>收盘价</th>
+                    <th className="col-right" style={{ width: "9%" }}>当日收益</th>
+                    <th className="col-right" style={{ width: "8%" }}>当日收益率</th>
+                    <th className="col-right" style={{ width: "9%" }}>累计收益</th>
+                    <th className="col-right" style={{ width: "8%" }}>持仓盈亏率</th>
+                    <th className="col-right" style={{ width: "9%" }}>日末市值</th>
                   </tr>
                 </thead>
                 <tbody>
