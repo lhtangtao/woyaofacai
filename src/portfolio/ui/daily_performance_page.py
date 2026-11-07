@@ -225,45 +225,53 @@ class DailyTrendCanvas(QWidget):
             return
 
         if self.mode == "daily":
-            # 每日收益柱状图：采用自适应平衡非线性比例尺，让常态区间柱子饱满充实展开
+            # 每日收益柱状图：基于分位数基准（Quantile Benchmark）分层映射，彻底消除死白大面积空白
             pos_vals = [p[1] for p in self.data_points if p[1] > 0]
             neg_vals = [abs(p[1]) for p in self.data_points if p[1] < 0]
 
             max_pos = max(pos_vals) if pos_vals else 100.0
             max_neg = max(neg_vals) if neg_vals else 100.0
 
-            # 零轴自适应居中（48% 留给正收益，52% 留给负收益）
+            # 计算正负收益高位基准值（88% 分位数），让 88% 的常态交易日柱子充分舒展覆盖 72% 的半区高度
+            if pos_vals:
+                s_pos = sorted(pos_vals)
+                v_bench_pos = max(50.0, s_pos[int(len(s_pos) * 0.88)])
+            else:
+                v_bench_pos = 100.0
+
+            if neg_vals:
+                s_neg = sorted(neg_vals)
+                v_bench_neg = max(50.0, s_neg[int(len(s_neg) * 0.88)])
+            else:
+                v_bench_neg = 100.0
+
+            # 零轴自适应居中（正负各约 50% 高度）
             zero_y = margin_top + plot_h * 0.48
-            h_pos_max = max(10.0, zero_y - margin_top - 6.0)
-            h_neg_max = max(10.0, margin_top + plot_h - zero_y - 6.0)
+            h_pos_max = max(10.0, zero_y - margin_top - 4.0)
+            h_neg_max = max(10.0, margin_top + plot_h - zero_y - 4.0)
 
-            # 感知非线性缩放指数（解决单日极大极端值把其他几百天常态柱子压扁导致大片死白的问题）
-            power = 0.62
-
-            # 绘制参考虚线与背景刻度
+            # 绘制参考线与 Y 轴刻度标签
             painter.setFont(numeric_font(9))
+
+            # 正收益常态参考线（约 72% 高度处）
+            y_bench_pos = zero_y - h_pos_max * 0.72
             painter.setPen(QPen(QColor("#F1F5F9"), 1))
-
-            # 正收益上半段参考线 (约 50% 高度处)
-            y_mid_pos = zero_y - h_pos_max * 0.5
-            painter.drawLine(int(margin_left), int(y_mid_pos), int(w - margin_right), int(y_mid_pos))
-            val_mid_pos = max_pos * (0.5 ** (1.0 / power))
+            painter.drawLine(int(margin_left), int(y_bench_pos), int(w - margin_right), int(y_bench_pos))
             painter.setPen(QColor("#94A3B8"))
-            painter.drawText(QRectF(0, y_mid_pos - 8, margin_left - 6, 16),
+            painter.drawText(QRectF(0, y_bench_pos - 8, margin_left - 6, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"+${val_mid_pos:,.0f}")
+                             f"+${v_bench_pos:,.0f}")
 
-            # 负收益下半段参考线 (约 50% 高度处)
+            # 负收益常态参考线（约 72% 高度处）
+            y_bench_neg = zero_y + h_neg_max * 0.72
             painter.setPen(QPen(QColor("#F1F5F9"), 1))
-            y_mid_neg = zero_y + h_neg_max * 0.5
-            painter.drawLine(int(margin_left), int(y_mid_neg), int(w - margin_right), int(y_mid_neg))
-            val_mid_neg = max_neg * (0.5 ** (1.0 / power))
+            painter.drawLine(int(margin_left), int(y_bench_neg), int(w - margin_right), int(y_bench_neg))
             painter.setPen(QColor("#94A3B8"))
-            painter.drawText(QRectF(0, y_mid_neg - 8, margin_left - 6, 16),
+            painter.drawText(QRectF(0, y_bench_neg - 8, margin_left - 6, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"-${val_mid_neg:,.0f}")
+                             f"-${v_bench_neg:,.0f}")
 
-            # 零轴
+            # 零轴基准线
             painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.DashLine))
             painter.drawLine(int(margin_left), int(zero_y), int(w - margin_right), int(zero_y))
             painter.setPen(QColor("#64748B"))
@@ -271,22 +279,31 @@ class DailyTrendCanvas(QWidget):
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                              "$0")
 
-            # 绘制柱状图
+            # 绘制柱状图：常态充分展开，极值平滑收顶，消除大量空白
             step_x = plot_w / n
-            bar_w = max(1.8, min(14.0, step_x * 0.8))
+            bar_w = max(1.8, min(14.0, step_x * 0.85))
 
             for i, (dt, d_pnl, _) in enumerate(self.data_points):
                 cx = margin_left + (i + 0.5) * step_x
                 bx = cx - bar_w / 2.0
 
                 if d_pnl > 0:
-                    ratio = (d_pnl / max_pos) ** power
-                    bar_h = max(2.5, min(h_pos_max, ratio * h_pos_max))
+                    if d_pnl <= v_bench_pos:
+                        ratio = (d_pnl / v_bench_pos) * 0.72
+                    else:
+                        excess = (d_pnl - v_bench_pos) / max(1.0, max_pos - v_bench_pos)
+                        ratio = 0.72 + 0.28 * (excess ** 0.5)
+                    bar_h = max(3.0, min(h_pos_max, ratio * h_pos_max))
                     by = zero_y - bar_h
                     color = QColor("#10B981")
                 elif d_pnl < 0:
-                    ratio = (abs(d_pnl) / max_neg) ** power
-                    bar_h = max(2.5, min(h_neg_max, ratio * h_neg_max))
+                    abs_val = abs(d_pnl)
+                    if abs_val <= v_bench_neg:
+                        ratio = (abs_val / v_bench_neg) * 0.72
+                    else:
+                        excess = (abs_val - v_bench_neg) / max(1.0, max_neg - v_bench_neg)
+                        ratio = 0.72 + 0.28 * (excess ** 0.5)
+                    bar_h = max(3.0, min(h_neg_max, ratio * h_neg_max))
                     by = zero_y
                     color = QColor("#EF4444")
                 else:
@@ -818,7 +835,7 @@ class DailyPerformancePage(QWidget):
 
         # Trend Chart Card
         trend_card = QFrame()
-        trend_card.setFixedHeight(210)
+        trend_card.setFixedHeight(260)
         trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         trend_vbox = QVBoxLayout(trend_card)
         trend_vbox.setContentsMargins(12, 6, 12, 6)
@@ -852,10 +869,6 @@ class DailyPerformancePage(QWidget):
         trend_top.addWidget(self.trend_tab_daily)
         trend_top.addWidget(self.trend_tab_cum)
         trend_top.addStretch()
-
-        self.trend_legend_lbl = QLabel("● 正收益  ● 负收益")
-        self.trend_legend_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
-        trend_top.addWidget(self.trend_legend_lbl)
         trend_vbox.addLayout(trend_top)
 
         self.trend_canvas = DailyTrendCanvas(self)
@@ -865,7 +878,7 @@ class DailyPerformancePage(QWidget):
 
         # Broker Cumulative Overview Card
         broker_card = QFrame()
-        broker_card.setFixedHeight(210)
+        broker_card.setFixedHeight(260)
         broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         broker_vbox = QVBoxLayout(broker_card)
         broker_vbox.setContentsMargins(12, 6, 12, 6)
@@ -1042,32 +1055,32 @@ class DailyPerformancePage(QWidget):
 
         self.donut_p_btn = QPushButton("盈利股票 0 只   +$0.00")
         self.donut_l_btn = QPushButton("亏损股票 0 只   -$0.00")
-        self.donut_f_btn = QPushButton("持平股票 0 只    $0.00")
 
-        for btn in (self.donut_p_btn, self.donut_l_btn, self.donut_f_btn):
+        for btn in (self.donut_p_btn, self.donut_l_btn):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(34)
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #F8FAFC;
                     border: 1px solid #E2E8F0;
                     border-radius: 6px;
-                    padding: 6px 10px;
+                    padding: 4px 10px;
                     text-align: left;
                     font-size: 11.5px;
                     font-weight: 500;
+                    color: #1E293B;
                 }
                 QPushButton:hover {
                     background-color: #EFF6FF;
                     border-color: #BFDBFE;
+                    color: #1D4ED8;
                 }
             """)
         self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl("profit"))
         self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl("loss"))
-        self.donut_f_btn.clicked.connect(lambda: self.filter_stock_pnl("flat"))
 
         dist_vbox.addWidget(self.donut_p_btn)
         dist_vbox.addWidget(self.donut_l_btn)
-        dist_vbox.addWidget(self.donut_f_btn)
         dist_vbox.addStretch()
 
         # Date Navigation Buttons (与左侧分页组件底对齐)
@@ -1689,7 +1702,6 @@ class DailyPerformancePage(QWidget):
         self.donut_canvas.set_data(tot, p_amt, l_amt)
         self.donut_p_btn.setText(f"盈利股票 {p_cnt} 只    {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"亏损股票 {l_cnt} 只    {fmt_signed_money(l_amt)}")
-        self.donut_f_btn.setText(f"持平股票 {f_cnt} 只    ${fmt_money(f_amt)}")
         self.update_date_nav_buttons()
 
     def filter_stock_pnl(self, mode: str):
@@ -2054,10 +2066,6 @@ class DailyPerformancePage(QWidget):
         self.trend_tab_daily.setChecked(mode == "daily")
         self.trend_tab_cum.setChecked(mode == "cum")
         self.trend_canvas.set_mode(mode)
-        if mode == "daily":
-            self.trend_legend_lbl.setText("● 正收益  ● 负收益")
-        else:
-            self.trend_legend_lbl.setText("● 累计收益曲线")
 
     def export_csv(self):
         if not self.raw_rows:

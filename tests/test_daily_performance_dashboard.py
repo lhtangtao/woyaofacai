@@ -200,6 +200,12 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert page.selected_broker == ""
     assert page.broker_list_layout.count() == total_overview_brokers
 
-    # 16. Verify Trend Canvas height allocation
-    assert page.trend_canvas.parent().height() >= 185
+    # 16. Verify Trend Canvas height allocation & legend removal
+    trend_card_widget = page.trend_canvas.parent()
+    assert trend_card_widget.height() >= 250
+    assert not hasattr(page, "trend_legend_lbl")
+
+    # 17. Verify Flat stocks button removed from donut section
+    assert not hasattr(page, "donut_f_btn")
+    assert hasattr(page, "donut_p_btn") and hasattr(page, "donut_l_btn")
 
