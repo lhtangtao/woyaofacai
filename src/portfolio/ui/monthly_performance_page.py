@@ -659,58 +659,34 @@ class MonthlyPerformancePage(QWidget):
 
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(24, 20, 24, 24)
-        content_layout.setSpacing(14)
+        content_layout.setContentsMargins(14, 8, 14, 16)
+        content_layout.setSpacing(10)
 
-        # 1. Page Header
-        header_h = QHBoxLayout()
-        header_v = QVBoxLayout()
-        header_v.setSpacing(4)
-        title_lbl = QLabel("每月持仓收益")
-        title_lbl.setStyleSheet("font-size: 20px; font-weight: 700; color: #0F172A;")
-        header_v.addWidget(title_lbl)
-
-        desc_lbl = QLabel("查看历史每月的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
-        desc_lbl.setStyleSheet("font-size: 12px; color: #64748B;")
-        header_v.addWidget(desc_lbl)
-
-        db_hint = QLabel("已连接数据库 · 只读")
-        db_hint.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        header_v.addWidget(db_hint)
-        header_h.addLayout(header_v)
-        header_h.addStretch()
-
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-size: 12px;
-                color: #334155;
-            }
-            QPushButton:hover {
-                background-color: #F8FAFC;
-                border-color: #CBD5E1;
-            }
-        """)
-        refresh_btn.clicked.connect(self.recalculate_and_refresh)
-        header_h.addWidget(refresh_btn)
-        content_layout.addLayout(header_h)
-
-        # 2. Filter Bar
+        # 1. Single-row Compact Filter Toolbar (Aligning with DailyPerformancePage, no redundant header)
         filter_card = QFrame()
+        filter_card.setFixedHeight(48)
         filter_card.setStyleSheet("""
             QFrame {
                 background-color: #FFFFFF;
                 border: 1px solid #E2E8F0;
                 border-radius: 8px;
             }
+            QComboBox, QLineEdit, QDateEdit {
+                height: 28px;
+                border: 1px solid #CBD5E1;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+                color: #1E293B;
+                background: #FFFFFF;
+            }
+            QComboBox:focus, QLineEdit:focus, QDateEdit:focus {
+                border-color: #2563EB;
+            }
         """)
         filter_layout = QHBoxLayout(filter_card)
-        filter_layout.setContentsMargins(12, 10, 12, 10)
-        filter_layout.setSpacing(10)
+        filter_layout.setContentsMargins(10, 8, 10, 8)
+        filter_layout.setSpacing(8)
 
         # Person
         self.person_combo = QComboBox()
