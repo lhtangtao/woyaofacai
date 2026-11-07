@@ -880,8 +880,8 @@ class DailyPerformancePage(QWidget):
         main_layout.addLayout(kpi_grid)
 
         # 3. Middle Section: Trend Chart (Left) + Broker Cumulative Overview (Right)
-        mid_splitter = QSplitter(Qt.Orientation.Horizontal)
-        mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
+        self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         # Trend Chart Card
         trend_card = QFrame()
@@ -924,11 +924,12 @@ class DailyPerformancePage(QWidget):
         self.trend_canvas = DailyTrendCanvas(self)
         self.trend_canvas.date_clicked.connect(self.select_date)
         trend_vbox.addWidget(self.trend_canvas)
-        mid_splitter.addWidget(trend_card)
+        self.mid_splitter.addWidget(trend_card)
 
         # Broker Cumulative Overview Card
         broker_card = QFrame()
         broker_card.setFixedHeight(260)
+        broker_card.setMinimumWidth(360)
         broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         broker_vbox = QVBoxLayout(broker_card)
         broker_vbox.setContentsMargins(12, 6, 12, 6)
@@ -972,10 +973,10 @@ class DailyPerformancePage(QWidget):
         self.broker_scroll.setWidget(self.broker_list_widget)
         broker_vbox.addWidget(self.broker_scroll)
 
-        mid_splitter.addWidget(broker_card)
-        mid_splitter.setStretchFactor(0, 3)
-        mid_splitter.setStretchFactor(1, 2)
-        main_layout.addWidget(mid_splitter)
+        self.mid_splitter.addWidget(broker_card)
+        self.mid_splitter.setStretchFactor(0, 3)
+        self.mid_splitter.setStretchFactor(1, 2)
+        main_layout.addWidget(self.mid_splitter)
 
         # 4. Full-Width Daily Attribution Section (单日收益归因)
         self.attr_card = QFrame()
@@ -2628,10 +2629,18 @@ class DailyPerformancePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if hasattr(self, "mid_splitter") and self.mid_splitter:
+            w = self.mid_splitter.width()
+            if w > 100:
+                self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         QTimer.singleShot(50, self.adjust_current_table_columns)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "mid_splitter") and self.mid_splitter:
+            w = self.mid_splitter.width()
+            if w > 100:
+                self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         if self.drawer_frame.isVisible():
             w = 440
             self.drawer_overlay.setGeometry(self.rect())

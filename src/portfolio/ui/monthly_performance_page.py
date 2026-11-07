@@ -823,8 +823,8 @@ class MonthlyPerformancePage(QWidget):
         content_layout.addLayout(kpi_grid)
 
         # 4. Middle Section: Monthly Trend Chart (Left) + Broker Overview (Right)
-        mid_splitter = QSplitter(Qt.Orientation.Horizontal)
-        mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
+        self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         # Trend Chart Card
         trend_card = QFrame()
@@ -862,37 +862,36 @@ class MonthlyPerformancePage(QWidget):
         trend_top.addWidget(self.trend_tab_monthly)
         trend_top.addWidget(self.trend_tab_cum)
         trend_top.addStretch()
-
-        detail_link = QPushButton("查看详情 ›")
-        detail_link.setStyleSheet("border: none; color: #2563EB; font-size: 11.5px; font-weight: 500;")
-        detail_link.setCursor(Qt.CursorShape.PointingHandCursor)
-        detail_link.clicked.connect(lambda: self.tab_bar.setCurrentIndex(0))
-        trend_top.addWidget(detail_link)
         trend_vbox.addLayout(trend_top)
 
         self.trend_canvas = MonthlyTrendCanvas()
         self.trend_canvas.month_selected.connect(self.select_month)
         trend_vbox.addWidget(self.trend_canvas)
-        mid_splitter.addWidget(trend_card)
+        self.mid_splitter.addWidget(trend_card)
 
         # Broker Cumulative Overview Card
         broker_card = QFrame()
         broker_card.setFixedHeight(260)
+        broker_card.setMinimumWidth(360)
         broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         broker_vbox = QVBoxLayout(broker_card)
-        broker_vbox.setContentsMargins(12, 6, 12, 6)
-        broker_vbox.setSpacing(4)
+        broker_vbox.setContentsMargins(16, 12, 16, 12)
+        broker_vbox.setSpacing(8)
 
-        b_header = QHBoxLayout()
-        b_title = QLabel("渠道收益概览 <span style='font-size: 11px; color: #64748B;'>(期间累计)</span>")
-        b_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
-        b_detail_link = QLabel("<a href='#channel' style='color: #2563EB; text-decoration: none;'>查看详情 →</a>")
-        b_detail_link.setOpenExternalLinks(False)
-        b_detail_link.linkActivated.connect(lambda: self.tab_bar.setCurrentIndex(1))
-        b_header.addWidget(b_title)
-        b_header.addStretch()
-        b_header.addWidget(b_detail_link)
-        broker_vbox.addLayout(b_header)
+        broker_top = QHBoxLayout()
+        broker_title = QLabel("渠道收益概览 (期间累计)")
+        broker_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
+        broker_title.setStyleSheet("color: #0F172A; border: none; background: transparent;")
+        broker_top.addWidget(broker_title)
+        broker_top.addStretch()
+
+        detail_link = QLabel("查看详情 →")
+        detail_link.setFont(QFont(".AppleSystemUIFont", 11))
+        detail_link.setStyleSheet("color: #2563EB; border: none; background: transparent;")
+        detail_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        detail_link.mousePressEvent = lambda e: self.tab_bar.setCurrentIndex(1)
+        broker_top.addWidget(detail_link)
+        broker_vbox.addLayout(broker_top)
 
         # Broker column headers
         b_th = QHBoxLayout()
@@ -921,26 +920,40 @@ class MonthlyPerformancePage(QWidget):
         self.broker_scroll.setWidget(self.broker_list_widget)
         broker_vbox.addWidget(self.broker_scroll)
 
-        mid_splitter.addWidget(broker_card)
-        mid_splitter.setStretchFactor(0, 3)
-        mid_splitter.setStretchFactor(1, 2)
-        content_layout.addWidget(mid_splitter)
+        self.mid_splitter.addWidget(broker_card)
+        self.mid_splitter.setStretchFactor(0, 3)
+        self.mid_splitter.setStretchFactor(1, 2)
+        content_layout.addWidget(self.mid_splitter)
 
         # 5. Full-width Monthly Attribution Module
         self.attr_card = QFrame()
         self.attr_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         attr_card_v = QVBoxLayout(self.attr_card)
-        attr_card_v.setContentsMargins(16, 14, 16, 14)
-        attr_card_v.setSpacing(12)
+        attr_card_v.setContentsMargins(14, 10, 14, 10)
+        attr_card_v.setSpacing(8)
 
-        # Attribution Header with Month Navigation Buttons
+        # Attribution Header: Icon + Title + "点击联动" Badge + Subtitle + Stretch + Prev/Next Month Buttons
         attr_head = QHBoxLayout()
+        attr_head.setSpacing(8)
+
+        attr_icon_lbl = QLabel("📊")
+        attr_icon_lbl.setStyleSheet("font-size: 15px;")
+        attr_head.addWidget(attr_icon_lbl)
+
         self.attr_title_lbl = QLabel("单月收益归因 (—)")
-        self.attr_title_lbl.setStyleSheet("font-size: 13.5px; font-weight: 700; color: #0F172A;")
+        self.attr_title_lbl.setStyleSheet("font-size: 14px; font-weight: 700; color: #1E293B;")
         attr_head.addWidget(self.attr_title_lbl)
 
         linked_badge = QLabel("点击联动")
-        linked_badge.setStyleSheet("font-size: 10.5px; color: #2563EB; background-color: #EFF6FF; border: 1px solid #DBEAFE; border-radius: 4px; padding: 2px 6px;")
+        linked_badge.setStyleSheet("""
+            background-color: #EFF6FF;
+            color: #2563EB;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 4px;
+            border: 1px solid #BFDBFE;
+        """)
         attr_head.addWidget(linked_badge)
 
         attr_subtitle = QLabel("深度拆解单月收益构成：亏损/盈利贡献排行、盈亏结构与股票明细。")
@@ -950,187 +963,193 @@ class MonthlyPerformancePage(QWidget):
 
         # Month Navigation Buttons
         self.prev_month_btn = QPushButton("◀ 上一月")
-        self.prev_month_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F8FAFC;
-                color: #334155;
-                border: 1px solid #E2E8F0;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-size: 11px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #F1F5F9;
-                border-color: #CBD5E1;
-            }
-            QPushButton:disabled {
-                color: #CBD5E1;
-                border-color: #F1F5F9;
-                background-color: #FFFFFF;
-            }
-        """)
-        self.prev_month_btn.clicked.connect(self.select_prev_month)
-        attr_head.addWidget(self.prev_month_btn)
-
         self.next_month_btn = QPushButton("下一月 ▶")
-        self.next_month_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F8FAFC;
-                color: #334155;
-                border: 1px solid #E2E8F0;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-size: 11px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #F1F5F9;
-                border-color: #CBD5E1;
-            }
-            QPushButton:disabled {
-                color: #CBD5E1;
-                border-color: #F1F5F9;
-                background-color: #FFFFFF;
-            }
-        """)
+        for btn in (self.prev_month_btn, self.next_month_btn):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(28)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #F8FAFC;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 4px;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 10px;
+                }
+                QPushButton:hover:!disabled {
+                    background-color: #EFF6FF;
+                    border-color: #3B82F6;
+                    color: #2563EB;
+                }
+                QPushButton:disabled {
+                    background-color: #F1F5F9;
+                    border-color: #E2E8F0;
+                    color: #94A3B8;
+                }
+            """)
+        self.prev_month_btn.clicked.connect(self.select_prev_month)
         self.next_month_btn.clicked.connect(self.select_next_month)
+        attr_head.addWidget(self.prev_month_btn)
         attr_head.addWidget(self.next_month_btn)
-
         attr_card_v.addLayout(attr_head)
 
-        # Attribution 3 Columns
+        # Attribution 3 Columns: 1:1:1 Equal Proportion
         attr_cols = QHBoxLayout()
-        attr_cols.setSpacing(14)
+        attr_cols.setSpacing(10)
 
-        # 5.1 Left: Monthly PnL Structure
-        pnl_col = QFrame()
-        pnl_col.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
-        pnl_col_v = QVBoxLayout(pnl_col)
-        pnl_col_v.setContentsMargins(12, 10, 12, 10)
-        pnl_col_v.setSpacing(6)
+        # Column 1: 当月盈亏结构
+        col1_card = QFrame()
+        col1_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col1_vbox = QVBoxLayout(col1_card)
+        col1_vbox.setContentsMargins(10, 8, 10, 8)
+        col1_vbox.setSpacing(6)
 
-        pnl_title = QLabel("当月盈亏结构 ⓘ")
-        pnl_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #334155;")
-        pnl_col_v.addWidget(pnl_title)
+        c1_hdr = QLabel("当月盈亏结构 <span style='color:#94A3B8; font-size:11px;'>ⓘ</span>")
+        c1_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
+        col1_vbox.addWidget(c1_hdr)
 
-        donut_h = QHBoxLayout()
+        c1_body = QHBoxLayout()
+        c1_body.setContentsMargins(0, 0, 0, 0)
+        c1_body.setSpacing(8)
+
         self.donut_widget = MonthlyDistributionDonut()
-        donut_h.addWidget(self.donut_widget)
+        c1_body.addWidget(self.donut_widget)
 
         donut_btns_v = QVBoxLayout()
         donut_btns_v.setSpacing(6)
         donut_btns_v.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        self.donut_p_btn = QPushButton("● 盈利股票   — 只    —")
-        self.donut_p_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FFFFFF;
-                color: #10B981;
-                border: 1px solid #E2E8F0;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 11.5px;
-                font-weight: 600;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #F0FDF4;
-                border-color: #86EFAC;
-            }
-        """)
-        self.donut_p_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.donut_p_btn = QPushButton("● 盈利股票   0 只   +0.00")
+        self.donut_l_btn = QPushButton("● 亏损股票   0 只   -0.00")
+        self.donut_f_btn = QPushButton("● 持平股票   0 只    0.00")
+
+        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444"), (self.donut_f_btn, "#64748B")):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(30)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #FFFFFF;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 5px;
+                    padding: 3px 8px;
+                    text-align: left;
+                    font-size: 11.5px;
+                    font-weight: 500;
+                    color: #1E293B;
+                }}
+                QPushButton:hover {{
+                    background-color: #F1F5F9;
+                    border-color: #CBD5E1;
+                    color: {hover_color};
+                }}
+            """)
         self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl("profit"))
-        donut_btns_v.addWidget(self.donut_p_btn)
-
-        self.donut_l_btn = QPushButton("● 亏损股票   — 只    —")
-        self.donut_l_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FFFFFF;
-                color: #EF4444;
-                border: 1px solid #E2E8F0;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 11.5px;
-                font-weight: 600;
-                text-align: left;
-            }
-            QPushButton:hover {
-                background-color: #FEF2F2;
-                border-color: #FCA5A5;
-            }
-        """)
-        self.donut_l_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl("loss"))
+        self.donut_f_btn.clicked.connect(lambda: self.filter_stock_pnl("flat"))
+
+        donut_btns_v.addWidget(self.donut_p_btn)
         donut_btns_v.addWidget(self.donut_l_btn)
+        donut_btns_v.addWidget(self.donut_f_btn)
+        c1_body.addLayout(donut_btns_v)
+        col1_vbox.addLayout(c1_body)
+        attr_cols.addWidget(col1_card, 1)
 
-        donut_h.addLayout(donut_btns_v)
-        pnl_col_v.addLayout(donut_h)
-        attr_cols.addWidget(pnl_col, 3)
+        # Column 2: 亏损贡献排行 Top 5
+        col2_card = QFrame()
+        col2_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col2_vbox = QVBoxLayout(col2_card)
+        col2_vbox.setContentsMargins(10, 8, 10, 8)
+        col2_vbox.setSpacing(4)
 
-        # 5.2 Middle: Loss Contribution Top 5
-        self.loss_col = QFrame()
-        self.loss_col.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
-        loss_col_v = QVBoxLayout(self.loss_col)
-        loss_col_v.setContentsMargins(12, 10, 12, 10)
-        loss_col_v.setSpacing(6)
+        c2_hdr = QLabel("↓ 亏损贡献排行 Top 5")
+        c2_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #EF4444;")
+        col2_vbox.addWidget(c2_hdr)
 
-        loss_title = QLabel("↓ 亏损贡献排行 Top 5")
-        loss_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #EF4444;")
-        loss_col_v.addWidget(loss_title)
-
-        loss_header_row = QHBoxLayout()
-        loss_header_row.addWidget(QLabel("排名"), 1)
-        loss_header_row.addWidget(QLabel("股票(Ticker)"), 3)
-        loss_header_row.addWidget(QLabel("券商渠道"), 2)
-        loss_header_row.addWidget(QLabel("当月收益"), 3)
-        loss_header_row.addWidget(QLabel("贡献度"), 4)
-        for i in range(loss_header_row.count()):
-            w = loss_header_row.itemAt(i).widget()
-            if isinstance(w, QLabel):
-                w.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 500;")
-        loss_col_v.addLayout(loss_header_row)
+        c2_th = QHBoxLayout()
+        c2_th.setContentsMargins(4, 2, 4, 2)
+        th_rank = QLabel("排名")
+        th_rank.setFixedWidth(24)
+        th_rank.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_sym = QLabel("股票 (Ticker)")
+        th_sym.setFixedWidth(65)
+        th_sym.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_broker = QLabel("券商渠道")
+        th_broker.setFixedWidth(55)
+        th_broker.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_pnl = QLabel("当月收益")
+        th_pnl.setFixedWidth(70)
+        th_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th_pnl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th_bar = QLabel("贡献度")
+        th_bar.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; padding-left: 8px;")
+        c2_th.addWidget(th_rank)
+        c2_th.addWidget(th_sym)
+        c2_th.addWidget(th_broker)
+        c2_th.addWidget(th_pnl)
+        c2_th.addWidget(th_bar)
+        col2_vbox.addLayout(c2_th)
 
         self.loss_rows_v = QVBoxLayout()
-        self.loss_rows_v.setSpacing(4)
-        loss_col_v.addLayout(self.loss_rows_v)
-        loss_col_v.addStretch()
-        attr_cols.addWidget(self.loss_col, 4)
+        self.loss_rows_v.setSpacing(3)
+        col2_vbox.addLayout(self.loss_rows_v)
+        col2_vbox.addStretch()
+        attr_cols.addWidget(col2_card, 1)
 
-        # 5.3 Right: Profit Contribution Top 5
-        self.profit_col = QFrame()
-        self.profit_col.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
-        profit_col_v = QVBoxLayout(self.profit_col)
-        profit_col_v.setContentsMargins(12, 10, 12, 10)
-        profit_col_v.setSpacing(6)
+        # Column 3: 盈利贡献排行 Top 5
+        col3_card = QFrame()
+        col3_card.setStyleSheet("background-color: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px;")
+        col3_vbox = QVBoxLayout(col3_card)
+        col3_vbox.setContentsMargins(10, 8, 10, 8)
+        col3_vbox.setSpacing(4)
 
-        profit_title = QLabel("↑ 盈利贡献排行 Top 5")
-        profit_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #10B981;")
-        profit_col_v.addWidget(profit_title)
+        c3_hdr = QLabel("↑ 盈利贡献排行 Top 5")
+        c3_hdr.setStyleSheet("font-size: 13px; font-weight: 700; color: #10B981;")
+        col3_vbox.addWidget(c3_hdr)
 
-        profit_header_row = QHBoxLayout()
-        profit_header_row.addWidget(QLabel("排名"), 1)
-        profit_header_row.addWidget(QLabel("股票(Ticker)"), 3)
-        profit_header_row.addWidget(QLabel("券商渠道"), 2)
-        profit_header_row.addWidget(QLabel("当月收益"), 3)
-        profit_header_row.addWidget(QLabel("贡献度"), 4)
-        for i in range(profit_header_row.count()):
-            w = profit_header_row.itemAt(i).widget()
-            if isinstance(w, QLabel):
-                w.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 500;")
-        profit_col_v.addLayout(profit_header_row)
+        c3_th = QHBoxLayout()
+        c3_th.setContentsMargins(4, 2, 4, 2)
+        th3_rank = QLabel("排名")
+        th3_rank.setFixedWidth(24)
+        th3_rank.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_sym = QLabel("股票 (Ticker)")
+        th3_sym.setFixedWidth(65)
+        th3_sym.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_broker = QLabel("券商渠道")
+        th3_broker.setFixedWidth(55)
+        th3_broker.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_pnl = QLabel("当月收益")
+        th3_pnl.setFixedWidth(70)
+        th3_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th3_pnl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
+        th3_bar = QLabel("贡献度")
+        th3_bar.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; padding-left: 8px;")
+        c3_th.addWidget(th3_rank)
+        c3_th.addWidget(th3_sym)
+        c3_th.addWidget(th3_broker)
+        c3_th.addWidget(th3_pnl)
+        c3_th.addWidget(th3_bar)
+        col3_vbox.addLayout(c3_th)
 
         self.profit_rows_v = QVBoxLayout()
-        self.profit_rows_v.setSpacing(4)
-        profit_col_v.addLayout(self.profit_rows_v)
-        profit_col_v.addStretch()
-        attr_cols.addWidget(self.profit_col, 4)
+        self.profit_rows_v.setSpacing(3)
+        col3_vbox.addLayout(self.profit_rows_v)
+        col3_vbox.addStretch()
+        attr_cols.addWidget(col3_card, 1)
 
         attr_card_v.addLayout(attr_cols)
 
-        attr_bottom_hint = QLabel("ⓘ 点击走势图月份、渠道概览或股票排行可联动下方明细与右侧抽屉。")
-        attr_bottom_hint.setStyleSheet("font-size: 10.5px; color: #94A3B8;")
-        attr_card_v.addWidget(attr_bottom_hint)
+        # Footer Hint
+        hint_bar = QFrame()
+        hint_bar.setStyleSheet("background-color: #F8FAFC; border-radius: 4px; padding: 2px 8px;")
+        hb_layout = QHBoxLayout(hint_bar)
+        hb_layout.setContentsMargins(6, 3, 6, 3)
+        hint_lbl = QLabel("ⓘ 点击走势图月份、渠道概览或股票排行可联动下方明细与右侧抽屉。")
+        hint_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        hb_layout.addWidget(hint_lbl)
+        attr_card_v.addWidget(hint_bar)
+
+        content_layout.addWidget(self.attr_card)
 
         content_layout.addWidget(self.attr_card)
 
@@ -1417,10 +1436,18 @@ class MonthlyPerformancePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if hasattr(self, "mid_splitter") and self.mid_splitter:
+            w = self.mid_splitter.width()
+            if w > 100:
+                self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         QTimer.singleShot(50, self.adjust_current_table_columns)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "mid_splitter") and self.mid_splitter:
+            w = self.mid_splitter.width()
+            if w > 100:
+                self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         if self.drawer_frame.isVisible():
             w = 440
             self.drawer_overlay.setGeometry(self.rect())
@@ -1838,21 +1865,25 @@ class MonthlyPerformancePage(QWidget):
         m_rows = [r for r in rows if r[0] == target_m]
         p_cnt, p_amt = 0, 0.0
         l_cnt, l_amt = 0, 0.0
+        f_cnt, f_amt = 0, 0.0
         tot = 0.0
 
         for r in m_rows:
             pnl = float(r[20] or 0)  # MONTHLY_COLUMNS index 20
             tot += pnl
-            if pnl > 0:
+            if pnl > 0.001:
                 p_cnt += 1
                 p_amt += pnl
-            elif pnl < 0:
+            elif pnl < -0.001:
                 l_cnt += 1
                 l_amt += pnl
+            else:
+                f_cnt += 1
 
         self.donut_widget.set_data(p_amt, l_amt, tot)
-        self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只    {fmt_signed_money(p_amt)}")
-        self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只    {fmt_signed_money(l_amt)}")
+        self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只   {fmt_signed_money(p_amt)}")
+        self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只   {fmt_signed_money(l_amt)}")
+        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只    0.00")
 
         self.update_top5_rankings(m_rows, p_amt, l_amt)
         self.update_month_nav_buttons()
@@ -1895,6 +1926,7 @@ class MonthlyPerformancePage(QWidget):
                 self.select_month(all_months[cur_idx + 1])
 
     def update_top5_rankings(self, m_rows: List[Tuple], total_profit: float, total_loss: float):
+        target_m = self.selected_month or self.max_as_of_month
         # Clear loss rows
         while self.loss_rows_v.count():
             item = self.loss_rows_v.takeAt(0)
@@ -1915,127 +1947,181 @@ class MonthlyPerformancePage(QWidget):
         profit_candidates.sort(key=lambda r: float(r[20] or 0), reverse=True)  # Most positive first
         top_profit = profit_candidates[:5]
 
-        # Render Loss Top 5
+        # 1. 渲染亏损排行 Top 5 (100% 对齐每日页面)
         if not top_loss:
             empty_lbl = QLabel("当月无亏损标的")
-            empty_lbl.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 12px 0;")
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet("font-size: 12px; color: #94A3B8; padding: 24px 0;")
             self.loss_rows_v.addWidget(empty_lbl)
         else:
-            base_loss_tot = abs(total_loss) if abs(total_loss) > 0.001 else 1.0
-            for rank, r in enumerate(top_loss, 1):
-                sym, b, pnl = r[3], r[1], float(r[20] or 0)
-                contrib = (abs(pnl) / base_loss_tot) * 100.0
+            rank_bg_colors = ["#EF4444", "#F97316", "#FB923C", "#94A3B8", "#CBD5E1"]
+            total_loss_abs = abs(total_loss) if abs(total_loss) > 0.001 else 1.0
+            for idx, r in enumerate(top_loss):
+                rank = idx + 1
+                sym = r[3]
+                broker = fmt_broker_cn(r[1])
+                pnl = float(r[20] or 0)
+                contrib = (abs(pnl) / total_loss_abs) * 100.0
 
-                row_w = QWidget()
-                row_w.setCursor(Qt.CursorShape.PointingHandCursor)
-                row_w.setStyleSheet("QWidget:hover { background-color: #FEE2E2; border-radius: 4px; }")
-                h = QHBoxLayout(row_w)
-                h.setContentsMargins(2, 2, 2, 2)
-                h.setSpacing(4)
+                item_frame = QFrame()
+                item_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                item_frame.setStyleSheet("""
+                    QFrame {
+                        background: #FFFFFF;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 4px;
+                        padding: 1px 4px;
+                    }
+                    QFrame:hover {
+                        background: #FEF2F2;
+                        border-color: #FECACA;
+                    }
+                """)
+                i_lay = QHBoxLayout(item_frame)
+                i_lay.setContentsMargins(4, 2, 4, 2)
+                i_lay.setSpacing(6)
 
-                badge = QLabel(str(rank))
-                badge.setFixedSize(16, 16)
-                badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                badge.setStyleSheet("background-color: #F87171; color: white; border-radius: 8px; font-size: 9.5px; font-weight: bold;")
-                h.addWidget(badge, 1)
+                r_lbl = QLabel(str(rank))
+                r_lbl.setFixedSize(18, 18)
+                r_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                bg_col = rank_bg_colors[idx] if idx < len(rank_bg_colors) else "#E2E8F0"
+                txt_col = "#FFFFFF" if idx < 3 else "#475569"
+                r_lbl.setStyleSheet(f"background: {bg_col}; color: {txt_col}; border-radius: 9px; font-size: 10px; font-weight: 700;")
+                i_lay.addWidget(r_lbl)
 
                 sym_lbl = QLabel(sym)
+                sym_lbl.setFixedWidth(65)
                 sym_lbl.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #1E293B;")
-                h.addWidget(sym_lbl, 3)
+                i_lay.addWidget(sym_lbl)
 
-                b_lbl = QLabel(fmt_broker_cn(b))
+                b_lbl = QLabel(broker)
+                b_lbl.setFixedWidth(55)
                 b_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
-                h.addWidget(b_lbl, 2)
+                i_lay.addWidget(b_lbl)
 
                 pnl_lbl = QLabel(fmt_signed_money(pnl))
-                pnl_lbl.setFont(numeric_font(11, bold=True))
-                pnl_lbl.setStyleSheet("color: #EF4444;")
+                pnl_lbl.setFixedWidth(70)
                 pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                h.addWidget(pnl_lbl, 3)
+                pnl_lbl.setFont(numeric_font(11, bold=True))
+                pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #EF4444;")
+                i_lay.addWidget(pnl_lbl)
 
-                bar_w = QProgressBar()
-                bar_w.setFixedHeight(5)
-                bar_w.setTextVisible(False)
-                bar_w.setRange(0, 100)
-                bar_w.setValue(int(min(100, contrib)))
-                bar_w.setStyleSheet("""
-                    QProgressBar { background-color: #FEE2E2; border: none; border-radius: 2px; }
-                    QProgressBar::chunk { background-color: #EF4444; border-radius: 2px; }
+                bar = QProgressBar()
+                bar.setFixedHeight(7)
+                bar.setTextVisible(False)
+                bar.setRange(0, 1000)
+                bar.setValue(int(max(1, min(100, contrib)) * 10))
+                bar.setStyleSheet("""
+                    QProgressBar {
+                        background-color: #FEE2E2;
+                        border: none;
+                        border-radius: 3.5px;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #EF4444;
+                        border-radius: 3.5px;
+                    }
                 """)
-                h.addWidget(bar_w, 3)
+                i_lay.addWidget(bar, 1)
 
                 c_lbl = QLabel(f"{contrib:.1f}%")
-                c_lbl.setStyleSheet("font-size: 10px; color: #94A3B8;")
-                c_lbl.setFixedWidth(32)
+                c_lbl.setFixedWidth(40)
                 c_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                h.addWidget(c_lbl, 1)
+                c_lbl.setStyleSheet("font-size: 10.5px; color: #64748B;")
+                i_lay.addWidget(c_lbl)
 
-                def make_click(row_record):
-                    return lambda e: self.open_stock_drawer(row_record[3], row_record[0], row_record[1])
-                row_w.mousePressEvent = make_click(r)
-                self.loss_rows_v.addWidget(row_w)
+                def make_click_l(s=sym, m=target_m, brk=r[1]):
+                    return lambda e: self.open_stock_drawer(s, m, brk)
+                item_frame.mousePressEvent = make_click_l(sym, target_m, r[1])
+                self.loss_rows_v.addWidget(item_frame)
 
-        # Render Profit Top 5
+        # 2. 渲染盈利排行 Top 5 (100% 对齐每日页面)
         if not top_profit:
             empty_lbl = QLabel("当月无盈利标的")
-            empty_lbl.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 12px 0;")
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet("font-size: 12px; color: #94A3B8; padding: 24px 0;")
             self.profit_rows_v.addWidget(empty_lbl)
         else:
-            base_profit_tot = total_profit if total_profit > 0.001 else 1.0
-            for rank, r in enumerate(top_profit, 1):
-                sym, b, pnl = r[3], r[1], float(r[20] or 0)
-                contrib = (pnl / base_profit_tot) * 100.0
+            rank_bg_colors_p = ["#10B981", "#34D399", "#6EE7B7", "#94A3B8", "#CBD5E1"]
+            total_profit_val = total_profit if total_profit > 0.001 else 1.0
+            for idx, r in enumerate(top_profit):
+                rank = idx + 1
+                sym = r[3]
+                broker = fmt_broker_cn(r[1])
+                pnl = float(r[20] or 0)
+                contrib = (pnl / total_profit_val) * 100.0
 
-                row_w = QWidget()
-                row_w.setCursor(Qt.CursorShape.PointingHandCursor)
-                row_w.setStyleSheet("QWidget:hover { background-color: #DCFCE7; border-radius: 4px; }")
-                h = QHBoxLayout(row_w)
-                h.setContentsMargins(2, 2, 2, 2)
-                h.setSpacing(4)
+                item_frame = QFrame()
+                item_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                item_frame.setStyleSheet("""
+                    QFrame {
+                        background: #FFFFFF;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 4px;
+                        padding: 1px 4px;
+                    }
+                    QFrame:hover {
+                        background: #F0FDF4;
+                        border-color: #BBF7D0;
+                    }
+                """)
+                i_lay = QHBoxLayout(item_frame)
+                i_lay.setContentsMargins(4, 2, 4, 2)
+                i_lay.setSpacing(6)
 
-                badge = QLabel(str(rank))
-                badge.setFixedSize(16, 16)
-                badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                badge.setStyleSheet("background-color: #34D399; color: white; border-radius: 8px; font-size: 9.5px; font-weight: bold;")
-                h.addWidget(badge, 1)
+                r_lbl = QLabel(str(rank))
+                r_lbl.setFixedSize(18, 18)
+                r_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                bg_col = rank_bg_colors_p[idx] if idx < len(rank_bg_colors_p) else "#E2E8F0"
+                txt_col = "#FFFFFF" if idx < 3 else "#475569"
+                r_lbl.setStyleSheet(f"background: {bg_col}; color: {txt_col}; border-radius: 9px; font-size: 10px; font-weight: 700;")
+                i_lay.addWidget(r_lbl)
 
                 sym_lbl = QLabel(sym)
+                sym_lbl.setFixedWidth(65)
                 sym_lbl.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #1E293B;")
-                h.addWidget(sym_lbl, 3)
+                i_lay.addWidget(sym_lbl)
 
-                b_lbl = QLabel(fmt_broker_cn(b))
+                b_lbl = QLabel(broker)
+                b_lbl.setFixedWidth(55)
                 b_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
-                h.addWidget(b_lbl, 2)
+                i_lay.addWidget(b_lbl)
 
                 pnl_lbl = QLabel(fmt_signed_money(pnl))
-                pnl_lbl.setFont(numeric_font(11, bold=True))
-                pnl_lbl.setStyleSheet("color: #10B981;")
+                pnl_lbl.setFixedWidth(70)
                 pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                h.addWidget(pnl_lbl, 3)
+                pnl_lbl.setFont(numeric_font(11, bold=True))
+                pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #10B981;")
+                i_lay.addWidget(pnl_lbl)
 
-                bar_w = QProgressBar()
-                bar_w.setFixedHeight(5)
-                bar_w.setTextVisible(False)
-                bar_w.setRange(0, 100)
-                bar_w.setValue(int(min(100, contrib)))
-                bar_w.setStyleSheet("""
-                    QProgressBar { background-color: #DCFCE7; border: none; border-radius: 2px; }
-                    QProgressBar::chunk { background-color: #10B981; border-radius: 2px; }
+                bar = QProgressBar()
+                bar.setFixedHeight(7)
+                bar.setTextVisible(False)
+                bar.setRange(0, 1000)
+                bar.setValue(int(max(1, min(100, contrib)) * 10))
+                bar.setStyleSheet("""
+                    QProgressBar {
+                        background-color: #DCFCE7;
+                        border: none;
+                        border-radius: 3.5px;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #10B981;
+                        border-radius: 3.5px;
+                    }
                 """)
-                h.addWidget(bar_w, 3)
+                i_lay.addWidget(bar, 1)
 
                 c_lbl = QLabel(f"{contrib:.1f}%")
-                c_lbl.setStyleSheet("font-size: 10px; color: #94A3B8;")
-                c_lbl.setFixedWidth(32)
+                c_lbl.setFixedWidth(40)
                 c_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                h.addWidget(c_lbl, 1)
+                c_lbl.setStyleSheet("font-size: 10.5px; color: #64748B;")
+                i_lay.addWidget(c_lbl)
 
-                def make_click_p(row_record):
-                    return lambda e: self.open_stock_drawer(row_record[3], row_record[0], row_record[1])
-                row_w.mousePressEvent = make_click_p(r)
-                self.profit_rows_v.addWidget(row_w)
+                def make_click_p(s=sym, m=target_m, brk=r[1]):
+                    return lambda e: self.open_stock_drawer(s, m, brk)
+                item_frame.mousePressEvent = make_click_p(sym, target_m, r[1])
+                self.profit_rows_v.addWidget(item_frame)
 
     def filter_stock_pnl_by_month(self, mode: str):
         self.tab_bar.setCurrentIndex(2)
