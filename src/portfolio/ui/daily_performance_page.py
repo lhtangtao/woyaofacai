@@ -1283,6 +1283,7 @@ class DailyPerformancePage(QWidget):
         self.update_broker_overview(filtered)
 
         # Update Selected Date Distribution
+        self.current_filtered_rows = filtered
         self.update_date_distribution(filtered)
 
         # Update Active Table Tab
@@ -1606,8 +1607,16 @@ class DailyPerformancePage(QWidget):
                 self.open_stock_drawer(r_vals[2], r_vals[0])
 
     def open_date_drawer(self, target_date: str):
+        self.selected_date = target_date
+        rows = getattr(self, "current_filtered_rows", self.raw_rows)
+        self.update_date_distribution(rows)
+        self.trend_canvas.selected_date = target_date
+        self.trend_canvas.update()
+
         self.drawer_title.setText(f"单日收益详情 · {target_date}")
-        day_rows = [r for r in self.raw_rows if r[0] == target_date]
+        day_rows = [r for r in rows if r[0] == target_date]
+        if not day_rows:
+            day_rows = [r for r in self.raw_rows if r[0] == target_date]
         tot_pnl = sum(float(r[19] or 0) for r in day_rows)
 
         self.drawer_content_lbl.setText(
@@ -1664,7 +1673,14 @@ class DailyPerformancePage(QWidget):
 
         self.show_drawer()
 
-    def open_channel_drawer(self, channel: str, date_str: str):
+    def open_channel_drawer(self, channel: str, date_str: str = ""):
+        if date_str:
+            self.selected_date = date_str
+            rows = getattr(self, "current_filtered_rows", self.raw_rows)
+            self.update_date_distribution(rows)
+            self.trend_canvas.selected_date = date_str
+            self.trend_canvas.update()
+
         ch_cn = fmt_broker_cn(channel)
         self.drawer_title.setText(f"渠道收益详情 · {ch_cn}")
         c_rows = [r for r in self.raw_rows if r[1] == channel or fmt_broker_cn(r[1]) == ch_cn]
@@ -1677,7 +1693,14 @@ class DailyPerformancePage(QWidget):
         )
         self.show_drawer()
 
-    def open_stock_drawer(self, symbol: str, date_str: str):
+    def open_stock_drawer(self, symbol: str, date_str: str = ""):
+        if date_str:
+            self.selected_date = date_str
+            rows = getattr(self, "current_filtered_rows", self.raw_rows)
+            self.update_date_distribution(rows)
+            self.trend_canvas.selected_date = date_str
+            self.trend_canvas.update()
+
         self.drawer_title.setText(f"标的历史收益 · {symbol}")
         s_rows = [r for r in self.raw_rows if r[3] == symbol]
         tot_pnl = sum(float(r[19] or 0) for r in s_rows)

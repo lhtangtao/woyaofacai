@@ -104,3 +104,10 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     # 11. Verify sync_person_from_main
     page.sync_person_from_main(1)
     assert page.selected_person_id == 1
+
+    # 12. Verify open_date_drawer syncs right-bottom donut distribution and trend selection
+    page.open_date_drawer("2026-11-05")
+    assert page.selected_date == "2026-11-05"
+    assert "2026-11-05" in page.dist_title.text()
+    assert "2026-11-05" in page.drawer_title.text()
+    assert page.trend_canvas.selected_date == "2026-11-05"
