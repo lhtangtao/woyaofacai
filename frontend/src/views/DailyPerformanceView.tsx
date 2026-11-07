@@ -636,6 +636,20 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     };
   }, [selectedDateRows, selectedDate, dataAsOf]);
 
+  // 计算各标的随时间升序累积的累计收益
+  const stockCumMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const sorted = [...rawData].sort((a, b) => a.date.localeCompare(b.date));
+    const tracker = new Map<string, number>();
+    sorted.forEach((r) => {
+      const key = `${r.channel}__${r.symbol}`;
+      const nextCum = (tracker.get(key) || 0) + r.dailyProfit;
+      tracker.set(key, nextCum);
+      map.set(`${r.date}__${r.channel}__${r.symbol}`, nextCum);
+    });
+    return map;
+  }, [rawData]);
+
   // Tab 3 Stock list with filters
   const stockTableRows = useMemo(() => {
     let list = filteredRawData;
@@ -1823,44 +1837,67 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                     <th className="col-right">成本价</th>
                     <th className="col-right">收盘价</th>
                     <th className="col-right">当日收益</th>
-                    <th className="col-right">收益率</th>
+                    <th className="col-right">当日收益率</th>
+                    <th className="col-right">累计收益</th>
+                    <th className="col-right">持仓盈亏率</th>
                     <th className="col-right">日末市值</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stockTableRows
                     .slice((currentPage - 1) * pageSize, currentPage * pageSize)
-                    .map((s, idx) => (
-                      <tr
-                        key={`${s.date}-${s.channel}-${s.symbol}-${idx}`}
-                        className="clickable-row"
-                        onClick={() => openStockDetail(s.symbol, s.date)}
-                      >
-                        <td style={{ fontWeight: 600 }}>{s.date}</td>
-                        <td>{fmtBrokerCn(s.channel)}</td>
-                        <td style={{ fontWeight: 700, color: "#2563EB" }}>{s.symbol}</td>
-                        <td>{s.category}</td>
-                        <td className="col-right">{fmtMoney(s.endQty, 2)}</td>
-                        <td className="col-right">{fmtMoney(s.costPrice)}</td>
-                        <td className="col-right">{fmtMoney(s.closePrice)}</td>
-                        <td
-                          className={`col-right ${
-                            s.dailyProfit >= 0 ? "color-profit" : "color-loss"
-                          }`}
-                          style={{ fontWeight: 600 }}
+                    .map((s, idx) => {
+                      const cumPnl = stockCumMap.get(`${s.date}__${s.channel}__${s.symbol}`) ?? s.dailyProfit;
+                      const baseV = s.initValue > 0 ? s.initValue : s.buyAmount;
+                      const dailyRate = baseV > 0 ? s.dailyProfit / baseV : (s.profitRate || 0);
+
+                      return (
+                        <tr
+                          key={`${s.date}-${s.channel}-${s.symbol}-${idx}`}
+                          className="clickable-row"
+                          onClick={() => openStockDetail(s.symbol, s.date)}
                         >
-                          {fmtSignedMoney(s.dailyProfit)}
-                        </td>
-                        <td
-                          className={`col-right ${
-                            s.profitRate >= 0 ? "color-profit" : "color-loss"
-                          }`}
-                        >
-                          {fmtPercent(s.profitRate)}
-                        </td>
-                        <td className="col-right">{fmtMoney(s.marketValue)}</td>
-                      </tr>
-                    ))}
+                          <td style={{ fontWeight: 600 }}>{s.date}</td>
+                          <td>{fmtBrokerCn(s.channel)}</td>
+                          <td style={{ fontWeight: 700, color: "#2563EB" }}>{s.symbol}</td>
+                          <td>{s.category}</td>
+                          <td className="col-right">{fmtMoney(s.endQty, 2)}</td>
+                          <td className="col-right">{fmtMoney(s.costPrice)}</td>
+                          <td className="col-right">{fmtMoney(s.closePrice)}</td>
+                          <td
+                            className={`col-right ${
+                              s.dailyProfit >= 0 ? "color-profit" : "color-loss"
+                            }`}
+                            style={{ fontWeight: 600 }}
+                          >
+                            {fmtSignedMoney(s.dailyProfit)}
+                          </td>
+                          <td
+                            className={`col-right ${
+                              dailyRate >= 0 ? "color-profit" : "color-loss"
+                            }`}
+                          >
+                            {fmtPercent(dailyRate)}
+                          </td>
+                          <td
+                            className={`col-right ${
+                              cumPnl >= 0 ? "color-profit" : "color-loss"
+                            }`}
+                            style={{ fontWeight: 600 }}
+                          >
+                            {fmtSignedMoney(cumPnl)}
+                          </td>
+                          <td
+                            className={`col-right ${
+                              s.profitRate >= 0 ? "color-profit" : "color-loss"
+                            }`}
+                          >
+                            {fmtPercent(s.profitRate)}
+                          </td>
+                          <td className="col-right">{fmtMoney(s.marketValue)}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             )}

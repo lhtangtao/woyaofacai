@@ -2201,19 +2201,8 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, rows)
             self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
 
-            # Set proportional column widths
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 130)
-            self.table_view.setColumnWidth(1, 110)
-            self.table_view.setColumnWidth(2, 110)
-            self.table_view.setColumnWidth(3, 105)
-            self.table_view.setColumnWidth(4, 105)
-            self.table_view.setColumnWidth(5, 110)
-            self.table_view.setColumnWidth(6, 110)
-            self.table_view.setColumnWidth(7, 90)
-            self.table_view.setColumnWidth(8, 115)
-            self.table_view.setColumnWidth(9, 95)
-            header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
+            # 均称填充整张表格，无单独拉伸的大片空白
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         elif current_tab == 1:
             # 🏛️ 按渠道明细（与按日期汇总展示相同结构的资金流动与收益指标）
@@ -2283,23 +2272,22 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, c_rows)
             self.table_count_lbl.setText(f"共 {len(c_rows)} 条记录")
 
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 130)
-            self.table_view.setColumnWidth(1, 105)
-            self.table_view.setColumnWidth(2, 110)
-            self.table_view.setColumnWidth(3, 110)
-            self.table_view.setColumnWidth(4, 105)
-            self.table_view.setColumnWidth(5, 105)
-            self.table_view.setColumnWidth(6, 110)
-            self.table_view.setColumnWidth(7, 110)
-            self.table_view.setColumnWidth(8, 90)
-            self.table_view.setColumnWidth(9, 115)
-            self.table_view.setColumnWidth(10, 95)
-            header.setSectionResizeMode(11, QHeaderView.ResizeMode.Stretch)
+            # 均称填充整张表格
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         else:
             # 📈 按股票明细
-            cols = ("日期", "券商渠道", "Ticker", "分类", "持仓数量", "成本价", "收盘价", "当日收益", "收益率", "日末市值")
+            cols = ("日期", "券商渠道", "Ticker", "分类", "持仓数量", "成本价", "收盘价", "当日收益", "当日收益率", "累计收益", "持仓盈亏率", "日末市值")
+
+            # 按时间升序计算每只标的随日期的累计收益
+            stock_cum_map: Dict[Tuple[str, str, str], float] = {}
+            sorted_raw = sorted(self.raw_rows, key=lambda x: x[0])
+            cum_tracker: Dict[Tuple[str, str], float] = {}
+            for sr in sorted_raw:
+                k = (sr[1], sr[3])
+                cum_tracker[k] = cum_tracker.get(k, 0.0) + float(sr[19] or 0)
+                stock_cum_map[(sr[0], sr[1], sr[3])] = cum_tracker[k]
+
             s_rows = []
             for r in filtered_rows:
                 if self.stock_filter_date and r[0] != self.stock_filter_date:
@@ -2312,6 +2300,12 @@ class DailyPerformancePage(QWidget):
                 if self.stock_pnl_filter == "flat" and pnl != 0:
                     continue
 
+                init_v = float(r[15] or 0)
+                buy_v = float(r[16] or 0)
+                base_v = init_v if init_v > 0 else buy_v
+                daily_rate = (pnl / base_v) if base_v > 0 else (float(r[13] or 0) if r[13] else 0.0)
+                cum_pnl = stock_cum_map.get((r[0], r[1], r[3]), pnl)
+
                 s_rows.append([
                     r[0],
                     fmt_broker_cn(r[1]),
@@ -2321,6 +2315,8 @@ class DailyPerformancePage(QWidget):
                     fmt_money(r[9]),
                     fmt_money(r[10]),
                     fmt_signed_money(pnl),
+                    fmt_percent(daily_rate),
+                    fmt_signed_money(cum_pnl),
                     fmt_percent(r[13]),
                     fmt_money(r[11]),
                 ])
@@ -2328,25 +2324,8 @@ class DailyPerformancePage(QWidget):
             self.table_model.set_columns_and_rows(cols, s_rows)
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
 
-            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 130)
-            self.table_view.setColumnWidth(1, 105)
-            self.table_view.setColumnWidth(2, 90)
-            self.table_view.setColumnWidth(3, 95)
-            self.table_view.setColumnWidth(4, 95)
-            self.table_view.setColumnWidth(5, 95)
-            self.table_view.setColumnWidth(6, 95)
-            self.table_view.setColumnWidth(7, 115)
-            self.table_view.setColumnWidth(8, 95)
-            header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
-            self.table_view.setColumnWidth(2, 85)
-            self.table_view.setColumnWidth(3, 80)
-            self.table_view.setColumnWidth(4, 90)
-            self.table_view.setColumnWidth(5, 90)
-            self.table_view.setColumnWidth(6, 90)
-            self.table_view.setColumnWidth(7, 105)
-            self.table_view.setColumnWidth(8, 85)
-            header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
+            # 12列均称填充整张表格，彻底消除右侧大片空白
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         self.update_pagination_ui()
 
