@@ -56,11 +56,13 @@ interface DateSummary {
   date: string;
   initValue: number;
   marketValue: number;
+  buyAmount: number;
+  sellAmount: number;
+  netAmount: number;
   dailyProfit: number;
   profitRate: number;
   cumProfit: number;
   cumProfitRate: number;
-  topContributors: string;
 }
 
 interface ChannelSummary {
@@ -280,7 +282,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
         initVal: number;
         marketVal: number;
         profit: number;
-        stocks: Map<string, number>;
+        buyAmount: number;
+        sellAmount: number;
       }
     >();
 
@@ -290,14 +293,16 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           initVal: 0,
           marketVal: 0,
           profit: 0,
-          stocks: new Map<string, number>(),
+          buyAmount: 0,
+          sellAmount: 0,
         });
       }
       const item = dateMap.get(r.date)!;
-      item.initVal += r.initValue;
-      item.marketVal += r.marketValue;
-      item.profit += r.dailyProfit;
-      item.stocks.set(r.symbol, (item.stocks.get(r.symbol) || 0) + r.dailyProfit);
+      item.initVal += r.initValue || 0;
+      item.marketVal += r.marketValue || 0;
+      item.profit += r.dailyProfit || 0;
+      item.buyAmount += r.buyAmount || 0;
+      item.sellAmount += r.sellAmount || 0;
     });
 
     const dates = Array.from(dateMap.keys()).sort();
@@ -318,24 +323,21 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     return dates.map((d) => {
       const data = dateMap.get(d)!;
       runningCum += data.profit;
-      const profitRate = data.initVal > 0 ? data.profit / data.initVal : 0;
+      const profitRate = data.initVal > 0 ? data.profit / data.initVal : (data.buyAmount > 0 ? data.profit / data.buyAmount : 0);
       const cumProfitRate = initialBaseline > 0 ? runningCum / initialBaseline : 0;
-
-      // Top 3 contributors
-      const stockList = Array.from(data.stocks.entries()).sort(
-        (a, b) => Math.abs(b[1]) - Math.abs(a[1])
-      );
-      const top3 = stockList.slice(0, 3).map(([sym, p]) => `${sym} ${fmtSignedMoney(p, 2)}`);
+      const netAmount = data.buyAmount - data.sellAmount;
 
       return {
         date: d,
         initValue: data.initVal,
         marketValue: data.marketVal,
+        buyAmount: data.buyAmount,
+        sellAmount: data.sellAmount,
+        netAmount,
         dailyProfit: data.profit,
         profitRate,
         cumProfit: runningCum,
         cumProfitRate,
-        topContributors: top3.join(" | "),
       };
     });
   }, [rawData]);
@@ -435,16 +437,19 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     return list.sort((a, b) => b.cumProfit - a.cumProfit);
   }, [filteredRawData]);
 
-  // Aggregate by Channel & Date for Tab 2
+  // Aggregate by Channel & Date for Tab 2 (Mirrors Date Summary Structure)
   const channelDailyList = useMemo(() => {
     const map = new Map<
       string,
       {
         date: string;
         channel: string;
+        initValue: number;
+        marketValue: number;
+        buyAmount: number;
+        sellAmount: number;
+        netAmount: number;
         dailyProfit: number;
-        initVal: number;
-        stocks: Map<string, number>;
       }
     >();
 
@@ -454,37 +459,88 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
         map.set(key, {
           date: r.date,
           channel: r.channel,
+          initValue: 0,
+          marketValue: 0,
+          buyAmount: 0,
+          sellAmount: 0,
+          netAmount: 0,
           dailyProfit: 0,
-          initVal: 0,
-          stocks: new Map(),
         });
       }
       const item = map.get(key)!;
-      item.dailyProfit += r.dailyProfit;
-      item.initVal += r.initValue;
-      item.stocks.set(r.symbol, (item.stocks.get(r.symbol) || 0) + r.dailyProfit);
+      item.initValue += r.initValue || 0;
+      item.marketValue += r.marketValue || 0;
+      const bAmt = r.buyAmount || 0;
+      const sAmt = r.sellAmount || 0;
+      item.buyAmount += bAmt;
+      item.sellAmount += sAmt;
+      item.netAmount += (bAmt - sAmt);
+      item.dailyProfit += r.dailyProfit || 0;
     });
 
-    const list = Array.from(map.values()).map((item) => {
-      const rate = item.initVal > 0 ? item.dailyProfit / item.initVal : 0;
-      const top3 = Array.from(item.stocks.entries())
-        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-        .slice(0, 3)
-        .map(([sym, p]) => `${sym} ${fmtSignedMoney(p, 2)}`)
-        .join(" | ");
+    // Group entries per channel to calculate historical cumulative returns
+    const brokerMap = new Map<string, Array<{
+      date: string;
+      channel: string;
+      initValue: number;
+      marketValue: number;
+      buyAmount: number;
+      sellAmount: number;
+      netAmount: number;
+      dailyProfit: number;
+    }>>();
 
-      return {
-        date: item.date,
-        channel: item.channel,
-        dailyProfit: item.dailyProfit,
-        profitRate: rate,
-        topContributors: top3,
-      };
+    map.forEach((item) => {
+      if (!brokerMap.has(item.channel)) {
+        brokerMap.set(item.channel, []);
+      }
+      brokerMap.get(item.channel)!.push(item);
     });
 
-    return list.sort((a, b) => {
+    const resultList: Array<{
+      date: string;
+      channel: string;
+      initValue: number;
+      marketValue: number;
+      buyAmount: number;
+      sellAmount: number;
+      netAmount: number;
+      dailyProfit: number;
+      profitRate: number;
+      cumProfit: number;
+      cumProfitRate: number | null;
+    }> = [];
+
+    brokerMap.forEach((entries) => {
+      entries.sort((a, b) => a.date.localeCompare(b.date));
+      let brokerBaseline = 0;
+      for (const e of entries) {
+        if (e.initValue > 0) {
+          brokerBaseline = e.initValue;
+          break;
+        } else if (e.marketValue > 0) {
+          brokerBaseline = e.marketValue;
+          break;
+        }
+      }
+
+      let brokerCum = 0;
+      for (const e of entries) {
+        brokerCum += e.dailyProfit;
+        const rate = e.initValue > 0 ? e.dailyProfit / e.initValue : (e.buyAmount > 0 ? e.dailyProfit / e.buyAmount : 0);
+        const cumRate = brokerBaseline > 0 ? brokerCum / brokerBaseline : null;
+        resultList.push({
+          ...e,
+          profitRate: rate,
+          cumProfit: brokerCum,
+          cumProfitRate: cumRate,
+        });
+      }
+    });
+
+    return resultList.sort((a, b) => {
       if (b.date !== a.date) return b.date.localeCompare(a.date);
-      return b.dailyProfit - a.dailyProfit;
+      return a.channel.localeCompare(b.channel);
     });
   }, [filteredRawData]);
 
@@ -1338,11 +1394,13 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                     <th>日期 (收盘)</th>
                     <th className="col-right">期初市值</th>
                     <th className="col-right">期末市值</th>
+                    <th className="col-right">当日买入</th>
+                    <th className="col-right">当日卖出</th>
+                    <th className="col-right">当日净投入</th>
                     <th className="col-right">当日收益</th>
                     <th className="col-right">当日收益率</th>
                     <th className="col-right">累计收益</th>
                     <th className="col-right">累计收益率</th>
-                    <th>主要贡献股票</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1355,22 +1413,31 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         onClick={() => openDateDetail(d.date)}
                       >
                         <td style={{ fontWeight: 600 }}>{d.date}</td>
-                        <td className="col-right">${fmtMoney(d.initValue)}</td>
-                        <td className="col-right">${fmtMoney(d.marketValue)}</td>
+                        <td className="col-right">${fmtMoney(d.initValue, 2)}</td>
+                        <td className="col-right">${fmtMoney(d.marketValue, 2)}</td>
+                        <td className="col-right">${fmtMoney(d.buyAmount, 2)}</td>
+                        <td className="col-right">${fmtMoney(d.sellAmount, 2)}</td>
+                        <td
+                          className={`col-right ${
+                            d.netAmount > 0 ? "color-profit" : d.netAmount < 0 ? "color-loss" : ""
+                          }`}
+                        >
+                          {fmtSignedMoney(d.netAmount, 2)}
+                        </td>
                         <td
                           className={`col-right ${
                             d.dailyProfit >= 0 ? "color-profit" : "color-loss"
                           }`}
                           style={{ fontWeight: 600 }}
                         >
-                          {fmtSignedMoney(d.dailyProfit)}
+                          {fmtSignedMoney(d.dailyProfit, 2)}
                         </td>
                         <td
                           className={`col-right ${
                             d.profitRate >= 0 ? "color-profit" : "color-loss"
                           }`}
                         >
-                          {fmtPercent(d.profitRate)}
+                          {fmtPercent(d.profitRate, 2)}
                         </td>
                         <td
                           className={`col-right ${
@@ -1378,16 +1445,15 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                           }`}
                           style={{ fontWeight: 600 }}
                         >
-                          {fmtSignedMoney(d.cumProfit)}
+                          {fmtSignedMoney(d.cumProfit, 2)}
                         </td>
                         <td
                           className={`col-right ${
                             d.cumProfitRate >= 0 ? "color-profit" : "color-loss"
                           }`}
                         >
-                          {fmtPercent(d.cumProfitRate)}
+                          {fmtPercent(d.cumProfitRate, 2)}
                         </td>
-                        <td style={{ color: "#475569", fontSize: 12 }}>{d.topContributors || "—"}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -1400,9 +1466,15 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                   <tr>
                     <th>日期</th>
                     <th>券商渠道</th>
+                    <th className="col-right">期初市值</th>
+                    <th className="col-right">期末市值</th>
+                    <th className="col-right">当日买入</th>
+                    <th className="col-right">当日卖出</th>
+                    <th className="col-right">当日净投入</th>
                     <th className="col-right">当日收益</th>
                     <th className="col-right">当日收益率</th>
-                    <th>主要贡献股票</th>
+                    <th className="col-right">累计收益</th>
+                    <th className="col-right">累计收益率</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1416,22 +1488,47 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                       >
                         <td style={{ fontWeight: 600 }}>{cd.date}</td>
                         <td>{cd.channel}</td>
+                        <td className="col-right">${fmtMoney(cd.initValue, 2)}</td>
+                        <td className="col-right">${fmtMoney(cd.marketValue, 2)}</td>
+                        <td className="col-right">${fmtMoney(cd.buyAmount, 2)}</td>
+                        <td className="col-right">${fmtMoney(cd.sellAmount, 2)}</td>
+                        <td
+                          className={`col-right ${
+                            cd.netAmount > 0 ? "color-profit" : cd.netAmount < 0 ? "color-loss" : ""
+                          }`}
+                        >
+                          {fmtSignedMoney(cd.netAmount, 2)}
+                        </td>
                         <td
                           className={`col-right ${
                             cd.dailyProfit >= 0 ? "color-profit" : "color-loss"
                           }`}
                           style={{ fontWeight: 600 }}
                         >
-                          {fmtSignedMoney(cd.dailyProfit)}
+                          {fmtSignedMoney(cd.dailyProfit, 2)}
                         </td>
                         <td
                           className={`col-right ${
                             cd.profitRate >= 0 ? "color-profit" : "color-loss"
                           }`}
                         >
-                          {fmtPercent(cd.profitRate)}
+                          {fmtPercent(cd.profitRate, 2)}
                         </td>
-                        <td style={{ color: "#475569", fontSize: 12 }}>{cd.topContributors || "—"}</td>
+                        <td
+                          className={`col-right ${
+                            cd.cumProfit >= 0 ? "color-profit" : "color-loss"
+                          }`}
+                          style={{ fontWeight: 600 }}
+                        >
+                          {fmtSignedMoney(cd.cumProfit, 2)}
+                        </td>
+                        <td
+                          className={`col-right ${
+                            (cd.cumProfitRate ?? 0) >= 0 ? "color-profit" : "color-loss"
+                          }`}
+                        >
+                          {cd.cumProfitRate !== null ? fmtPercent(cd.cumProfitRate, 2) : "—"}
+                        </td>
                       </tr>
                     ))}
                 </tbody>
