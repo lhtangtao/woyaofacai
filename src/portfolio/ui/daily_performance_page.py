@@ -215,8 +215,8 @@ class DailyTrendCanvas(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无收益走势数据")
             return
 
-        margin_left, margin_right = 65, 20
-        margin_top, margin_bottom = 20, 24
+        margin_left, margin_right = 58, 16
+        margin_top, margin_bottom = 10, 20
         plot_w = w - margin_left - margin_right
         plot_h = h - margin_top - margin_bottom
 
@@ -225,71 +225,124 @@ class DailyTrendCanvas(QWidget):
             return
 
         if self.mode == "daily":
-            vals = [p[1] for p in self.data_points]
-        else:
-            vals = [p[2] for p in self.data_points]
+            # 每日收益柱状图：采用自适应平衡非线性比例尺，让常态区间柱子饱满充实展开
+            pos_vals = [p[1] for p in self.data_points if p[1] > 0]
+            neg_vals = [abs(p[1]) for p in self.data_points if p[1] < 0]
 
-        min_val, max_val = min(vals), max(vals)
-        if min_val > 0:
-            min_val = 0
-        if max_val < 0:
-            max_val = 0
-        val_range = max(1e-5, max_val - min_val)
+            max_pos = max(pos_vals) if pos_vals else 100.0
+            max_neg = max(neg_vals) if neg_vals else 100.0
 
-        zero_y = margin_top + plot_h * (max_val / val_range)
+            # 零轴自适应居中（48% 留给正收益，52% 留给负收益）
+            zero_y = margin_top + plot_h * 0.48
+            h_pos_max = max(10.0, zero_y - margin_top - 6.0)
+            h_neg_max = max(10.0, margin_top + plot_h - zero_y - 6.0)
 
-        # Draw Grid & Y-Axis labels
-        painter.setPen(QPen(QColor("#F1F5F9"), 1))
-        steps = 4
-        painter.setFont(numeric_font(9))
-        for i in range(steps + 1):
-            y = margin_top + plot_h * (i / steps)
-            painter.drawLine(int(margin_left), int(y), int(w - margin_right), int(y))
-            val_at_y = max_val - (i / steps) * val_range
-            painter.setPen(QColor("#94A3B8"))
-            painter.drawText(QRectF(0, y - 8, margin_left - 8, 16),
-                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"${val_at_y:,.0f}")
+            # 感知非线性缩放指数（解决单日极大极端值把其他几百天常态柱子压扁导致大片死白的问题）
+            power = 0.62
+
+            # 绘制参考虚线与背景刻度
+            painter.setFont(numeric_font(9))
             painter.setPen(QPen(QColor("#F1F5F9"), 1))
 
-        # Zero Line
-        painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.DashLine))
-        painter.drawLine(int(margin_left), int(zero_y), int(w - margin_right), int(zero_y))
+            # 正收益上半段参考线 (约 50% 高度处)
+            y_mid_pos = zero_y - h_pos_max * 0.5
+            painter.drawLine(int(margin_left), int(y_mid_pos), int(w - margin_right), int(y_mid_pos))
+            val_mid_pos = max_pos * (0.5 ** (1.0 / power))
+            painter.setPen(QColor("#94A3B8"))
+            painter.drawText(QRectF(0, y_mid_pos - 8, margin_left - 6, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             f"+${val_mid_pos:,.0f}")
 
-        # Draw Bars or Line
-        step_x = plot_w / n
-        if self.mode == "daily":
-            bar_w = max(1.5, min(14.0, step_x * 0.75))
+            # 负收益下半段参考线 (约 50% 高度处)
+            painter.setPen(QPen(QColor("#F1F5F9"), 1))
+            y_mid_neg = zero_y + h_neg_max * 0.5
+            painter.drawLine(int(margin_left), int(y_mid_neg), int(w - margin_right), int(y_mid_neg))
+            val_mid_neg = max_neg * (0.5 ** (1.0 / power))
+            painter.setPen(QColor("#94A3B8"))
+            painter.drawText(QRectF(0, y_mid_neg - 8, margin_left - 6, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             f"-${val_mid_neg:,.0f}")
+
+            # 零轴
+            painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.DashLine))
+            painter.drawLine(int(margin_left), int(zero_y), int(w - margin_right), int(zero_y))
+            painter.setPen(QColor("#64748B"))
+            painter.drawText(QRectF(0, zero_y - 8, margin_left - 6, 16),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                             "$0")
+
+            # 绘制柱状图
+            step_x = plot_w / n
+            bar_w = max(1.8, min(14.0, step_x * 0.8))
+
             for i, (dt, d_pnl, _) in enumerate(self.data_points):
                 cx = margin_left + (i + 0.5) * step_x
                 bx = cx - bar_w / 2.0
-                bar_h = abs(d_pnl) / val_range * plot_h
-                if d_pnl >= 0:
+
+                if d_pnl > 0:
+                    ratio = (d_pnl / max_pos) ** power
+                    bar_h = max(2.5, min(h_pos_max, ratio * h_pos_max))
                     by = zero_y - bar_h
                     color = QColor("#10B981")
-                else:
+                elif d_pnl < 0:
+                    ratio = (abs(d_pnl) / max_neg) ** power
+                    bar_h = max(2.5, min(h_neg_max, ratio * h_neg_max))
                     by = zero_y
                     color = QColor("#EF4444")
+                else:
+                    bar_h = 1.0
+                    by = zero_y - 0.5
+                    color = QColor("#CBD5E1")
 
-                rect = QRectF(bx, by, bar_w, max(1.0, bar_h))
+                rect = QRectF(bx, by, bar_w, bar_h)
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
                 self.hit_rects.append((hit_rect, dt))
 
                 if dt == self.selected_date:
-                    painter.fillRect(hit_rect, QColor(37, 99, 235, 25))
+                    painter.fillRect(hit_rect, QColor(37, 99, 235, 30))
                     painter.setPen(QPen(QColor("#2563EB"), 1.5))
                 else:
                     painter.setPen(Qt.PenStyle.NoPen)
 
                 painter.setBrush(color)
-                painter.drawRoundedRect(rect, 2, 2)
+                painter.drawRoundedRect(rect, 1.5, 1.5)
         else:
             # Cumulative Line Chart
+            vals = [p[2] for p in self.data_points]
+            min_val, max_val = min(vals), max(vals)
+            span = max(1e-5, max_val - min_val)
+            pad = span * 0.08
+            disp_min = min_val - pad
+            disp_max = max_val + pad
+            disp_range = disp_max - disp_min
+
+            # Y-Axis labels & Grid
+            painter.setPen(QPen(QColor("#F1F5F9"), 1))
+            steps = 4
+            painter.setFont(numeric_font(9))
+            for i in range(steps + 1):
+                y = margin_top + plot_h * (i / steps)
+                painter.drawLine(int(margin_left), int(y), int(w - margin_right), int(y))
+                val_at_y = disp_max - (i / steps) * disp_range
+                painter.setPen(QColor("#94A3B8"))
+                painter.drawText(QRectF(0, y - 8, margin_left - 6, 16),
+                                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                                 f"${val_at_y:,.0f}")
+                painter.setPen(QPen(QColor("#F1F5F9"), 1))
+
+            # Zero Line (if within range)
+            if disp_min <= 0 <= disp_max:
+                zero_y = margin_top + (disp_max / disp_range) * plot_h
+                painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.DashLine))
+                painter.drawLine(int(margin_left), int(zero_y), int(w - margin_right), int(zero_y))
+
+            # Cumulative Line Chart
+            step_x = plot_w / n
             path = QPainterPath()
             pts = []
             for i, (dt, _, c_pnl) in enumerate(self.data_points):
                 cx = margin_left + (i + 0.5) * step_x
-                cy = margin_top + (max_val - c_pnl) / val_range * plot_h
+                cy = margin_top + (disp_max - c_pnl) / disp_range * plot_h
                 pts.append((cx, cy, dt))
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
                 self.hit_rects.append((hit_rect, dt))
@@ -765,11 +818,11 @@ class DailyPerformancePage(QWidget):
 
         # Trend Chart Card
         trend_card = QFrame()
-        trend_card.setFixedHeight(185)
+        trend_card.setFixedHeight(210)
         trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         trend_vbox = QVBoxLayout(trend_card)
-        trend_vbox.setContentsMargins(12, 8, 12, 8)
-        trend_vbox.setSpacing(4)
+        trend_vbox.setContentsMargins(12, 6, 12, 6)
+        trend_vbox.setSpacing(2)
 
         trend_top = QHBoxLayout()
         self.trend_tab_daily = QPushButton("每日收益走势")
@@ -812,10 +865,10 @@ class DailyPerformancePage(QWidget):
 
         # Broker Cumulative Overview Card
         broker_card = QFrame()
-        broker_card.setFixedHeight(185)
+        broker_card.setFixedHeight(210)
         broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         broker_vbox = QVBoxLayout(broker_card)
-        broker_vbox.setContentsMargins(12, 8, 12, 8)
+        broker_vbox.setContentsMargins(12, 6, 12, 6)
         broker_vbox.setSpacing(4)
 
         b_header = QHBoxLayout()
@@ -1016,6 +1069,43 @@ class DailyPerformancePage(QWidget):
         dist_vbox.addWidget(self.donut_l_btn)
         dist_vbox.addWidget(self.donut_f_btn)
         dist_vbox.addStretch()
+
+        # Date Navigation Buttons (与左侧分页组件底对齐)
+        date_nav_h = QHBoxLayout()
+        date_nav_h.setContentsMargins(0, 0, 0, 0)
+        date_nav_h.setSpacing(8)
+
+        self.prev_date_btn = QPushButton("◀ 前一日")
+        self.next_date_btn = QPushButton("后一日 ▶")
+        for btn in (self.prev_date_btn, self.next_date_btn):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(28)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #F8FAFC;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 4px;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 10px;
+                }
+                QPushButton:hover:!disabled {
+                    background-color: #EFF6FF;
+                    border-color: #3B82F6;
+                    color: #2563EB;
+                }
+                QPushButton:disabled {
+                    background-color: #F1F5F9;
+                    border-color: #E2E8F0;
+                    color: #94A3B8;
+                }
+            """)
+        self.prev_date_btn.clicked.connect(lambda: self.navigate_date(-1))
+        self.next_date_btn.clicked.connect(lambda: self.navigate_date(1))
+        date_nav_h.addWidget(self.prev_date_btn)
+        date_nav_h.addWidget(self.next_date_btn)
+        dist_vbox.addLayout(date_nav_h)
 
         lower_splitter.addWidget(dist_card)
         lower_splitter.setStretchFactor(0, 3)
@@ -1272,10 +1362,9 @@ class DailyPerformancePage(QWidget):
 
     def recalculate_and_refresh(self):
         filtered: List[Tuple] = []
+        broker_overview_rows: List[Tuple] = []
         for r in self.raw_rows:
             d, b, cat, sym = r[0], r[1], r[2], r[3]
-            if self.selected_broker and b != self.selected_broker and fmt_broker_cn(b) != self.selected_broker:
-                continue
             if self.search_ticker and self.search_ticker not in sym:
                 continue
             if self.selected_category and cat != self.selected_category:
@@ -1283,6 +1372,14 @@ class DailyPerformancePage(QWidget):
             if self.start_date and d < self.start_date:
                 continue
             if self.end_date and d > self.end_date:
+                continue
+            broker_overview_rows.append(r)
+            if (
+                self.selected_broker
+                and b != self.selected_broker
+                and fmt_broker_cn(b) != self.selected_broker
+                and fmt_broker_cn(b) != fmt_broker_cn(self.selected_broker)
+            ):
                 continue
             filtered.append(r)
 
@@ -1425,8 +1522,8 @@ class DailyPerformancePage(QWidget):
         # Update Trend Canvas
         self.trend_canvas.set_data(trend_pts, self.selected_date)
 
-        # Update Channel Cumulative Overview
-        self.update_broker_overview(filtered)
+        # Update Channel Cumulative Overview (保留所有券商渠道以供全局对比，选中的渠道以蓝色高亮显式呈现)
+        self.update_broker_overview(broker_overview_rows)
 
         # Update Selected Date Distribution
         self.current_filtered_rows = filtered
@@ -1435,14 +1532,14 @@ class DailyPerformancePage(QWidget):
         # Update Active Table Tab
         self.refresh_table_view(filtered, date_summaries)
 
-    def update_broker_overview(self, filtered_rows: List[Tuple]):
+    def update_broker_overview(self, overview_rows: List[Tuple]):
         while self.broker_list_layout.count():
             item = self.broker_list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
         broker_pnl: Dict[str, float] = {}
-        for r in filtered_rows:
+        for r in overview_rows:
             b = r[1]
             broker_pnl[b] = broker_pnl.get(b, 0.0) + float(r[19] or 0)
 
@@ -1452,23 +1549,38 @@ class DailyPerformancePage(QWidget):
         for b, pnl in sorted_brokers:
             row_frame = QFrame()
             row_frame.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_frame.setStyleSheet("""
-                QFrame {
-                    background: #F8FAFC;
-                    border: 1px solid #F1F5F9;
-                    border-radius: 5px;
-                    padding: 2px 6px;
-                }
-                QFrame:hover {
-                    background: #EFF6FF;
-                    border-color: #BFDBFE;
-                }
-            """)
+
+            b_cn = fmt_broker_cn(b)
+            sel_cn = fmt_broker_cn(self.selected_broker) if self.selected_broker else ""
+            is_selected = bool(self.selected_broker and (b == self.selected_broker or b_cn == self.selected_broker or b_cn == sel_cn))
+
+            if is_selected:
+                row_frame.setStyleSheet("""
+                    QFrame {
+                        background: #EFF6FF;
+                        border: 1.5px solid #3B82F6;
+                        border-radius: 5px;
+                        padding: 2px 6px;
+                    }
+                """)
+            else:
+                row_frame.setStyleSheet("""
+                    QFrame {
+                        background: #F8FAFC;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 5px;
+                        padding: 2px 6px;
+                    }
+                    QFrame:hover {
+                        background: #EFF6FF;
+                        border-color: #BFDBFE;
+                    }
+                """)
             r_layout = QHBoxLayout(row_frame)
             r_layout.setContentsMargins(6, 3, 6, 3)
 
-            b_name = QLabel(fmt_broker_cn(b))
-            b_name.setStyleSheet("font-size: 12px; font-weight: 600; color: #1E293B;")
+            b_name = QLabel(b_cn)
+            b_name.setStyleSheet(f"font-size: 12px; font-weight: {'700' if is_selected else '600'}; color: {'#1D4ED8' if is_selected else '#1E293B'};")
             r_layout.addWidget(b_name)
             r_layout.addStretch()
 
@@ -1489,15 +1601,67 @@ class DailyPerformancePage(QWidget):
 
     def filter_by_broker(self, broker_name: str):
         target_cn = fmt_broker_cn(broker_name)
-        idx = 0
-        for i in range(self.broker_combo.count()):
-            if self.broker_combo.itemData(i) == broker_name or self.broker_combo.itemText(i) == target_cn:
-                idx = i
-                break
-        self.broker_combo.setCurrentIndex(idx)
-        self.selected_broker = self.broker_combo.itemData(idx) or ""
+        current_cn = fmt_broker_cn(self.selected_broker) if self.selected_broker else ""
+
+        # 如果当前已经选中该渠道，点击则取消筛选恢复全部；否则选中该渠道
+        if self.selected_broker and (self.selected_broker == broker_name or current_cn == target_cn):
+            self.selected_broker = ""
+            self.broker_combo.setCurrentIndex(0)
+        else:
+            self.selected_broker = broker_name
+            idx = 0
+            for i in range(self.broker_combo.count()):
+                if self.broker_combo.itemData(i) == broker_name or self.broker_combo.itemText(i) == target_cn:
+                    idx = i
+                    break
+            self.broker_combo.setCurrentIndex(idx)
+
+        # 留在本页面，且下方表格自动切换到「🏛️ 按渠道明细」Tab (Tab 1)
         self.tab_bar.setCurrentIndex(1)
         self.apply_filter()
+
+    def get_available_dates(self) -> List[str]:
+        rows = self.current_filtered_rows if self.current_filtered_rows else self.raw_rows
+        dates = sorted({r[0] for r in rows if r[0]})
+        if not dates and self.raw_rows:
+            dates = sorted({r[0] for r in self.raw_rows if r[0]})
+        return dates
+
+    def update_date_nav_buttons(self):
+        dates = self.get_available_dates()
+        if not dates or not hasattr(self, "prev_date_btn"):
+            return
+
+        target_d = self.selected_date or self.max_as_of_date or dates[-1]
+        try:
+            idx = dates.index(target_d)
+        except ValueError:
+            idx = len(dates) - 1
+
+        self.prev_date_btn.setEnabled(idx > 0)
+        self.next_date_btn.setEnabled(idx < len(dates) - 1)
+
+    def navigate_date(self, direction: int):
+        dates = self.get_available_dates()
+        if not dates:
+            return
+
+        target_d = self.selected_date or self.max_as_of_date or dates[-1]
+        try:
+            idx = dates.index(target_d)
+        except ValueError:
+            idx = len(dates) - 1
+
+        new_idx = idx + direction
+        if 0 <= new_idx < len(dates):
+            new_date = dates[new_idx]
+            self.selected_date = new_date
+            self.update_date_distribution(self.current_filtered_rows or self.raw_rows)
+            self.trend_canvas.selected_date = new_date
+            self.trend_canvas.update()
+            self.update_date_nav_buttons()
+            if getattr(self, "drawer_frame", None) and self.drawer_frame.isVisible():
+                self.open_date_drawer(new_date)
 
     def update_date_distribution(self, filtered_rows: List[Tuple]):
         target_d = self.selected_date or self.max_as_of_date
@@ -1526,6 +1690,7 @@ class DailyPerformancePage(QWidget):
         self.donut_p_btn.setText(f"盈利股票 {p_cnt} 只    {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"亏损股票 {l_cnt} 只    {fmt_signed_money(l_amt)}")
         self.donut_f_btn.setText(f"持平股票 {f_cnt} 只    ${fmt_money(f_amt)}")
+        self.update_date_nav_buttons()
 
     def filter_stock_pnl(self, mode: str):
         self.stock_pnl_filter = mode
@@ -1720,7 +1885,10 @@ class DailyPerformancePage(QWidget):
 
     def select_date(self, target_date: str):
         self.selected_date = target_date
-        self.update_date_distribution(self.raw_rows)
+        self.update_date_distribution(self.current_filtered_rows or self.raw_rows)
+        self.trend_canvas.selected_date = target_date
+        self.trend_canvas.update()
+        self.update_date_nav_buttons()
         self.open_date_drawer(target_date)
 
     def handle_kpi_clicked(self, key: str):

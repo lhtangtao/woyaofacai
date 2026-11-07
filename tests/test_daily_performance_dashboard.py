@@ -161,3 +161,45 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert page.table_model.sort_order == Qt.SortOrder.DescendingOrder
     pnl_first_desc = float(page.table_model.rows[0][6].replace("$", "").replace(",", "").replace("+", ""))
     assert pnl_first_desc >= pnl_first_asc
+
+    # 14. Verify Date Navigation Buttons (◀ 前一日 / 后一日 ▶)
+    assert hasattr(page, "prev_date_btn") and hasattr(page, "next_date_btn")
+    page.select_date("2026-11-06")
+    page.update_date_nav_buttons()
+    # At latest date: next button should be disabled, prev button enabled
+    assert not page.next_date_btn.isEnabled()
+    assert page.prev_date_btn.isEnabled()
+
+    # Click prev date -> navigate to 2026-11-05
+    page.prev_date_btn.click()
+    assert page.selected_date == "2026-11-05"
+    assert "2026-11-05" in page.dist_title.text()
+    assert page.trend_canvas.selected_date == "2026-11-05"
+    assert page.next_date_btn.isEnabled()
+
+    # Click next date -> navigate back to 2026-11-06
+    page.next_date_btn.click()
+    assert page.selected_date == "2026-11-06"
+    assert not page.next_date_btn.isEnabled()
+
+    # 15. Verify Broker Overview Retention & Tab 1 Switching
+    total_overview_brokers = page.broker_list_layout.count()
+    assert total_overview_brokers >= 3  # Multiple brokers: Longbridge, Schwab, Firstrade, BBAE...
+    
+    # Click Longbridge in broker overview
+    page.filter_by_broker("LONGBRIDGE")
+    assert page.tab_bar.currentIndex() == 1  # Switched to Tab 1 (按渠道明细)
+    assert page.selected_broker == "LONGBRIDGE"
+    # CRITICAL: Overview list must STILL contain all brokers, NOT collapsed to only Longbridge!
+    assert page.broker_list_layout.count() == total_overview_brokers
+    # All displayed rows in table Tab 1 belong to Longbridge
+    assert all("长桥" in str(r[1]) for r in page.table_model.all_rows)
+
+    # Click Longbridge again -> toggle off (back to all brokers)
+    page.filter_by_broker("LONGBRIDGE")
+    assert page.selected_broker == ""
+    assert page.broker_list_layout.count() == total_overview_brokers
+
+    # 16. Verify Trend Canvas height allocation
+    assert page.trend_canvas.parent().height() >= 185
+
