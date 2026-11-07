@@ -5,26 +5,32 @@ export const tradeLabels:Record<string,string>={person_id:'归属人员',broker:
 // Display only: retain exact API values for sorting, calculations and exports.
 export const tradeMoneyKeys=new Set(['current_price','price','amount','fees','post_cost','pre_cost','post_net','realized_pnl']);
 export const tradeMoneyLabels=new Set(['当前价','成交价','成交金额','手续费','成交前成本价','成交后成本价','成交后净投入','本笔已实现盈亏']);
-export function tradeMoney(value:any):string {
+export function tradeMoney(value:any,precision=2):string {
   if(value==null||value==='')return '—';
   const match=String(value).match(/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/);
   if(!match)return '—';
   const exponent=Number(match[4]||0),fraction=match[3]||'';
   if(!Number.isSafeInteger(exponent)||Math.abs(exponent)>100)return '—';
   let cents=BigInt(match[2]+fraction);
-  const scale=fraction.length-exponent-2;
+  const scale=fraction.length-exponent-precision;
   if(scale>0){const divisor=10n**BigInt(scale),rest=cents%divisor;cents/=divisor;if(rest*2n>=divisor)cents+=1n;}
   else cents*=10n**BigInt(-scale);
-  const digits=cents.toString().padStart(3,'0');
-  return (match[1]==='-'&&cents!==0n?'-':'')+digits.slice(0,-2).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+digits.slice(-2);
+  const digits=cents.toString().padStart(precision+1,'0');
+  return (match[1]==='-'&&cents!==0n?'-':'')+digits.slice(0,-precision).replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+digits.slice(-precision);
 }
 export function tradeCell(item:Record<string,any>,key:string):string {
   if(key==='trade_date')return tradeTimeDisplay(item.trade_date);
   if(key==='cost_change'&&['建仓','清仓'].includes(item.cost_change))return item.cost_change;
   if(key==='cost_change'&&item.cost_diff!=null){
-    const value=tradeMoney(item.cost_diff);
-    if(value==='0.00'||value==='—') return item.cost_change || '—';
-    return `${value.startsWith('-')?'降低':'提高'} ${value.replace(/^-/,'')}/股`;
+    const raw=String(item.cost_diff);
+    const sign=raw.startsWith('-') ? '-' : '+';
+    const magnitude=raw.replace(/^[+-]/,'');
+    let value=tradeMoney(magnitude);
+    if(value==='—') return item.cost_change || '—';
+    if(Number(magnitude)===0) return '不变';
+    if(value==='0.00') value=tradeMoney(magnitude,4);
+    value=value==='0.0000' ? magnitude : value.replace(/0+$/,'').replace(/\.$/,'');
+    return `${sign}${value}/股`;
   }
   return tradeMoneyKeys.has(key)?tradeMoney(item[key]):item[key]==null||item[key]===''?'—':String(item[key]);
 }
@@ -52,9 +58,8 @@ export const tradeOptionLabel = (value:string) => ({
 
 export function tradeTimeDisplay(value:string | null | undefined, explicitUtc?:string | null) {
   if (!value) return '—';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value + '（账务日期）';
   if (!explicitUtc && /^\d{4}-\d{2}-\d{2}[ T]00:00(?::00(?:\.0+)?)?$/.test(value)) {
-    return value.slice(0,10) + (explicitUtc === undefined ? '（账务日期 · 核对时刻）' : '（仅账务日期）');
+    return value.slice(0,10);
   }
   return value;
 }

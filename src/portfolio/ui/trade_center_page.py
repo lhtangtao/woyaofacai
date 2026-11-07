@@ -23,6 +23,7 @@ PRESETS={
     '完整字段': KEYS,
 }
 NUMERIC_KEYS=MONEY_KEYS | {'quantity','post_quantity','cost_change'}
+DAILY_CENTER_KEYS={'symbol','side','current_price'}
 OPTION_LABELS={
     **SIDES, **KINDS, 'LINKED':'已关联','LEGACY_UNLINKED':'历史未关联','REVIEW_REQUIRED':'待核查',
     'NOT_APPLICABLE':'不适用','EXCEL':'Excel 导入','CSV':'CSV 导入','API':'接口同步','MANUAL':'手工录入',
@@ -31,21 +32,19 @@ OPTION_LABELS={
 MONEY_LABELS={'当前价','成交价','成交金额','手续费','成交前成本价','成交后成本价','成交后净投入','本笔已实现盈亏'}
 
 
-def money_text(value):
+def money_text(value, precision=2):
     if value in (None,''):return '—'
     with localcontext() as context:
         context.prec=100
-        text=format(Decimal(str(value)).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP),',.2f')
+        text=format(Decimal(str(value)).quantize(Decimal(1).scaleb(-precision),rounding=ROUND_HALF_UP),f',.{precision}f')
     return '0.00' if text=='-0.00' else text
 
 
 def time_text(value, *, precise=None):
     if not value:
         return '—'
-    if re.fullmatch(r'\d{4}-\d{2}-\d{2}',value):
-        return value+'（账务日期）'
     if not precise and re.fullmatch(r'\d{4}-\d{2}-\d{2}[ T]00:00(?::00(?:\.0+)?)?',value):
-        return value[:10]+('（账务日期 · 核对时刻）' if precise is None else '（仅账务日期）')
+        return value[:10]
     return value
 
 
@@ -62,8 +61,12 @@ def cell_text(row,key):
         delta=row['cost_diff']
         if not delta:
             return '不变'
-        value=money_text(delta.copy_abs())
-        return row['cost_change'] if value=='0.00' else ('降低 ' if delta<0 else '提高 ')+value+'/股'
+        magnitude=delta.copy_abs()
+        value=money_text(magnitude)
+        if value=='0.00':
+            value=money_text(magnitude,precision=4)
+        value=exact_text(magnitude) if value=='0.0000' else value.rstrip('0').rstrip('.')
+        return ('-' if delta<0 else '+')+value+'/股'
     value=row.get(key)
     return money_text(value) if key in MONEY_KEYS else '—' if value in ('',None) else exact_text(value)
 
@@ -81,14 +84,28 @@ class CenterModel(FinanceModel):
             return '每股成本变化'
         return COLUMNS[index]
 
+    def alignment(self,key):
+        if self.preset=='日常查看' and key in DAILY_CENTER_KEYS:
+            return Qt.AlignmentFlag.AlignCenter
+        horizontal=Qt.AlignmentFlag.AlignRight if key in NUMERIC_KEYS else Qt.AlignmentFlag.AlignLeft
+        return Qt.AlignmentFlag.AlignVCenter | horizontal
+
     def headerData(self,section,orientation,role=Qt.ItemDataRole.DisplayRole):
-        if role==Qt.ItemDataRole.DisplayRole:return self.column_title(section) if orientation==Qt.Orientation.Horizontal else str(section+1)
+        if orientation==Qt.Orientation.Horizontal:
+            if role==Qt.ItemDataRole.DisplayRole:
+                return self.column_title(section)
+            if role==Qt.ItemDataRole.TextAlignmentRole:
+                return int(self.alignment(KEYS[section]))
+        elif role==Qt.ItemDataRole.DisplayRole:
+            return str(section+1)
     def data(self,index,role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():return None
         row=self.rows[index.row()];key=KEYS[index.column()];value=row.get(key)
         if role==Qt.ItemDataRole.DisplayRole:
             return cell_text(row,key)
         if role==Qt.ItemDataRole.ToolTipRole:
+            if key=='trade_date' and len(time_text(value))==10:
+                return '账务日期；实际成交时刻请查看交易详情。'
             if key=='current_price':
                 return quote_text(row)
             if key=='fees' and value is None:
@@ -106,8 +123,7 @@ class CenterModel(FinanceModel):
             theme=tokens(self.parent())
             return QColor(theme.profit if row['cost_diff']<0 else theme.loss)
         if role==Qt.ItemDataRole.TextAlignmentRole:
-            alignment=Qt.AlignmentFlag.AlignRight if key in NUMERIC_KEYS else Qt.AlignmentFlag.AlignLeft
-            return int(Qt.AlignmentFlag.AlignVCenter | alignment)
+            return int(self.alignment(key))
 
 
 class CenterTable(FinanceTable):
@@ -126,10 +142,17 @@ class CenterTable(FinanceTable):
             self.frozen.viewport().update()
 
     def fit_columns(self):
-        widths={'trade_date':190,'broker':84,'person_name':76,'symbol':72,'category':76,
-                'side':72,'counterparty':80,'micro_tag':96,'current_price':82,'price':82,
-                'quantity':82,'amount':116,'fees':72,'post_quantity':94,'post_cost':108,
-                'post_net':116,'cost_change':142,'action':56}
+        widths={'trade_date':156,'broker':82,'person_name':72,'symbol':64,'category':72,
+                'side':76,'micro_tag':180,'current_price':72,'price':72,'quantity':76,
+                'amount':98,'fees':68,'post_quantity':86,'post_cost':96,'post_net':106,
+                'cost_change':108}
+        micro_column=KEYS.index('micro_tag')
+        if not self.isColumnHidden(micro_column):
+            metrics=self.fontMetrics()
+            longest=max((metrics.horizontalAdvance(row.get('micro_tag') or '') for row in self.finance_model.rows),default=0)
+            widths['micro_tag']=max(widths['micro_tag'],min(280,longest+28))
+        if self.finance_model.preset=='成本分析':
+            widths['cost_change']=120
         visible=[(i,widths.get(key,90)) for i,key in enumerate(KEYS) if not self.isColumnHidden(i)]
         extra=max(0,self.viewport().width()-sum(width for _,width in visible))
         for position,(column,width) in enumerate(visible):
@@ -190,16 +213,34 @@ class TradeCenterPage(QWidget):
         self.fields['search'].setPlaceholderText('搜索订单号、交易 ID、来源')
         self.local_search=self.fields['search']
         self.start=QDateEdit(QDate(2025,1,1));self.end=QDateEdit(QDate.currentDate())
-        for w in (self.start,self.end):w.setCalendarPopup(True);w.setDisplayFormat('yyyy-MM-dd');w.setMinimumWidth(112)
-        dates=QWidget();date_layout=QHBoxLayout(dates);date_layout.setContentsMargins(0,0,0,0);date_layout.setSpacing(5);date_layout.addWidget(self.start);date_layout.addWidget(QLabel('至'));date_layout.addWidget(self.end)
-        top=QHBoxLayout();top.setSpacing(12)
-        for label,widget,stretch in (('归属人员',self.person,2),('券商渠道',self.fields['broker'],1),('Ticker',self.fields['symbol'],1),('日期范围 · 账务日期',dates,3),('关键词',self.fields['search'],3)):
+        for widget in (self.start,self.end):
+            widget.setCalendarPopup(True)
+            widget.setDisplayFormat('yyyy-MM-dd')
+            widget.setFixedWidth(136)
+        dates=QWidget()
+        dates.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Preferred)
+        date_layout=QHBoxLayout(dates)
+        date_layout.setContentsMargins(0,0,0,0)
+        date_layout.setSpacing(6)
+        date_layout.addWidget(self.start)
+        date_layout.addWidget(QLabel('至'))
+        date_layout.addWidget(self.end)
+        top=QHBoxLayout()
+        top.setSpacing(12)
+        for label,widget,stretch in (('归属人员',self.person,2),('券商渠道',self.fields['broker'],1),('Ticker',self.fields['symbol'],1),('日期范围 · 账务日期',dates,0),('关键词',self.fields['search'],3)):
             top.addWidget(field(label,widget),stretch)
         form_layout.addLayout(top)
-        secondary=QHBoxLayout();secondary.setSpacing(12)
-        secondary.addStretch(1)
+
+        secondary=QHBoxLayout()
+        secondary.setSpacing(10)
+        self.chips=QWidget()
+        self.chip_layout=FlowLayout(self.chips)
+        secondary.addWidget(self.chips,1,Qt.AlignmentFlag.AlignVCenter)
         for title,slot,name in (('查询',self.query,'primary'),('重置',self.reset,''),('高级筛选 ▾',self.toggle_advanced,'textButton')):
-            button=QPushButton(title);button.setObjectName(name);button.clicked.connect(slot);secondary.addWidget(button,0,Qt.AlignmentFlag.AlignBottom)
+            button=QPushButton(title)
+            button.setObjectName(name)
+            button.clicked.connect(slot)
+            secondary.addWidget(button,0,Qt.AlignmentFlag.AlignVCenter)
         self.advanced_button=button
         form_layout.addLayout(secondary)
         layout.addLayout(stats);layout.addWidget(form)
@@ -224,7 +265,6 @@ class TradeCenterPage(QWidget):
             advanced.addWidget(widget,3,index+2)
         self.advanced.hide()
         form_layout.addWidget(self.advanced)
-        self.chips=QWidget();self.chip_layout=FlowLayout(self.chips);self.chip_layout.setContentsMargins(0,0,0,0);form_layout.addWidget(self.chips)
         self.status=QLabel('等待连接数据库');self.status.setWordWrap(True);layout.addWidget(self.status)
         table_surface=QFrame();table_surface.setObjectName('surface');table_layout=QVBoxLayout(table_surface);table_layout.setContentsMargins(0,0,0,0);table_layout.setSpacing(0);layout.addWidget(table_surface,1)
         table_head=QHBoxLayout()
@@ -567,7 +607,10 @@ class TradeCenterPage(QWidget):
             header.moveSection(header.visualIndex(column),position)
             table.setColumnHidden(column,key not in shown)
         table.frozen.setVisible('trade_date' in shown)
-        table.finance_model.headerDataChanged.emit(Qt.Orientation.Horizontal,0,len(KEYS)-1)
+        model=table.finance_model
+        model.headerDataChanged.emit(Qt.Orientation.Horizontal,0,len(KEYS)-1)
+        if model.rowCount():
+            model.dataChanged.emit(model.index(0,0),model.index(model.rowCount()-1,len(KEYS)-1),[Qt.ItemDataRole.TextAlignmentRole])
         table.fit_columns()
         self.update_sort_indicator()
 

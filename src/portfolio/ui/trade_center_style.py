@@ -292,7 +292,8 @@ class TradeCellDelegate(QStyledItemDelegate):
         if key=='side':
             fill,color=side_tone(index.model().rows[index.row()])
             width=min(opt.rect.width()-10,opt.fontMetrics.horizontalAdvance(text)+16)
-            rect=QRectF(opt.rect.x()+8,opt.rect.center().y()-11,width,22)
+            x=opt.rect.x()+(opt.rect.width()-width)/2 if opt.displayAlignment & Qt.AlignmentFlag.AlignHCenter else opt.rect.x()+8
+            rect=QRectF(x,opt.rect.center().y()-11,width,22)
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(Qt.PenStyle.NoPen)

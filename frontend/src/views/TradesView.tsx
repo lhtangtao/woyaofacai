@@ -147,10 +147,18 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
           <div className="tc-date-range"><span>交易日期 · 账务日期</span><div>{input('start_date','date')}<span>至</span>{input('end_date','date')}</div></div>
           {input('search')}
         </div>
-        <div className="tc-actions">
-          <button className="btn tc-primary" type="submit">查询</button>
-          <button className="btn" type="button" onClick={() => applyAndSync(tradeDefaults())}>重置</button>
-          <button className="btn tc-text-button" type="button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>高级筛选 {advanced ? '▴' : '▾'}</button>
+        <div className="tc-filter-toolbar">
+          <div className="tc-chips">
+            <span>已选条件</span>
+            <button className="tc-chip" type="button" title="恢复默认日期范围" onClick={() => applyAndSync({...applied,...tradeDefaults()})}>日期 {applied.start_date || '不限'} 至 {applied.end_date || '不限'} ×</button>
+            {Object.entries(applied).filter(([key,value]) => !['start_date','end_date'].includes(key) && value !== '' && value != null && value !== false)
+              .map(([key,value]) => <button className="tc-chip" type="button" key={key} onClick={() => remove(key)}>{tradeLabels[key] || key} {chipValue(key,value)} ×</button>)}
+          </div>
+          <div className="tc-actions">
+            <button className="btn tc-primary" type="submit">查询</button>
+            <button className="btn" type="button" onClick={() => applyAndSync(tradeDefaults())}>重置</button>
+            <button className="btn tc-text-button" type="button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>高级筛选 {advanced ? '▴' : '▾'}</button>
+          </div>
         </div>
         {advanced && <div className="tc-advanced">
           {select('side',['BUY','SELL','TRANSFER_IN','TRANSFER_OUT'],'全部方向')}
@@ -162,12 +170,6 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
           {select('link_status',['LINKED','LEGACY_UNLINKED','REVIEW_REQUIRED','NOT_APPLICABLE'],'全部关联状态')}
           {['review_only','affects_only'].map(key => <label className="tc-check" key={key}><input type="checkbox" checked={!!draft[key]} onChange={e => set(key,e.target.checked)}/>{tradeLabels[key]}</label>)}
         </div>}
-        <div className="tc-chips">
-          <span>已选条件</span>
-          <button className="tc-chip" type="button" title="恢复默认日期范围" onClick={() => applyAndSync({...applied,...tradeDefaults()})}>日期 {applied.start_date || '不限'} 至 {applied.end_date || '不限'} ×</button>
-          {Object.entries(applied).filter(([key,value]) => !['start_date','end_date'].includes(key) && value !== '' && value != null && value !== false)
-            .map(([key,value]) => <button className="tc-chip" type="button" key={key} onClick={() => remove(key)}>{tradeLabels[key] || key} {chipValue(key,value)} ×</button>)}
-        </div>
       </form>
       {error && <p role="alert" className="tc-error">查询失败 · {error} <button className="btn" onClick={() => setReload(n => n+1)}>重试</button></p>}
       <div className="tc-list" aria-busy={loading}>
@@ -186,7 +188,7 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
             </div>
           </details>
         </div>
-        <div className="tc-table-scroll" ref={tableScroll}><table>
+        <div className="tc-table-scroll" data-preset={preset} ref={tableScroll}><table>
           <thead><tr>{visible.map(key => {
             const sorted = sort.sort_col === tradeSortKey(key);
             return <th key={key} data-column={key} className={tradeNumericKeys.has(key) ? 'numeric' : ''}
@@ -199,7 +201,7 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
             {data?.items?.map((item:any) => <tr key={item.record_id} tabIndex={0} aria-selected={selected === item.record_id} className={selected === item.record_id ? 'selected' : ''}
               onClick={() => openRow(item.record_id)} onKeyDown={event => rowKey(event,item.record_id)}>
               {visible.map(key => <td key={key} data-column={key} className={key === 'cost_change' ? `numeric tc-cost ${tradeTone(item.cost_diff)}` : tradeNumericKeys.has(key) ? 'numeric' : ''}
-                title={key === 'current_price' ? tradeQuoteInfo(item) : key === 'fees' && item.fees == null ? '手续费尚未核实' : ['post_quantity','post_cost','cost_change'].includes(key) ? item.cost_note : tradeCell(item,key)}>
+                title={key === 'trade_date' && tradeCell(item,key).length === 10 ? '账务日期；实际成交时刻请查看交易详情。' : key === 'current_price' ? tradeQuoteInfo(item) : key === 'fees' && item.fees == null ? '手续费尚未核实' : ['post_quantity','post_cost','cost_change'].includes(key) ? item.cost_note : tradeCell(item,key)}>
                 {key === 'side' ? <span className={`tc-side ${tradeSideTone(item.side_code,item.kind_code)}`}>{item.side}</span> : tradeCell(item,key)}
               </td>)}
             </tr>)}

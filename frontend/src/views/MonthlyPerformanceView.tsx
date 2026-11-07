@@ -1120,36 +1120,40 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               return (
                 <div
                   key={b.channel}
-                  className={`broker-row ${isSelected ? "selected" : ""}`}
+                  className={`channel-row ${isSelected ? "channel-row-selected" : ""}`}
+                  style={{ cursor: "pointer" }}
                   onClick={() => {
+                    if (isSelected) {
+                      setFilterBroker("");
+                      setAppliedFilters((f) => ({ ...f, broker: "" }));
+                    } else {
+                      setFilterBroker(b.channel);
+                      setAppliedFilters((f) => ({ ...f, broker: b.channel }));
+                    }
                     setActiveTab("channel");
-                    setFilterBroker(b.channel);
-                    setAppliedFilters((prev) => ({ ...prev, broker: b.channel }));
                   }}
                 >
-                  <span className="broker-name">{fmtBrokerCn(b.channel)}</span>
-                  <div className="broker-progress-wrap">
-                    <div
-                      className={`broker-progress-bar ${
-                        isSelected
-                          ? "bar-selected"
-                          : b.cumProfit >= 0
-                          ? "bar-profit"
-                          : "bar-loss"
-                      }`}
-                      style={{ width: `${Math.min(100, b.contributionRatio)}%` }}
-                    />
+                  <div className="channel-info">
+                    <span className="channel-name">{fmtBrokerCn(b.channel)}</span>
                   </div>
-                  <span className="broker-ratio">
-                    {b.contributionRatio.toFixed(1)}%
-                  </span>
-                  <span
-                    className={`broker-pnl ${
+                  <div className="channel-bar-wrap">
+                    <div className="channel-bar-bg">
+                      <div
+                        className="channel-bar-fill"
+                        style={{ width: `${Math.min(100, Math.max(1, Math.round(b.contributionRatio)))}%` }}
+                      />
+                    </div>
+                    <span className="channel-bar-text">
+                      {b.contributionRatio.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div
+                    className={`channel-profit ${
                       b.cumProfit >= 0 ? "color-profit" : "color-loss"
                     }`}
                   >
                     {fmtSignedMoney(b.cumProfit)}
-                  </span>
+                  </div>
                 </div>
               );
             })}
@@ -1512,12 +1516,12 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                   <th style={{ width: "7%" }}>Ticker</th>
                   <th style={{ width: "7%" }}>股票分类</th>
                   <th className="col-right" style={{ width: "8%" }}>持仓数量</th>
-                  <th className="col-right" style={{ width: "8%" }}>成本价</th>
+                  <th className="col-right" style={{ width: "8%" }}>成本均价</th>
                   <th className="col-right" style={{ width: "8%" }}>收盘价</th>
                   <th className="col-right" style={{ width: "9%" }}>本月收益</th>
                   <th className="col-right" style={{ width: "8%" }}>本月收益率</th>
                   <th className="col-right" style={{ width: "9%" }}>累计收益</th>
-                  <th className="col-right" style={{ width: "8%" }}>持仓盈亏率</th>
+                  <th className="col-right" style={{ width: "8%" }}>收益率</th>
                   <th className="col-right" style={{ width: "9%" }}>月末市值</th>
                 </tr>
               </thead>
@@ -1874,7 +1878,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                               display: "flex",
                               justifyContent: "space-between",
                               fontSize: 12,
+                              cursor: "pointer",
                             }}
+                            title="点击查看该月详情"
+                            onClick={() => openMonthDetail(cd.month)}
                           >
                             <span style={{ color: "#475569" }}>{cd.month}</span>
                             <span
@@ -1952,7 +1959,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                                     justifyContent: "space-between",
                                     alignItems: "center",
                                     fontSize: 12,
+                                    cursor: "pointer",
                                   }}
+                                  title="点击查看该月详情"
+                                  onClick={() => openMonthDetail(r.month)}
                                 >
                                   <div>
                                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

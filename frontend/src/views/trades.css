@@ -63,19 +63,20 @@ button.tc-stat:not(:disabled):hover, .tc-stat.active { border-color: #93B4F5; ba
 .tc-stat.green .tc-stat-icon { background: #ECFDF3; color: #15803D; }
 .tc-stat.red .tc-stat-icon { background: #FFF1F2; color: #DC2626; }
 .tc-filters { padding: 12px 14px 10px; }
-.tc-filter-main { display: grid; grid-template-columns: minmax(125px,1.1fr) minmax(90px,.8fr) minmax(90px,.8fr) minmax(252px,1.6fr) minmax(130px,1.4fr); gap: 10px; }
+.tc-filter-main { display: grid; grid-template-columns: minmax(125px,1.1fr) minmax(90px,.8fr) minmax(90px,.8fr) max-content minmax(130px,1.4fr); gap: 10px; }
 .tc-filters label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--tc-muted); min-width: 0; }
 .tc-filters :is(input,select), .tc-list select { width: 100%; height: 34px; min-width: 0; border: 1px solid #E2E8F0; border-radius: 7px; background: white; color: var(--tc-text); padding: 5px 8px; }
 .tc-filters input::placeholder { color: #64748B; }
-.tc-date-range { min-width: 0; font-size: 12px; color: var(--tc-muted); }
+.tc-date-range { width: 270px; max-width: 100%; min-width: 0; font-size: 12px; color: var(--tc-muted); }
 .tc-date-range > div { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
 .tc-date-range label { flex: 1; font-size: 0; gap: 0; }
 .tc-date-range input { font-size: 12px; }
-.tc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.tc-filter-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 8px; flex-wrap: wrap; }
+.tc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .tc-advanced { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; border-top: 1px solid var(--tc-line); margin-top: 8px; padding-top: 10px; }
 .tc-advanced .tc-check { flex-direction: row; align-items: center; }
 .tc-advanced input[type=checkbox] { height: 15px; width: 15px; }
-.tc-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; border-top: 1px solid var(--tc-line); padding-top: 8px; margin-top: 8px; font-size: 12px; color: var(--tc-muted); }
+.tc-chips { display: flex; flex: 1 1 260px; min-width: 0; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--tc-muted); }
 .tc-chip { background: #EBF2FF; color: var(--tc-blue); border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
 .tc-list { display: flex; flex: 1; min-width: 0; min-height: 280px; flex-direction: column; }
 .tc-table-tools { padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -95,6 +96,9 @@ button.tc-stat:not(:disabled):hover, .tc-stat.active { border-color: #93B4F5; ba
 .tc-list th button { border: 0; background: transparent; width: 100%; padding: 0; height: 39px; color: inherit; text-align: inherit; cursor: pointer; }
 .tc-list th[aria-sort] { color: var(--tc-blue); }
 .tc-list .numeric { text-align: right; }
+.tc-table-scroll[data-preset='日常查看'] :is([data-column=symbol],[data-column=side],[data-column=current_price]) { text-align: center; }
+.tc-list [data-column=micro_tag] { min-width: 180px; }
+.tc-list [data-column=cost_change] { width: 108px; }
 .tc-list td { background: white; }
 .tc-list td[data-column=trade_date], .tc-list th[data-column=trade_date] { position: sticky; left: 0; }
 .tc-list td[data-column=trade_date] { z-index: 1; font-weight: 550; }

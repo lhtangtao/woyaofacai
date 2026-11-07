@@ -520,8 +520,8 @@ class ModernTableModel(QAbstractTableModel):
                 return QColor("#EFF6FF")
             return None
 
-        is_text_col = col_name in ("券商渠道", "Ticker", "分类", "股票分类")
-        is_center_col = col_name in ("月份 (收盘)", "月份", "上涨股票数", "下跌股票数") or ("只" in val_str)
+        is_text_col = col_name in ("月份 (收盘)", "月份", "券商渠道", "Ticker", "分类", "股票分类")
+        is_center_col = col_name in ("上涨股票数", "下跌股票数") or ("只" in val_str)
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if is_center_col:
@@ -1289,6 +1289,33 @@ class MonthlyPerformancePage(QWidget):
         drawer_top = QHBoxLayout()
         self.drawer_title = QLabel("月度详情")
         self.drawer_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #1E293B;")
+
+        self.drawer_prev_btn = QPushButton("◀")
+        self.drawer_prev_btn.setFixedSize(24, 24)
+        self.drawer_prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drawer_prev_btn.setStyleSheet("""
+            QPushButton {
+                background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 4px;
+                color: #475569; font-size: 11px; font-weight: bold;
+            }
+            QPushButton:hover:!disabled { background: #EFF6FF; border-color: #3B82F6; color: #2563EB; }
+            QPushButton:disabled { opacity: 0.4; color: #94A3B8; }
+        """)
+        self.drawer_prev_btn.clicked.connect(self.select_prev_month)
+
+        self.drawer_next_btn = QPushButton("▶")
+        self.drawer_next_btn.setFixedSize(24, 24)
+        self.drawer_next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.drawer_next_btn.setStyleSheet("""
+            QPushButton {
+                background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 4px;
+                color: #475569; font-size: 11px; font-weight: bold;
+            }
+            QPushButton:hover:!disabled { background: #EFF6FF; border-color: #3B82F6; color: #2563EB; }
+            QPushButton:disabled { opacity: 0.4; color: #94A3B8; }
+        """)
+        self.drawer_next_btn.clicked.connect(self.select_next_month)
+
         self.drawer_close_btn = QPushButton("✕")
         self.drawer_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.drawer_close_btn.setFixedSize(26, 26)
@@ -1307,6 +1334,9 @@ class MonthlyPerformancePage(QWidget):
         """)
         self.drawer_close_btn.clicked.connect(self.close_drawer)
         drawer_top.addWidget(self.drawer_title)
+        drawer_top.addSpacing(6)
+        drawer_top.addWidget(self.drawer_prev_btn)
+        drawer_top.addWidget(self.drawer_next_btn)
         drawer_top.addStretch()
         drawer_top.addWidget(self.drawer_close_btn)
         drawer_vbox.addLayout(drawer_top)
@@ -1678,85 +1708,112 @@ class MonthlyPerformancePage(QWidget):
             if b in broker_totals:
                 broker_totals[b] += float(r[20] or 0)
 
-        tot_abs = sum(abs(v) for v in broker_totals.values()) or 1.0
+        total_abs = max(1e-5, sum(abs(v) for v in broker_totals.values()))
+        sorted_brokers = sorted(broker_totals.items(), key=lambda x: x[1], reverse=True)
 
-        for b, pnl in sorted(broker_totals.items(), key=lambda x: x[1]):
-            row_w = QWidget()
-            row_w.setCursor(Qt.CursorShape.PointingHandCursor)
-            is_active = (self.selected_broker == b or fmt_broker_cn(b) == self.selected_broker)
-            bg_color = "#EFF6FF" if is_active else "#FFFFFF"
-            border_color = "#93C5FD" if is_active else "transparent"
-            row_w.setStyleSheet(f"""
-                QWidget {{
-                    background-color: {bg_color};
-                    border: 1px solid {border_color};
-                    border-radius: 4px;
-                    padding: 2px 4px;
-                }}
-                QWidget:hover {{
-                    background-color: #F8FAFC;
-                    border: 1px solid #CBD5E1;
-                }}
-            """)
+        for b, pnl in sorted_brokers:
+            row_frame = QFrame()
+            row_frame.setCursor(Qt.CursorShape.PointingHandCursor)
 
-            row_layout = QHBoxLayout(row_w)
-            row_layout.setContentsMargins(4, 3, 4, 3)
-            row_layout.setSpacing(6)
+            b_cn = fmt_broker_cn(b)
+            sel_cn = fmt_broker_cn(self.selected_broker) if self.selected_broker else ""
+            is_selected = bool(self.selected_broker and (b == self.selected_broker or b_cn == self.selected_broker or b_cn == sel_cn))
 
-            name_lbl = QLabel(fmt_broker_cn(b))
-            name_lbl.setStyleSheet(f"font-size: 11.5px; font-weight: {'700' if is_active else '500'}; color: {'#2563EB' if is_active else '#334155'};")
-            name_lbl.setFixedWidth(65)
-            row_layout.addWidget(name_lbl)
+            if is_selected:
+                row_frame.setStyleSheet("""
+                    QFrame {
+                        background: #EFF6FF;
+                        border: 1.5px solid #3B82F6;
+                        border-radius: 5px;
+                        padding: 2px 6px;
+                    }
+                """)
+            else:
+                row_frame.setStyleSheet("""
+                    QFrame {
+                        background: #F8FAFC;
+                        border: 1px solid #F1F5F9;
+                        border-radius: 5px;
+                        padding: 2px 6px;
+                    }
+                    QFrame:hover {
+                        background: #EFF6FF;
+                        border-color: #BFDBFE;
+                    }
+                """)
 
-            ratio = (abs(pnl) / tot_abs) * 100.0
-            pbar = QProgressBar()
-            pbar.setFixedHeight(6)
-            pbar.setTextVisible(False)
-            pbar.setRange(0, 100)
-            pbar.setValue(int(min(100, ratio)))
+            r_layout = QHBoxLayout(row_frame)
+            r_layout.setContentsMargins(6, 4, 6, 4)
+            r_layout.setSpacing(6)
 
-            chunk_color = "#2563EB" if is_active else ("#10B981" if pnl >= 0 else "#EF4444")
-            pbar.setStyleSheet(f"""
-                QProgressBar {{
+            b_name = QLabel(b_cn)
+            b_name.setFixedWidth(75)
+            b_name.setStyleSheet(f"font-size: 12px; font-weight: {'700' if is_selected else '600'}; color: {'#1D4ED8' if is_selected else '#1E293B'};")
+            r_layout.addWidget(b_name)
+
+            contrib = (abs(pnl) / total_abs) * 100.0
+
+            # 鲜明蓝色条形柱状图（与每日持仓收益 100% 对齐）
+            bar = QProgressBar()
+            bar.setFixedHeight(8)
+            bar.setTextVisible(False)
+            bar.setRange(0, 1000)
+            bar.setValue(int(max(1, min(100, contrib)) * 10))
+            bar.setStyleSheet("""
+                QProgressBar {
                     background-color: #E2E8F0;
                     border: none;
-                    border-radius: 3px;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {chunk_color};
-                    border-radius: 3px;
-                }}
+                    border-radius: 4px;
+                }
+                QProgressBar::chunk {
+                    background-color: #2563EB;
+                    border-radius: 4px;
+                }
             """)
-            row_layout.addWidget(pbar, 1)
+            r_layout.addWidget(bar, 1)
 
-            pct_lbl = QLabel(f"{ratio:.1f}%")
-            pct_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8;")
-            pct_lbl.setFixedWidth(36)
-            pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row_layout.addWidget(pct_lbl)
+            contrib_lbl = QLabel(f"{contrib:.1f}%")
+            contrib_lbl.setFixedWidth(42)
+            contrib_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            contrib_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+            r_layout.addWidget(contrib_lbl)
 
             pnl_lbl = QLabel(fmt_signed_money(pnl))
-            pnl_lbl.setFont(numeric_font(11, bold=True))
+            pnl_lbl.setFont(numeric_font(12, bold=True))
             pnl_lbl.setStyleSheet(f"color: {'#10B981' if pnl >= 0 else '#EF4444'};")
-            pnl_lbl.setFixedWidth(75)
+            pnl_lbl.setFixedWidth(85)
             pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row_layout.addWidget(pnl_lbl)
+            r_layout.addWidget(pnl_lbl)
 
             def make_handler(broker_name):
-                return lambda e: self.on_broker_overview_clicked(broker_name)
-            row_w.mousePressEvent = make_handler(b)
+                return lambda e: self.filter_by_broker(broker_name)
+            row_frame.mousePressEvent = make_handler(b)
 
-            self.broker_list_layout.addWidget(row_w)
+            self.broker_list_layout.addWidget(row_frame)
+
+    def filter_by_broker(self, broker_name: str):
+        target_cn = fmt_broker_cn(broker_name)
+        current_cn = fmt_broker_cn(self.selected_broker) if self.selected_broker else ""
+
+        # 如果当前已经选中该渠道，点击则取消筛选恢复全部；否则选中该渠道
+        if self.selected_broker and (self.selected_broker == broker_name or current_cn == target_cn):
+            self.selected_broker = ""
+            self.broker_combo.setCurrentIndex(0)
+        else:
+            self.selected_broker = broker_name
+            idx = 0
+            for i in range(self.broker_combo.count()):
+                if self.broker_combo.itemData(i) == broker_name or self.broker_combo.itemText(i) == target_cn:
+                    idx = i
+                    break
+            self.broker_combo.setCurrentIndex(idx)
+
+        # 留在本页面，且下方表格自动切换到「🏛️ 按渠道明细」Tab (Tab 1)
+        self.tab_bar.setCurrentIndex(1)
+        self.recalculate_and_refresh()
 
     def on_broker_overview_clicked(self, broker: str):
-        self.tab_bar.setCurrentIndex(1)
-        self.selected_broker = broker
-        self.broker_combo.blockSignals(True)
-        idx = self.broker_combo.findData(broker)
-        if idx >= 0:
-            self.broker_combo.setCurrentIndex(idx)
-        self.broker_combo.blockSignals(False)
-        self.recalculate_and_refresh()
+        self.filter_by_broker(broker)
 
     def update_month_distribution(self, rows: List[Tuple]):
         target_m = self.selected_month or self.max_as_of_month
@@ -1791,11 +1848,19 @@ class MonthlyPerformancePage(QWidget):
         if not all_months or not self.selected_month or self.selected_month not in all_months:
             self.prev_month_btn.setEnabled(False)
             self.next_month_btn.setEnabled(False)
+            if hasattr(self, "drawer_prev_btn"):
+                self.drawer_prev_btn.setEnabled(False)
+                self.drawer_next_btn.setEnabled(False)
             return
 
         cur_idx = all_months.index(self.selected_month)
-        self.prev_month_btn.setEnabled(cur_idx > 0)
-        self.next_month_btn.setEnabled(cur_idx < len(all_months) - 1)
+        can_prev = cur_idx > 0
+        can_next = cur_idx < len(all_months) - 1
+        self.prev_month_btn.setEnabled(can_prev)
+        self.next_month_btn.setEnabled(can_next)
+        if hasattr(self, "drawer_prev_btn"):
+            self.drawer_prev_btn.setEnabled(can_prev)
+            self.drawer_next_btn.setEnabled(can_next)
 
     def select_prev_month(self):
         all_months = sorted({r[0] for r in self.current_filtered_rows if r[0]})
@@ -2064,7 +2129,7 @@ class MonthlyPerformancePage(QWidget):
 
         else:
             # 📈 按股票明细
-            cols = ("月份", "券商渠道", "Ticker", "分类", "持仓数量", "成本价", "收盘价", "本月收益", "本月收益率", "累计收益", "持仓盈亏率", "月末市值")
+            cols = ("月份", "券商渠道", "Ticker", "分类", "持仓数量", "成本均价", "收盘价", "本月收益", "本月收益率", "累计收益", "收益率", "月末市值")
 
             stock_cum_map: Dict[Tuple[str, str, str], float] = {}
             sorted_raw = sorted(self.raw_rows, key=lambda x: x[0])
@@ -2133,7 +2198,10 @@ class MonthlyPerformancePage(QWidget):
         self.trend_canvas.selected_month = target_month
         self.trend_canvas.update()
         self.update_month_nav_buttons()
-        self.open_month_drawer(target_month)
+        self.table_model.highlight_month = target_month
+        self.table_model.layoutChanged.emit()
+        if getattr(self, "drawer_frame", None) and self.drawer_frame.isVisible():
+            self.open_month_drawer(target_month)
 
     def handle_kpi_clicked(self, key: str):
         for k, c in self.kpi_cards.items():
@@ -2168,6 +2236,8 @@ class MonthlyPerformancePage(QWidget):
                 self.trend_canvas.selected_month = month_val
                 self.trend_canvas.update()
                 self.update_month_nav_buttons()
+                self.table_model.highlight_month = month_val
+                self.table_model.layoutChanged.emit()
                 self.open_month_drawer(month_val)
             elif current_tab == 1:
                 month_val = r_vals[0]
@@ -2188,6 +2258,13 @@ class MonthlyPerformancePage(QWidget):
         self.update_month_distribution(rows)
         self.trend_canvas.selected_month = target_month
         self.trend_canvas.update()
+        self.table_model.highlight_month = target_month
+        self.table_model.layoutChanged.emit()
+
+        if hasattr(self, "drawer_prev_btn"):
+            self.drawer_prev_btn.show()
+            self.drawer_next_btn.show()
+        self.update_month_nav_buttons()
 
         self.drawer_title.setText(f"单月收益详情 · {target_month}")
         m_rows = [r for r in rows if r[0] == target_month]
@@ -2209,7 +2286,18 @@ class MonthlyPerformancePage(QWidget):
         sorted_rows = sorted(m_rows, key=lambda x: float(x[20] or 0), reverse=True)
         for r in sorted_rows:
             card = QFrame()
-            card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setStyleSheet("""
+                QFrame {
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 6px;
+                }
+                QFrame:hover {
+                    background: #EFF6FF;
+                    border: 1px solid #93C5FD;
+                }
+            """)
             c_lay = QHBoxLayout(card)
             c_lay.setContentsMargins(8, 6, 8, 6)
 
@@ -2243,6 +2331,11 @@ class MonthlyPerformancePage(QWidget):
             pnl_v.addWidget(rate_lbl)
             c_lay.addLayout(pnl_v)
 
+            # 点击下钻到标的历史收益
+            def make_stock_click(sym, ch):
+                return lambda e: self.open_stock_drawer(sym, target_month, ch)
+            card.mousePressEvent = make_stock_click(r[3], r[1])
+
             self.drawer_list_layout.addWidget(card)
 
         self.show_drawer()
@@ -2255,8 +2348,12 @@ class MonthlyPerformancePage(QWidget):
             self.trend_canvas.selected_month = month_str
             self.trend_canvas.update()
 
+        if hasattr(self, "drawer_prev_btn"):
+            self.drawer_prev_btn.hide()
+            self.drawer_next_btn.hide()
+
         ch_cn = fmt_broker_cn(channel)
-        self.drawer_title.setText(f"渠道月度明细 · {ch_cn}")
+        self.drawer_title.setText(f"渠道收益详情 · {ch_cn}")
         c_rows = [r for r in self.raw_rows if r[1] == channel or fmt_broker_cn(r[1]) == ch_cn]
         tot_pnl = sum(float(r[20] or 0) for r in c_rows)
 
@@ -2274,7 +2371,18 @@ class MonthlyPerformancePage(QWidget):
         sorted_c_rows = sorted(c_rows, key=lambda x: x[0], reverse=True)[:50]
         for r in sorted_c_rows:
             card = QFrame()
-            card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setStyleSheet("""
+                QFrame {
+                    background: #F8FAFC;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 6px;
+                }
+                QFrame:hover {
+                    background: #EFF6FF;
+                    border: 1px solid #93C5FD;
+                }
+            """)
             c_lay = QHBoxLayout(card)
             c_lay.setContentsMargins(8, 6, 8, 6)
 
@@ -2304,6 +2412,10 @@ class MonthlyPerformancePage(QWidget):
             pnl_v.addWidget(rate_lbl)
             c_lay.addLayout(pnl_v)
 
+            def make_m_click(m):
+                return lambda e: self.open_month_drawer(m)
+            card.mousePressEvent = make_m_click(r[0])
+
             self.drawer_list_layout.addWidget(card)
 
         self.show_drawer()
@@ -2315,6 +2427,10 @@ class MonthlyPerformancePage(QWidget):
             self.update_month_distribution(rows)
             self.trend_canvas.selected_month = month_str
             self.trend_canvas.update()
+
+        if hasattr(self, "drawer_prev_btn"):
+            self.drawer_prev_btn.hide()
+            self.drawer_next_btn.hide()
 
         self.drawer_title.setText(f"标的历史收益 · {symbol}")
         s_rows = [r for r in self.raw_rows if r[3] == symbol]
@@ -2337,10 +2453,30 @@ class MonthlyPerformancePage(QWidget):
         for r in sorted_s_rows:
             is_cur_month = (month_str and r[0] == month_str)
             card = QFrame()
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
             if is_cur_month:
-                card.setStyleSheet("background: #EFF6FF; border: 1.5px solid #3B82F6; border-radius: 6px;")
+                card.setStyleSheet("""
+                    QFrame {
+                        background: #EFF6FF;
+                        border: 1.5px solid #3B82F6;
+                        border-radius: 6px;
+                    }
+                    QFrame:hover {
+                        background: #DBEAFE;
+                    }
+                """)
             else:
-                card.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px;")
+                card.setStyleSheet("""
+                    QFrame {
+                        background: #F8FAFC;
+                        border: 1px solid #E2E8F0;
+                        border-radius: 6px;
+                    }
+                    QFrame:hover {
+                        background: #EFF6FF;
+                        border: 1px solid #93C5FD;
+                    }
+                """)
             c_lay = QHBoxLayout(card)
             c_lay.setContentsMargins(8, 6, 8, 6)
 
@@ -2369,6 +2505,10 @@ class MonthlyPerformancePage(QWidget):
             pnl_v.addWidget(pnl_lbl)
             pnl_v.addWidget(rate_lbl)
             c_lay.addLayout(pnl_v)
+
+            def make_m_click(m):
+                return lambda e: self.open_month_drawer(m)
+            card.mousePressEvent = make_m_click(r[0])
 
             self.drawer_list_layout.addWidget(card)
 
@@ -2430,10 +2570,27 @@ class MonthlyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def on_search_clicked(self):
+        p_id = self.person_combo.currentData()
+        person_changed = (p_id != self.selected_person_id)
+        self.selected_person_id = p_id
+        self.selected_broker = self.broker_combo.currentData() or ""
+        self.selected_category = self.category_combo.currentData() or ""
         self.search_ticker = self.ticker_input.text().strip()
+        self.table_model.page = 1
+
+        # 反向同步全局人员，确保全局统一
+        main_win = getattr(self, "main_window", None) or self.parent() or self.window()
+        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+            self._syncing_person = True
+            try:
+                main_win.sync_person_from_holdings(p_id)
+            finally:
+                self._syncing_person = False
+
         self.recalculate_and_refresh()
 
     def on_reset_clicked(self):
+        person_changed = (self.selected_person_id is not None)
         self.ticker_input.clear()
         self.search_ticker = ""
         self.category_combo.setCurrentIndex(0)
@@ -2443,6 +2600,17 @@ class MonthlyPerformancePage(QWidget):
         self.person_combo.setCurrentIndex(0)
         self.selected_person_id = None
         self.active_kpi_filter = None
+        self.stock_pnl_filter = "all"
+        self.table_model.page = 1
         for c in self.kpi_cards.values():
             c.set_selected(False)
+
+        main_win = getattr(self, "main_window", None) or self.parent() or self.window()
+        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+            self._syncing_person = True
+            try:
+                main_win.sync_person_from_holdings(None)
+            finally:
+                self._syncing_person = False
+
         self.recalculate_and_refresh()
