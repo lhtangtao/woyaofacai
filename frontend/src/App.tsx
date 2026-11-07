@@ -5,6 +5,7 @@ import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { DashboardView } from "./views/DashboardView";
 import { TradesView } from "./views/TradesView";
 import { ReportsView } from "./views/ReportsView";
+import { DailyPerformanceView } from "./views/DailyPerformanceView";
 import { MonitorView } from "./views/MonitorView";
 import { HistoricalTrendView } from "./views/HistoricalTrendView";
 import { ChartsView } from "./views/ChartsView";
@@ -338,8 +339,19 @@ export const App: React.FC = () => {
               />
             )}
 
+            {currentRoute === "reports:每日持仓收益" && (
+              <DailyPerformanceView
+                key={`daily-perf:${assetResetKey}`}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
+                persons={bootstrap?.persons || []}
+              />
+            )}
+
             {currentRoute.startsWith("reports:") &&
-              !["reports:当前持仓", "reports:股票汇总"].includes(currentRoute) && (
+              !["reports:当前持仓", "reports:股票汇总", "reports:每日持仓收益"].includes(currentRoute) && (
               <ReportsView
                 key={`${currentRoute}:${assetResetKey}`}
                 initialReportName={currentRoute.replace("reports:", "")}

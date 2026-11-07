@@ -715,6 +715,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.preload_people_bundle()
         if hasattr(self, "holdings_page"):
             self.holdings_page.set_analytics(self.get_holdings_analytics())
+        if hasattr(self, "daily_performance_page"):
+            self.daily_performance_page.update_data(analytics)
         self.stock_detail.set_analytics(analytics)
         for page in self.report_pages:
             page.set_reports(analytics.reports)
