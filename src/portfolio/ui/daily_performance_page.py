@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -65,7 +66,7 @@ def fmt_signed_money(val: Any, digits: int = 2) -> str:
     try:
         num = float(val)
         sign = "+" if num > 0 else "-" if num < 0 else ""
-        return f"{sign}${abs(num):,.{digits}f}"
+        return f"{sign}{abs(num):,.{digits}f}"
     except (ValueError, TypeError):
         return str(val)
 
@@ -260,7 +261,7 @@ class DailyTrendCanvas(QWidget):
             painter.setPen(QColor("#94A3B8"))
             painter.drawText(QRectF(0, y_bench_pos - 8, margin_left - 6, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"+${v_bench_pos:,.0f}")
+                             f"+{v_bench_pos:,.0f}")
 
             # 负收益常态参考线（约 72% 高度处）
             y_bench_neg = zero_y + h_neg_max * 0.72
@@ -269,7 +270,7 @@ class DailyTrendCanvas(QWidget):
             painter.setPen(QColor("#94A3B8"))
             painter.drawText(QRectF(0, y_bench_neg - 8, margin_left - 6, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                             f"-${v_bench_neg:,.0f}")
+                             f"-{v_bench_neg:,.0f}")
 
             # 零轴基准线
             painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.DashLine))
@@ -344,7 +345,7 @@ class DailyTrendCanvas(QWidget):
                 painter.setPen(QColor("#94A3B8"))
                 painter.drawText(QRectF(0, y - 8, margin_left - 6, 16),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                                 f"${val_at_y:,.0f}")
+                                 f"{val_at_y:,.0f}")
                 painter.setPen(QPen(QColor("#F1F5F9"), 1))
 
             # Zero Line (if within range)
@@ -670,10 +671,48 @@ class DailyPerformancePage(QWidget):
         self._syncing_person = False
         self._syncing_broker = False
 
-        # Root Layout
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 8, 14, 12)
+        # Root Layout with Outer Smooth Scrolling
+        root_vbox = QVBoxLayout(self)
+        root_vbox.setContentsMargins(0, 0, 0, 0)
+        root_vbox.setSpacing(0)
+
+        self.outer_scroll = QScrollArea(self)
+        self.outer_scroll.setWidgetResizable(True)
+        self.outer_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.outer_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.outer_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.outer_scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #F1F5F9;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #CBD5E1;
+                border-radius: 4px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #94A3B8;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        content_container = QWidget()
+        content_container.setStyleSheet("background-color: transparent;")
+        main_layout = QVBoxLayout(content_container)
+        main_layout.setContentsMargins(14, 8, 14, 16)
         main_layout.setSpacing(10)
+
+        self.outer_scroll.setWidget(content_container)
+        root_vbox.addWidget(self.outer_scroll)
 
         # 1. Single-row Compact Filter Toolbar (NO huge blank space, NO duplicate headers)
         filter_card = QFrame()
@@ -1219,6 +1258,9 @@ class DailyPerformancePage(QWidget):
         self.table_view.horizontalHeader().setHighlightSections(False)
         self.table_view.horizontalHeader().setSectionsClickable(True)
         self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
+        # 完全展示 20 行高度并禁用内层纵向滚动条，由最外层页面滚动
+        self.table_view.setMinimumHeight(760)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
@@ -1641,10 +1683,10 @@ class DailyPerformancePage(QWidget):
 
             date_summaries.append([
                 d,
-                f"${fmt_money(init_v, 2)}",
-                f"${fmt_money(data['end'], 2)}",
-                f"${fmt_money(data['buy'], 2)}",
-                f"${fmt_money(data['sell'], 2)}",
+                fmt_money(init_v, 2),
+                fmt_money(data['end'], 2),
+                fmt_money(data['buy'], 2),
+                fmt_money(data['sell'], 2),
                 fmt_signed_money(data['net'], 2),
                 fmt_signed_money(d_pnl, 2),
                 fmt_percent(rate, 2),
@@ -1762,21 +1804,24 @@ class DailyPerformancePage(QWidget):
 
             contrib = (abs(pnl) / total_abs) * 100.0
 
-            # 蓝色条形进度条
-            bar_container = QFrame()
-            bar_container.setFixedHeight(7)
-            bar_container.setStyleSheet("background-color: #E2E8F0; border-radius: 3px;")
-            bc_lay = QHBoxLayout(bar_container)
-            bc_lay.setContentsMargins(0, 0, 0, 0)
-            bc_lay.setSpacing(0)
-            bar_fill = QFrame()
-            bar_fill.setStyleSheet("background-color: #3B82F6; border-radius: 3px;")
-            fill_weight = int(max(1, min(100, contrib)))
-            empty_weight = int(max(0, 100 - fill_weight))
-            bc_lay.addWidget(bar_fill, fill_weight)
-            if empty_weight > 0:
-                bc_lay.addStretch(empty_weight)
-            r_layout.addWidget(bar_container, 1)
+            # 鲜明蓝色条形柱状图（使用 QProgressBar 确保高对比度和真实填充）
+            bar = QProgressBar()
+            bar.setFixedHeight(8)
+            bar.setTextVisible(False)
+            bar.setRange(0, 1000)
+            bar.setValue(int(max(1, min(100, contrib)) * 10))
+            bar.setStyleSheet("""
+                QProgressBar {
+                    background-color: #E2E8F0;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QProgressBar::chunk {
+                    background-color: #2563EB;
+                    border-radius: 4px;
+                }
+            """)
+            r_layout.addWidget(bar, 1)
 
             contrib_lbl = QLabel(f"{contrib:.1f}%")
             contrib_lbl.setFixedWidth(42)
@@ -1902,7 +1947,7 @@ class DailyPerformancePage(QWidget):
         self.donut_canvas.set_data(tot, p_amt, l_amt)
         self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只    {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只    {fmt_signed_money(l_amt)}")
-        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只     $0.00")
+        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只     0.00")
 
         # 2. 清空并填充中栏：亏损贡献排行 Top 5
         while self.loss_top_vbox.count():
@@ -1971,19 +2016,23 @@ class DailyPerformancePage(QWidget):
                 pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #EF4444;")
                 i_lay.addWidget(pnl_lbl)
 
-                bar_bg = QFrame()
-                bar_bg.setFixedHeight(6)
-                bar_bg.setStyleSheet("background-color: #FEE2E2; border-radius: 3px;")
-                bb_lay = QHBoxLayout(bar_bg)
-                bb_lay.setContentsMargins(0, 0, 0, 0)
-                bb_lay.setSpacing(0)
-                bar_fill = QFrame()
-                bar_fill.setStyleSheet("background-color: #EF4444; border-radius: 3px;")
-                fill_w = int(max(1, min(100, contrib)))
-                bb_lay.addWidget(bar_fill, fill_w)
-                if 100 - fill_w > 0:
-                    bb_lay.addStretch(100 - fill_w)
-                i_lay.addWidget(bar_bg, 1)
+                bar = QProgressBar()
+                bar.setFixedHeight(7)
+                bar.setTextVisible(False)
+                bar.setRange(0, 1000)
+                bar.setValue(int(max(1, min(100, contrib)) * 10))
+                bar.setStyleSheet("""
+                    QProgressBar {
+                        background-color: #FEE2E2;
+                        border: none;
+                        border-radius: 3.5px;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #EF4444;
+                        border-radius: 3.5px;
+                    }
+                """)
+                i_lay.addWidget(bar, 1)
 
                 c_lbl = QLabel(f"{contrib:.1f}%")
                 c_lbl.setFixedWidth(40)
@@ -2081,19 +2130,23 @@ class DailyPerformancePage(QWidget):
                 pnl_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #10B981;")
                 i_lay.addWidget(pnl_lbl)
 
-                bar_bg = QFrame()
-                bar_bg.setFixedHeight(6)
-                bar_bg.setStyleSheet("background-color: #D1FAE5; border-radius: 3px;")
-                bb_lay = QHBoxLayout(bar_bg)
-                bb_lay.setContentsMargins(0, 0, 0, 0)
-                bb_lay.setSpacing(0)
-                bar_fill = QFrame()
-                bar_fill.setStyleSheet("background-color: #10B981; border-radius: 3px;")
-                fill_w = int(max(1, min(100, contrib)))
-                bb_lay.addWidget(bar_fill, fill_w)
-                if 100 - fill_w > 0:
-                    bb_lay.addStretch(100 - fill_w)
-                i_lay.addWidget(bar_bg, 1)
+                bar = QProgressBar()
+                bar.setFixedHeight(7)
+                bar.setTextVisible(False)
+                bar.setRange(0, 1000)
+                bar.setValue(int(max(1, min(100, contrib)) * 10))
+                bar.setStyleSheet("""
+                    QProgressBar {
+                        background-color: #D1FAE5;
+                        border: none;
+                        border-radius: 3.5px;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #10B981;
+                        border-radius: 3.5px;
+                    }
+                """)
+                i_lay.addWidget(bar, 1)
 
                 c_lbl = QLabel(f"{contrib:.1f}%")
                 c_lbl.setFixedWidth(40)
@@ -2212,10 +2265,10 @@ class DailyPerformancePage(QWidget):
                     c_rows.append([
                         d,
                         fmt_broker_cn(b),
-                        f"${fmt_money(init_v, 2)}",
-                        f"${fmt_money(data['end'], 2)}",
-                        f"${fmt_money(data['buy'], 2)}",
-                        f"${fmt_money(data['sell'], 2)}",
+                        fmt_money(init_v, 2),
+                        fmt_money(data['end'], 2),
+                        fmt_money(data['buy'], 2),
+                        fmt_money(data['sell'], 2),
                         fmt_signed_money(data['net'], 2),
                         fmt_signed_money(data['pnl'], 2),
                         fmt_percent(rate, 2),
@@ -2265,11 +2318,11 @@ class DailyPerformancePage(QWidget):
                     r[3],
                     r[2],
                     fmt_money(r[8]),
-                    f"${fmt_money(r[9])}",
-                    f"${fmt_money(r[10])}",
+                    fmt_money(r[9]),
+                    fmt_money(r[10]),
                     fmt_signed_money(pnl),
                     fmt_percent(r[13]),
-                    f"${fmt_money(r[11])}",
+                    fmt_money(r[11]),
                 ])
             s_rows.sort(key=lambda x: x[0], reverse=True)
             self.table_model.set_columns_and_rows(cols, s_rows)
@@ -2389,7 +2442,7 @@ class DailyPerformancePage(QWidget):
             info_v.setSpacing(2)
             sym_lbl = QLabel(f"{r[3]} ({fmt_broker_cn(r[1])})")
             sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
-            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
             sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
             info_v.addWidget(sym_lbl)
             info_v.addWidget(sub_lbl)
@@ -2455,7 +2508,7 @@ class DailyPerformancePage(QWidget):
             info_v.setSpacing(2)
             sym_lbl = QLabel(f"{r[0]} · {r[3]}")
             sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
-            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
             sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
             info_v.addWidget(sym_lbl)
             info_v.addWidget(sub_lbl)
@@ -2520,7 +2573,7 @@ class DailyPerformancePage(QWidget):
             info_v.setSpacing(2)
             sym_lbl = QLabel(f"{r[0]} ({fmt_broker_cn(r[1])}) {'[选中日]' if is_cur_date else ''}")
             sym_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {'#1D4ED8' if is_cur_date else '#2563EB'};")
-            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
+            sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 {fmt_money(r[10])}")
             sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
             info_v.addWidget(sym_lbl)
             info_v.addWidget(sub_lbl)

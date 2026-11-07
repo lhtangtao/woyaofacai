@@ -86,7 +86,7 @@ const fmtSignedMoney = (val: number | null | undefined, digits = 2): string => {
   if (val == null || isNaN(val)) return "—";
   const num = Number(val);
   const sign = num > 0 ? "+" : num < 0 ? "-" : "";
-  return `${sign}$${fmtMoney(Math.abs(num), digits)}`;
+  return `${sign}${fmtMoney(Math.abs(num), digits)}`;
 };
 
 const fmtPercent = (val: number | null | undefined, digits = 2): string => {
@@ -738,7 +738,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           axisLabel: {
             color: "#64748B",
             fontSize: 11,
-            formatter: (v: number) => `$${v.toLocaleString()}`,
+            formatter: (v: number) => v.toLocaleString(),
           },
           splitLine: { lineStyle: { color: "#F1F5F9" } },
         },
@@ -768,7 +768,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
             return `
               <div style="font-size:12px; font-weight:600; margin-bottom:4px;">${d.date}</div>
               <div style="font-size:12px; color:#2563EB;">累计收益: ${fmtSignedMoney(d.cumProfit)} (${fmtPercent(d.cumProfitRate)})</div>
-              <div style="font-size:12px; color:#64748B;">期初市值: $${fmtMoney(d.initValue)}</div>
+              <div style="font-size:12px; color:#64748B;">期初市值: {fmtMoney(d.initValue)}</div>
             `;
           },
         },
@@ -784,7 +784,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           axisLabel: {
             color: "#64748B",
             fontSize: 11,
-            formatter: (v: number) => `$${v.toLocaleString()}`,
+            formatter: (v: number) => v.toLocaleString(),
           },
           splitLine: { lineStyle: { color: "#F1F5F9" } },
         },
@@ -824,7 +824,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     return {
       tooltip: {
         trigger: "item",
-        formatter: (p: any) => `${p.name}: $${Math.abs(p.value).toLocaleString()} (${p.percent}%)`,
+        formatter: (p: any) => `${p.name}: ${Math.abs(p.value).toLocaleString()} (${p.percent}%)`,
       },
       legend: { show: false },
       series: [
@@ -1496,7 +1496,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                   <span className="dot dot-flat">●</span>
                   <span className="btn-label">持平股票</span>
                   <span className="btn-count">{selectedDateDistribution.flatCount} 只</span>
-                  <span className="btn-amt">$0.00</span>
+                  <span className="btn-amt">0.00</span>
                 </button>
               </div>
             </div>
@@ -1678,10 +1678,10 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         onClick={() => openDateDetail(d.date)}
                       >
                         <td style={{ fontWeight: 600 }}>{d.date}</td>
-                        <td className="col-right">${fmtMoney(d.initValue, 2)}</td>
-                        <td className="col-right">${fmtMoney(d.marketValue, 2)}</td>
-                        <td className="col-right">${fmtMoney(d.buyAmount, 2)}</td>
-                        <td className="col-right">${fmtMoney(d.sellAmount, 2)}</td>
+                        <td className="col-right">{fmtMoney(d.initValue, 2)}</td>
+                        <td className="col-right">{fmtMoney(d.marketValue, 2)}</td>
+                        <td className="col-right">{fmtMoney(d.buyAmount, 2)}</td>
+                        <td className="col-right">{fmtMoney(d.sellAmount, 2)}</td>
                         <td
                           className={`col-right ${
                             d.netAmount > 0 ? "color-profit" : d.netAmount < 0 ? "color-loss" : ""
@@ -1759,10 +1759,10 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                       >
                         <td style={{ fontWeight: 600 }}>{cd.date}</td>
                         <td>{fmtBrokerCn(cd.channel)}</td>
-                        <td className="col-right">${fmtMoney(cd.initValue, 2)}</td>
-                        <td className="col-right">${fmtMoney(cd.marketValue, 2)}</td>
-                        <td className="col-right">${fmtMoney(cd.buyAmount, 2)}</td>
-                        <td className="col-right">${fmtMoney(cd.sellAmount, 2)}</td>
+                        <td className="col-right">{fmtMoney(cd.initValue, 2)}</td>
+                        <td className="col-right">{fmtMoney(cd.marketValue, 2)}</td>
+                        <td className="col-right">{fmtMoney(cd.buyAmount, 2)}</td>
+                        <td className="col-right">{fmtMoney(cd.sellAmount, 2)}</td>
                         <td
                           className={`col-right ${
                             cd.netAmount > 0 ? "color-profit" : cd.netAmount < 0 ? "color-loss" : ""
@@ -1841,8 +1841,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         <td style={{ fontWeight: 700, color: "#2563EB" }}>{s.symbol}</td>
                         <td>{s.category}</td>
                         <td className="col-right">{fmtMoney(s.endQty, 2)}</td>
-                        <td className="col-right">${fmtMoney(s.costPrice)}</td>
-                        <td className="col-right">${fmtMoney(s.closePrice)}</td>
+                        <td className="col-right">{fmtMoney(s.costPrice)}</td>
+                        <td className="col-right">{fmtMoney(s.closePrice)}</td>
                         <td
                           className={`col-right ${
                             s.dailyProfit >= 0 ? "color-profit" : "color-loss"
@@ -1858,7 +1858,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         >
                           {fmtPercent(s.profitRate)}
                         </td>
-                        <td className="col-right">${fmtMoney(s.marketValue)}</td>
+                        <td className="col-right">{fmtMoney(s.marketValue)}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -2022,7 +2022,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                               <span style={{ fontSize: 11, color: "#64748B" }}>({fmtBrokerCn(r.channel)})</span>
                             </div>
                             <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
-                              持仓: {fmtMoney(r.endQty)} 股 · 收盘价: ${fmtMoney(r.closePrice)}
+                              持仓: {fmtMoney(r.endQty)} 股 · 收盘价: {fmtMoney(r.closePrice)}
                             </div>
                           </div>
                           <div style={{ textAlign: "right" }}>
