@@ -433,9 +433,11 @@ class ModernTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return val_str
 
+        col_name = self.columns[col_idx] if (self.columns and col_idx < len(self.columns)) else ""
+
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            # First column date is centered
-            if col_idx == 0:
+            # First column date is centered, count columns are centered
+            if col_idx == 0 or "数" in col_name or "只" in val_str:
                 return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             # Numbers / Amounts / Percentages align right
             if any(c in val_str for c in ("$", "%", "+", "-")) and not ("|" in val_str):
@@ -443,6 +445,10 @@ class ModernTableModel(QAbstractTableModel):
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         if role == Qt.ItemDataRole.ForegroundRole:
+            if col_name == "上涨股票数":
+                return QColor("#10B981") if not val_str.startswith("0") else QColor("#94A3B8")
+            if col_name == "下跌股票数":
+                return QColor("#EF4444") if not val_str.startswith("0") else QColor("#94A3B8")
             if not ("|" in val_str):
                 if val_str.startswith("+"):
                     return QColor("#10B981")
@@ -450,11 +456,13 @@ class ModernTableModel(QAbstractTableModel):
                     return QColor("#EF4444")
             if val_str == "—":
                 return QColor("#94A3B8")
-            if self.columns and col_idx < len(self.columns) and self.columns[col_idx] == "Ticker":
+            if col_name == "Ticker":
                 return QColor("#2563EB")
             return QColor("#1E293B")
 
         if role == Qt.ItemDataRole.FontRole:
+            if "数" in col_name or "只" in val_str:
+                return numeric_font(12, bold=True)
             if not ("|" in val_str) and any(c in val_str for c in ("$", "%", "+", "-")):
                 return numeric_font(12, bold=True)
             return QFont(".AppleSystemUIFont", 12)
@@ -1157,6 +1165,8 @@ class DailyPerformancePage(QWidget):
                     "buy": 0.0,
                     "sell": 0.0,
                     "net": 0.0,
+                    "up_stocks": 0,
+                    "down_stocks": 0,
                     "stocks": {},
                 }
             item = date_map[d]
@@ -1169,6 +1179,10 @@ class DailyPerformancePage(QWidget):
             item["buy"] += b_amt
             item["sell"] += s_amt
             item["net"] += (b_amt - s_amt)
+            if pnl > 0:
+                item["up_stocks"] += 1
+            elif pnl < 0:
+                item["down_stocks"] += 1
             sym = r[3]
             item["stocks"][sym] = item["stocks"].get(sym, 0.0) + pnl
 
@@ -1219,7 +1233,6 @@ class DailyPerformancePage(QWidget):
 
             init_v = data["init"]
             rate = (d_pnl / init_v) if init_v > 0 else 0.0
-            cum_rate = (cum_pnl / base_init) if base_init > 0 else None
 
             date_summaries.append([
                 d,
@@ -1231,7 +1244,8 @@ class DailyPerformancePage(QWidget):
                 fmt_signed_money(d_pnl, 2),
                 fmt_percent(rate, 2),
                 fmt_signed_money(cum_pnl, 2),
-                fmt_percent(cum_rate, 2) if cum_rate is not None else "—",
+                f"{data['up_stocks']} 只",
+                f"{data['down_stocks']} 只",
             ])
 
         total_days = len(dates_asc)
@@ -1240,10 +1254,9 @@ class DailyPerformancePage(QWidget):
         avg_down_pnl = (down_pnl_sum / down_days) if down_days > 0 else 0.0
 
         # Update 7 KPI Cards
-        tot_rate_str = fmt_percent(total_pnl / base_init) if base_init > 0 else "—"
         self.kpi_cards["total"].set_data(
             fmt_signed_money(total_pnl),
-            f"收益率 {tot_rate_str}",
+            "",
             "profit" if total_pnl >= 0 else "loss",
         )
         self.kpi_cards["days"].set_data(
@@ -1396,7 +1409,7 @@ class DailyPerformancePage(QWidget):
 
         if current_tab == 0:
             # 📅 按日期汇总
-            cols = ("日期 (收盘)", "期初市值", "期末市值", "当日买入", "当日卖出", "当日净投入", "当日收益", "当日收益率", "累计收益", "累计收益率")
+            cols = ("日期 (收盘)", "期初市值", "期末市值", "当日买入", "当日卖出", "当日净投入", "当日收益", "当日收益率", "累计收益", "上涨股票数", "下跌股票数")
             rows = list(reversed(date_summaries))
             if self.active_kpi_filter == "up":
                 rows = [r for r in rows if "+" in str(r[6])]
@@ -1409,19 +1422,20 @@ class DailyPerformancePage(QWidget):
             # Set proportional column widths
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             self.table_view.setColumnWidth(0, 130)
-            self.table_view.setColumnWidth(1, 115)
-            self.table_view.setColumnWidth(2, 115)
-            self.table_view.setColumnWidth(3, 110)
-            self.table_view.setColumnWidth(4, 110)
-            self.table_view.setColumnWidth(5, 115)
-            self.table_view.setColumnWidth(6, 115)
-            self.table_view.setColumnWidth(7, 95)
-            self.table_view.setColumnWidth(8, 120)
-            header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
+            self.table_view.setColumnWidth(1, 110)
+            self.table_view.setColumnWidth(2, 110)
+            self.table_view.setColumnWidth(3, 105)
+            self.table_view.setColumnWidth(4, 105)
+            self.table_view.setColumnWidth(5, 110)
+            self.table_view.setColumnWidth(6, 110)
+            self.table_view.setColumnWidth(7, 90)
+            self.table_view.setColumnWidth(8, 115)
+            self.table_view.setColumnWidth(9, 95)
+            header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
 
         elif current_tab == 1:
             # 🏛️ 按渠道明细（与按日期汇总展示相同结构的资金流动与收益指标）
-            cols = ("日期", "券商渠道", "期初市值", "期末市值", "当日买入", "当日卖出", "当日净投入", "当日收益", "当日收益率", "累计收益", "累计收益率")
+            cols = ("日期", "券商渠道", "期初市值", "期末市值", "当日买入", "当日卖出", "当日净投入", "当日收益", "当日收益率", "累计收益", "上涨股票数", "下跌股票数")
             channel_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
             for r in filtered_rows:
                 key = (r[0], r[1])
@@ -1433,6 +1447,8 @@ class DailyPerformancePage(QWidget):
                         "buy": 0.0,
                         "sell": 0.0,
                         "net": 0.0,
+                        "up_stocks": 0,
+                        "down_stocks": 0,
                     }
                 item = channel_map[key]
                 item["init"] += float(r[15] or 0)
@@ -1444,6 +1460,10 @@ class DailyPerformancePage(QWidget):
                 item["buy"] += b_amt
                 item["sell"] += s_amt
                 item["net"] += (b_amt - s_amt)
+                if pnl > 0:
+                    item["up_stocks"] += 1
+                elif pnl < 0:
+                    item["down_stocks"] += 1
 
             # 各渠道分别计算按时间升序的累计收益
             broker_history: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
@@ -1455,21 +1475,11 @@ class DailyPerformancePage(QWidget):
             c_rows = []
             for b, entries in broker_history.items():
                 entries.sort(key=lambda x: x[0])
-                b_base = 0.0
-                for d, data in entries:
-                    if data["init"] > 0:
-                        b_base = data["init"]
-                        break
-                    elif data["end"] > 0:
-                        b_base = data["end"]
-                        break
-
                 b_cum = 0.0
                 for d, data in entries:
                     b_cum += data["pnl"]
                     init_v = data["init"]
                     rate = (data["pnl"] / init_v) if init_v > 0 else (data["pnl"] / data["buy"] if data["buy"] > 0 else 0.0)
-                    cum_rate = (b_cum / b_base) if b_base > 0 else None
                     c_rows.append([
                         d,
                         fmt_broker_cn(b),
@@ -1481,7 +1491,8 @@ class DailyPerformancePage(QWidget):
                         fmt_signed_money(data['pnl'], 2),
                         fmt_percent(rate, 2),
                         fmt_signed_money(b_cum, 2),
-                        fmt_percent(cum_rate, 2) if cum_rate is not None else "—",
+                        f"{data['up_stocks']} 只",
+                        f"{data['down_stocks']} 只",
                     ])
 
             # 默认按日期降序，同日期按渠道名称排序
@@ -1493,15 +1504,16 @@ class DailyPerformancePage(QWidget):
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             self.table_view.setColumnWidth(0, 130)
             self.table_view.setColumnWidth(1, 105)
-            self.table_view.setColumnWidth(2, 115)
-            self.table_view.setColumnWidth(3, 115)
-            self.table_view.setColumnWidth(4, 110)
-            self.table_view.setColumnWidth(5, 110)
-            self.table_view.setColumnWidth(6, 115)
-            self.table_view.setColumnWidth(7, 115)
-            self.table_view.setColumnWidth(8, 95)
-            self.table_view.setColumnWidth(9, 120)
-            header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
+            self.table_view.setColumnWidth(2, 110)
+            self.table_view.setColumnWidth(3, 110)
+            self.table_view.setColumnWidth(4, 105)
+            self.table_view.setColumnWidth(5, 105)
+            self.table_view.setColumnWidth(6, 110)
+            self.table_view.setColumnWidth(7, 110)
+            self.table_view.setColumnWidth(8, 90)
+            self.table_view.setColumnWidth(9, 115)
+            self.table_view.setColumnWidth(10, 95)
+            header.setSectionResizeMode(11, QHeaderView.ResizeMode.Stretch)
 
         else:
             # 📈 按股票明细

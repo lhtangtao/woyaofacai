@@ -63,6 +63,8 @@ interface DateSummary {
   profitRate: number;
   cumProfit: number;
   cumProfitRate: number;
+  upStocks: number;
+  downStocks: number;
 }
 
 interface ChannelSummary {
@@ -303,6 +305,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
         profit: number;
         buyAmount: number;
         sellAmount: number;
+        upStocks: number;
+        downStocks: number;
       }
     >();
 
@@ -314,6 +318,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           profit: 0,
           buyAmount: 0,
           sellAmount: 0,
+          upStocks: 0,
+          downStocks: 0,
         });
       }
       const item = dateMap.get(r.date)!;
@@ -322,6 +328,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       item.profit += r.dailyProfit || 0;
       item.buyAmount += r.buyAmount || 0;
       item.sellAmount += r.sellAmount || 0;
+      if ((r.dailyProfit || 0) > 0) item.upStocks++;
+      else if ((r.dailyProfit || 0) < 0) item.downStocks++;
     });
 
     const dates = Array.from(dateMap.keys()).sort();
@@ -357,6 +365,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
         profitRate,
         cumProfit: runningCum,
         cumProfitRate,
+        upStocks: data.upStocks,
+        downStocks: data.downStocks,
       };
     });
   }, [rawData]);
@@ -464,6 +474,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
         sellAmount: number;
         netAmount: number;
         dailyProfit: number;
+        upStocks: number;
+        downStocks: number;
       }
     >();
 
@@ -479,6 +491,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           sellAmount: 0,
           netAmount: 0,
           dailyProfit: 0,
+          upStocks: 0,
+          downStocks: 0,
         });
       }
       const item = map.get(key)!;
@@ -489,7 +503,10 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       item.buyAmount += bAmt;
       item.sellAmount += sAmt;
       item.netAmount += (bAmt - sAmt);
-      item.dailyProfit += r.dailyProfit || 0;
+      const p = r.dailyProfit || 0;
+      item.dailyProfit += p;
+      if (p > 0) item.upStocks++;
+      else if (p < 0) item.downStocks++;
     });
 
     // Group entries per channel to calculate historical cumulative returns
@@ -502,6 +519,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       sellAmount: number;
       netAmount: number;
       dailyProfit: number;
+      upStocks: number;
+      downStocks: number;
     }>>();
 
     map.forEach((item) => {
@@ -523,6 +542,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
       profitRate: number;
       cumProfit: number;
       cumProfitRate: number | null;
+      upStocks: number;
+      downStocks: number;
     }> = [];
 
     brokerMap.forEach((entries) => {
@@ -548,6 +569,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
           profitRate: rate,
           cumProfit: brokerCum,
           cumProfitRate: cumRate,
+          upStocks: e.upStocks,
+          downStocks: e.downStocks,
         });
       }
     });
@@ -1120,7 +1143,6 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
             {fmtSignedMoney(kpiStats.totalProfit)}
           </div>
           <div className="kpi-sub">
-            <span>收益率 {fmtPercent(kpiStats.totalProfitRate)}</span>
           </div>
         </div>
 
@@ -1400,7 +1422,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                     <th className="col-right">当日收益</th>
                     <th className="col-right">当日收益率</th>
                     <th className="col-right">累计收益</th>
-                    <th className="col-right">累计收益率</th>
+                    <th className="col-center">上涨股票数</th>
+                    <th className="col-center">下跌股票数</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1448,11 +1471,16 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                           {fmtSignedMoney(d.cumProfit, 2)}
                         </td>
                         <td
-                          className={`col-right ${
-                            d.cumProfitRate >= 0 ? "color-profit" : "color-loss"
-                          }`}
+                          className={`col-center ${d.upStocks > 0 ? "color-profit" : ""}`}
+                          style={{ fontWeight: 600 }}
                         >
-                          {fmtPercent(d.cumProfitRate, 2)}
+                          {d.upStocks} 只
+                        </td>
+                        <td
+                          className={`col-center ${d.downStocks > 0 ? "color-loss" : ""}`}
+                          style={{ fontWeight: 600 }}
+                        >
+                          {d.downStocks} 只
                         </td>
                       </tr>
                     ))}
@@ -1474,7 +1502,8 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                     <th className="col-right">当日收益</th>
                     <th className="col-right">当日收益率</th>
                     <th className="col-right">累计收益</th>
-                    <th className="col-right">累计收益率</th>
+                    <th className="col-center">上涨股票数</th>
+                    <th className="col-center">下跌股票数</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1523,11 +1552,16 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                           {fmtSignedMoney(cd.cumProfit, 2)}
                         </td>
                         <td
-                          className={`col-right ${
-                            (cd.cumProfitRate ?? 0) >= 0 ? "color-profit" : "color-loss"
-                          }`}
+                          className={`col-center ${cd.upStocks > 0 ? "color-profit" : ""}`}
+                          style={{ fontWeight: 600 }}
                         >
-                          {cd.cumProfitRate !== null ? fmtPercent(cd.cumProfitRate, 2) : "—"}
+                          {cd.upStocks} 只
+                        </td>
+                        <td
+                          className={`col-center ${cd.downStocks > 0 ? "color-loss" : ""}`}
+                          style={{ fontWeight: 600 }}
+                        >
+                          {cd.downStocks} 只
                         </td>
                       </tr>
                     ))}

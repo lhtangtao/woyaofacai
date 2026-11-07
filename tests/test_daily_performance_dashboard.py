@@ -52,25 +52,31 @@ def test_daily_performance_dashboard_full_parity(qtbot):
 
     # 5. Verify Table Tab 0 (按日期汇总)
     assert page.tab_bar.currentIndex() == 0
-    assert page.table_model.columnCount() == 10
-    # STRICT REQUIREMENT: NO "操作" column, NO "主要贡献股票", with buy/sell/net
+    assert page.table_model.columnCount() == 11
+    # STRICT REQUIREMENT: NO "操作", NO "主要贡献股票", NO "累计收益率", with buy/sell/net/up_stocks/down_stocks
     assert "操作" not in page.table_model.columns
     assert "主要贡献股票" not in page.table_model.columns
+    assert "累计收益率" not in page.table_model.columns
     assert "当日买入" in page.table_model.columns
     assert "当日卖出" in page.table_model.columns
     assert "当日净投入" in page.table_model.columns
+    assert "上涨股票数" in page.table_model.columns
+    assert "下跌股票数" in page.table_model.columns
     assert len(page.table_model.all_rows) == days_cnt
 
     # 6. Verify Table Tab 1 (按渠道明细: 与按日期汇总镜像对称)
     page.tab_bar.setCurrentIndex(1)
     page.on_table_tab_changed(1)
-    assert page.table_model.columnCount() == 11
+    assert page.table_model.columnCount() == 12
     assert "操作" not in page.table_model.columns
     assert "券商渠道" in page.table_model.columns
+    assert "累计收益率" not in page.table_model.columns
     assert "当日买入" in page.table_model.columns
     assert "当日卖出" in page.table_model.columns
     assert "当日净投入" in page.table_model.columns
     assert "累计收益" in page.table_model.columns
+    assert "上涨股票数" in page.table_model.columns
+    assert "下跌股票数" in page.table_model.columns
     # Verify broker channels are displayed in Chinese
     broker_vals = [r[1] for r in page.table_model.all_rows]
     assert any("长桥" in str(b) or "第一证券" in str(b) or "嘉信" in str(b) for b in broker_vals)
