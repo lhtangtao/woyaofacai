@@ -80,6 +80,27 @@ def fmt_percent(val: Any, digits: int = 2) -> str:
         return str(val)
 
 
+BROKER_NAME_MAP = {
+    "LONGBRIDGE": "长桥",
+    "LONG BRIDGE": "长桥",
+    "FIRSTRADE": "第一证券",
+    "SCHWAB": "嘉信",
+    "CHARLES SCHWAB": "嘉信",
+    "BBAE": "BBAE",
+    "IBKR": "盈透证券",
+    "INTERACTIVE BROKERS": "盈透证券",
+    "FUTU": "富途证券",
+    "TIGER": "老虎证券",
+}
+
+
+def fmt_broker_cn(name: Any) -> str:
+    if not name:
+        return "—"
+    s = str(name).strip()
+    return BROKER_NAME_MAP.get(s.upper(), BROKER_NAME_MAP.get(s, s))
+
+
 class KpiMetricCard(QFrame):
     clicked = Signal(str)
 
@@ -988,7 +1009,7 @@ class DailyPerformancePage(QWidget):
         self.broker_combo.clear()
         self.broker_combo.addItem("全部渠道", "")
         for b in brokers:
-            self.broker_combo.addItem(b, b)
+            self.broker_combo.addItem(fmt_broker_cn(b), b)
         self.broker_combo.blockSignals(False)
 
         cats = sorted({r[2] for r in self.raw_rows if r[2]})
@@ -1034,8 +1055,17 @@ class DailyPerformancePage(QWidget):
             clean = (broker_name or "").strip()
             self.selected_broker = clean
             self.broker_combo.blockSignals(True)
-            idx = self.broker_combo.findText(clean) if clean else 0
-            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            idx = 0
+            if clean:
+                for i in range(self.broker_combo.count()):
+                    if (
+                        self.broker_combo.itemData(i) == clean
+                        or self.broker_combo.itemText(i) == clean
+                        or self.broker_combo.itemText(i) == fmt_broker_cn(clean)
+                    ):
+                        idx = i
+                        break
+            self.broker_combo.setCurrentIndex(idx)
             self.broker_combo.blockSignals(False)
             self.recalculate_and_refresh()
         finally:
@@ -1043,13 +1073,11 @@ class DailyPerformancePage(QWidget):
 
     def apply_filter(self):
         p_id = self.person_combo.currentData()
-        b_name = self.broker_combo.currentText()
-        if b_name == "全部渠道":
-            b_name = ""
+        b_data = self.broker_combo.currentData()
 
         person_changed = (p_id != self.selected_person_id)
         self.selected_person_id = p_id
-        self.selected_broker = b_name
+        self.selected_broker = b_data or ""
         self.search_ticker = self.ticker_input.text().strip().upper()
         self.selected_category = self.category_combo.currentText()
         if self.selected_category == "全部分类":
@@ -1105,7 +1133,7 @@ class DailyPerformancePage(QWidget):
         filtered: List[Tuple] = []
         for r in self.raw_rows:
             d, b, cat, sym = r[0], r[1], r[2], r[3]
-            if self.selected_broker and b != self.selected_broker:
+            if self.selected_broker and b != self.selected_broker and fmt_broker_cn(b) != self.selected_broker:
                 continue
             if self.search_ticker and self.search_ticker not in sym:
                 continue
@@ -1286,7 +1314,7 @@ class DailyPerformancePage(QWidget):
             r_layout = QHBoxLayout(row_frame)
             r_layout.setContentsMargins(6, 3, 6, 3)
 
-            b_name = QLabel(b)
+            b_name = QLabel(fmt_broker_cn(b))
             b_name.setStyleSheet("font-size: 12px; font-weight: 600; color: #1E293B;")
             r_layout.addWidget(b_name)
             r_layout.addStretch()
@@ -1307,11 +1335,16 @@ class DailyPerformancePage(QWidget):
             self.broker_list_layout.addWidget(row_frame)
 
     def filter_by_broker(self, broker_name: str):
-        idx = self.broker_combo.findText(broker_name)
-        if idx >= 0:
-            self.broker_combo.setCurrentIndex(idx)
-            self.tab_bar.setCurrentIndex(1)
-            self.apply_filter()
+        target_cn = fmt_broker_cn(broker_name)
+        idx = 0
+        for i in range(self.broker_combo.count()):
+            if self.broker_combo.itemData(i) == broker_name or self.broker_combo.itemText(i) == target_cn:
+                idx = i
+                break
+        self.broker_combo.setCurrentIndex(idx)
+        self.selected_broker = self.broker_combo.itemData(idx) or ""
+        self.tab_bar.setCurrentIndex(1)
+        self.apply_filter()
 
     def update_date_distribution(self, filtered_rows: List[Tuple]):
         target_d = self.selected_date or self.max_as_of_date
@@ -1368,15 +1401,15 @@ class DailyPerformancePage(QWidget):
 
             # Set proportional column widths
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 95)
-            self.table_view.setColumnWidth(1, 105)
-            self.table_view.setColumnWidth(2, 105)
-            self.table_view.setColumnWidth(3, 100)
-            self.table_view.setColumnWidth(4, 100)
-            self.table_view.setColumnWidth(5, 105)
-            self.table_view.setColumnWidth(6, 110)
-            self.table_view.setColumnWidth(7, 90)
-            self.table_view.setColumnWidth(8, 115)
+            self.table_view.setColumnWidth(0, 130)
+            self.table_view.setColumnWidth(1, 115)
+            self.table_view.setColumnWidth(2, 115)
+            self.table_view.setColumnWidth(3, 110)
+            self.table_view.setColumnWidth(4, 110)
+            self.table_view.setColumnWidth(5, 115)
+            self.table_view.setColumnWidth(6, 115)
+            self.table_view.setColumnWidth(7, 95)
+            self.table_view.setColumnWidth(8, 120)
             header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
 
         elif current_tab == 1:
@@ -1432,7 +1465,7 @@ class DailyPerformancePage(QWidget):
                     cum_rate = (b_cum / b_base) if b_base > 0 else None
                     c_rows.append([
                         d,
-                        b,
+                        fmt_broker_cn(b),
                         f"${fmt_money(init_v, 2)}",
                         f"${fmt_money(data['end'], 2)}",
                         f"${fmt_money(data['buy'], 2)}",
@@ -1451,16 +1484,16 @@ class DailyPerformancePage(QWidget):
             self.table_count_lbl.setText(f"共 {len(c_rows)} 条记录")
 
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 95)
+            self.table_view.setColumnWidth(0, 130)
             self.table_view.setColumnWidth(1, 105)
-            self.table_view.setColumnWidth(2, 100)
-            self.table_view.setColumnWidth(3, 100)
-            self.table_view.setColumnWidth(4, 95)
-            self.table_view.setColumnWidth(5, 95)
-            self.table_view.setColumnWidth(6, 100)
-            self.table_view.setColumnWidth(7, 105)
-            self.table_view.setColumnWidth(8, 85)
-            self.table_view.setColumnWidth(9, 110)
+            self.table_view.setColumnWidth(2, 115)
+            self.table_view.setColumnWidth(3, 115)
+            self.table_view.setColumnWidth(4, 110)
+            self.table_view.setColumnWidth(5, 110)
+            self.table_view.setColumnWidth(6, 115)
+            self.table_view.setColumnWidth(7, 115)
+            self.table_view.setColumnWidth(8, 95)
+            self.table_view.setColumnWidth(9, 120)
             header.setSectionResizeMode(10, QHeaderView.ResizeMode.Stretch)
 
         else:
@@ -1478,7 +1511,7 @@ class DailyPerformancePage(QWidget):
 
                 s_rows.append([
                     r[0],
-                    r[1],
+                    fmt_broker_cn(r[1]),
                     r[3],
                     r[2],
                     fmt_money(r[8]),
@@ -1493,8 +1526,16 @@ class DailyPerformancePage(QWidget):
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
 
             header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-            self.table_view.setColumnWidth(0, 100)
-            self.table_view.setColumnWidth(1, 110)
+            self.table_view.setColumnWidth(0, 130)
+            self.table_view.setColumnWidth(1, 105)
+            self.table_view.setColumnWidth(2, 90)
+            self.table_view.setColumnWidth(3, 95)
+            self.table_view.setColumnWidth(4, 95)
+            self.table_view.setColumnWidth(5, 95)
+            self.table_view.setColumnWidth(6, 95)
+            self.table_view.setColumnWidth(7, 115)
+            self.table_view.setColumnWidth(8, 95)
+            header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
             self.table_view.setColumnWidth(2, 85)
             self.table_view.setColumnWidth(3, 80)
             self.table_view.setColumnWidth(4, 90)
@@ -1593,7 +1634,7 @@ class DailyPerformancePage(QWidget):
 
             info_v = QVBoxLayout()
             info_v.setSpacing(2)
-            sym_lbl = QLabel(f"{r[3]} ({r[1]})")
+            sym_lbl = QLabel(f"{r[3]} ({fmt_broker_cn(r[1])})")
             sym_lbl.setStyleSheet("font-size: 12px; font-weight: bold; color: #2563EB;")
             sub_lbl = QLabel(f"持仓 {fmt_money(r[8])} 股 · 收盘 ${fmt_money(r[10])}")
             sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
@@ -1626,12 +1667,13 @@ class DailyPerformancePage(QWidget):
         self.show_drawer()
 
     def open_channel_drawer(self, channel: str, date_str: str):
-        self.drawer_title.setText(f"渠道收益详情 · {channel}")
-        c_rows = [r for r in self.raw_rows if r[1] == channel]
+        ch_cn = fmt_broker_cn(channel)
+        self.drawer_title.setText(f"渠道收益详情 · {ch_cn}")
+        c_rows = [r for r in self.raw_rows if r[1] == channel or fmt_broker_cn(r[1]) == ch_cn]
         tot_pnl = sum(float(r[19] or 0) for r in c_rows)
 
         self.drawer_content_lbl.setText(
-            f"券商渠道：{channel}\n"
+            f"券商渠道：{ch_cn}\n"
             f"期间累计收益：{fmt_signed_money(tot_pnl)}\n"
             f"历史交易记录数：{len(c_rows)} 条"
         )

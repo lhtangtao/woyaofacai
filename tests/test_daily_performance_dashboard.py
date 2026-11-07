@@ -71,6 +71,10 @@ def test_daily_performance_dashboard_full_parity(qtbot):
     assert "当日卖出" in page.table_model.columns
     assert "当日净投入" in page.table_model.columns
     assert "累计收益" in page.table_model.columns
+    # Verify broker channels are displayed in Chinese
+    broker_vals = [r[1] for r in page.table_model.all_rows]
+    assert any("长桥" in str(b) or "第一证券" in str(b) or "嘉信" in str(b) for b in broker_vals)
+    assert not any("LONGBRIDGE" == str(b) for b in broker_vals)
 
     # 7. Verify Table Tab 2 (按股票明细)
     page.tab_bar.setCurrentIndex(2)

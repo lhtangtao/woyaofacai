@@ -94,6 +94,25 @@ const fmtPercent = (val: number | null | undefined, digits = 2): string => {
   return `${sign}${Math.abs(num).toFixed(digits)}%`;
 };
 
+const BROKER_CN_MAP: Record<string, string> = {
+  LONGBRIDGE: "长桥",
+  "LONG BRIDGE": "长桥",
+  FIRSTRADE: "第一证券",
+  SCHWAB: "嘉信",
+  "CHARLES SCHWAB": "嘉信",
+  BBAE: "BBAE",
+  IBKR: "盈透证券",
+  "INTERACTIVE BROKERS": "盈透证券",
+  FUTU: "富途证券",
+  TIGER: "老虎证券",
+};
+
+const fmtBrokerCn = (broker: string | null | undefined): string => {
+  if (!broker) return "—";
+  const upper = broker.toUpperCase().trim();
+  return BROKER_CN_MAP[upper] || broker;
+};
+
 export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
   personId,
   onPersonChange,
@@ -957,7 +976,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
               <option value="">全部渠道</option>
               {channelList.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {fmtBrokerCn(c)}
                 </option>
               ))}
             </select>
@@ -1308,7 +1327,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                 }}
               >
                 <div className="channel-info">
-                  <span className="channel-name">{c.channel}</span>
+                  <span className="channel-name">{fmtBrokerCn(c.channel)}</span>
                   <span
                     className={`channel-rate ${
                       c.profitRate >= 0 ? "color-profit" : "color-loss"
@@ -1487,7 +1506,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         onClick={() => openChannelDetail(cd.channel, cd.date)}
                       >
                         <td style={{ fontWeight: 600 }}>{cd.date}</td>
-                        <td>{cd.channel}</td>
+                        <td>{fmtBrokerCn(cd.channel)}</td>
                         <td className="col-right">${fmtMoney(cd.initValue, 2)}</td>
                         <td className="col-right">${fmtMoney(cd.marketValue, 2)}</td>
                         <td className="col-right">${fmtMoney(cd.buyAmount, 2)}</td>
@@ -1561,7 +1580,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                         onClick={() => openStockDetail(s.symbol, s.date)}
                       >
                         <td style={{ fontWeight: 600 }}>{s.date}</td>
-                        <td>{s.channel}</td>
+                        <td>{fmtBrokerCn(s.channel)}</td>
                         <td style={{ fontWeight: 700, color: "#2563EB" }}>{s.symbol}</td>
                         <td>{s.category}</td>
                         <td className="col-right">{fmtMoney(s.endQty, 2)}</td>
@@ -1716,7 +1735,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                 )}
                 <div style={{ fontSize: 16, fontWeight: 700, color: "#1E293B" }}>
                   {drawerMode === "date" && `单日收益详情 · ${drawerTargetDate}`}
-                  {drawerMode === "channel" && `渠道收益详情 · ${drawerTargetChannel}`}
+                  {drawerMode === "channel" && `渠道收益详情 · ${fmtBrokerCn(drawerTargetChannel)}`}
                   {drawerMode === "stock" && `标的历史收益 · ${drawerTargetStock}`}
                 </div>
               </div>
@@ -1812,7 +1831,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                               <span style={{ fontWeight: 700, color: "#2563EB", fontSize: 13 }}>
                                 {r.symbol}
                               </span>
-                              <span style={{ fontSize: 11, color: "#64748B" }}>({r.channel})</span>
+                              <span style={{ fontSize: 11, color: "#64748B" }}>({fmtBrokerCn(r.channel)})</span>
                             </div>
                             <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2 }}>
                               持仓: {fmtMoney(r.endQty)} 股 · 收盘价: ${fmtMoney(r.closePrice)}
@@ -1859,7 +1878,7 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
                               alignItems: "center",
                             }}
                           >
-                            <span style={{ fontWeight: 600, fontSize: 13 }}>{c.channel}</span>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{fmtBrokerCn(c.channel)}</span>
                             <span
                               style={{
                                 fontWeight: 600,
