@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import {
   Users,
@@ -16,8 +16,6 @@ import {
   Eye,
 } from "lucide-react";
 import { api } from "../api/client";
-import { openHoldingColumns,closedHoldingColumns,holdingCell,holdingNumber,holdingTone,holdingQuantity } from "./holdings-presentation";
-import "./holdings.css";
 import { StockDrawer } from "../components/StockDrawer";
 
 interface HoldingsViewProps {
@@ -71,13 +69,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [detailRows, setDetailRows] = useState<any[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailPage, setDetailPage] = useState(1);
-  const [detailPageSize,setDetailPageSize] = useState(25);
-  const [category,setCategory] = useState("");
-  const [advanced,setAdvanced] = useState(false);
-  const [hiddenColumns,setHiddenColumns] = useState<string[]>([]);
-  const [selectedRow,setSelectedRow] = useState("");
-  const [error,setError] = useState("");
-  const dashRequest=useRef(0),detailRequest=useRef(0);
+  const [detailPageSize] = useState(25);
   const [sortField, setSortField] = useState<string>(initialStatus === "已清仓" ? "last_close_date" : "market_value");
   const [sortAsc, setSortAsc] = useState<boolean>(false);
 
@@ -143,43 +135,52 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   // Load Dashboard Data
   const loadDashboard = () => {
-    const request=++dashRequest.current;setDashLoading(true);setError("");
+    setDashLoading(true);
     api
-      .holdingsDashboard(selectedPersonId,selectedBroker||undefined)
+      .holdingsDashboard(selectedPersonId)
       .then((res) => {
-        if(request!==dashRequest.current)return;
         if (res.status === "ok") {
           setDashboardData(res);
-        }else throw new Error(res.message||"总览加载失败");
+        }
       })
-      .catch((err) => {if(request===dashRequest.current)setError(err.message||"总览加载失败")})
-      .finally(() => {if(request===dashRequest.current)setDashLoading(false)});
+      .catch((err) => console.error("Holdings dashboard load error:", err))
+      .finally(() => setDashLoading(false));
   };
 
   // Load Detail Rows
-  const loadDetail = async () => {
-    const request=++detailRequest.current;setDetailLoading(true);setError('');
-    try{
-      const params={dimension,person_id:selectedPersonId,broker:selectedBroker||undefined,ticker:selectedTicker||undefined,status:statusFilter,search:searchKeyword||undefined,page_size:200};
-      const first=await api.holdingsDetail({...params,page:1});
-      if(first.status!=='ok')throw new Error(first.message||'明细加载失败');
-      const rows=[...(first.rows||[])];
-      for(let page=2;rows.length<first.total;page++){
-        if(request!==detailRequest.current)return;
-        const next=await api.holdingsDetail({...params,page});
-        if(next.status!=='ok'||!next.rows?.length)throw new Error(next.message||'未能读取全部匹配记录，请重试');
-        rows.push(...next.rows);
-      }
-      if(request===detailRequest.current){setDetailRows(rows);setDetailPage(1)}
-    }catch(err:any){if(request===detailRequest.current)setError(err.message||'持仓明细加载失败')}
-    finally{if(request===detailRequest.current)setDetailLoading(false)}
+  const loadDetail = () => {
+    setDetailLoading(true);
+    api
+      .holdingsDetail({
+        dimension,
+        person_id: selectedPersonId,
+        broker: selectedBroker || undefined,
+        ticker: selectedTicker || undefined,
+        status: statusFilter !== "全部" ? statusFilter : undefined,
+        search: searchKeyword || undefined,
+        page: 1,
+        page_size: 200,
+      })
+      .then((res) => {
+        if (res.status === "ok") {
+          setDetailRows(res.rows || []);
+        }
+      })
+      .catch((err) => console.error("Holdings detail load error:", err))
+      .finally(() => setDetailLoading(false));
   };
-  useEffect(()=>{loadDashboard();return()=>{dashRequest.current++}},[selectedPersonId,selectedBroker]);
-  useEffect(()=>{if(viewMode==='detail')loadDetail();return()=>{detailRequest.current++}},[viewMode,dimension,selectedPersonId,selectedBroker,selectedTicker,statusFilter,searchKeyword]);
+
+  useEffect(() => {
+    if (viewMode === "dashboard") {
+      loadDashboard();
+    } else {
+      loadDetail();
+    }
+  }, [viewMode, dimension, selectedPersonId, selectedBroker, selectedTicker, statusFilter, searchKeyword]);
 
   // Formatters
   const formatNumber = (val: any, decimals = 2) => {
-    if (val == null || isNaN(Number(val))) return "—";
+    if (val == null || isNaN(Number(val))) return "0.00";
     return Number(val).toLocaleString(undefined, {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
@@ -208,20 +209,25 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const drillToBroker = (brokerName: string) => {
     setSelectedBroker(brokerName);
     if (onBrokerChange) onBrokerChange(brokerName);
+    setSelectedTicker("");
+    setSearchKeyword("");
     setDimension("broker");
     setDetailPage(1);
     setViewMode("detail");
   };
 
   const drillToStock = (tk: string) => {
-    setSelectedTicker(tk);
+    setSelectedBroker("");
+    if (onBrokerChange) onBrokerChange("");
+    setSelectedTicker("");
+    setSearchKeyword(tk);
     setDimension("stock");
     setDetailPage(1);
     setViewMode("detail");
   };
 
   // Sorted and paged detail rows
-  const sortedDetailRows = detailRows.filter(r=>!category||r.category===category).sort((a, b) => {
+  const sortedDetailRows = [...detailRows].sort((a, b) => {
     const valA = a[sortField];
     const valB = b[sortField];
     if (valA == null && valB == null) return 0;
@@ -273,7 +279,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
     return sSortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
   });
 
-  useEffect(()=>{setDetailPage(1)},[category,statusFilter,sortField,sortAsc]);
   const totalDetailCount = sortedDetailRows.length;
   const totalDetailPages = Math.max(1, Math.ceil(totalDetailCount / detailPageSize));
   const currentDetailRows = sortedDetailRows.slice((detailPage - 1) * detailPageSize, detailPage * detailPageSize);
@@ -323,7 +328,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           textAlign: "center",
           fontSize: 15,
           fontWeight: "bold",
-          fill: "#1E293B",
+          fill: "var(--text-heading, #1e293b)",
         },
       },
       {
@@ -334,7 +339,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           text: "USD",
           textAlign: "center",
           fontSize: 11,
-          fill: "#64748B",
+          fill: "var(--text-muted, #64748b)",
         },
       },
     ],
@@ -445,43 +450,895 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   const enabledPersons = persons.filter((p) => p.enabled !== false);
 
-  const columns=statusFilter==='已清仓'?closedHoldingColumns:openHoldingColumns;
-  const categories=Array.from(new Set<string>(detailRows.map(r=>r.category).filter(Boolean)));
-  const query=()=>{if(category||selectedTicker||searchKeyword)viewMode==='dashboard'?setViewMode('detail'):loadDetail();else viewMode==='dashboard'?loadDashboard():loadDetail()};
-  const reset=()=>{setSelectedPersonId(null);onPersonChange?.(null);setSelectedBroker('');onBrokerChange?.('');setSelectedTicker('');setSearchKeyword('');setCategory('');setStatusFilter('持有中');setDetailPage(1)};
-  const summaryTable=(title:string,rows:any[],nameKey:string,onRow:(r:any)=>void,sort:(key:string)=>void,sortKey:string,asc:boolean,person=false)=><section className="hp-card hp-summary"><header><h3>{title}</h3><span>点击下钻明细</span></header><div className="hp-summary-scroll"><table><thead><tr>{[[nameKey,person?'人员':nameKey==='channel'?'券商':'Ticker'],['market_value','市值'],['total_pnl','累计盈亏'],['pnl_rate','收益率'],...(person?[['open_stocks','股票数']]:[])].map(([k,label])=><th key={k} onClick={()=>sort(k)}>{label}{sortKey===k?(asc?' ↑':' ↓'):''}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i} onClick={()=>onRow(r)}><td className={nameKey==='ticker'?'hp-ticker':''}>{r[nameKey]||'—'}</td><td>{holdingNumber(r.market_value)}</td><td className={holdingTone(r.total_pnl)}>{holdingCell(r,{key:'total_pnl',label:'',kind:'pnl'})}</td><td className={holdingTone(r.pnl_rate)}>{holdingCell(r,{key:'pnl_rate',label:'',kind:'rate'})}</td>{person&&<td>{r.open_stocks??'—'}</td>}</tr>)}</tbody></table>{!rows.length&&<p className="hp-empty">{dashLoading?'正在读取汇总…':'当前范围暂无汇总数据'}</p>}</div></section>;
-  return <section className="hp-page">
-    <div className="hp-toolbar"><div className="hp-segment"><button className={viewMode==='dashboard'?'active':''} onClick={()=>setViewMode('dashboard')}>总览</button><button className={viewMode==='detail'?'active':''} onClick={()=>setViewMode('detail')}>持仓明细</button></div><div><button className="hp-button" onClick={()=>{loadDashboard();if(viewMode==='detail')loadDetail()}}>↻ 刷新</button><button className="hp-button primary" disabled={!detailRows.length||viewMode!=='detail'} title={viewMode==='dashboard'?'进入持仓明细后导出当前筛选结果':''} onClick={exportDetailCsv}>↓ 导出明细</button></div></div>
-    <div className="hp-metrics">
-      <article className="hp-card hp-metric"><Wallet/><label>持仓总市值</label><strong>{dashLoading?'…':holdingNumber(cards.total_market_value)}</strong><small>浮动盈亏 <span className={holdingTone(cards.floating_pnl)}>{holdingCell(cards,{key:'floating_pnl',label:'',kind:'pnl'})}</span></small></article>
-      <article className="hp-card hp-metric"><Layers/><label>持仓股票数量</label><strong>{dashLoading?'…':cards.open_stock_count??'—'}</strong><small>历史标的 {cards.total_stock_count??'—'} · 已清仓 {cards.closed_stock_count??'—'}</small></article>
-      <article className="hp-card hp-metric"><TrendingUp/><label>累计盈亏（含已清仓）</label><strong className={holdingTone(cards.cumulative_pnl)}>{dashLoading?'…':holdingCell(cards,{key:'cumulative_pnl',label:'',kind:'pnl'})}</strong><small>收益率 <span className={holdingTone(cards.cumulative_pnl_rate)}>{holdingCell(cards,{key:'cumulative_pnl_rate',label:'',kind:'rate'})}</span></small></article>
-      <article className="hp-card hp-metric"><Activity/><label>总投入 · 既定净投入口径</label><strong>{dashLoading?'…':holdingNumber(cards.total_invested)}</strong><small>已实现盈亏 <span className={holdingTone(cards.realized_pnl)}>{holdingCell(cards,{key:'realized_pnl',label:'',kind:'pnl'})}</span></small></article>
-    </div>
-    <div className="hp-card hp-filters">
-      <div className="hp-filter-fields"><label>归属人员<select value={selectedPersonId??''} onChange={e=>{const id=e.target.value?Number(e.target.value):null;setSelectedPersonId(id);onPersonChange?.(id)}}><option value="">全部启用人员</option>{enabledPersons.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-      <label>券商渠道<select value={selectedBroker} onChange={e=>{setSelectedBroker(e.target.value);onBrokerChange?.(e.target.value)}}><option value="">全部渠道</option>{['长桥','BBAE','第一证券','嘉信'].map(b=><option key={b}>{b}</option>)}</select></label>
-      <label>Ticker<input value={selectedTicker} placeholder="搜索股票代码" onChange={e=>setSelectedTicker(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==='Enter')query()}}/></label>
-      <label>持仓状态<select value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setViewMode('detail');setDetailPage(1)}}><option>持有中</option><option>已清仓</option></select></label>
-      <label>股票分类<select value={category} onFocus={()=>{if(!detailRows.length&&viewMode==='dashboard')loadDetail()}} onChange={e=>{setCategory(e.target.value);setViewMode('detail');setDetailPage(1)}}><option value="">全部分类</option>{categories.map(c=><option key={c}>{c}</option>)}</select></label>
-      <div className="hp-actions"><button className="hp-button primary" onClick={query}>查询</button><button className="hp-button" onClick={reset}>重置</button><button className="hp-button text" aria-expanded={advanced} onClick={()=>setAdvanced(!advanced)}>高级筛选 {advanced?'▴':'▾'}</button></div></div>
-      {advanced&&<div className="hp-advanced"><label>组合搜索<input value={searchKeyword} placeholder="人员、券商或股票代码" onChange={e=>setSearchKeyword(e.target.value)}/></label><small>股票、状态和分类用于持仓明细；总览统计沿用当前人员及渠道范围，包含历史已清仓收益。</small></div>}
-      <div className="hp-chips">{selectedPersonId!=null&&<button onClick={()=>{setSelectedPersonId(null);onPersonChange?.(null)}}>人员：{persons.find(p=>p.id===selectedPersonId)?.name||selectedPersonId} ×</button>}{selectedBroker&&<button onClick={()=>{setSelectedBroker('');onBrokerChange?.('')}}>渠道：{selectedBroker} ×</button>}{selectedTicker&&<button onClick={()=>setSelectedTicker('')}>股票：{selectedTicker} ×</button>}{category&&<button onClick={()=>setCategory('')}>分类：{category} ×</button>}<button onClick={()=>setStatusFilter('持有中')}>状态：{statusFilter} {statusFilter==='已清仓'?'×':''}</button>{searchKeyword&&<button onClick={()=>setSearchKeyword('')}>搜索：{searchKeyword} ×</button>}</div>
-    </div>
-    {error&&<div className="hp-error" role="alert">{error}<button className="hp-button" onClick={query}>重试</button></div>}
-    {viewMode==='dashboard'?<>
-      <div className="hp-summaries">
-        {summaryTable('按人员汇总',sortedPersonSummary,'name',r=>drillToPerson(r.person_id),togglePSort,pSortField,pSortAsc,true)}
-        {summaryTable('按券商汇总',sortedBrokerSummary,'channel',r=>drillToBroker(r.channel),toggleBSort,bSortField,bSortAsc)}
-        {summaryTable('按股票汇总',sortedStockSummary,'ticker',r=>drillToStock(r.ticker),toggleSSort,sSortField,sSortAsc)}
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto", position: "relative" }}>
+      {/* Top Header Bar: Person Tabs on Left, Mode Switcher on Right */}
+      <div
+        className="card-panel"
+        style={{
+          padding: "10px 16px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "10px",
+        }}
+      >
+        {/* Left: Person Filter Dropdown (与前面页面统一的下拉选择框风格) */}
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <select
+            value={selectedPersonId == null ? "" : String(selectedPersonId)}
+            onChange={(e) => {
+              const val = e.target.value ? Number(e.target.value) : null;
+              setSelectedPersonId(val);
+              if (onPersonChange) onPersonChange(val);
+            }}
+            className="input-control"
+            style={{ fontSize: "13px", padding: "6px 12px", minWidth: "140px", borderRadius: "8px" }}
+          >
+            <option value="">全部启用人员</option>
+            {enabledPersons.map((p) => (
+              <option key={p.id} value={String(p.id)}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Right: View Mode Toggle (仪表板总览 vs 持仓明细页) */}
+        <div
+          style={{
+            display: "flex",
+            background: "var(--bg-app, #f1f5f9)",
+            padding: "3px",
+            borderRadius: "8px",
+            border: "1px solid var(--border-color, #e2e8f0)",
+          }}
+        >
+          <button
+            onClick={() => setViewMode("dashboard")}
+            style={{
+              padding: "5px 14px",
+              borderRadius: "6px",
+              border: "none",
+              background: viewMode === "dashboard" ? "var(--brand, #2563eb)" : "transparent",
+              color: viewMode === "dashboard" ? "#fff" : "var(--text-muted, #64748b)",
+              fontWeight: viewMode === "dashboard" ? 700 : 500,
+              fontSize: "12px",
+              cursor: "pointer",
+            }}
+          >
+            仪表板总览
+          </button>
+          <button
+            onClick={() => setViewMode("detail")}
+            style={{
+              padding: "5px 14px",
+              borderRadius: "6px",
+              border: "none",
+              background: viewMode === "detail" ? "var(--brand, #2563eb)" : "transparent",
+              color: viewMode === "detail" ? "#fff" : "var(--text-muted, #64748b)",
+              fontWeight: viewMode === "detail" ? 700 : 500,
+              fontSize: "12px",
+              cursor: "pointer",
+            }}
+          >
+            持仓明细页
+          </button>
+        </div>
       </div>
-      <section className="hp-card hp-distribution"><header><div><h3>资产分布</h3><small>当前人员及渠道范围 · 持仓市值</small></div><div className="hp-segment">{[['by_person','按人员'],['by_broker','按券商'],['by_stock','按股票']].map(([key,label])=><button key={key} className={distTab===key?'active':''} onClick={()=>setDistTab(key as any)}>{label}</button>)}</div></header><div className="hp-distribution-body"><ReactECharts option={donutOption} style={{height:220,width:260,flexShrink:0}}/><div className="hp-legend">{donutSlices.map((d,i)=><div key={d.name}><span><i style={{background:donutColors[i%donutColors.length]}}/>{d.name}</span><strong>{holdingNumber(d.value)}</strong><span>{holdingNumber(d.percent,1)}%</span></div>)}{!donutSlices.length&&<p className="hp-empty">当前范围暂无有效资产分布</p>}</div></div></section>
-    </>:<section className="hp-card hp-detail"><header><div><button className="hp-button text" onClick={()=>setViewMode('dashboard')}>← 返回总览</button><h3>{statusFilter==='已清仓'?'已清仓明细':'当前持仓明细'}</h3><small>{totalDetailCount} 条记录</small></div><div className="hp-actions"><div className="hp-segment">{[['person','按人员'],['broker','按券商'],['stock','按股票']].map(([k,label])=><button key={k} className={dimension===k?'active':''} onClick={()=>setDimension(k as any)}>{label}</button>)}</div><details className="hp-columns"><summary>☷ 显示列</summary><div>{columns.map(c=><label key={c.key}><input type="checkbox" checked={!hiddenColumns.includes(c.key)} onChange={()=>setHiddenColumns(h=>h.includes(c.key)?h.filter(k=>k!==c.key):[...h,c.key])}/>{c.label}</label>)}</div></details></div></header>
-      <div className="hp-table-scroll"><table><thead><tr>{columns.filter(c=>!hiddenColumns.includes(c.key)).map(c=><th className={c.kind?'numeric':''} key={c.key} onClick={()=>toggleDetailSort(c.key)}>{c.label}{sortField===c.key?(sortAsc?' ↑':' ↓'):''}</th>)}</tr></thead><tbody>
-      {detailLoading?<tr><td className="hp-empty" colSpan={columns.length}>正在读取当前范围的完整持仓明细…</td></tr>:currentDetailRows.map((r,i)=>{const key=`${r.person_id}-${r.account_id}-${r.ticker}`;return <tr key={key+'-'+i} className={selectedRow===key?'selected':''} onClick={()=>{setSelectedRow(key);setDrawerTicker(r.ticker)}}>{columns.filter(c=>!hiddenColumns.includes(c.key)).map(c=><td key={c.key} className={`${c.kind?'numeric':''} ${c.key==='ticker'?'hp-ticker':''} ${c.kind==='rate'||c.kind==='pnl'?holdingTone(r[c.key]):''}`} title={c.key==='close_price'&&r.is_split_adjusted?`原始清仓价 ${holdingNumber(r.orig_close_price)}；${r.split_notes||''}`:undefined}>{holdingCell(r,c)}</td>)}</tr>})}
-      {!detailLoading&&!currentDetailRows.length&&<tr><td className="hp-empty" colSpan={columns.length}>没有符合当前筛选的持仓记录</td></tr>}</tbody></table></div>
-      <footer><span>共 {totalDetailCount} 条 · 第 {detailPage} / {totalDetailPages} 页</span><div><select value={detailPageSize} onChange={e=>{setDetailPageSize(Number(e.target.value));setDetailPage(1)}}>{[25,50,100,200].map(n=><option key={n} value={n}>每页 {n} 条</option>)}</select><button className="hp-button" disabled={detailPage<=1} onClick={()=>setDetailPage(p=>p-1)}>上一页</button><button className="hp-button" disabled={detailPage>=totalDetailPages} onClick={()=>setDetailPage(p=>p+1)}>下一页</button></div></footer>
-    </section>}
-    <StockDrawer className="hp-stock-drawer" ticker={drawerTicker} personId={selectedPersonId} broker={selectedBroker} onClose={()=>setDrawerTicker(null)}/>
-  </section>;
+
+      {/* =========================================================================
+          VIEW 1: 主页仪表板 (Dashboard)
+          ========================================================================= */}
+      {viewMode === "dashboard" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* Top 4 Summary Cards (Matching Mockup) */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px" }}>
+            {/* Card 1: 持仓总市值 */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>持仓总市值 (USD)</div>
+              <div style={{ fontSize: "24px", fontWeight: 800, marginTop: "6px", fontFamily: "var(--font-mono)", color: "var(--text-heading, #0f172a)" }}>
+                ${formatNumber(cards.total_market_value, 2)}
+              </div>
+              <div style={{ marginTop: "6px", fontSize: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                <span
+                  style={{
+                    color: (cards.floating_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                    fontWeight: 700,
+                  }}
+                >
+                  {(cards.floating_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.floating_pnl, 2)}
+                </span>
+                <span
+                  style={{
+                    color: (cards.floating_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                    fontWeight: 600,
+                  }}
+                >
+                  {formatPercent(cards.floating_pnl_rate)}
+                </span>
+              </div>
+            </div>
+
+            {/* Card 2: 持仓股票 */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>持仓股票</div>
+              <div style={{ fontSize: "24px", fontWeight: 800, marginTop: "6px", fontFamily: "var(--font-mono)", color: "var(--text-heading, #0f172a)" }}>
+                {cards.total_stock_count ?? "0"}
+              </div>
+              <div style={{ marginTop: "6px", fontSize: "12px", color: "var(--text-muted, #64748b)" }}>
+                当前持仓 <strong style={{ color: "var(--text-heading)" }}>{cards.open_stock_count ?? 0}</strong> | 已清仓{" "}
+                <strong style={{ color: "var(--text-heading)" }}>{cards.closed_stock_count ?? 0}</strong>
+              </div>
+            </div>
+
+            {/* Card 3: 累计盈亏 (含已清仓) */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>累计盈亏 (含已清仓)</div>
+              <div
+                style={{
+                  fontSize: "24px",
+                  fontWeight: 800,
+                  marginTop: "6px",
+                  fontFamily: "var(--font-mono)",
+                  color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                }}
+              >
+                {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+              </div>
+              <div style={{ marginTop: "6px", fontSize: "12px", fontWeight: 600 }}>
+                <span
+                  style={{
+                    color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                  }}
+                >
+                  收益率 {formatPercent(cards.cumulative_pnl_rate)}
+                </span>
+              </div>
+            </div>
+
+            {/* Card 4: 总投入 */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>总投入 (USD)</div>
+              <div style={{ fontSize: "24px", fontWeight: 800, marginTop: "6px", fontFamily: "var(--font-mono)", color: "var(--text-heading, #0f172a)" }}>
+                ${formatNumber(cards.total_invested, 2)}
+              </div>
+              <div style={{ marginTop: "6px", fontSize: "11px", color: "var(--text-muted, #64748b)" }}>
+                已实现 +${formatNumber(cards.realized_pnl, 2)} | 浮动 ${(cards.floating_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.floating_pnl, 2)}
+              </div>
+            </div>
+          </div>
+
+          {/* 上下两层结构：上层人员持仓明细，下层[券商持仓汇总 | 股票持仓汇总 | 资产分布] 等高三列并排 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            {/* 上层：人员持仓明细 (全宽) */}
+            <div className="card-panel" style={{ padding: "16px 20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div style={{ fontSize: "15px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Users size={16} color="var(--brand, #2563EB)" />
+                  人员持仓明细
+                </div>
+                <span style={{ fontSize: "11px", color: "var(--text-muted, #64748B)" }}>点击表头可正倒序排列</span>
+              </div>
+
+              <div className="table-container">
+                <table className="finance-table" style={{ fontSize: "12px" }}>
+                  <thead>
+                    <tr>
+                      <th onClick={() => togglePSort("name")} style={{ cursor: "pointer", userSelect: "none" }}>
+                        人员 {pSortField === "name" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("market_value")}>
+                        持仓市值 (USD) {pSortField === "market_value" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_pnl")}>
+                        累计盈亏 (USD) {pSortField === "total_pnl" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("pnl_rate")}>
+                        收益率 {pSortField === "pnl_rate" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_stocks")}>
+                        持仓股票 {pSortField === "total_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("open_stocks")}>
+                        当前持仓 {pSortField === "open_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("closed_stocks")}>
+                        已清仓 {pSortField === "closed_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedPersonSummary.map((p, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          ${formatNumber(p.market_value, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 700,
+                            color: (p.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {(p.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(p.total_pnl, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 600,
+                            color: (p.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {formatPercent(p.pnl_rate)}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.total_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.open_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.closed_stocks || 0)}</td>
+                      </tr>
+                    ))}
+                    {/* 合计行 */}
+                    {personSummary.length > 0 && (
+                      <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
+                        <td>合计</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                          }}
+                        >
+                          {formatPercent(cards.cumulative_pnl_rate)}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.total_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.open_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.closed_stock_count ?? 0)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 下层：券商持仓汇总 + 股票持仓汇总 + 资产分布 (三列并列等高，表头线水平对齐) */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.15fr", gap: "16px", alignItems: "stretch" }}>
+              {/* 1. 券商持仓汇总 */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ fontSize: "14px", fontWeight: 700, marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px", height: "24px" }}>
+                  <Building2 size={15} color="var(--brand, #2563EB)" />
+                  券商持仓汇总
+                </div>
+                <div className="table-container" style={{ flex: 1 }}>
+                  <table className="finance-table" style={{ fontSize: "11px" }}>
+                    <thead>
+                      <tr>
+                        <th onClick={() => toggleBSort("channel")} style={{ cursor: "pointer", userSelect: "none" }}>
+                          券商 {bSortField === "channel" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("market_value")}>
+                          持仓市值 {bSortField === "market_value" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("total_pnl")}>
+                          累计盈亏 {bSortField === "total_pnl" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("pnl_rate")}>
+                          收益率 {bSortField === "pnl_rate" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedBrokerSummary.map((b, idx) => (
+                        <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
+                          <td style={{ fontWeight: 600 }}>{b.channel}</td>
+                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(b.market_value, 2)}</td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              fontWeight: 700,
+                              color: (b.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {(b.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(b.total_pnl, 2)}
+                          </td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              color: (b.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {formatPercent(b.pnl_rate)}
+                          </td>
+                        </tr>
+                      ))}
+                      {brokerSummary.length > 0 && (
+                        <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
+                          <td>合计</td>
+                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                          </td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {formatPercent(cards.cumulative_pnl_rate)}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 2. 股票持仓汇总 */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", alignItems: "center", marginBottom: "10px", height: "24px" }}>
+                  <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Layers size={15} color="var(--brand, #2563EB)" />
+                    股票持仓汇总
+                  </div>
+                </div>
+                <div className="table-container" style={{ flex: 1 }}>
+                  <table className="finance-table" style={{ fontSize: "11px" }}>
+                    <thead>
+                      <tr>
+                        <th onClick={() => toggleSSort("ticker")} style={{ cursor: "pointer", userSelect: "none" }}>
+                          Ticker {sSortField === "ticker" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("market_value")}>
+                          持仓市值 {sSortField === "market_value" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("total_pnl")}>
+                          累计盈亏 {sSortField === "total_pnl" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("pnl_rate")}>
+                          收益率 {sSortField === "pnl_rate" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedStockSummary.slice(0, 7).map((s, idx) => (
+                        <tr
+                          key={idx}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => drillToStock(s.ticker)}
+                        >
+                          <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
+                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(s.market_value, 2)}</td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              fontWeight: 700,
+                              color: (s.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {(s.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(s.total_pnl, 2)}
+                          </td>
+                          <td
+                            className="font-mono"
+                            style={{
+                              textAlign: "right",
+                              color: (s.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                            }}
+                          >
+                            {formatPercent(s.pnl_rate)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* 3. 资产分布图 (Donut Ring Chart) */}
+              <div className="card-panel" style={{ padding: "16px 18px", display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "6px" }}>
+                    <PieIcon size={15} color="var(--brand, #2563EB)" />
+                    资产分布
+                  </div>
+
+                  {/* Donut Tabs */}
+                  <div
+                    style={{
+                      display: "flex",
+                      background: "var(--bg-app, #f1f5f9)",
+                      padding: "2px",
+                      borderRadius: "6px",
+                      gap: "2px",
+                    }}
+                  >
+                    {[
+                      { key: "by_person", label: "按人员" },
+                      { key: "by_broker", label: "按券商" },
+                      { key: "by_stock", label: "按股票" },
+                    ].map((t) => (
+                      <button
+                        key={t.key}
+                        onClick={() => setDistTab(t.key as any)}
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: "4px",
+                          border: "none",
+                          fontSize: "11px",
+                          background: distTab === t.key ? "var(--brand, #2563eb)" : "transparent",
+                          color: distTab === t.key ? "#fff" : "var(--text-muted, #64748B)",
+                          fontWeight: distTab === t.key ? 700 : 500,
+                          cursor: "pointer",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text-muted, #64748B)", marginBottom: "8px" }}>持仓市值分布占比</div>
+
+                {/* Donut Chart Ring & Clean Legend */}
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minHeight: "220px" }}>
+                  <div style={{ flex: 1.1, height: "200px" }}>
+                    <ReactECharts option={donutOption} style={{ height: "100%", width: "100%" }} />
+                  </div>
+
+                  {/* Legend Table on the Right */}
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", overflowY: "auto", maxHeight: "200px" }}>
+                    {donutSlices.map((d: any, idx: number) => (
+                      <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px", gap: "4px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                          <span
+                            style={{
+                              width: "8px",
+                              height: "8px",
+                              borderRadius: "50%",
+                              background: donutColors[idx % donutColors.length],
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span style={{ fontWeight: 600, color: "var(--text-heading, #0f172a)", maxWidth: "60px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {d.name}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: "6px", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+                          <span>${formatNumber(d.value, 0)}</span>
+                          <span style={{ color: "var(--text-muted, #64748B)", width: "32px", textAlign: "right" }}>{d.percent}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          VIEW 2: 统一持仓明细页 (Unified Detail Page)
+          ========================================================================= */}
+      {viewMode === "detail" && (
+        <div className="card-panel" style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+          {/* Detail Filters Toolbar (Exclusive to Detail View!) */}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "10px",
+              paddingBottom: "8px",
+              borderBottom: "1px solid var(--border-color, #e2e8f0)",
+            }}
+          >
+            {/* Status, Broker, Search, Export */}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  const nextStatus = e.target.value;
+                  setStatusFilter(nextStatus);
+                  setDetailPage(1);
+                  if (nextStatus === "已清仓") {
+                    setSortField("last_close_date");
+                    setSortAsc(false);
+                  } else {
+                    setSortField("market_value");
+                    setSortAsc(false);
+                  }
+                }}
+                className="input-control"
+                style={{ fontSize: "12px", padding: "5px 10px" }}
+              >
+                <option value="持有中">当前持仓</option>
+                <option value="已清仓">已清仓</option>
+              </select>
+
+              <select
+                value={selectedBroker}
+                onChange={(e) => {
+                  setSelectedBroker(e.target.value);
+                  if (onBrokerChange) onBrokerChange(e.target.value);
+                  setDetailPage(1);
+                }}
+                className="input-control"
+                style={{ fontSize: "12px", padding: "5px 10px" }}
+              >
+                <option value="">全部渠道</option>
+                <option value="长桥">长桥</option>
+                <option value="BBAE">BBAE</option>
+                <option value="第一证券">第一证券</option>
+                <option value="嘉信">嘉信</option>
+              </select>
+
+              <div style={{ position: "relative" }}>
+                <Search size={14} style={{ position: "absolute", left: "8px", top: "8px", color: "var(--text-muted)" }} />
+                <input
+                  type="text"
+                  placeholder="搜索人员、券商或股票代码..."
+                  value={searchKeyword}
+                  onChange={(e) => {
+                    setSearchKeyword(e.target.value);
+                    setDetailPage(1);
+                  }}
+                  className="input-control"
+                  style={{ paddingLeft: "28px", fontSize: "12px", width: "190px" }}
+                />
+              </div>
+
+              <button onClick={exportDetailCsv} className="btn btn-quiet" style={{ fontSize: "12px", padding: "5px 10px" }}>
+                <Download size={14} style={{ marginRight: "4px" }} />
+                导出明细
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
+              <Layers size={16} color="var(--brand, #2563EB)" />
+              <span>
+                {statusFilter === "已清仓" ? "已清仓明细" : "当前持仓明细"} ·{" "}
+                {dimension === "person" ? "人员维度" : dimension === "broker" ? "券商维度" : "股票维度"}
+              </span>
+              <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 400 }}>
+                （共 {totalDetailCount} 条记录）
+              </span>
+            </div>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>点击任意股票行右侧滑出深度分析抽屉</span>
+          </div>
+
+          {/* Unified Detail Table */}
+          <div className="table-container" style={{ border: "1px solid var(--border-color, #e2e8f0)", borderRadius: "8px" }}>
+            <table className="finance-table" style={{ fontSize: "12px" }}>
+              <thead>
+                {statusFilter === "已清仓" ? (
+                  <tr>
+                    <th onClick={() => toggleDetailSort("person_name")} style={{ cursor: "pointer" }}>
+                      归属人员 {sortField === "person_name" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("channel")} style={{ cursor: "pointer" }}>
+                      券商渠道 {sortField === "channel" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("ticker")} style={{ cursor: "pointer" }}>
+                      Ticker {sortField === "ticker" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("first_buy_date")} style={{ cursor: "pointer" }}>
+                      首次买入日期 {sortField === "first_buy_date" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("last_close_date")} style={{ cursor: "pointer" }}>
+                      最后清仓日期 {sortField === "last_close_date" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("closed_quantity")}>
+                      清仓数量 {sortField === "closed_quantity" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("avg_buy_price")}>
+                      买入均价 {sortField === "avg_buy_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("avg_sell_price")}>
+                      卖出均价 {sortField === "avg_sell_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("close_price")}>
+                      清仓价 {sortField === "close_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("current_price")}>
+                      当前价 {sortField === "current_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("post_close_change")}>
+                      清仓后涨跌幅 {sortField === "post_close_change" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_buy_amount")}>
+                      买入总额 {sortField === "total_buy_amount" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_sell_amount")}>
+                      卖出总额 {sortField === "total_sell_amount" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("realized_pnl")}>
+                      已实现盈亏 {sortField === "realized_pnl" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("realized_pnl_rate")}>
+                      已实现收益率 {sortField === "realized_pnl_rate" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("buy_count")}>
+                      买入次数 {sortField === "buy_count" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("sell_count")}>
+                      卖出次数 {sortField === "sell_count" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                  </tr>
+                ) : (
+                  <tr>
+                    <th onClick={() => toggleDetailSort("person_name")} style={{ cursor: "pointer" }}>
+                      归属人员 {sortField === "person_name" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("channel")} style={{ cursor: "pointer" }}>
+                      券商渠道 {sortField === "channel" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th onClick={() => toggleDetailSort("ticker")} style={{ cursor: "pointer" }}>
+                      Ticker {sortField === "ticker" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("quantity")}>
+                      数量 {sortField === "quantity" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_price")}>
+                      成本价 {sortField === "cost_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_amount")}>
+                      成本总额 {sortField === "cost_amount" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("current_price")}>
+                      当前最新价 {sortField === "current_price" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("market_value")}>
+                      市值 {sortField === "market_value" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("pnl_rate")}>
+                      收益率 {sortField === "pnl_rate" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_pnl")}>
+                      累计盈亏 {sortField === "total_pnl" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("buy_count")}>
+                      买入次数 {sortField === "buy_count" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("sell_count")}>
+                      卖出次数 {sortField === "sell_count" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("weight")}>
+                      持仓占比 {sortField === "weight" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                  </tr>
+                )}
+              </thead>
+              <tbody>
+                {detailLoading ? (
+                  <tr>
+                    <td colSpan={statusFilter === "已清仓" ? 17 : 13} style={{ textAlign: "center", padding: "30px", color: "var(--brand)" }}>
+                      正在加载持仓明细...
+                    </td>
+                  </tr>
+                ) : statusFilter === "已清仓" ? (
+                  currentDetailRows.map((r, idx) => {
+                    const postChange = r.post_close_change != null ? Number(r.post_close_change) : null;
+                    const realizedPnl = r.realized_pnl != null ? Number(r.realized_pnl) : null;
+                    const realizedRate = r.realized_pnl_rate != null ? Number(r.realized_pnl_rate) : null;
+                    const closedQty = r.closed_quantity != null ? Number(r.closed_quantity) : null;
+                    return (
+                      <tr
+                        key={idx}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => setDrawerTicker(r.ticker)}
+                        title="点击从右侧打开该标的深度交易与收益抽屉"
+                      >
+                        <td style={{ fontWeight: 600 }}>{r.person_name || "—"}</td>
+                        <td>{r.channel || "—"}</td>
+                        <td style={{ fontWeight: 700, color: "var(--brand)" }}>{r.ticker || "—"}</td>
+                        <td className="font-mono">{r.first_buy_date || "—"}</td>
+                        <td className="font-mono">{r.last_close_date || "—"}</td>
+                        <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                          {closedQty != null ? formatNumber(closedQty, closedQty % 1 === 0 ? 0 : 2) : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.avg_buy_price != null ? `$${formatNumber(r.avg_buy_price, 2)}` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.avg_sell_price != null ? `$${formatNumber(r.avg_sell_price, 2)}` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                          {r.close_price != null ? (
+                            r.is_split_adjusted ? (
+                              <span
+                                title={`折算后清仓价: $${formatNumber(r.close_price, 2)}\n原始清仓价: $${formatNumber(r.orig_close_price, 2)}\n清仓后除权调整: ${r.split_notes || ""}`}
+                                style={{ borderBottom: "1px dashed var(--brand, #2563EB)", cursor: "help" }}
+                              >
+                                ${formatNumber(r.close_price, 2)}
+                                <span style={{ fontSize: "10px", color: "var(--brand, #2563EB)", marginLeft: "2px", fontWeight: 700 }}>*</span>
+                              </span>
+                            ) : (
+                              `$${formatNumber(r.close_price, 2)}`
+                            )
+                          ) : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
+                          {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 600,
+                            color: postChange != null && postChange > 0 ? "var(--profit-color, #16A34A)" : postChange != null && postChange < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                          }}
+                        >
+                          {postChange != null ? `${postChange > 0 ? "+" : ""}${(postChange * 100).toFixed(2)}%` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.total_buy_amount != null ? `$${formatNumber(r.total_buy_amount, 2)}` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.total_sell_amount != null ? `$${formatNumber(r.total_sell_amount, 2)}` : "—"}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 700,
+                            color: realizedPnl != null && realizedPnl > 0 ? "var(--profit-color, #16A34A)" : realizedPnl != null && realizedPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                          }}
+                        >
+                          {realizedPnl != null ? `${realizedPnl > 0 ? "+" : ""}$${formatNumber(realizedPnl, 2)}` : "—"}
+                        </td>
+                        <td
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            fontWeight: 600,
+                            color: realizedRate != null && realizedRate > 0 ? "var(--profit-color, #16A34A)" : realizedRate != null && realizedRate < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                          }}
+                        >
+                          {realizedRate != null ? `${realizedRate > 0 ? "+" : ""}${(realizedRate * 100).toFixed(2)}%` : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.buy_count != null ? r.buy_count : "—"}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "right" }}>
+                          {r.sell_count != null ? r.sell_count : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : currentDetailRows.map((r, idx) => {
+                  const totalPnl = r.total_pnl != null ? Number(r.total_pnl) : (r.pnl != null ? Number(r.pnl) : null);
+                  const pnlRate = r.pnl_rate != null ? Number(r.pnl_rate) : null;
+                  const qty = r.quantity != null ? Number(r.quantity) : null;
+                  return (
+                    <tr
+                      key={idx}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setDrawerTicker(r.ticker)}
+                      title="点击从右侧打开该标的深度交易与收益抽屉"
+                    >
+                      <td style={{ fontWeight: 600 }}>{r.person_name}</td>
+                      <td>{r.channel}</td>
+                      <td style={{ fontWeight: 700, color: "var(--brand)" }}>{r.ticker}</td>
+                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                        {qty != null ? formatNumber(qty, qty % 1 === 0 ? 0 : 2) : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.cost_price != null ? `$${formatNumber(r.cost_price, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.cost_amount != null ? `$${formatNumber(r.cost_amount, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
+                        {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 700 }}>
+                        {r.market_value != null ? `$${formatNumber(r.market_value, 2)}` : "—"}
+                      </td>
+                      <td
+                        className="font-mono"
+                        style={{
+                          textAlign: "right",
+                          fontWeight: 600,
+                          color: pnlRate != null && pnlRate > 0 ? "var(--profit-color, #16A34A)" : pnlRate != null && pnlRate < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                        }}
+                      >
+                        {pnlRate != null ? `${pnlRate > 0 ? "+" : ""}${(pnlRate * 100).toFixed(2)}%` : "—"}
+                      </td>
+                      <td
+                        className="font-mono"
+                        style={{
+                          textAlign: "right",
+                          fontWeight: 700,
+                          color: totalPnl != null && totalPnl > 0 ? "var(--profit-color, #16A34A)" : totalPnl != null && totalPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
+                        }}
+                      >
+                        {totalPnl != null ? `${totalPnl > 0 ? "+" : ""}$${formatNumber(totalPnl, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.buy_count != null ? r.buy_count : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {r.sell_count != null ? r.sell_count : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "right", color: "var(--text-muted)" }}>
+                        {r.weight != null ? `${(Number(r.weight) * 100).toFixed(2)}%` : "0.00%"}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!detailLoading && !currentDetailRows.length && (
+                  <tr>
+                    <td colSpan={statusFilter === "已清仓" ? 17 : 13} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                      没有符合当前筛选条件的持仓明细记录
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Detail Pagination */}
+          {totalDetailPages > 1 && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
+              <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                共 {totalDetailCount} 条记录，第 {detailPage} / {totalDetailPages} 页
+              </span>
+              <div style={{ display: "flex", gap: "6px" }}>
+                <button
+                  className="btn"
+                  disabled={detailPage <= 1}
+                  onClick={() => setDetailPage(detailPage - 1)}
+                  style={{ fontSize: "12px", padding: "4px 10px" }}
+                >
+                  上一页
+                </button>
+                <button
+                  className="btn"
+                  disabled={detailPage >= totalDetailPages}
+                  onClick={() => setDetailPage(detailPage + 1)}
+                  style={{ fontSize: "12px", padding: "4px 10px" }}
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =========================================================================
+          RIGHT SLIDE-OUT DRAWER (股票右侧抽屉)
+          ========================================================================= */}
+      <StockDrawer
+        ticker={drawerTicker}
+        personId={selectedPersonId}
+        broker={selectedBroker}
+        onClose={() => setDrawerTicker(null)}
+      />
+    </div>
+  );
 };
