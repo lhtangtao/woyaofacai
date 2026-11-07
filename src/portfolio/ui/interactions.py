@@ -304,6 +304,17 @@ class InteractionMixin:
             if self.analytics:
                 self.daily_performance_page.update_data(self.analytics)
             self.update_history_buttons();return
+        if page == 24 and hasattr(self, "monthly_performance_page"):
+            self.heading.setText("每月持仓收益")
+            self.description.setText("查看历史每月的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
+            self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
+            self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
+            self.monthly_performance_page.sync_person_from_main(self.person.currentData())
+            self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+            self.monthly_performance_page.activate()
+            if self.analytics:
+                self.monthly_performance_page.update_data(self.analytics)
+            self.update_history_buttons();return
         self.sync_date_granularity()
         self.description.setText("按日期查看持仓、当日盈亏与累计盈亏；今天每10秒刷新行情，历史日期使用收盘数据。" if self.today_snapshot() else DESCRIPTIONS[page])
         if page == 17:

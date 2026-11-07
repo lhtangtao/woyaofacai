@@ -405,6 +405,10 @@ def build_workspace(self):
     self.daily_performance_page = DailyPerformancePage(self)
     self.pages.addWidget(self.daily_performance_page)
     self.daily_performance_page.drill.connect(self.drill_chart)
+    from portfolio.ui.monthly_performance_page import MonthlyPerformancePage
+    self.monthly_performance_page = MonthlyPerformancePage(self)
+    self.pages.addWidget(self.monthly_performance_page)
+    self.monthly_performance_page.drill.connect(self.drill_chart)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

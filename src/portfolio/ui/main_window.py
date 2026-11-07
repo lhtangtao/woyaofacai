@@ -463,6 +463,9 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "daily_performance_page"):
             self.daily_performance_page.sync_person_from_main(self.person.currentData())
             self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+        if hasattr(self, "monthly_performance_page"):
+            self.monthly_performance_page.sync_person_from_main(self.person.currentData())
+            self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
         if hasattr(self, "earnings_page") and self.pages.currentIndex() == 14:
             self.earnings_page.activate()
         self.refresh()
@@ -720,6 +723,8 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.holdings_page.set_analytics(self.get_holdings_analytics())
         if hasattr(self, "daily_performance_page"):
             self.daily_performance_page.update_data(analytics)
+        if hasattr(self, "monthly_performance_page"):
+            self.monthly_performance_page.update_data(analytics)
         self.stock_detail.set_analytics(analytics)
         for page in self.report_pages:
             page.set_reports(analytics.reports)

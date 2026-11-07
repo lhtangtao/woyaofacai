@@ -1072,3 +1072,8 @@
   font-size: 11px;
   color: #64748B;
 }
+
+.month-input {
+  width: 95px !important;
+  text-align: center;
+}
