@@ -1022,17 +1022,16 @@ class MonthlyPerformancePage(QWidget):
 
         self.donut_p_btn = QPushButton("● 盈利股票   0 只   +0.00")
         self.donut_l_btn = QPushButton("● 亏损股票   0 只   -0.00")
-        self.donut_f_btn = QPushButton("● 持平股票   0 只    0.00")
 
-        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444"), (self.donut_f_btn, "#64748B")):
+        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444")):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(34)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: #FFFFFF;
                     border: 1px solid #E2E8F0;
-                    border-radius: 5px;
-                    padding: 3px 8px;
+                    border-radius: 6px;
+                    padding: 4px 10px;
                     text-align: left;
                     font-size: 11.5px;
                     font-weight: 500;
@@ -1046,11 +1045,9 @@ class MonthlyPerformancePage(QWidget):
             """)
         self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl("profit"))
         self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl("loss"))
-        self.donut_f_btn.clicked.connect(lambda: self.filter_stock_pnl("flat"))
 
         donut_btns_v.addWidget(self.donut_p_btn)
         donut_btns_v.addWidget(self.donut_l_btn)
-        donut_btns_v.addWidget(self.donut_f_btn)
         c1_body.addLayout(donut_btns_v)
         col1_vbox.addLayout(c1_body)
         attr_cols.addWidget(col1_card, 1)
@@ -1151,38 +1148,38 @@ class MonthlyPerformancePage(QWidget):
 
         content_layout.addWidget(self.attr_card)
 
-        content_layout.addWidget(self.attr_card)
-
         # 6. Bottom Table Card (Full Width, 3 Tabs)
         table_card = QFrame()
         table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         table_vbox = QVBoxLayout(table_card)
-        table_vbox.setContentsMargins(16, 12, 16, 12)
-        table_vbox.setSpacing(10)
+        table_vbox.setContentsMargins(12, 8, 12, 8)
+        table_vbox.setSpacing(6)
 
         # Tab Bar
         tab_h = QHBoxLayout()
         self.tab_bar = QTabBar()
-        self.tab_bar.setDrawBase(False)
+        self.tab_bar.setExpanding(False)
+        self.tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
+        self.tab_bar.setUsesScrollButtons(False)
         self.tab_bar.addTab("📅 按月份汇总")
         self.tab_bar.addTab("🏛️ 按渠道明细")
         self.tab_bar.addTab("📈 按股票明细")
+        self.tab_bar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tab_bar.setStyleSheet("""
             QTabBar::tab {
-                background: transparent;
-                color: #64748B;
+                min-width: 135px;
+                height: 34px;
+                padding: 0 16px;
                 font-size: 13px;
-                font-weight: 500;
-                padding: 6px 14px;
-                margin-right: 4px;
+                font-weight: 600;
+                color: #64748B;
                 border-bottom: 2px solid transparent;
             }
             QTabBar::tab:selected {
                 color: #2563EB;
-                font-weight: 600;
                 border-bottom: 2px solid #2563EB;
             }
-            QTabBar::tab:hover {
+            QTabBar::tab:hover:!selected {
                 color: #1E293B;
             }
         """)
@@ -1883,7 +1880,6 @@ class MonthlyPerformancePage(QWidget):
         self.donut_widget.set_data(p_amt, l_amt, tot)
         self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只   {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只   {fmt_signed_money(l_amt)}")
-        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只    0.00")
 
         self.update_top5_rankings(m_rows, p_amt, l_amt)
         self.update_month_nav_buttons()

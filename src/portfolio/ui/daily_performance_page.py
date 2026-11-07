@@ -1074,19 +1074,18 @@ class DailyPerformancePage(QWidget):
         c1_btn_vbox.setSpacing(6)
         c1_btn_vbox.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        self.donut_p_btn = QPushButton("● 盈利股票   0 只   +$0.00")
-        self.donut_l_btn = QPushButton("● 亏损股票   0 只   -$0.00")
-        self.donut_f_btn = QPushButton("● 持平股票   0 只    $0.00")
+        self.donut_p_btn = QPushButton("● 盈利股票   0 只   +0.00")
+        self.donut_l_btn = QPushButton("● 亏损股票   0 只   -0.00")
 
-        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444"), (self.donut_f_btn, "#64748B")):
+        for btn, hover_color in ((self.donut_p_btn, "#10B981"), (self.donut_l_btn, "#EF4444")):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(34)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: #FFFFFF;
                     border: 1px solid #E2E8F0;
-                    border-radius: 5px;
-                    padding: 3px 8px;
+                    border-radius: 6px;
+                    padding: 4px 10px;
                     text-align: left;
                     font-size: 11.5px;
                     font-weight: 500;
@@ -1100,11 +1099,9 @@ class DailyPerformancePage(QWidget):
             """)
         self.donut_p_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("profit"))
         self.donut_l_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("loss"))
-        self.donut_f_btn.clicked.connect(lambda: self.filter_stock_pnl_by_date("flat"))
 
         c1_btn_vbox.addWidget(self.donut_p_btn)
         c1_btn_vbox.addWidget(self.donut_l_btn)
-        c1_btn_vbox.addWidget(self.donut_f_btn)
         c1_body.addLayout(c1_btn_vbox)
         col1_vbox.addLayout(c1_body)
         attr_cols_layout.addWidget(col1_card, 1)
@@ -1952,7 +1949,6 @@ class DailyPerformancePage(QWidget):
         self.donut_canvas.set_data(tot, p_amt, l_amt)
         self.donut_p_btn.setText(f"● 盈利股票   {p_cnt} 只    {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"● 亏损股票   {l_cnt} 只    {fmt_signed_money(l_amt)}")
-        self.donut_f_btn.setText(f"● 持平股票   {f_cnt} 只     0.00")
 
         # 2. 清空并填充中栏：亏损贡献排行 Top 5
         while self.loss_top_vbox.count():
