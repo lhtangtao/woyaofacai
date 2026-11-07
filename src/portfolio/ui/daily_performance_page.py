@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QDate, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QDate, QModelIndex, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -42,8 +42,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from portfolio.domain.analytics import Report, ReportRow
-from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
 
@@ -90,11 +88,11 @@ class KpiMetricCard(QFrame):
         self.key = key
         self.selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(84)
+        self.setFixedHeight(78)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(3)
 
         header_layout = QHBoxLayout()
         header_layout.setSpacing(4)
@@ -107,7 +105,7 @@ class KpiMetricCard(QFrame):
         header_layout.addWidget(self.arrow_label)
 
         self.value_label = QLabel("—")
-        self.value_label.setFont(numeric_font(16, bold=True))
+        self.value_label.setFont(numeric_font(15, bold=True))
         self.value_label.setStyleSheet("color: #1E293B;")
 
         self.sub_label = QLabel("—")
@@ -139,7 +137,7 @@ class KpiMetricCard(QFrame):
                 KpiMetricCard {
                     background-color: #F8FAFC;
                     border: 1.5px solid #2563EB;
-                    border-radius: 10px;
+                    border-radius: 8px;
                 }
             """)
         else:
@@ -147,7 +145,7 @@ class KpiMetricCard(QFrame):
                 KpiMetricCard {
                     background-color: #FFFFFF;
                     border: 1px solid #E2E8F0;
-                    border-radius: 10px;
+                    border-radius: 8px;
                 }
                 KpiMetricCard:hover {
                     border: 1px solid #93C5FD;
@@ -171,7 +169,6 @@ class DailyTrendCanvas(QWidget):
         self.hit_rects: List[Tuple[QRectF, str]] = []
         self.selected_date = ""
         self.setMouseTracking(True)
-        self.hover_point = -1
 
     def set_data(self, points: List[Tuple[str, float, float]], selected_date: str = ""):
         self.data_points = points
@@ -188,7 +185,6 @@ class DailyTrendCanvas(QWidget):
         w, h = self.width(), self.height()
         self.hit_rects.clear()
 
-        # Background
         painter.fillRect(0, 0, w, h, QColor("#FFFFFF"))
 
         if not self.data_points:
@@ -198,7 +194,7 @@ class DailyTrendCanvas(QWidget):
             return
 
         margin_left, margin_right = 65, 20
-        margin_top, margin_bottom = 25, 30
+        margin_top, margin_bottom = 20, 24
         plot_w = w - margin_left - margin_right
         plot_h = h - margin_top - margin_bottom
 
@@ -257,7 +253,6 @@ class DailyTrendCanvas(QWidget):
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
                 self.hit_rects.append((hit_rect, dt))
 
-                # Highlight if selected
                 if dt == self.selected_date:
                     painter.fillRect(hit_rect, QColor(37, 99, 235, 25))
                     painter.setPen(QPen(QColor("#2563EB"), 1.5))
@@ -282,35 +277,32 @@ class DailyTrendCanvas(QWidget):
                 for pt in pts[1:]:
                     path.lineTo(pt[0], pt[1])
 
-                # Fill area
                 area_path = QPainterPath(path)
                 area_path.lineTo(pts[-1][0], margin_top + plot_h)
                 area_path.lineTo(pts[0][0], margin_top + plot_h)
                 area_path.closeSubpath()
-                painter.fillPath(area_path, QColor(37, 99, 235, 30))
+                painter.fillPath(area_path, QColor(37, 99, 235, 25))
 
-                # Stroke line
                 painter.setPen(QPen(QColor("#2563EB"), 2))
                 painter.drawPath(path)
 
-                # Selected point
                 for cx, cy, dt in pts:
                     if dt == self.selected_date:
                         painter.setBrush(QColor("#2563EB"))
                         painter.setPen(QPen(QColor("#FFFFFF"), 2))
                         painter.drawEllipse(QRectF(cx - 5, cy - 5, 10, 10))
 
-        # X-Axis labels (First, Middle, Last)
+        # X-Axis labels
         painter.setPen(QColor("#64748B"))
         painter.setFont(QFont(".AppleSystemUIFont", 9))
         if n > 0:
-            painter.drawText(QRectF(margin_left, h - margin_bottom + 6, 80, 18),
+            painter.drawText(QRectF(margin_left, h - margin_bottom + 4, 80, 16),
                              Qt.AlignmentFlag.AlignLeft, self.data_points[0][0])
-            painter.drawText(QRectF(w - margin_right - 80, h - margin_bottom + 6, 80, 18),
+            painter.drawText(QRectF(w - margin_right - 80, h - margin_bottom + 4, 80, 16),
                              Qt.AlignmentFlag.AlignRight, self.data_points[-1][0])
             if n > 2:
                 mid_idx = n // 2
-                painter.drawText(QRectF(margin_left + plot_w * 0.4, h - margin_bottom + 6, 80, 18),
+                painter.drawText(QRectF(margin_left + plot_w * 0.4, h - margin_bottom + 4, 80, 16),
                                  Qt.AlignmentFlag.AlignCenter, self.data_points[mid_idx][0])
 
     def mousePressEvent(self, event):
@@ -326,27 +318,17 @@ class DailyTrendCanvas(QWidget):
 
 
 class DailyDistributionDonut(QWidget):
-    pnl_filter_clicked = Signal(str)
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.total_profit = 0.0
-        self.profit_count = 0
         self.profit_amt = 0.0
-        self.loss_count = 0
         self.loss_amt = 0.0
-        self.flat_count = 0
-        self.flat_amt = 0.0
-        self.setFixedHeight(160)
+        self.setFixedHeight(140)
 
-    def set_data(self, total: float, p_cnt: int, p_amt: float, l_cnt: int, l_amt: float, f_cnt: int, f_amt: float):
+    def set_data(self, total: float, p_amt: float, l_amt: float):
         self.total_profit = total
-        self.profit_count = p_cnt
         self.profit_amt = p_amt
-        self.loss_count = l_cnt
         self.loss_amt = l_amt
-        self.flat_count = f_cnt
-        self.flat_amt = f_amt
         self.update()
 
     def paintEvent(self, event):
@@ -356,7 +338,7 @@ class DailyDistributionDonut(QWidget):
 
         painter.fillRect(0, 0, w, h, QColor("#FFFFFF"))
 
-        side = min(w, h) - 20
+        side = min(w, h) - 16
         cx, cy = w / 2.0, h / 2.0
         radius = side / 2.0
         inner_radius = radius * 0.72
@@ -365,19 +347,15 @@ class DailyDistributionDonut(QWidget):
         profit_angle = (abs(self.profit_amt) / total_abs) * 360.0
         loss_angle = 360.0 - profit_angle
 
-        # Draw outer donut
         outer_rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # Draw profit arc
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#10B981"))
         painter.drawPie(outer_rect, int(90 * 16), int(-profit_angle * 16))
 
-        # Draw loss arc
         painter.setBrush(QColor("#EF4444"))
         painter.drawPie(outer_rect, int((90 - profit_angle) * 16), int(-loss_angle * 16))
 
-        # Inner hole
         painter.setBrush(QColor("#FFFFFF"))
         inner_rect = QRectF(cx - inner_radius, cy - inner_radius, inner_radius * 2, inner_radius * 2)
         painter.drawEllipse(inner_rect)
@@ -387,33 +365,85 @@ class DailyDistributionDonut(QWidget):
         pnl_color = QColor("#10B981" if self.total_profit >= 0 else "#EF4444")
         painter.setPen(pnl_color)
         val_str = fmt_signed_money(self.total_profit, 0)
-        painter.drawText(QRectF(cx - inner_radius, cy - 14, inner_radius * 2, 18),
+        painter.drawText(QRectF(cx - inner_radius, cy - 13, inner_radius * 2, 16),
                          Qt.AlignmentFlag.AlignCenter, val_str)
 
         painter.setFont(QFont(".AppleSystemUIFont", 9))
         painter.setPen(QColor("#94A3B8"))
-        painter.drawText(QRectF(cx - inner_radius, cy + 4, inner_radius * 2, 14),
+        painter.drawText(QRectF(cx - inner_radius, cy + 3, inner_radius * 2, 14),
                          Qt.AlignmentFlag.AlignCenter, "当日收益")
 
 
-class ModernTableModel(FinanceModel):
-    """Generic table model for daily performance views with sorting & pagination."""
+class ModernTableModel(QAbstractTableModel):
+    """Clean, dedicated table model for daily performance views with correct headers and colors."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.columns: Tuple[str, ...] = ()
         self.all_rows: List[List[Any]] = []
+        self.rows: List[List[Any]] = []
         self.page = 1
         self.page_size = 20
-        self.sort_col = -1
-        self.sort_desc = True
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.columns)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            if 0 <= section < len(self.columns):
+                return self.columns[section]
+        if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
+            return str((self.page - 1) * self.page_size + section + 1)
+        return None
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row_idx = index.row()
+        col_idx = index.column()
+        if row_idx >= len(self.rows) or col_idx >= len(self.columns):
+            return None
+
+        val = self.rows[row_idx][col_idx]
+        val_str = str(val) if val is not None else "—"
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            return val_str
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            # First column date is centered
+            if col_idx == 0:
+                return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            # Numbers / Amounts / Percentages align right
+            if any(c in val_str for c in ("$", "%", "+", "-")) and not ("|" in val_str):
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if not ("|" in val_str):
+                if val_str.startswith("+"):
+                    return QColor("#10B981")
+                elif val_str.startswith("-") or val_str.startswith("−"):
+                    return QColor("#EF4444")
+            if val_str == "—":
+                return QColor("#94A3B8")
+            if self.columns and col_idx < len(self.columns) and self.columns[col_idx] == "Ticker":
+                return QColor("#2563EB")
+            return QColor("#1E293B")
+
+        if role == Qt.ItemDataRole.FontRole:
+            if not ("|" in val_str) and any(c in val_str for c in ("$", "%", "+", "-")):
+                return numeric_font(12, bold=True)
+            return QFont(".AppleSystemUIFont", 12)
+
+        return None
 
     def set_columns_and_rows(self, columns: Tuple[str, ...], rows: List[List[Any]]):
         self.columns = columns
         self.all_rows = list(rows)
         self._apply_pagination()
-
-    def columnCount(self, parent=None):
-        return len(self.columns)
 
     def set_page(self, page: int):
         self.page = max(1, page)
@@ -423,7 +453,7 @@ class ModernTableModel(FinanceModel):
         self.beginResetModel()
         start = (self.page - 1) * self.page_size
         end = start + self.page_size
-        self.rows = tuple(ReportRow(tuple(r)) for r in self.all_rows[start:end])
+        self.rows = self.all_rows[start:end]
         self.endResetModel()
 
 
@@ -450,44 +480,134 @@ class DailyPerformancePage(QWidget):
 
         # Root Layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 14, 16, 16)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(14, 8, 14, 12)
+        main_layout.setSpacing(10)
 
-        # 1. Header Area
-        header_bar = QHBoxLayout()
-        header_bar.setSpacing(8)
+        # 1. Single-row Compact Filter Toolbar (NO huge blank space, NO duplicate headers)
+        filter_card = QFrame()
+        filter_card.setFixedHeight(48)
+        filter_card.setStyleSheet("""
+            QFrame {
+                background-color: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 8px;
+            }
+            QComboBox, QLineEdit, QDateEdit {
+                height: 28px;
+                border: 1px solid #CBD5E1;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+                color: #1E293B;
+                background: #FFFFFF;
+            }
+            QComboBox:focus, QLineEdit:focus, QDateEdit:focus {
+                border-color: #2563EB;
+            }
+        """)
+        filter_h = QHBoxLayout(filter_card)
+        filter_h.setContentsMargins(10, 8, 10, 8)
+        filter_h.setSpacing(8)
 
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("每日持仓收益")
-        title_lbl.setStyleSheet("font-size: 20px; font-weight: 700; color: #1E293B;")
-        desc_lbl = QLabel("查看历史每日的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
-        desc_lbl.setStyleSheet("font-size: 12px; color: #64748B;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(desc_lbl)
-        header_bar.addLayout(title_vbox)
-        header_bar.addStretch()
+        # Person Filter
+        self.person_combo = QComboBox()
+        self.person_combo.setFixedWidth(105)
+        self.person_combo.addItem("全部人员", None)
+        filter_h.addWidget(self.person_combo)
 
+        # Broker Filter
+        self.broker_combo = QComboBox()
+        self.broker_combo.setFixedWidth(110)
+        self.broker_combo.addItem("全部渠道", "")
+        filter_h.addWidget(self.broker_combo)
+
+        # Ticker Search
+        self.ticker_input = QLineEdit()
+        self.ticker_input.setPlaceholderText("输入代码或名称")
+        self.ticker_input.setFixedWidth(130)
+        self.ticker_input.returnPressed.connect(self.apply_filter)
+        filter_h.addWidget(self.ticker_input)
+
+        # Date Range
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDate(QDate(2025, 1, 1))
+        self.start_date_edit.setFixedWidth(105)
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDate(QDate.currentDate())
+        self.end_date_edit.setFixedWidth(105)
+
+        filter_h.addWidget(self.start_date_edit)
+        filter_h.addWidget(QLabel("~"))
+        filter_h.addWidget(self.end_date_edit)
+
+        # Category Filter
+        self.category_combo = QComboBox()
+        self.category_combo.setFixedWidth(100)
+        self.category_combo.addItem("全部分类", "")
+        filter_h.addWidget(self.category_combo)
+
+        # Buttons
+        self.query_btn = QPushButton("查询")
+        self.query_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.query_btn.setFixedHeight(28)
+        self.query_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563EB;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 5px;
+                padding: 0 14px;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: #1D4ED8; }
+        """)
+        self.query_btn.clicked.connect(self.apply_filter)
+        filter_h.addWidget(self.query_btn)
+
+        self.reset_btn = QPushButton("重置")
+        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_btn.setFixedHeight(28)
+        self.reset_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F1F5F9;
+                color: #475569;
+                border: 1px solid #CBD5E1;
+                border-radius: 5px;
+                padding: 0 10px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: #E2E8F0; }
+        """)
+        self.reset_btn.clicked.connect(self.reset_filters)
+        filter_h.addWidget(self.reset_btn)
+
+        filter_h.addStretch()
+
+        # Data As of Badge & Export on the right of toolbar
         self.as_of_badge = QLabel("数据截至：—（收盘）")
         self.as_of_badge.setStyleSheet("""
-            background-color: #E2E8F0;
+            background-color: #F1F5F9;
             color: #475569;
             font-size: 12px;
             font-weight: 500;
-            padding: 5px 12px;
-            border-radius: 6px;
+            padding: 4px 10px;
+            border-radius: 5px;
         """)
-        header_bar.addWidget(self.as_of_badge)
+        filter_h.addWidget(self.as_of_badge)
 
         self.export_btn = QPushButton("↓ 导出")
         self.export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.export_btn.setFixedHeight(28)
         self.export_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FFFFFF;
                 color: #2563EB;
                 border: 1px solid #CBD5E1;
-                border-radius: 6px;
-                padding: 5px 14px;
+                border-radius: 5px;
+                padding: 0 12px;
                 font-size: 12px;
                 font-weight: 600;
             }
@@ -497,128 +617,13 @@ class DailyPerformancePage(QWidget):
             }
         """)
         self.export_btn.clicked.connect(self.export_csv)
-        header_bar.addWidget(self.export_btn)
-        main_layout.addLayout(header_bar)
+        filter_h.addWidget(self.export_btn)
 
-        # 2. Compact Query Filter Card
-        filter_card = QFrame()
-        filter_card.setStyleSheet("""
-            QFrame {
-                background-color: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 10px;
-            }
-        """)
-        filter_layout = QVBoxLayout(filter_card)
-        filter_layout.setContentsMargins(14, 10, 14, 10)
-        filter_layout.setSpacing(8)
-
-        inputs_row = QHBoxLayout()
-        inputs_row.setSpacing(12)
-
-        # Person Filter
-        p_vbox = QVBoxLayout()
-        p_vbox.setSpacing(2)
-        p_vbox.addWidget(QLabel("归属人员"))
-        self.person_combo = QComboBox()
-        self.person_combo.addItem("全部人员", None)
-        p_vbox.addWidget(self.person_combo)
-        inputs_row.addLayout(p_vbox)
-
-        # Broker Filter
-        b_vbox = QVBoxLayout()
-        b_vbox.setSpacing(2)
-        b_vbox.addWidget(QLabel("券商渠道"))
-        self.broker_combo = QComboBox()
-        self.broker_combo.addItem("全部渠道", "")
-        b_vbox.addWidget(self.broker_combo)
-        inputs_row.addLayout(b_vbox)
-
-        # Ticker Search
-        t_vbox = QVBoxLayout()
-        t_vbox.setSpacing(2)
-        t_vbox.addWidget(QLabel("Ticker"))
-        self.ticker_input = QLineEdit()
-        self.ticker_input.setPlaceholderText("输入代码或名称")
-        self.ticker_input.returnPressed.connect(self.apply_filter)
-        t_vbox.addWidget(self.ticker_input)
-        inputs_row.addLayout(t_vbox)
-
-        # Date Range
-        d_vbox = QVBoxLayout()
-        d_vbox.setSpacing(2)
-        d_vbox.addWidget(QLabel("日期范围"))
-        d_range_h = QHBoxLayout()
-        d_range_h.setSpacing(4)
-        self.start_date_edit = QDateEdit()
-        self.start_date_edit.setCalendarPopup(True)
-        self.start_date_edit.setDate(QDate(2025, 1, 1))
-        self.end_date_edit = QDateEdit()
-        self.end_date_edit.setCalendarPopup(True)
-        self.end_date_edit.setDate(QDate.currentDate())
-        d_range_h.addWidget(self.start_date_edit)
-        d_range_h.addWidget(QLabel("~"))
-        d_range_h.addWidget(self.end_date_edit)
-        d_vbox.addLayout(d_range_h)
-        inputs_row.addLayout(d_vbox)
-
-        # Category Filter
-        c_vbox = QVBoxLayout()
-        c_vbox.setSpacing(2)
-        c_vbox.addWidget(QLabel("股票分类"))
-        self.category_combo = QComboBox()
-        self.category_combo.addItem("全部分类", "")
-        c_vbox.addWidget(self.category_combo)
-        inputs_row.addLayout(c_vbox)
-
-        # Buttons
-        btn_vbox = QVBoxLayout()
-        btn_vbox.setSpacing(2)
-        btn_vbox.addWidget(QLabel(""))  # Spacer label
-        btn_h = QHBoxLayout()
-        btn_h.setSpacing(6)
-        self.query_btn = QPushButton("查询")
-        self.query_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.query_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563EB;
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                padding: 5px 16px;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QPushButton:hover { background-color: #1D4ED8; }
-        """)
-        self.query_btn.clicked.connect(self.apply_filter)
-
-        self.reset_btn = QPushButton("重置")
-        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.reset_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F1F5F9;
-                color: #475569;
-                border: 1px solid #CBD5E1;
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-size: 12px;
-            }
-            QPushButton:hover { background-color: #E2E8F0; }
-        """)
-        self.reset_btn.clicked.connect(self.reset_filters)
-
-        btn_h.addWidget(self.query_btn)
-        btn_h.addWidget(self.reset_btn)
-        btn_vbox.addLayout(btn_h)
-        inputs_row.addLayout(btn_vbox)
-
-        filter_layout.addLayout(inputs_row)
         main_layout.addWidget(filter_card)
 
-        # 3. Seven KPI Cards Grid
+        # 2. Seven KPI Cards Grid
         kpi_grid = QGridLayout()
-        kpi_grid.setSpacing(10)
+        kpi_grid.setSpacing(8)
         self.kpi_cards: Dict[str, KpiMetricCard] = {}
 
         kpi_defs = [
@@ -638,16 +643,17 @@ class DailyPerformancePage(QWidget):
 
         main_layout.addLayout(kpi_grid)
 
-        # 4. Middle Section: Trend Chart (Left) + Broker Cumulative Overview (Right)
+        # 3. Middle Section: Trend Chart (Left) + Broker Cumulative Overview (Right)
         mid_splitter = QSplitter(Qt.Orientation.Horizontal)
         mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
         # Trend Chart Card
         trend_card = QFrame()
-        trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;")
+        trend_card.setFixedHeight(185)
+        trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         trend_vbox = QVBoxLayout(trend_card)
-        trend_vbox.setContentsMargins(12, 10, 12, 10)
-        trend_vbox.setSpacing(6)
+        trend_vbox.setContentsMargins(12, 8, 12, 8)
+        trend_vbox.setSpacing(4)
 
         trend_top = QHBoxLayout()
         self.trend_tab_daily = QPushButton("每日收益走势")
@@ -662,7 +668,7 @@ class DailyPerformancePage(QWidget):
                     font-size: 12px;
                     font-weight: 600;
                     border: none;
-                    padding: 4px 10px;
+                    padding: 3px 8px;
                     border-radius: 4px;
                 }
                 QPushButton:checked {
@@ -690,10 +696,11 @@ class DailyPerformancePage(QWidget):
 
         # Broker Cumulative Overview Card
         broker_card = QFrame()
-        broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;")
+        broker_card.setFixedHeight(185)
+        broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         broker_vbox = QVBoxLayout(broker_card)
-        broker_vbox.setContentsMargins(14, 10, 14, 10)
-        broker_vbox.setSpacing(6)
+        broker_vbox.setContentsMargins(12, 8, 12, 8)
+        broker_vbox.setSpacing(4)
 
         b_header = QHBoxLayout()
         b_title = QLabel("渠道收益概览 <span style='font-size: 11px; color: #64748B;'>(期间累计)</span>")
@@ -712,7 +719,7 @@ class DailyPerformancePage(QWidget):
         self.broker_list_widget = QWidget()
         self.broker_list_layout = QVBoxLayout(self.broker_list_widget)
         self.broker_list_layout.setContentsMargins(0, 0, 0, 0)
-        self.broker_list_layout.setSpacing(6)
+        self.broker_list_layout.setSpacing(4)
         self.broker_scroll.setWidget(self.broker_list_widget)
         broker_vbox.addWidget(self.broker_scroll)
 
@@ -721,16 +728,15 @@ class DailyPerformancePage(QWidget):
         mid_splitter.setStretchFactor(1, 2)
         main_layout.addWidget(mid_splitter)
 
-        # 5. Lower Section: Tables (Left) + Selected Date Donut Distribution (Right)
+        # 4. Lower Section: Clean Table (Left) + Selected Date Donut Distribution (Right)
         lower_splitter = QSplitter(Qt.Orientation.Horizontal)
         lower_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
-        # Tables Container Card
         table_card = QFrame()
-        table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;")
+        table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         table_vbox = QVBoxLayout(table_card)
-        table_vbox.setContentsMargins(12, 10, 12, 10)
-        table_vbox.setSpacing(8)
+        table_vbox.setContentsMargins(12, 8, 12, 8)
+        table_vbox.setSpacing(6)
 
         tab_h = QHBoxLayout()
         self.tab_bar = QTabBar()
@@ -760,12 +766,43 @@ class DailyPerformancePage(QWidget):
         tab_h.addWidget(self.table_count_lbl)
         table_vbox.addLayout(tab_h)
 
-        # Finance Table (NO OPERATION COLUMN)
+        # Standard QTableView (NO OPERATION COLUMN, NO TRADE_COLUMNS OVERWRITE)
         self.table_model = ModernTableModel(self)
-        self.table_view = FinanceTable(self)
+        self.table_view = QTableView(self)
         self.table_view.setModel(self.table_model)
-        self.table_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table_view.setAlternatingRowColors(True)
+        self.table_view.setShowGrid(False)
+        self.table_view.setWordWrap(False)
         self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table_view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table_view.verticalHeader().hide()
+        self.table_view.verticalHeader().setDefaultSectionSize(36)
+        self.table_view.horizontalHeader().setFixedHeight(36)
+        self.table_view.horizontalHeader().setHighlightSections(False)
+        self.table_view.setStyleSheet("""
+            QTableView {
+                background-color: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                alternate-background-color: #FAFCFF;
+            }
+            QTableView::item:selected {
+                background-color: #EFF6FF;
+                color: #1E293B;
+            }
+            QTableView::item:hover {
+                background-color: #F8FAFC;
+            }
+            QHeaderView::section {
+                background-color: #F8FAFC;
+                color: #475569;
+                font-size: 12px;
+                font-weight: 600;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+                padding: 4px 8px;
+            }
+        """)
         self.table_view.clicked.connect(self.on_table_row_clicked)
         table_vbox.addWidget(self.table_view)
 
@@ -808,9 +845,9 @@ class DailyPerformancePage(QWidget):
 
         # Selected Date Distribution Card
         dist_card = QFrame()
-        dist_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;")
+        dist_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
         dist_vbox = QVBoxLayout(dist_card)
-        dist_vbox.setContentsMargins(14, 10, 14, 10)
+        dist_vbox.setContentsMargins(12, 8, 12, 8)
         dist_vbox.setSpacing(6)
 
         self.dist_title = QLabel("当日收益分布 (—)")
@@ -820,7 +857,6 @@ class DailyPerformancePage(QWidget):
         self.donut_canvas = DailyDistributionDonut(self)
         dist_vbox.addWidget(self.donut_canvas)
 
-        # Donut Breakdown Buttons
         self.donut_p_btn = QPushButton("盈利股票 0 只   +$0.00")
         self.donut_l_btn = QPushButton("亏损股票 0 只   -$0.00")
         self.donut_f_btn = QPushButton("持平股票 0 只    $0.00")
@@ -832,9 +868,9 @@ class DailyPerformancePage(QWidget):
                     background-color: #F8FAFC;
                     border: 1px solid #E2E8F0;
                     border-radius: 6px;
-                    padding: 8px 12px;
+                    padding: 6px 10px;
                     text-align: left;
-                    font-size: 12px;
+                    font-size: 11.5px;
                     font-weight: 500;
                 }
                 QPushButton:hover {
@@ -856,7 +892,7 @@ class DailyPerformancePage(QWidget):
         lower_splitter.setStretchFactor(1, 1)
         main_layout.addWidget(lower_splitter)
 
-        # 6. Right Side Detail Drawer (Slide-out panel)
+        # 5. Right Side Detail Drawer
         self.drawer_frame = QFrame(self)
         self.drawer_frame.setStyleSheet("""
             QFrame {
@@ -866,7 +902,6 @@ class DailyPerformancePage(QWidget):
         """)
         self.drawer_frame.hide()
 
-        # Drawer UI
         drawer_vbox = QVBoxLayout(self.drawer_frame)
         drawer_vbox.setContentsMargins(14, 12, 14, 12)
         drawer_vbox.setSpacing(10)
@@ -911,11 +946,9 @@ class DailyPerformancePage(QWidget):
         drawer_vbox.addWidget(self.drawer_scroll)
 
     def activate(self):
-        """Called when navigating to this page."""
         self.show()
 
     def update_data(self, analytics):
-        """Update analytics reference and reload views."""
         self.analytics = analytics
         if not analytics or "每日持仓收益" not in analytics.reports:
             return
@@ -956,6 +989,7 @@ class DailyPerformancePage(QWidget):
             self.as_of_badge.setText(f"数据截至：{self.max_as_of_date}（收盘）")
             if not self.selected_date:
                 self.selected_date = self.max_as_of_date
+            self.end_date_edit.setDate(QDate.fromString(self.max_as_of_date, "yyyy-MM-dd"))
 
         self.recalculate_and_refresh()
 
@@ -979,7 +1013,10 @@ class DailyPerformancePage(QWidget):
         self.ticker_input.clear()
         self.category_combo.setCurrentIndex(0)
         self.start_date_edit.setDate(QDate(2025, 1, 1))
-        self.end_date_edit.setDate(QDate.currentDate())
+        if self.max_as_of_date:
+            self.end_date_edit.setDate(QDate.fromString(self.max_as_of_date, "yyyy-MM-dd"))
+        else:
+            self.end_date_edit.setDate(QDate.currentDate())
         self.selected_person_id = None
         self.selected_broker = ""
         self.search_ticker = ""
@@ -992,7 +1029,6 @@ class DailyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def recalculate_and_refresh(self):
-        # Filter raw rows
         filtered: List[Tuple] = []
         for r in self.raw_rows:
             d, b, cat, sym = r[0], r[1], r[2], r[3]
@@ -1035,6 +1071,15 @@ class DailyPerformancePage(QWidget):
         max_loss = float("inf")
         max_loss_d = "—"
 
+        base_init = 0.0
+        for d in dates_asc:
+            if date_map[d]["init"] > 0:
+                base_init = date_map[d]["init"]
+                break
+            elif date_map[d]["end"] > 0:
+                base_init = date_map[d]["end"]
+                break
+
         for d in dates_asc:
             data = date_map[d]
             d_pnl = data["pnl"]
@@ -1056,8 +1101,8 @@ class DailyPerformancePage(QWidget):
 
             init_v = data["init"]
             rate = (d_pnl / init_v) if init_v > 0 else 0.0
+            cum_rate = (cum_pnl / base_init) if base_init > 0 else None
 
-            # Top 3
             sorted_stk = sorted(data["stocks"].items(), key=lambda x: abs(x[1]), reverse=True)
             top3 = " | ".join(f"{s} {fmt_signed_money(p)}" for s, p in sorted_stk[:3])
 
@@ -1068,7 +1113,7 @@ class DailyPerformancePage(QWidget):
                 fmt_signed_money(d_pnl),
                 fmt_percent(rate),
                 fmt_signed_money(cum_pnl),
-                "—",
+                fmt_percent(cum_rate) if cum_rate is not None else "—",
                 top3 or "—",
             ])
 
@@ -1076,9 +1121,10 @@ class DailyPerformancePage(QWidget):
         avg_pnl = (total_pnl / total_days) if total_days > 0 else 0.0
 
         # Update 7 KPI Cards
+        tot_rate_str = fmt_percent(total_pnl / base_init) if base_init > 0 else "—"
         self.kpi_cards["total"].set_data(
             fmt_signed_money(total_pnl),
-            f"收益率 {fmt_percent(total_pnl / (date_map[dates_asc[0]]['init'] if dates_asc and date_map[dates_asc[0]]['init'] > 0 else 1))}",
+            f"收益率 {tot_rate_str}",
             "profit" if total_pnl >= 0 else "loss",
         )
         self.kpi_cards["days"].set_data(
@@ -1124,7 +1170,6 @@ class DailyPerformancePage(QWidget):
         self.refresh_table_view(filtered, date_summaries)
 
     def update_broker_overview(self, filtered_rows: List[Tuple]):
-        # Clear existing items
         while self.broker_list_layout.count():
             item = self.broker_list_layout.takeAt(0)
             if item.widget():
@@ -1145,8 +1190,8 @@ class DailyPerformancePage(QWidget):
                 QFrame {
                     background: #F8FAFC;
                     border: 1px solid #F1F5F9;
-                    border-radius: 6px;
-                    padding: 4px;
+                    border-radius: 5px;
+                    padding: 2px 6px;
                 }
                 QFrame:hover {
                     background: #EFF6FF;
@@ -1154,7 +1199,7 @@ class DailyPerformancePage(QWidget):
                 }
             """)
             r_layout = QHBoxLayout(row_frame)
-            r_layout.setContentsMargins(8, 4, 8, 4)
+            r_layout.setContentsMargins(6, 3, 6, 3)
 
             b_name = QLabel(b)
             b_name.setStyleSheet("font-size: 12px; font-weight: 600; color: #1E293B;")
@@ -1170,7 +1215,6 @@ class DailyPerformancePage(QWidget):
             pnl_lbl.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {'#10B981' if pnl >= 0 else '#EF4444'};")
             r_layout.addWidget(pnl_lbl)
 
-            # Click to filter broker
             def make_handler(broker_name):
                 return lambda e: self.filter_by_broker(broker_name)
             row_frame.mousePressEvent = make_handler(b)
@@ -1207,7 +1251,7 @@ class DailyPerformancePage(QWidget):
                     f_cnt += 1
                     f_amt += pnl
 
-        self.donut_canvas.set_data(tot, p_cnt, p_amt, l_cnt, l_amt, f_cnt, f_amt)
+        self.donut_canvas.set_data(tot, p_amt, l_amt)
         self.donut_p_btn.setText(f"盈利股票 {p_cnt} 只    {fmt_signed_money(p_amt)}")
         self.donut_l_btn.setText(f"亏损股票 {l_cnt} 只    {fmt_signed_money(l_amt)}")
         self.donut_f_btn.setText(f"持平股票 {f_cnt} 只    ${fmt_money(f_amt)}")
@@ -1223,6 +1267,7 @@ class DailyPerformancePage(QWidget):
 
     def refresh_table_view(self, filtered_rows: List[Tuple], date_summaries: List[List[Any]]):
         current_tab = self.tab_bar.currentIndex()
+        header = self.table_view.horizontalHeader()
 
         if current_tab == 0:
             # 📅 按日期汇总
@@ -1232,8 +1277,20 @@ class DailyPerformancePage(QWidget):
                 rows = [r for r in rows if "+" in str(r[3])]
             elif self.active_kpi_filter == "down":
                 rows = [r for r in rows if "-" in str(r[3])]
+
             self.table_model.set_columns_and_rows(cols, rows)
             self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
+
+            # Set proportional column widths
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            self.table_view.setColumnWidth(0, 105)
+            self.table_view.setColumnWidth(1, 105)
+            self.table_view.setColumnWidth(2, 105)
+            self.table_view.setColumnWidth(3, 110)
+            self.table_view.setColumnWidth(4, 95)
+            self.table_view.setColumnWidth(5, 115)
+            self.table_view.setColumnWidth(6, 95)
+            header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
 
         elif current_tab == 1:
             # 🏛️ 按渠道明细
@@ -1262,8 +1319,16 @@ class DailyPerformancePage(QWidget):
                     fmt_percent(rate),
                     top3 or "—",
                 ])
+
             self.table_model.set_columns_and_rows(cols, c_rows)
             self.table_count_lbl.setText(f"共 {len(c_rows)} 条记录")
+
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            self.table_view.setColumnWidth(0, 110)
+            self.table_view.setColumnWidth(1, 130)
+            self.table_view.setColumnWidth(2, 120)
+            self.table_view.setColumnWidth(3, 100)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
 
         else:
             # 📈 按股票明细
@@ -1293,6 +1358,18 @@ class DailyPerformancePage(QWidget):
             s_rows.sort(key=lambda x: x[0], reverse=True)
             self.table_model.set_columns_and_rows(cols, s_rows)
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
+
+            header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            self.table_view.setColumnWidth(0, 100)
+            self.table_view.setColumnWidth(1, 110)
+            self.table_view.setColumnWidth(2, 85)
+            self.table_view.setColumnWidth(3, 80)
+            self.table_view.setColumnWidth(4, 90)
+            self.table_view.setColumnWidth(5, 90)
+            self.table_view.setColumnWidth(6, 90)
+            self.table_view.setColumnWidth(7, 105)
+            self.table_view.setColumnWidth(8, 85)
+            header.setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
 
         self.update_pagination_ui()
 
@@ -1348,7 +1425,7 @@ class DailyPerformancePage(QWidget):
         row = index.row()
         current_tab = self.tab_bar.currentIndex()
         if row < len(self.table_model.rows):
-            r_vals = self.table_model.rows[row].values
+            r_vals = self.table_model.rows[row]
             if current_tab == 0:
                 self.open_date_drawer(r_vals[0])
             elif current_tab == 1:

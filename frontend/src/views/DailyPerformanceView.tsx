@@ -302,7 +302,18 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
 
     const dates = Array.from(dateMap.keys()).sort();
     let runningCum = 0;
-    const initialBaseline = dates.length > 0 ? dateMap.get(dates[0])!.initVal || 1 : 1;
+    let initialBaseline = 0;
+    for (const d of dates) {
+      const item = dateMap.get(d)!;
+      if (item.initVal > 0) {
+        initialBaseline = item.initVal;
+        break;
+      }
+      if (item.marketVal > 0) {
+        initialBaseline = item.marketVal;
+        break;
+      }
+    }
 
     return dates.map((d) => {
       const data = dateMap.get(d)!;
@@ -361,7 +372,17 @@ export const DailyPerformanceView: React.FC<DailyPerformanceViewProps> = ({
     });
 
     const avgDailyProfit = totalTradingDays > 0 ? totalProfit / totalTradingDays : 0;
-    const initialBase = dateSummariesAsc[0]?.initValue || 1;
+    let initialBase = 0;
+    for (const ds of dateSummariesAsc) {
+      if (ds.initValue > 0) {
+        initialBase = ds.initValue;
+        break;
+      }
+      if (ds.marketValue > 0) {
+        initialBase = ds.marketValue;
+        break;
+      }
+    }
     const totalProfitRate = initialBase > 0 ? totalProfit / initialBase : 0;
     const upRatio = totalTradingDays > 0 ? upDays / totalTradingDays : 0;
     const downRatio = totalTradingDays > 0 ? downDays / totalTradingDays : 0;
