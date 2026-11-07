@@ -196,7 +196,6 @@ class MonthlyTrendCanvas(QWidget):
         self.data_points: List[Tuple[str, float, float]] = []  # (month, monthly_pnl, cum_pnl)
         self.selected_month = ""
         self.setMouseTracking(True)
-        self.setMinimumHeight(260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.hovered_index = -1
 
@@ -824,93 +823,108 @@ class MonthlyPerformancePage(QWidget):
         content_layout.addLayout(kpi_grid)
 
         # 4. Middle Section: Monthly Trend Chart (Left) + Broker Overview (Right)
-        mid_layout = QHBoxLayout()
-        mid_layout.setSpacing(12)
+        mid_splitter = QSplitter(Qt.Orientation.Horizontal)
+        mid_splitter.setStyleSheet("QSplitter::handle { background: transparent; }")
 
-        # 4.1 Monthly Trend Chart Panel
-        trend_panel = QFrame()
-        trend_panel.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
-        trend_panel_v = QVBoxLayout(trend_panel)
-        trend_panel_v.setContentsMargins(16, 12, 16, 12)
-        trend_panel_v.setSpacing(8)
+        # Trend Chart Card
+        trend_card = QFrame()
+        trend_card.setFixedHeight(260)
+        trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        trend_vbox = QVBoxLayout(trend_card)
+        trend_vbox.setContentsMargins(12, 6, 12, 6)
+        trend_vbox.setSpacing(2)
 
-        trend_head = QHBoxLayout()
-        trend_title = QLabel("月度收益走势")
-        trend_title.setStyleSheet("font-size: 13.5px; font-weight: 700; color: #1E293B;")
-        trend_head.addWidget(trend_title)
-
-        trend_tab_layout = QHBoxLayout()
-        trend_tab_layout.setSpacing(2)
-        self.trend_tab_monthly = QPushButton("月度收益")
-        self.trend_tab_monthly.setCheckable(True)
+        trend_top = QHBoxLayout()
+        self.trend_tab_monthly = QPushButton("月度收益走势")
+        self.trend_tab_cum = QPushButton("累计收益走势")
+        for btn in (self.trend_tab_monthly, self.trend_tab_cum):
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent;
+                    color: #64748B;
+                    font-size: 12px;
+                    font-weight: 600;
+                    border: none;
+                    padding: 3px 8px;
+                    border-radius: 4px;
+                }
+                QPushButton:checked {
+                    background: #EFF6FF;
+                    color: #2563EB;
+                }
+            """)
         self.trend_tab_monthly.setChecked(True)
-        self.trend_tab_cum = QPushButton("累计收益")
-        self.trend_tab_cum.setCheckable(True)
-
-        tab_style = """
-            QPushButton {
-                background-color: #F1F5F9;
-                color: #64748B;
-                border: none;
-                border-radius: 4px;
-                padding: 3px 10px;
-                font-size: 11px;
-            }
-            QPushButton:checked {
-                background-color: #2563EB;
-                color: #FFFFFF;
-                font-weight: 600;
-            }
-        """
-        self.trend_tab_monthly.setStyleSheet(tab_style)
-        self.trend_tab_cum.setStyleSheet(tab_style)
         self.trend_tab_monthly.clicked.connect(lambda: self.switch_trend_mode("monthly"))
         self.trend_tab_cum.clicked.connect(lambda: self.switch_trend_mode("cum"))
 
-        trend_tab_layout.addWidget(self.trend_tab_monthly)
-        trend_tab_layout.addWidget(self.trend_tab_cum)
-        trend_head.addLayout(trend_tab_layout)
-        trend_head.addStretch()
+        trend_top.addWidget(self.trend_tab_monthly)
+        trend_top.addWidget(self.trend_tab_cum)
+        trend_top.addStretch()
 
         detail_link = QPushButton("查看详情 ›")
         detail_link.setStyleSheet("border: none; color: #2563EB; font-size: 11.5px; font-weight: 500;")
         detail_link.setCursor(Qt.CursorShape.PointingHandCursor)
         detail_link.clicked.connect(lambda: self.tab_bar.setCurrentIndex(0))
-        trend_head.addWidget(detail_link)
-        trend_panel_v.addLayout(trend_head)
+        trend_top.addWidget(detail_link)
+        trend_vbox.addLayout(trend_top)
 
         self.trend_canvas = MonthlyTrendCanvas()
         self.trend_canvas.month_selected.connect(self.select_month)
-        trend_panel_v.addWidget(self.trend_canvas)
-        mid_layout.addWidget(trend_panel, 7)
+        trend_vbox.addWidget(self.trend_canvas)
+        mid_splitter.addWidget(trend_card)
 
-        # 4.2 Broker Channel Cumulative Overview Panel (Right)
-        broker_panel = QFrame()
-        broker_panel.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
-        broker_panel_v = QVBoxLayout(broker_panel)
-        broker_panel_v.setContentsMargins(16, 12, 16, 12)
-        broker_panel_v.setSpacing(10)
+        # Broker Cumulative Overview Card
+        broker_card = QFrame()
+        broker_card.setFixedHeight(260)
+        broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        broker_vbox = QVBoxLayout(broker_card)
+        broker_vbox.setContentsMargins(12, 6, 12, 6)
+        broker_vbox.setSpacing(4)
 
-        broker_head = QHBoxLayout()
-        broker_title = QLabel("渠道收益概览 (期间累计)")
-        broker_title.setStyleSheet("font-size: 13.5px; font-weight: 700; color: #1E293B;")
-        broker_head.addWidget(broker_title)
-        broker_head.addStretch()
+        b_header = QHBoxLayout()
+        b_title = QLabel("渠道收益概览 <span style='font-size: 11px; color: #64748B;'>(期间累计)</span>")
+        b_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
+        b_detail_link = QLabel("<a href='#channel' style='color: #2563EB; text-decoration: none;'>查看详情 →</a>")
+        b_detail_link.setOpenExternalLinks(False)
+        b_detail_link.linkActivated.connect(lambda: self.tab_bar.setCurrentIndex(1))
+        b_header.addWidget(b_title)
+        b_header.addStretch()
+        b_header.addWidget(b_detail_link)
+        broker_vbox.addLayout(b_header)
 
-        b_detail_link = QPushButton("查看详情 ›")
-        b_detail_link.setStyleSheet("border: none; color: #2563EB; font-size: 11.5px; font-weight: 500;")
-        b_detail_link.setCursor(Qt.CursorShape.PointingHandCursor)
-        b_detail_link.clicked.connect(lambda: self.tab_bar.setCurrentIndex(1))
-        broker_head.addWidget(b_detail_link)
-        broker_panel_v.addLayout(broker_head)
+        # Broker column headers
+        b_th = QHBoxLayout()
+        b_th.setContentsMargins(6, 2, 6, 2)
+        th_b_name = QLabel("券商渠道")
+        th_b_name.setFixedWidth(75)
+        th_b_name.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        th_b_bar = QLabel("收益率 (占总收益)")
+        th_b_bar.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        th_b_pnl = QLabel("累计收益")
+        th_b_pnl.setFixedWidth(85)
+        th_b_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        th_b_pnl.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        b_th.addWidget(th_b_name)
+        b_th.addWidget(th_b_bar)
+        b_th.addWidget(th_b_pnl)
+        broker_vbox.addLayout(b_th)
 
-        self.broker_list_layout = QVBoxLayout()
-        self.broker_list_layout.setSpacing(8)
-        broker_panel_v.addLayout(self.broker_list_layout)
-        broker_panel_v.addStretch()
-        mid_layout.addWidget(broker_panel, 3)
+        self.broker_scroll = QScrollArea()
+        self.broker_scroll.setWidgetResizable(True)
+        self.broker_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.broker_list_widget = QWidget()
+        self.broker_list_layout = QVBoxLayout(self.broker_list_widget)
+        self.broker_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.broker_list_layout.setSpacing(4)
+        self.broker_scroll.setWidget(self.broker_list_widget)
+        broker_vbox.addWidget(self.broker_scroll)
 
-        content_layout.addLayout(mid_layout)
+        mid_splitter.addWidget(broker_card)
+        mid_splitter.setStretchFactor(0, 3)
+        mid_splitter.setStretchFactor(1, 2)
+        content_layout.addWidget(mid_splitter)
 
         # 5. Full-width Monthly Attribution Module
         self.attr_card = QFrame()

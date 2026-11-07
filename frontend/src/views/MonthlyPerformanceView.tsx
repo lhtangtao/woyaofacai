@@ -1062,19 +1062,19 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       </div>
 
       {/* 4. Middle Section: Trend Chart (Left) + Broker Overview (Right) */}
-      <div className="mid-grid">
-        <div className="chart-panel">
-          <div className="panel-head">
-            <span className="panel-title">月度收益走势</span>
-            <div className="toggle-group">
+      <div className="charts-split-section">
+        {/* Left Trend Chart */}
+        <div className="daily-perf-card" id="trend-chart-card">
+          <div className="trend-card-header">
+            <div className="trend-tabs">
               <button
-                className={`toggle-btn ${trendMode === "monthly" ? "active" : ""}`}
+                className={`trend-tab ${trendMode === "monthly" ? "active" : ""}`}
                 onClick={() => setTrendMode("monthly")}
               >
                 月度收益
               </button>
               <button
-                className={`toggle-btn ${trendMode === "cum" ? "active" : ""}`}
+                className={`trend-tab ${trendMode === "cum" ? "active" : ""}`}
                 onClick={() => setTrendMode("cum")}
               >
                 累计收益
@@ -1102,9 +1102,12 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           </div>
         </div>
 
-        <div className="broker-panel">
-          <div className="panel-head">
-            <span className="panel-title">渠道收益概览 (期间累计)</span>
+        {/* Right Broker Overview */}
+        <div className="daily-perf-card">
+          <div className="trend-card-header">
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#1E293B" }}>
+              渠道收益概览 <span style={{ fontSize: 12, color: "#64748B", fontWeight: 400 }}>(期间累计)</span>
+            </div>
             <button
               className="link-detail"
               onClick={() => setActiveTab("channel")}

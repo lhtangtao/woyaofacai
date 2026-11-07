@@ -1,5 +1,16 @@
 [
   {
+    "title": "修复每日与每月持仓收益走势图与渠道概览宽度比例不一致问题",
+    "time": "2026-11-08 01:10",
+    "author": "Antigravity",
+    "tag": "宽度比例与分割器结构 100% 对齐，已推送到远端仓库，待用户验收",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "根因定位：Mac 端每日收益使用 QSplitter 并将拉伸比例设为 3:2（60%:40%），而每月收益此前采用 QHBoxLayout 且权重为 7:3（70%:30%），导致每月走势图过宽且渠道面板过窄；Web 端每月收益误用了未带 CSS 规则的 mid-grid 容器。",
+      "对齐重构：Mac 端 monthly_performance_page.py 全面改用与每日完全一致的 QSplitter（拉伸比例严格设为 3:2，统一高度 260px，补全渠道列标题与 QScrollArea）；Web 端 MonthlyPerformanceView.tsx 改用统一的 charts-split-section 容器，确保两端走势图与渠道概览在宽度、高度与内边距上完全一致。"
+    ]
+  },
+  {
     "title": "每月持仓收益与每日持仓收益操作与细节全量对齐",
     "time": "2026-11-08 00:30",
     "author": "Antigravity",
