@@ -1077,3 +1077,27 @@
   width: 95px !important;
   text-align: center;
 }
+
+/* Monthly workspace additions. Daily performance keeps its own layout. */
+.monthly-workspace .monthly-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.monthly-workspace .monthly-period { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+.monthly-workspace .monthly-flow-content { padding: 12px 14px 0; }
+.monthly-workspace .monthly-flow-cards {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(154px, 1fr)); gap: 12px; margin-bottom: 12px;
+}
+.monthly-workspace .monthly-flow-stat {
+  display: grid; gap: 5px; padding: 12px 14px; border: 1px solid #e8edf5;
+  border-radius: 8px; background: #f5f8fd; font-size: 12px; color: #475569;
+}
+.monthly-workspace .monthly-flow-stat strong { font-size: 18px; color: #1e293b; font-variant-numeric: tabular-nums; }
+.monthly-workspace .monthly-flow-table { min-width: 1190px; }
+.monthly-workspace .monthly-flow-table .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+.monthly-workspace .monthly-flow-table button { background: transparent; border: 0; color: #2563eb; cursor: pointer; font: inherit; }
+.monthly-workspace .monthly-flow-table tfoot { background: #f5f8fd; font-weight: 600; }
+.monthly-workspace .monthly-flow-table .flow-selected { background: #eff6ff; }
+.monthly-workspace .monthly-message { margin: 4px 0; color: #64748b; font-size: 12px; overflow-wrap: anywhere; }
+.monthly-workspace .monthly-more { border: 1px solid #e8edf5; border-radius: 8px; padding: 8px 12px; background: white; }
+.monthly-workspace .monthly-more summary { cursor: pointer; color: #475569; font-size: 13px; }
+.monthly-workspace .monthly-more .kpi-grid, .monthly-workspace .monthly-more .attr-card { margin-top: 10px; }
+.monthly-workspace .monthly-sort-head th { cursor: pointer; }
+.monthly-workspace .monthly-local-tools { justify-content: flex-end; }

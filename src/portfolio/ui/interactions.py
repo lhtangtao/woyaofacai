@@ -218,6 +218,9 @@ class InteractionMixin:
         self.update_filter_chips()
 
     def route_changed(self, page, target):
+        legacy_cash_tab = page == 4 and target == "月度净投入明细"
+        if legacy_cash_tab:
+            page, target = 24, "每月持仓收益"
         if page == 10 or (page == 3 and target in ('replay', '交易回放')):
             # 证券详情/历史资产回放已合并下线，平滑映射跳转至功能更完备的「交易明细」
             page = 0
@@ -312,6 +315,8 @@ class InteractionMixin:
             self.monthly_performance_page.sync_person_from_main(self.person.currentData())
             self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
             self.monthly_performance_page.activate()
+            if legacy_cash_tab:
+                self.monthly_performance_page.tab_bar.setCurrentIndex(3)
             if self.analytics:
                 self.monthly_performance_page.update_data(self.analytics)
             self.update_history_buttons();return

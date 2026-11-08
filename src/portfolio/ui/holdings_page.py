@@ -542,24 +542,22 @@ class StockDrawerWidget(QFrame):
         # Tab 2: Holding analysis
         h_data = drawer_data.get("holding_analysis", {})
         h_series = []
-        if h_data.get("quantities"):
-            pts = tuple((p["date"], Decimal(str(p["quantity"]))) for p in h_data["quantities"])
-            h_series.append(Series("持仓股数", pts))
-        if h_data.get("costs"):
-            pts = tuple((p["date"], Decimal(str(p["cost"]))) for p in h_data["costs"])
-            h_series.append(Series("持仓成本价", pts))
-        if h_series:
-            self.holdings_canvas.chart = Chart(89, "持仓与成本轨迹", "trend", tuple(h_series), "数量与成本历史变化")
-            self.holdings_canvas.update()
+        dates = h_data.get("dates", [])
+        for name, key in (("持仓股数", "quantities"), ("持仓成本价", "costs")):
+            points = tuple((day, Decimal(str(value))) for day,value in zip(dates,h_data.get(key,[]))
+                           if value is not None)
+            if points:
+                h_series.append(Series(name, points))
+        self.holdings_canvas.chart = Chart(89, "持仓与成本轨迹", "trend", tuple(h_series), "数量与成本历史变化")
+        self.holdings_canvas.update()
 
         # Tab 3: PnL analysis
         pnl_data = drawer_data.get("pnl_analysis", {})
-        curve = pnl_data.get("curve", [])
-        if curve:
-            pts = tuple((p["date"], Decimal(str(p["cumulative_return"]))) for p in curve)
-            p_series = [Series("累计收益率", pts)]
-            self.pnl_canvas.chart = Chart(90, "收益率走势图", "trend", tuple(p_series), "包含买卖成交点位标记")
-            self.pnl_canvas.update()
+        points = tuple((day, Decimal(str(value))) for day,value in
+                       zip(pnl_data.get("chart_dates", []),pnl_data.get("cumulative_rates", [])) if value is not None)
+        series = (Series("累计收益率", points),) if points else ()
+        self.pnl_canvas.chart = Chart(90, "收益率走势图", "trend", series, "包含买卖成交点位标记")
+        self.pnl_canvas.update()
 
         # Tab 4: Monthly performance
         m_recs = drawer_data.get("monthly_performance", [])
@@ -568,8 +566,8 @@ class StockDrawerWidget(QFrame):
             m_rows.append(ReportRow((
                 mr.get("month"),
                 Decimal(str(mr.get("market_value") or 0)),
-                Decimal(str(mr.get("pnl") or 0)),
-                Decimal(str(mr.get("pnl_rate") or 0)) if mr.get("pnl_rate") is not None else None,
+                Decimal(str(mr["monthly_pnl"])) if mr.get("monthly_pnl") is not None else None,
+                Decimal(str(mr["return_rate"])) if mr.get("return_rate") is not None else None,
             ), {}))
         self.monthly_model.replace(m_rows)
 
@@ -585,14 +583,14 @@ class StockDrawerWidget(QFrame):
             rows.append(ReportRow((
                 t.get("trade_time"),
                 t.get("person_name"),
-                t.get("broker_channel"),
-                t.get("direction"),
+                t.get("channel"),
+                t.get("side"),
                 Decimal(str(t.get("quantity") or 0)),
                 Decimal(str(t.get("current_price") or 0)) if t.get("current_price") is not None else None,
                 Decimal(str(t.get("price") or 0)),
                 Decimal(str(t.get("amount") or 0)),
                 Decimal(str(t.get("fee") or 0)),
-                Decimal(str(t.get("post_holding") or 0)),
+                Decimal(str(t["post_quantity"])) if t.get("post_quantity") is not None else None,
                 t.get("cost_change"),
             ), {}))
         self.trade_model.replace(rows)

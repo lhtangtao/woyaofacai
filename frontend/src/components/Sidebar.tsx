@@ -51,7 +51,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "reports:每月持仓收益", label: "每月持仓收益", icon: <TrendingUp size={16} /> },
       { id: "reports:每月微操收益", label: "每月微操收益", icon: <ArrowLeftRight size={16} /> },
       { id: "reports:清仓收益", label: "清仓收益", icon: <Wallet size={16} /> },
-      { id: "reports:月度净投入明细", label: "月度净投入", icon: <TrendingUp size={16} /> },
     ],
   },
   {

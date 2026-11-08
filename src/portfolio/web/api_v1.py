@@ -515,7 +515,9 @@ def api_holdings_stock_drawer():
         scope = get_user_query_scope(person_id=person_id)
         analytics = svc.calculate(scope)
         data = HoldingsManagementService.get_stock_drawer_data(
-            str(DATABASE_PATH), analytics, ticker, person_id=person_id, broker=broker
+            str(svc.path), analytics, ticker, person_id=person_id, broker=broker,
+            account_id=request.args.get("account_id", type=int),
+            instrument_id=request.args.get("instrument_id", type=int),
         )
         return jsonify(status="ok", **data)
     except Exception as e:

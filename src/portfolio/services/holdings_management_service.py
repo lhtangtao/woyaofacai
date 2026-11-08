@@ -816,11 +816,14 @@ class HoldingsManagementService:
         person_id: int | None = None,
         broker: str | None = None,
         as_of: date | None = None,
+        *, account_id: int | None = None, instrument_id: int | None = None,
     ) -> dict[str, Any]:
         """Fetch all data required by the 4-tab stock drawer."""
         start_t = time.monotonic()
         ticker = ticker.strip().upper()
         as_of = as_of or (analytics.scope.as_of if analytics and hasattr(analytics, "scope") else date.today())
+
+        scope = analytics.scope if analytics else QueryScope(as_of=as_of, include_disabled=True)
 
         # 1. Top Summary Metrics
         pa = analytics.reports.get("人员资产") if analytics else None
@@ -828,6 +831,8 @@ class HoldingsManagementService:
             r for r in (pa.rows if pa else ())
             if r.values[2] and r.values[2].upper() == ticker
             and (person_id is None or r.metadata.get("person_id") == person_id)
+            and (account_id is None or r.metadata.get("account_id") == account_id)
+            and (instrument_id is None or r.metadata.get("instrument_id") == instrument_id)
             and (broker is None or (r.values[1] and broker.upper() in r.values[1].upper()))
         ]
 
@@ -842,8 +847,9 @@ class HoldingsManagementService:
         live_p = live_quotes_map.get(ticker)
         current_price = live_p
         if current_price is None:
-            for r in active_rows:
-                if isinstance(r.values[6], Decimal) and r.values[6] > 0:
+            quote_rows = pa_rows if account_id is not None or instrument_id is not None else active_rows
+            for r in quote_rows:
+                if (r.values[4] == "持有中" or r.metadata.get("valuation_date")) and isinstance(r.values[6], Decimal) and r.values[6] > 0:
                     current_price = r.values[6]
                     break
 
@@ -881,19 +887,32 @@ class HoldingsManagementService:
 
         # 2. Tab 1: 交易记录 (11 Columns)
         ts = TradesService(source_path)
-        trade_scope = QueryScope(
-            as_of=as_of,
-            person_ids=(person_id,) if person_id is not None else None,
-            include_disabled=True,
-            search=ticker,
-        )
-        trade_page = ts.get_trades(trade_scope)
-        matched_trades = []
-        for r in trade_page.rows:
-            if r.values[3] and r.values[3].upper() == ticker:
-                if broker and r.values[1] and broker.upper() not in r.values[1].upper():
-                    continue
-                matched_trades.append(r)
+        scoped_drawer = account_id is not None or instrument_id is not None
+        person_ids = scope.person_ids
+        if person_id is not None:
+            person_ids = (person_id,) if person_ids is None or person_id in person_ids else (-99999,)
+        if scoped_drawer:
+            trade_scope = replace(
+                scope, as_of=as_of, start_date=None, search=ticker,
+                account_ids=(account_id,) if account_id is not None else scope.account_ids,
+                instrument_ids=(instrument_id,) if instrument_id is not None else scope.instrument_ids,
+                person_ids=person_ids,
+            )
+        else:
+            # Keep existing broad drill-down while respecting an authorized person's scope.
+            trade_scope = QueryScope(
+                as_of=as_of, person_ids=person_ids,
+                include_disabled=True, search=ticker,
+            )
+        trade_page = ts.get_trades(trade_scope, size=1000 if scoped_drawer else 200)
+        matched_trades = list(trade_page.rows)
+        if scoped_drawer:
+            for page in range(1, (trade_page.total + 999) // 1000):
+                matched_trades.extend(ts.get_trades(trade_scope, size=1000, page=page).rows)
+        matched_trades = [
+            row for row in matched_trades if (row.values[3] or "").upper() == ticker
+            and (scoped_drawer or not broker or broker.upper() in (row.values[1] or "").upper())
+        ]
 
         trade_records = []
         for r in matched_trades:
@@ -992,6 +1011,10 @@ class HoldingsManagementService:
             for r in monthly_rep.rows:
                 if r.values[3] and r.values[3].upper() == ticker:
                     if person_id is not None and r.metadata.get("person_id") != person_id:
+                        continue
+                    if account_id is not None and r.metadata.get("account_id") != account_id:
+                        continue
+                    if instrument_id is not None and r.metadata.get("instrument_id") != instrument_id:
                         continue
                     m_pnl = r.values[20]
                     m_mv = r.values[11]

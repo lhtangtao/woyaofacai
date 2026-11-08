@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import {
   Calendar,
@@ -13,8 +13,9 @@ import {
   BarChart2,
   PieChart,
 } from "lucide-react";
-import { api } from "../api/client";
-import { PersonItem, ReportDetailData } from "../types";
+import { StockDrawer } from "../components/StockDrawer";
+import { CASH_COLUMNS, NET_QUANTITY_COLUMN, cashFlowRows, exportMonthlyCsv, loadMonthlyReport, sumReportColumn, type ReportEntry } from "./monthly-cash-flow";
+import { PersonItem } from "../types";
 import "./daily-performance.css";
 
 interface MonthlyPerformanceViewProps {
@@ -23,6 +24,7 @@ interface MonthlyPerformanceViewProps {
   broker?: string;
   onBrokerChange?: (broker: string) => void;
   persons: PersonItem[];
+  refreshKey?: number;
 }
 
 interface RawMonthlyRow {
@@ -74,6 +76,10 @@ interface ChannelSummary {
   contributionRatio: number;
 }
 
+const currentMonth = () => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit",
+}).format(new Date()).slice(0, 7);
+
 const fmtMoney = (val: number | null | undefined, digits = 2): string => {
   if (val == null || isNaN(val)) return "—";
   return Number(val).toLocaleString("en-US", {
@@ -121,9 +127,17 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   broker,
   onBrokerChange,
   persons,
+  refreshKey = 0,
 }) => {
   // Loading & Data State
   const [loading, setLoading] = useState<boolean>(true);
+  const request = useRef<AbortController | null>(null);
+  const initialRangeLoaded = useRef(false);
+  const [error, setError] = useState("");
+  const [entries, setEntries] = useState<ReportEntry[]>([]);
+  const [netEntries, setNetEntries] = useState<ReportEntry[]>([]);
+  const [flowSelection, setFlowSelection] = useState<ReportEntry | null>(null);
+  const [tradeSelection, setTradeSelection] = useState<ReportEntry | null>(null);
   const [rawData, setRawData] = useState<RawMonthlyRow[]>([]);
 
   // Filter State
@@ -132,7 +146,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   const [filterTicker, setFilterTicker] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("");
   const [filterStartMonth, setFilterStartMonth] = useState<string>("2025-01");
-  const [filterEndMonth, setFilterEndMonth] = useState<string>("2026-11");
+  const [filterEndMonth, setFilterEndMonth] = useState<string>(currentMonth());
 
   // Applied Filters State
   const [appliedFilters, setAppliedFilters] = useState({
@@ -141,7 +155,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     ticker: "",
     category: "",
     startMonth: "2025-01",
-    endMonth: "2026-11",
+    endMonth: currentMonth(),
   });
 
   // Selected Month & Trend Mode
@@ -150,9 +164,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   const [kpiFilter, setKpiFilter] = useState<"up" | "down" | null>(null);
 
   // Table Tabs & Pagination
-  const [activeTab, setActiveTab] = useState<"month" | "channel" | "stock">("month");
+  const [activeTab, setActiveTab] = useState<"month" | "channel" | "stock" | "flow">("month");
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const pageSize = 20;
+  const [pageSize, setPageSize] = useState(20);
+  const [flowSort, setFlowSort] = useState({ column: NET_QUANTITY_COLUMN, ascending: false });
 
   // Sorting
   const [sortField, setSortField] = useState<string>("");
@@ -184,18 +199,22 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 
   // Fetch report data
   const fetchData = async () => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    setError("");
+    setEntries([]); setNetEntries([]); setRawData([]);
+    setFlowSelection(null); setTradeSelection(null);
     setLoading(true);
     try {
-      const res = await api.reportDetail(
-        "每月持仓收益",
-        appliedFilters.personId,
-        undefined,
-        1,
-        50000
-      );
-
-      if (res && res.rows) {
-        const rows: RawMonthlyRow[] = res.rows.map((r: any[]) => ({
+      const [monthly, net] = await Promise.all([
+        loadMonthlyReport("每月持仓收益", appliedFilters.personId, controller.signal),
+        loadMonthlyReport("月度净投入明细", appliedFilters.personId, controller.signal),
+      ]);
+      if (!controller.signal.aborted) {
+        setEntries(monthly);
+        setNetEntries(net);
+        const rows: RawMonthlyRow[] = monthly.map(({values: r}) => ({
           month: String(r[0] || ""),
           channel: String(r[1] || ""),
           category: String(r[2] || ""),
@@ -231,18 +250,24 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
         });
         if (maxM) {
           setSelectedMonth((prev) => prev || maxM);
+          if (!initialRangeLoaded.current) {
+            initialRangeLoaded.current = true;
+            setFilterEndMonth(maxM);
+            setAppliedFilters(prev => ({ ...prev, endMonth: maxM }));
+          }
         }
       }
     } catch (err) {
-      console.error("Failed to load monthly performance data:", err);
+      if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "月度报表读取失败");
     } finally {
-      setLoading(false);
+      if (request.current === controller) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchData();
-  }, [appliedFilters.personId]);
+    return () => request.current?.abort();
+  }, [appliedFilters.personId, refreshKey]);
 
   // Available dropdown options
   const channelOptions = useMemo(() => {
@@ -264,7 +289,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   // Filtered rows
   const filteredRows = useMemo(() => {
     return rawData.filter((r) => {
-      if (appliedFilters.broker && r.channel !== appliedFilters.broker && fmtBrokerCn(r.channel) !== appliedFilters.broker) {
+      if (appliedFilters.broker && fmtBrokerCn(r.channel) !== fmtBrokerCn(appliedFilters.broker)) {
         return false;
       }
       if (appliedFilters.ticker && !r.symbol.toUpperCase().includes(appliedFilters.ticker.toUpperCase())) {
@@ -282,6 +307,40 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       return true;
     });
   }, [rawData, appliedFilters]);
+
+  const matchesEntry = ({values: r}: ReportEntry) =>
+    (!appliedFilters.broker || fmtBrokerCn(r[1]) === fmtBrokerCn(appliedFilters.broker)) &&
+    (!appliedFilters.category || r[2] === appliedFilters.category) &&
+    (!appliedFilters.ticker || String(r[3]).toUpperCase().includes(appliedFilters.ticker.toUpperCase())) &&
+    (!appliedFilters.startMonth || r[0] >= appliedFilters.startMonth) &&
+    (!appliedFilters.endMonth || r[0] <= appliedFilters.endMonth);
+
+  const flowRows = useMemo(() => cashFlowRows(netEntries, entries).filter(matchesEntry).sort((a,b) => {
+    const monthOrder = String(a.values[0]).localeCompare(String(b.values[0]));
+    const left = a.values[NET_QUANTITY_COLUMN];
+    const right = b.values[NET_QUANTITY_COLUMN];
+    let order = monthOrder;
+    if (flowSort.column === NET_QUANTITY_COLUMN) {
+      if (left == null && right != null) return 1;
+      if (right == null && left != null) return -1;
+      order = left == null ? 0 : left - right;
+    }
+    return (flowSort.ascending ? order : -order) || -monthOrder ||
+      String(a.values[1]).localeCompare(String(b.values[1])) || String(a.values[3]).localeCompare(String(b.values[3]));
+  }), [netEntries, entries, appliedFilters, flowSort]);
+  const scopedMonthly = useMemo(() => entries.filter(matchesEntry), [entries, appliedFilters]);
+  const netByMonth = useMemo(() => {
+    const groups = new Map<string, ReportEntry[]>();
+    for (const row of flowRows) {
+      const month = String(row.values[0]);
+      const group = groups.get(month) ?? [];
+      group.push(row);
+      groups.set(month, group);
+    }
+    return new Map([...groups].map(([month, rows]) => [month, sumReportColumn(rows, 12)]));
+  }, [flowRows]);
+  const endBalance = netByMonth.get(appliedFilters.endMonth || [...netByMonth.keys()].sort().pop() || "") ?? null;
+  const flowTotals = [sumReportColumn(flowRows, 9), sumReportColumn(flowRows, 10), sumReportColumn(flowRows, 11), endBalance];
 
   // Months ascending list
   const availableMonths = useMemo(() => {
@@ -486,7 +545,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     const data = monthSummaries.map((d) => (trendMode === "monthly" ? d.monthlyProfit : d.cumProfit));
 
     if (trendMode === "monthly") {
+      const net = months.map(month => netByMonth.get(month) ?? null);
+      const showNet = net.some(value => value != null);
       return {
+        legend: showNet ? { data: ["月度收益", "月末累计净投入"], right: 8 } : undefined,
         tooltip: {
           trigger: "axis",
           backgroundColor: "rgba(15, 23, 42, 0.9)",
@@ -499,6 +561,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               <div style="font-weight:600;margin-bottom:4px;">${p.name}</div>
               <div>本月收益: <b>${fmtSignedMoney(item?.monthlyProfit)}</b></div>
               <div>累计收益: <b>${fmtSignedMoney(item?.cumProfit)}</b></div>
+              <div>月末累计净投入: <b>${fmtMoney(net[p.dataIndex])}</b></div>
             `;
           },
         },
@@ -516,15 +579,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           axisLabel: { color: "#64748B", fontSize: 11 },
           axisTick: { show: false },
         },
-        yAxis: {
-          type: "value",
-          splitLine: { lineStyle: { color: "#F1F5F9", type: "dashed" } },
-          axisLabel: {
-            color: "#64748B",
-            fontSize: 11,
-            formatter: (v: number) => fmtSignedMoney(v, 0),
-          },
-        },
+        yAxis: [
+          { type: "value", axisLabel: { color: "#64748B" }, splitLine: { lineStyle: { color: "#F1F5F9" } } },
+          ...(showNet ? [{ type: "value", position: "right", axisLabel: { color: "#64748B" }, splitLine: { show: false } }] : []),
+        ],
         series: [
           {
             name: "月度收益",
@@ -545,6 +603,8 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               },
             })),
           },
+          ...(showNet ? [{ name: "月末累计净投入", type: "line", yAxisIndex: 1, data: net,
+            connectNulls: false, symbolSize: 4, itemStyle: { color: "#2563EB" } }] : []),
         ],
       };
     } else {
@@ -612,7 +672,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
         ],
       };
     }
-  }, [monthSummaries, trendMode, targetMonth]);
+  }, [monthSummaries, trendMode, targetMonth, netByMonth]);
 
   // Donut Option for Selected Month Structure
   const donutOption = useMemo(() => {
@@ -815,6 +875,13 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   };
 
   const handleApplyFilter = () => {
+    if (filterStartMonth && filterEndMonth && filterStartMonth > filterEndMonth) {
+      setError("开始月份不能晚于结束月份");
+      return;
+    }
+    setError("");
+    onPersonChange?.(filterPersonId);
+    onBrokerChange?.(filterBroker);
     setAppliedFilters({
       personId: filterPersonId,
       broker: filterBroker,
@@ -827,19 +894,23 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   };
 
   const handleResetFilter = () => {
+    setError("");
+    onPersonChange?.(null);
+    onBrokerChange?.("");
     setFilterPersonId(null);
     setFilterBroker("");
     setFilterTicker("");
     setFilterCategory("");
     setFilterStartMonth("2025-01");
-    setFilterEndMonth("2026-11");
+    const endMonth = rawData.map(row => row.month).sort().pop() || currentMonth();
+    setFilterEndMonth(endMonth);
     setAppliedFilters({
       personId: null,
       broker: "",
       ticker: "",
       category: "",
       startMonth: "2025-01",
-      endMonth: "2026-11",
+      endMonth,
     });
     setKpiFilter(null);
     setStockFilterMonth("");
@@ -868,20 +939,51 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     setCurrentPage(1);
   };
 
+  const sortExisting = <T,>(rows: T[], value: (row: T, col: number) => string | number) => {
+    if (sortField === "") return rows;
+    return [...rows].sort((a,b) => {
+      const left = value(a, Number(sortField)), right = value(b, Number(sortField));
+      const order = typeof left === "number" && typeof right === "number" ? left - right : String(left).localeCompare(String(right));
+      return sortOrder === "asc" ? order : -order;
+    });
+  };
+  const summaryValues = (row: Omit<MonthSummary, "cumProfitRate">) => [
+    row.initValue,row.marketValue,row.buyAmount,row.sellAmount,row.netAmount,row.monthlyProfit,
+    row.profitRate,row.cumProfit,row.upStocks,row.downStocks,
+  ];
+  const sortedMonths = sortExisting(filteredMonthSummariesDesc, (r,i) => [r.month,...summaryValues(r)][i]);
+  const sortedChannels = sortExisting(channelMonthlyList, (r,i) => [r.month,fmtBrokerCn(r.channel),...summaryValues(r)][i]);
+  const sortedStocks = sortExisting(stockTableRows, (r,i) => [
+    r.month,fmtBrokerCn(r.channel),r.symbol,r.category,r.endQty,r.costPrice,r.closePrice,r.monthlyProfit,
+    r.initValue > 0 ? r.monthlyProfit/r.initValue : r.buyAmount > 0 ? r.monthlyProfit/r.buyAmount : r.profitRate,
+    stockCumMap.get(`${r.month}__${r.channel}__${r.symbol}`) ?? r.monthlyProfit,r.profitRate,r.marketValue,
+  ][i]);
+  useEffect(() => {
+    setSortField(""); setCurrentPage(1); setFlowSelection(null); setTradeSelection(null);
+  }, [activeTab, appliedFilters]);
+  const sortHeader = (event: React.MouseEvent<HTMLTableSectionElement>) => {
+    const cell = (event.target as HTMLElement).closest("th");
+    if (!cell) return;
+    const field = String(cell.cellIndex);
+    setSortOrder(sortField === field && sortOrder === "asc" ? "desc" : "asc");
+    setSortField(field);
+    setCurrentPage(1);
+  };
+
   return (
-    <div className="daily-perf-container">
-      {/* 1. Header */}
-      <div className="daily-perf-header">
-        <div>
-          <h1 className="daily-perf-title">每月持仓收益</h1>
-          <p className="daily-perf-desc">
-            查看历史每月的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。
-          </p>
-          <div className="db-badge">已连接数据库 · 只读</div>
+    <div className="daily-perf-container monthly-workspace">
+      <div className="daily-perf-header monthly-local-tools">
+        <div className="monthly-actions">
+          <button className="btn-refresh" disabled={!loading} onClick={() => {
+            request.current?.abort(); setLoading(false); setError("查询已取消");
+          }}>取消查询</button>
+          <button className="btn-refresh" disabled={loading || (activeTab === "flow" ? !flowRows.length : !scopedMonthly.length)} onClick={() =>
+            activeTab === "flow"
+              ? exportMonthlyCsv("资金流向明细", CASH_COLUMNS, flowRows.map(row => row.values))
+              : exportMonthlyCsv("每月持仓收益", ["月份","渠道","分类","Ticker","持仓数量","成本均价","收盘价","月末市值","本月收益","持仓盈亏比例"],
+                  scopedMonthly.map(({values: r}) => [r[0],r[1],r[2],r[3],r[8],r[9],r[10],r[11],r[20],r[13]]))
+          }>导出 CSV</button>
         </div>
-        <button className="btn-refresh" onClick={fetchData}>
-          刷新
-        </button>
       </div>
 
       {/* 2. Filter Bar */}
@@ -893,7 +995,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             onChange={(e) => {
               const val = e.target.value === "" ? null : Number(e.target.value);
               setFilterPersonId(val);
-              if (onPersonChange) onPersonChange(val);
             }}
           >
             <option value="">全部人员</option>
@@ -909,7 +1010,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             value={filterBroker}
             onChange={(e) => {
               setFilterBroker(e.target.value);
-              if (onBrokerChange) onBrokerChange(e.target.value);
             }}
           >
             <option value="">全部渠道</option>
@@ -970,26 +1070,25 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
         </div>
       </div>
 
-      {/* 3. 7 KPI Metric Cards */}
-      <div className="kpi-grid">
-        <div
-          className={`kpi-card ${kpiFilter === null ? "selected" : ""}`}
-          onClick={() => handleKpiCardClick("total")}
-        >
-          <div className="kpi-head">
-            <span className="kpi-title">期间总收益</span>
-            <span className="kpi-arrow">›</span>
+      {error && <p role="status" className="monthly-message">{error}</p>}
+      <div className="kpi-grid monthly-period">
+        <div className="kpi-card" onClick={() => handleKpiCardClick("total")}>
+          <div className="kpi-title">期间总收益</div>
+          <div className={`kpi-value ${kpiMetrics.totalPnl < 0 ? "color-loss" : "color-profit"}`}>
+            {fmtSignedMoney(kpiMetrics.totalMonths ? kpiMetrics.totalPnl : null)}
           </div>
-          <div
-            className={`kpi-value ${
-              kpiMetrics.totalPnl >= 0 ? "color-profit" : "color-loss"
-            }`}
-          >
-            {fmtSignedMoney(kpiMetrics.totalPnl)}
-          </div>
-          <div className="kpi-sub">累计收益</div>
         </div>
-
+        {[["期间收益率", "—"], ["累计净投入", fmtSignedMoney(endBalance)],
+          ["期间买入金额", fmtMoney(sumReportColumn(scopedMonthly, 16))],
+          ["期间卖出金额", fmtMoney(sumReportColumn(scopedMonthly, 17))],
+          ["交易笔数（账本操作）", fmtMoney(sumReportColumn(scopedMonthly, 19), 0)]].map(([label,value]) =>
+          <div className="kpi-card" key={label} title={label === "期间收益率" ? "现有报表没有提供期间收益率" : undefined}>
+            <div className="kpi-title">{label}</div><div className="kpi-value">{value}</div>
+          </div>)}
+      </div>
+      <details className="monthly-more">
+        <summary>更多收益统计</summary>
+        <div className="kpi-grid monthly-period">
         <div className="kpi-card">
           <div className="kpi-head">
             <span className="kpi-title">交易月数</span>
@@ -1060,6 +1159,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           <div className="kpi-sub">亏损月均值 ({kpiMetrics.downMonths}月)</div>
         </div>
       </div>
+      </details>
 
       {/* 4. Middle Section: Trend Chart (Left) + Broker Overview (Right) */}
       <div className="charts-split-section">
@@ -1342,17 +1442,52 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             >
               📈 按股票明细
             </button>
+            <button className={`tab-btn ${activeTab === "flow" ? "active" : ""}`} onClick={() => {
+              setActiveTab("flow"); setFlowSort({ column: NET_QUANTITY_COLUMN, ascending: false }); setFlowSelection(null);
+            }}>资金流向明细</button>
           </div>
           <span className="table-record-count">
-            共 {activeTab === "month" ? filteredMonthSummariesDesc.length : activeTab === "channel" ? channelMonthlyList.length : stockTableRows.length} 条记录
+            共 {activeTab === "month" ? filteredMonthSummariesDesc.length : activeTab === "channel" ? channelMonthlyList.length : activeTab === "flow" ? flowRows.length : stockTableRows.length} 条记录
           </span>
         </div>
 
-        {/* Table Container - NO OPERATION COLUMN */}
-        <div className="modern-table-wrap">
+        {activeTab === "flow" && <div className="monthly-flow-content">
+          <div className="monthly-flow-cards">
+            {["期间买入金额","期间卖出金额","期间净投入","月末累计净投入"].map((label,i) => (
+              <div className="monthly-flow-stat" key={label}><span>{label}</span>
+                <strong className={i === 2 && flowTotals[i] != null ? (flowTotals[i]! < 0 ? "color-loss" : "color-profit") : ""}>
+                  {i === 2 ? fmtSignedMoney(flowTotals[i]) : fmtMoney(flowTotals[i])}
+                </strong>
+              </div>
+            ))}
+          </div>
+          <div className="modern-table-wrap"><table className="modern-table monthly-flow-table">
+            <thead><tr>{CASH_COLUMNS.map((name,i) => <th key={name} className={i >= 4 ? "numeric" : ""}>
+              {i === 0 || i === NET_QUANTITY_COLUMN ? <button type="button" onClick={() =>
+                setFlowSort({ column: i, ascending: flowSort.column === i && !flowSort.ascending })
+              }>{name}{flowSort.column === i ? flowSort.ascending ? " ↑" : " ↓" : ""}</button> : name}
+            </th>)}</tr></thead>
+            <tbody>{flowRows.map((row,i) =>
+              <tr key={i} className={flowSelection === row ? "flow-selected" : ""} onClick={() => setFlowSelection(row)}
+                onDoubleClick={() => setTradeSelection(row)}>
+                {row.values.map((value,j) => <td key={j} className={j >= 4 ? "numeric" : ""}>
+                  {j === 3 ? <button type="button" onClick={() => setTradeSelection(row)}>{value}</button> :
+                    j === 1 ? fmtBrokerCn(value) : j === 11 || j === NET_QUANTITY_COLUMN ? <span className={value == null ? "" : value < 0 ? "color-loss" : "color-profit"}>{fmtSignedMoney(value)}</span> :
+                    j >= 4 ? fmtMoney(value) : value}
+                </td>)}
+              </tr>)}
+              {!flowRows.length && <tr><td colSpan={CASH_COLUMNS.length}>{loading ? "正在读取资金流向…" : "当前筛选没有资金流向数据"}</td></tr>}
+            </tbody>
+            <tfoot><tr><th colSpan={9}>当前筛选合计</th>{flowTotals.slice(0,3).map((value,i) =>
+              <td className="numeric" key={i}>{fmtMoney(value)}</td>)}<td className="numeric">{fmtMoney(endBalance)}</td></tr></tfoot>
+          </table></div>
+          {flowSelection && <p className="monthly-message">来源记录 ID：{(flowSelection.meta.source_record_ids || []).join("、") || "—"} · 点击 Ticker 或双击查看交易回放</p>}
+        </div>}
+        {/* The cash-flow table already contains all rows above. */}
+        {activeTab !== "flow" && <div className="modern-table-wrap">
           {activeTab === "month" && (
             <table className="modern-table">
-              <thead>
+              <thead onClick={sortHeader} className="monthly-sort-head">
                 <tr>
                   <th style={{ width: "11%" }}>月份 (收盘)</th>
                   <th className="col-right" style={{ width: "9%" }}>期初市值</th>
@@ -1368,7 +1503,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {filteredMonthSummariesDesc
+                {sortedMonths
                   .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                   .map((d) => (
                     <tr
@@ -1431,7 +1566,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 
           {activeTab === "channel" && (
             <table className="modern-table">
-              <thead>
+              <thead onClick={sortHeader} className="monthly-sort-head">
                 <tr>
                   <th style={{ width: "10%" }}>月份</th>
                   <th style={{ width: "8.5%" }}>券商渠道</th>
@@ -1448,7 +1583,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {channelMonthlyList
+                {sortedChannels
                   .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                   .map((cd, idx) => (
                     <tr
@@ -1512,7 +1647,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 
           {activeTab === "stock" && (
             <table className="modern-table">
-              <thead>
+              <thead onClick={sortHeader} className="monthly-sort-head">
                 <tr>
                   <th style={{ width: "9.5%" }}>月份</th>
                   <th style={{ width: "8.5%" }}>券商渠道</th>
@@ -1529,7 +1664,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {stockTableRows
+                {sortedStocks
                   .slice((currentPage - 1) * pageSize, currentPage * pageSize)
                   .map((s, idx) => {
                     const cumPnl = stockCumMap.get(`${s.month}__${s.channel}__${s.symbol}`) ?? s.monthlyProfit;
@@ -1586,11 +1721,12 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               </tbody>
             </table>
           )}
-        </div>
+        </div>}
 
         {/* Pagination Bar */}
-        <div className="table-pagination">
-          <span className="page-size-info">每页 20 条</span>
+        {activeTab !== "flow" && <div className="table-pagination">
+          <label className="page-size-info">每页 <select aria-label="每页条数" value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}}>
+            {[20,50,100].map(size=><option key={size} value={size}>{size} 条</option>)}</select></label>
           <div className="page-controls">
             <button
               className="page-btn"
@@ -1630,7 +1766,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               下一页
             </button>
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* 7. Slide-out Right Drawer */}
@@ -2017,6 +2153,9 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           </div>
         );
       })()}
+      {tradeSelection && <StockDrawer ticker={tradeSelection.values[3]} personId={appliedFilters.personId}
+        broker={tradeSelection.values[1]} accountId={tradeSelection.meta.account_id}
+        instrumentId={tradeSelection.meta.instrument_id} onClose={() => setTradeSelection(null)} />}
     </div>
   );
 };

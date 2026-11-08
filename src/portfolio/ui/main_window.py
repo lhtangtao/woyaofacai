@@ -919,6 +919,9 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.choose_database()
 
     def export_current_page(self):
+        if self.pages.currentIndex() == 24:
+            self.monthly_performance_page.export_csv()
+            return
         if self.pages.currentIndex() == 0 and hasattr(self, "trade_center"):
             self.trade_center.export();return
         if self.current_page is None:

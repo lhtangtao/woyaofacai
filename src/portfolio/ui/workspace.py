@@ -309,7 +309,7 @@ def build_workspace(self):
     self.pages.addWidget(self.dashboard)
     self.asset_page = ReportPage(("当前持仓", "今日盈亏", "实时持仓", "股票汇总", "人员资产", "渠道汇总", "股票归属", "交易回放"), broker_people=True, show_selector=False)
     self.pages.addWidget(self.asset_page)
-    self.performance_page = ReportPage(("每日持仓收益", "每月持仓收益", "每月微操收益", "微操配对证据", "月度净投入明细", "完整交易净投入", "清仓收益", "交易回放"))
+    self.performance_page = ReportPage(("每日持仓收益", "每月持仓收益", "每月微操收益", "微操配对证据", "完整交易净投入", "清仓收益", "交易回放"))
     self.pages.addWidget(self.performance_page)
     self.charts_page = ChartsPage()
     self.pages.addWidget(self.charts_page)

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QFileDialog,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -49,6 +50,7 @@ from PySide6.QtWidgets import (
 
 from portfolio.paths import DATABASE_PATH
 from portfolio.ui.icons import icon
+from portfolio.ui.monthly_cash_flow import CASH_COLUMNS, NET_QUANTITY_COLUMN, cash_flow_rows, sum_column
 from portfolio.ui.theme import numeric_font, tokens
 
 logger = logging.getLogger(__name__)
@@ -198,6 +200,7 @@ class MonthlyTrendCanvas(QWidget):
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.hovered_index = -1
+        self.net_by_month = {}
 
     def set_data(self, points: List[Tuple[str, float, float]], selected_month: str = ""):
         self.data_points = points
@@ -207,6 +210,11 @@ class MonthlyTrendCanvas(QWidget):
     def set_mode(self, mode: str):
         self.mode = mode
         self.update()
+
+    def right_margin(self):
+        return 90 if self.mode == "monthly" and any(
+            self.net_by_month.get(point[0]) is not None for point in self.data_points
+        ) else 20
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -224,7 +232,7 @@ class MonthlyTrendCanvas(QWidget):
             return
 
         margin_left = 55
-        margin_right = 20
+        margin_right = self.right_margin()
         margin_top = 25
         margin_bottom = 35
 
@@ -351,6 +359,35 @@ class MonthlyTrendCanvas(QWidget):
                     painter.setBrush(QColor("#2563EB"))
                     painter.drawEllipse(QRectF(cx - 5, cy - 5, 10, 10))
 
+        if self.mode == "monthly" and margin_right > 20:
+            net = [self.net_by_month.get(month) for month, *_ in self.data_points]
+            balances = [float(value) for value in net if value is not None]
+            low, high = min(balances), max(balances)
+            if low == high:
+                low -= 1
+                high += 1
+            path = QPainterPath()
+            painter.setPen(QPen(QColor("#2563EB"), 1.5))
+            painter.setBrush(QColor("#FFFFFF"))
+            connected = False
+            for i, value in enumerate(net):
+                if value is None:
+                    connected = False
+                    continue
+                x = margin_left + (i + 0.5) * bar_step
+                y = margin_top + plot_h * (high - float(value)) / (high - low)
+                if connected:
+                    path.lineTo(x, y)
+                else:
+                    path.moveTo(x, y)
+                painter.drawEllipse(QRectF(x - 2, y - 2, 4, 4))
+                connected = True
+            painter.strokePath(path, QPen(QColor("#2563EB"), 1.5))
+            painter.setFont(numeric_font(9))
+            painter.drawText(w - margin_right + 5, 13, "累计净投入")
+            painter.drawText(w - margin_right + 5, margin_top + 4, fmt_money(high, 0))
+            painter.drawText(w - margin_right + 5, int(margin_top + plot_h), fmt_money(low, 0))
+
         # X Axis labels (Show 3-5 representative months)
         painter.setPen(QColor("#94A3B8"))
         painter.setFont(numeric_font(9))
@@ -365,19 +402,21 @@ class MonthlyTrendCanvas(QWidget):
             hm, h_monthly, h_cum = self.data_points[self.hovered_index]
             tip_text = f"{hm}\n当月: {fmt_signed_money(h_monthly)}\n累计: {fmt_signed_money(h_cum)}"
             cx = margin_left + self.hovered_index * bar_step + bar_step * 0.5
-            tx = min(w - 130, max(margin_left, cx - 60))
+            if self.mode == "monthly" and margin_right > 20:
+                tip_text += f"\n月末净投入: {fmt_money(self.net_by_month.get(hm))}"
+            tx = min(w - 166, max(margin_left, cx - 70))
             ty = margin_top + 15
             painter.setBrush(QColor(15, 23, 42, 220))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(tx, ty, 120, 52), 4, 4)
+            painter.drawRoundedRect(QRectF(tx, ty, 156, 65), 4, 4)
             painter.setPen(QColor("#FFFFFF"))
             painter.setFont(QFont(".AppleSystemUIFont", 9.5))
-            painter.drawText(QRectF(tx, ty + 2, 120, 48), Qt.AlignmentFlag.AlignCenter, tip_text)
+            painter.drawText(QRectF(tx, ty + 2, 156, 61), Qt.AlignmentFlag.AlignCenter, tip_text)
 
     def mouseMoveEvent(self, event):
         w = self.width()
         margin_left = 55
-        margin_right = 20
+        margin_right = self.right_margin()
         plot_w = w - margin_left - margin_right
         n = len(self.data_points)
 
@@ -476,6 +515,7 @@ class ModernTableModel(QAbstractTableModel):
         self.rows: List[List[Any]] = []
         self.page = 1
         self.page_size = 20
+        self.show_all_rows = False
         self.sort_column: int = -1
         self.sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
         self.highlight_month: str = ""
@@ -507,7 +547,8 @@ class ModernTableModel(QAbstractTableModel):
             return None
 
         val = self.rows[row_idx][col_idx]
-        val_str = str(val) if val is not None else "—"
+        val_str = (fmt_signed_money(val) if self.show_all_rows and col_idx == NET_QUANTITY_COLUMN
+                   else str(val) if val is not None else "—")
 
         if role == Qt.ItemDataRole.DisplayRole:
             return val_str
@@ -587,27 +628,29 @@ class ModernTableModel(QAbstractTableModel):
         except ValueError:
             return s
 
+    def _update_visible_rows(self):
+        if self.sort_column >= 0:
+            descending = self.sort_order == Qt.SortOrder.DescendingOrder
+            if self.show_all_rows and self.sort_column == NET_QUANTITY_COLUMN:
+                self.all_rows.sort(key=lambda row: (
+                    (row[NET_QUANTITY_COLUMN] is not None) if descending else (row[NET_QUANTITY_COLUMN] is None),
+                    row[NET_QUANTITY_COLUMN] or Decimal(0),
+                ), reverse=descending)
+            else:
+                self.all_rows.sort(key=lambda row: self._parse_sort_key(row, self.sort_column), reverse=descending)
+        start = (self.page - 1) * self.page_size
+        self.rows = self.all_rows if self.show_all_rows else self.all_rows[start:start + self.page_size]
+
     def apply_sort_and_page(self):
         self.beginResetModel()
-        if self.sort_column >= 0:
-            rev = (self.sort_order == Qt.SortOrder.DescendingOrder)
-            self.all_rows.sort(key=lambda r: self._parse_sort_key(r, self.sort_column), reverse=rev)
-
-        start = (self.page - 1) * self.page_size
-        end = start + self.page_size
-        self.rows = self.all_rows[start:end]
+        self._update_visible_rows()
         self.endResetModel()
 
     def set_columns_and_rows(self, cols: Tuple[str, ...], rows: List[List[Any]]):
         self.beginResetModel()
         self.columns = cols
         self.all_rows = list(rows)
-        if self.sort_column >= 0:
-            rev = (self.sort_order == Qt.SortOrder.DescendingOrder)
-            self.all_rows.sort(key=lambda r: self._parse_sort_key(r, self.sort_column), reverse=rev)
-        start = (self.page - 1) * self.page_size
-        end = start + self.page_size
-        self.rows = self.all_rows[start:end]
+        self._update_visible_rows()
         self.endResetModel()
 
     def set_page(self, page: int):
@@ -628,6 +671,9 @@ class MonthlyPerformancePage(QWidget):
         super().__init__(parent)
         self.analytics = None
         self.raw_rows: List[Tuple] = []
+        self.cash_rows = []
+        self._loaded_month_range = False
+        self.cash_table_records = {}
         self.current_filtered_rows: List[Tuple] = []
         self.selected_month = ""
         self.max_as_of_month = ""
@@ -639,8 +685,8 @@ class MonthlyPerformancePage(QWidget):
         self.selected_person_id: Any = None
         self.selected_broker = ""
         self.search_ticker = ""
-        self.start_month = ""
-        self.end_month = ""
+        self.start_month = "2025-01"
+        self.end_month = QDate.currentDate().toString("yyyy-MM")
         self.selected_category = ""
 
         self.setup_ui()
@@ -691,14 +737,12 @@ class MonthlyPerformancePage(QWidget):
         self.person_combo = QComboBox()
         self.person_combo.setMinimumWidth(110)
         self.person_combo.addItem("全部人员", "")
-        self.person_combo.currentIndexChanged.connect(self.on_person_changed)
         filter_layout.addWidget(self.person_combo)
 
         # Broker
         self.broker_combo = QComboBox()
         self.broker_combo.setMinimumWidth(110)
         self.broker_combo.addItem("全部渠道", "")
-        self.broker_combo.currentIndexChanged.connect(self.on_broker_changed)
         filter_layout.addWidget(self.broker_combo)
 
         # Ticker input
@@ -735,7 +779,6 @@ class MonthlyPerformancePage(QWidget):
         self.category_combo = QComboBox()
         self.category_combo.setMinimumWidth(100)
         self.category_combo.addItem("全部分类", "")
-        self.category_combo.currentIndexChanged.connect(self.on_category_changed)
         filter_layout.addWidget(self.category_combo)
 
         # Search & Reset buttons
@@ -815,12 +858,25 @@ class MonthlyPerformancePage(QWidget):
             "avg_loss": KpiMetricCard("avg_loss", "平均亏损月"),
         }
 
-        col_idx = 0
+        period_cards = QHBoxLayout()
+        period_cards.addWidget(self.kpi_cards["total"], 1)
         for key, card in self.kpi_cards.items():
             card.clicked.connect(self.handle_kpi_clicked)
-            kpi_grid.addWidget(card, 0, col_idx)
-            col_idx += 1
-        content_layout.addLayout(kpi_grid)
+            if key != "total":
+                kpi_grid.addWidget(card, 0, kpi_grid.count())
+        self.period_cards = self.add_metric_cards(period_cards, (
+            "期间收益率", "累计净投入", "期间买入金额", "期间卖出金额", "交易笔数（账本操作）",
+        ))
+        self.period_cards[0].setToolTip("现有报表没有提供期间收益率")
+        content_layout.addLayout(period_cards)
+        extra_metrics = QWidget()
+        extra_metrics.setLayout(kpi_grid)
+        extra_metrics.hide()
+        toggle_metrics = QPushButton("更多收益统计")
+        toggle_metrics.setCheckable(True)
+        toggle_metrics.toggled.connect(extra_metrics.setVisible)
+        content_layout.addWidget(toggle_metrics, alignment=Qt.AlignmentFlag.AlignLeft)
+        content_layout.addWidget(extra_metrics)
 
         # 4. Middle Section: Monthly Trend Chart (Left) + Broker Overview (Right)
         self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1164,6 +1220,7 @@ class MonthlyPerformancePage(QWidget):
         self.tab_bar.addTab("📅 按月份汇总")
         self.tab_bar.addTab("🏛️ 按渠道明细")
         self.tab_bar.addTab("📈 按股票明细")
+        self.tab_bar.addTab("资金流向明细")
         self.tab_bar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tab_bar.setStyleSheet("""
             QTabBar::tab {
@@ -1191,6 +1248,14 @@ class MonthlyPerformancePage(QWidget):
         self.table_count_lbl.setStyleSheet("font-size: 11.5px; color: #94A3B8;")
         tab_h.addWidget(self.table_count_lbl)
         table_vbox.addLayout(tab_h)
+        self.flow_panel = QWidget()
+        flow_cards = QHBoxLayout(self.flow_panel)
+        flow_cards.setContentsMargins(8, 8, 8, 8)
+        self.flow_cards = self.add_metric_cards(flow_cards, (
+            "期间买入金额", "期间卖出金额", "期间净投入", "月末累计净投入",
+        ))
+        self.flow_panel.hide()
+        table_vbox.addWidget(self.flow_panel)
 
         # Standard QTableView (NO OPERATION COLUMN)
         self.table_model = ModernTableModel(self)
@@ -1208,8 +1273,8 @@ class MonthlyPerformancePage(QWidget):
         self.table_view.horizontalHeader().setSectionsClickable(True)
         self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
         # 展示 20 行高度并禁用内层纵向滚动条，由最外层页面滚动
-        self.table_view.setMinimumHeight(760)
-        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_view.setMinimumHeight(390)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
@@ -1239,13 +1304,22 @@ class MonthlyPerformancePage(QWidget):
             }
         """)
         self.table_view.clicked.connect(self.on_table_row_clicked)
+        self.table_view.doubleClicked.connect(self.open_cash_replay)
         table_vbox.addWidget(self.table_view)
+        self.flow_totals_label = QLabel()
+        self.flow_totals_label.setWordWrap(True)
+        self.flow_totals_label.hide()
+        table_vbox.addWidget(self.flow_totals_label)
 
         # Pagination Bar
-        page_h = QHBoxLayout()
-        self.page_info_lbl = QLabel("每页 20 条")
-        self.page_info_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
-        page_h.addWidget(self.page_info_lbl)
+        self.table_pager = QWidget()
+        page_h = QHBoxLayout(self.table_pager)
+        page_h.setContentsMargins(0, 0, 0, 0)
+        self.page_size_combo = QComboBox()
+        for count in (20, 50, 100):
+            self.page_size_combo.addItem(f"每页 {count} 条", count)
+        self.page_size_combo.currentIndexChanged.connect(self.change_page_size)
+        page_h.addWidget(self.page_size_combo)
         page_h.addStretch()
 
         self.prev_page_btn = QPushButton("上一页")
@@ -1292,7 +1366,7 @@ class MonthlyPerformancePage(QWidget):
         self.next_page_btn.clicked.connect(lambda: self.change_page(1))
         page_h.addWidget(self.next_page_btn)
 
-        table_vbox.addLayout(page_h)
+        table_vbox.addWidget(self.table_pager)
         content_layout.addWidget(table_card)
 
         scroll.setWidget(content_widget)
@@ -1429,6 +1503,8 @@ class MonthlyPerformancePage(QWidget):
         elif current_tab == 1:
             # 12 列：月份, 券商渠道, 期初市值, 期末市值, 本月买入, 本月卖出, 本月净投入, 本月收益, 本月收益率, 累计收益, 上涨股票数, 下跌股票数
             self.apply_proportional_column_widths([110, 100, 110, 110, 100, 100, 105, 110, 90, 110, 85, 85])
+        elif current_tab == 3:
+            self.apply_proportional_column_widths([95, 95, 90, 85, 105, 105, 105, 105, 105, 136, 136, 136, 148])
         else:
             # 12 列：月份, 券商渠道, Ticker, 分类, 持仓数量, 成本价, 收盘价, 本月收益, 本月收益率, 累计收益, 持仓盈亏率, 月末市值
             self.apply_proportional_column_widths([110, 95, 85, 80, 85, 85, 85, 105, 90, 105, 90, 110])
@@ -1467,10 +1543,15 @@ class MonthlyPerformancePage(QWidget):
     def update_data(self, analytics):
         self.analytics = analytics
         if not analytics or "每月持仓收益" not in analytics.reports:
+            self.raw_rows = []
+            self.cash_rows = []
+            self.recalculate_and_refresh()
             return
 
         report = analytics.reports["每月持仓收益"]
         self.raw_rows = [tuple(r.values) for r in report.rows]
+        net = analytics.reports.get("月度净投入明细")
+        self.cash_rows = cash_flow_rows(net.rows if net else (), report.rows)
 
         # Update person dropdown
         self._populate_persons()
@@ -1482,6 +1563,9 @@ class MonthlyPerformancePage(QWidget):
         self.broker_combo.addItem("全部渠道", "")
         for b in brokers:
             self.broker_combo.addItem(fmt_broker_cn(b), b)
+        index = next((i for i in range(self.broker_combo.count())
+                      if fmt_broker_cn(self.broker_combo.itemData(i)) == fmt_broker_cn(self.selected_broker)), 0)
+        self.broker_combo.setCurrentIndex(index)
         self.broker_combo.blockSignals(False)
 
         cats = sorted({r[2] for r in self.raw_rows if r[2]})
@@ -1490,6 +1574,7 @@ class MonthlyPerformancePage(QWidget):
         self.category_combo.addItem("全部分类", "")
         for c in cats:
             self.category_combo.addItem(c, c)
+        self.category_combo.setCurrentIndex(max(0, self.category_combo.findData(self.selected_category)))
         self.category_combo.blockSignals(False)
 
         # Max month
@@ -1502,7 +1587,10 @@ class MonthlyPerformancePage(QWidget):
             # Parse yyyy-MM
             try:
                 parts = self.max_as_of_month.split("-")
-                self.end_month_edit.setDate(QDate(int(parts[0]), int(parts[1]), 1))
+                if not self._loaded_month_range:
+                    self.end_month_edit.setDate(QDate(int(parts[0]), int(parts[1]), 1))
+                    self.end_month = self.max_as_of_month
+                    self._loaded_month_range = True
             except Exception:
                 pass
 
@@ -1577,8 +1665,8 @@ class MonthlyPerformancePage(QWidget):
         filtered: List[Tuple] = []
         broker_overview_rows: List[Tuple] = []
 
-        start_m_str = self.start_month_edit.date().toString("yyyy-MM")
-        end_m_str = self.end_month_edit.date().toString("yyyy-MM")
+        start_m_str = self.start_month
+        end_m_str = self.end_month
 
         for r in self.raw_rows:
             m, b, cat, sym = r[0], r[1], r[2], r[3]
@@ -1601,6 +1689,29 @@ class MonthlyPerformancePage(QWidget):
             ):
                 continue
             filtered.append(r)
+
+        self.filtered_cash_rows = [
+            entry for entry in self.cash_rows
+            if self.matches_cash_filters(entry[0], start_m_str, end_m_str)
+        ]
+        cash_values = [values for values, _ in self.filtered_cash_rows]
+        cash_by_month = {}
+        for row in cash_values:
+            cash_by_month.setdefault(row[0], []).append(row)
+        self.trend_canvas.net_by_month = {month: sum_column(rows, 12) for month, rows in cash_by_month.items()}
+        end_balance = self.trend_canvas.net_by_month.get(end_m_str)
+        flow_totals = [sum_column(cash_values, i) for i in (9, 10, 11)] + [end_balance]
+        for i, (card, value) in enumerate(zip(self.flow_cards, flow_totals)):
+            sign = ("profit" if value >= 0 else "loss") if i == 2 and value is not None else None
+            card.set_data(fmt_signed_money(value) if i == 2 else fmt_money(value), "", sign)
+        self.flow_totals_label.setText(
+            f"当前筛选合计　买入 {fmt_money(flow_totals[0])}　卖出 {fmt_money(flow_totals[1])}"
+            f"　净投入 {fmt_signed_money(flow_totals[2])}　月末累计 {fmt_money(end_balance)}"
+        )
+        for card, value, digits in zip(self.period_cards,
+                [None, end_balance, sum_column(filtered, 16), sum_column(filtered, 17), sum_column(filtered, 19)],
+                [2, 2, 2, 2, 0]):
+            card.set_data(fmt_money(value, digits), "")
 
         # Group by Month
         month_map: Dict[str, Dict[str, Any]] = {}
@@ -2134,7 +2245,9 @@ class MonthlyPerformancePage(QWidget):
 
     def on_table_tab_changed(self, idx: int):
         self.table_model.page = 1
-        self.table_model.sort_column = -1
+        self.table_model.sort_column = NET_QUANTITY_COLUMN if idx == 3 else -1
+        if idx == 3:
+            self.table_model.sort_order = Qt.SortOrder.DescendingOrder
         if idx != 2:
             self.stock_filter_month = ""
             self.stock_pnl_filter = "all"
@@ -2148,8 +2261,36 @@ class MonthlyPerformancePage(QWidget):
         self.table_model.highlight_month = self.selected_month
         current_tab = self.tab_bar.currentIndex()
         header = self.table_view.horizontalHeader()
-
-        if current_tab == 0:
+        is_flow = current_tab == 3
+        self.table_model.show_all_rows = is_flow
+        self.table_pager.setVisible(not is_flow)
+        self.table_view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff if is_flow else Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        if not is_flow:
+            self.table_view.setMaximumHeight(16777215)
+            self.table_view.setMinimumHeight(390)
+        self.flow_panel.setVisible(is_flow)
+        self.flow_totals_label.setVisible(is_flow)
+        if is_flow:
+            rows = []
+            self.cash_table_records = {}
+            # Stable tie order for records in the same month.
+            ordered = sorted(self.filtered_cash_rows, key=lambda entry: (entry[0][1], entry[0][3]))
+            ordered.sort(key=lambda entry: entry[0][0], reverse=True)
+            for values, meta in ordered:
+                display = [values[0], fmt_broker_cn(values[1]), *values[2:4]]
+                display.extend(
+                    value if i == NET_QUANTITY_COLUMN else fmt_signed_money(value) if i == 11 else fmt_money(value)
+                    for i, value in enumerate(values[4:], 4)
+                )
+                self.cash_table_records[id(display)] = (values, meta)
+                rows.append(display)
+            currency = getattr(getattr(self.analytics, "scope", None), "reporting_currency", "USD")
+            cols = tuple(name.replace("USD", currency) for name in CASH_COLUMNS)
+            self.table_model.set_columns_and_rows(cols, rows)
+            self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
+        elif current_tab == 0:
             # 📅 按月份汇总
             cols = ("月份 (收盘)", "期初市值", "期末市值", "本月买入", "本月卖出", "本月净投入", "本月收益", "本月收益率", "累计收益", "上涨股票数", "下跌股票数")
             rows = list(reversed(month_summaries))
@@ -2276,7 +2417,74 @@ class MonthlyPerformancePage(QWidget):
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
 
         self.adjust_current_table_columns()
+        if is_flow:
+            height = (header.height() + self.table_view.verticalHeader().length()
+                      + 2 * self.table_view.frameWidth()
+                      + self.table_view.horizontalScrollBar().sizeHint().height())
+            self.table_view.setFixedHeight(height)
         self.update_pagination_ui()
+
+    @staticmethod
+    def add_metric_cards(layout, labels):
+        cards = []
+        for label in labels:
+            card = KpiMetricCard(label, label)
+            card.arrow_lbl.hide()
+            card.setCursor(Qt.CursorShape.ArrowCursor)
+            layout.addWidget(card, 1)
+            cards.append(card)
+        return cards
+
+    def matches_cash_filters(self, row, start_month, end_month):
+        month, broker, category, ticker = row[:4]
+        return (
+            (not self.selected_broker or fmt_broker_cn(broker) == fmt_broker_cn(self.selected_broker))
+            and (not self.selected_category or category == self.selected_category)
+            and (not self.search_ticker or self.search_ticker.upper() in ticker.upper())
+            and (not start_month or month >= start_month)
+            and (not end_month or month <= end_month)
+        )
+
+    def change_page_size(self):
+        self.table_model.page_size = self.page_size_combo.currentData()
+        self.table_model.page = 1
+        self.table_model.apply_sort_and_page()
+        self.update_pagination_ui()
+
+    def open_cash_replay(self, index):
+        if self.tab_bar.currentIndex() != 3 or not index.isValid() or not self.analytics:
+            return
+        from portfolio.services.holdings_management_service import HoldingsManagementService
+        from portfolio.ui.holdings_page import StockDrawerWidget
+
+        host = self.window()
+        if not getattr(host, "service", None):
+            return
+        values, meta = self.cash_table_records[id(self.table_model.rows[index.row()])]
+        month, broker, _, ticker = values[:4]
+        path, analytics, person = host.service.path, self.analytics, self.selected_person_id
+        def show_detail(data):
+            dialog = QDialog(self)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            dialog.setWindowTitle(f"交易回放 · {ticker} · {month}")
+            layout = QVBoxLayout(dialog)
+            source_ids = "、".join(str(i) for i in meta.get("source_record_ids", ()))
+            source = QLabel(f"选中月份：{month} · 来源记录 ID：{source_ids or '—'}")
+            source.setWordWrap(True)
+            source.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(source)
+            drawer = StockDrawerWidget(dialog)
+            drawer.setMaximumWidth(16777215)
+            drawer.set_data(data)
+            drawer.closed.connect(dialog.close)
+            layout.addWidget(drawer)
+            dialog.resize(900, 700)
+            dialog.show()
+
+        host._submit("monthly_cash_replay", lambda cancel: HoldingsManagementService.get_stock_drawer_data(
+            str(path), analytics, ticker, person_id=person if isinstance(person, int) else None,
+            broker=broker, account_id=meta.get("account_id"), instrument_id=meta.get("instrument_id"),
+        ), show_detail)
 
     def change_page(self, delta: int):
         self.table_model.set_page(self.table_model.page + delta)
@@ -2327,6 +2535,14 @@ class MonthlyPerformancePage(QWidget):
             return
         row = index.row()
         current_tab = self.tab_bar.currentIndex()
+        if current_tab == 3:
+            if index.column() == 3:
+                self.open_cash_replay(index)
+            else:
+                _, meta = self.cash_table_records[id(self.table_model.rows[row])]
+                ids = "、".join(str(i) for i in meta.get("source_record_ids", ()))
+                self.flow_totals_label.setToolTip(f"来源记录 ID：{ids or '—'}")
+            return
         if row < len(self.table_model.rows):
             r_vals = self.table_model.rows[row]
             if current_tab == 0:
@@ -2633,18 +2849,25 @@ class MonthlyPerformancePage(QWidget):
         self.trend_canvas.set_mode(mode)
 
     def export_csv(self):
-        if not self.raw_rows:
+        is_flow = self.tab_bar.currentIndex() == 3
+        if not (self.table_model.all_rows if is_flow else self.current_filtered_rows):
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
             "导出每月持仓收益数据",
-            f"每月持仓收益_{self.max_as_of_month or 'export'}.csv",
+            "资金流向明细.csv" if is_flow else f"每月持仓收益_{self.max_as_of_month or 'export'}.csv",
             "CSV 文件 (*.csv)",
         )
         if not path:
             return
 
         import csv
+        if is_flow:
+            with open(path, "w", newline="", encoding="utf-8-sig") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(self.table_model.columns)
+                writer.writerows(self.cash_table_records[id(row)][0] for row in self.table_model.all_rows)
+            return
         headers = [
             "月份", "渠道", "分类", "Ticker", "持仓数量",
             "成本均价", "收盘价", "月末市值", "本月收益", "持仓盈亏比例"
@@ -2652,25 +2875,21 @@ class MonthlyPerformancePage(QWidget):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
-            for r in self.raw_rows:
+            for r in self.current_filtered_rows:
                 writer.writerow([
                     r[0], r[1], r[2], r[3], r[8],
                     r[9], r[10], r[11], r[20], r[13]
                 ])
 
-    def on_person_changed(self):
-        self.selected_person_id = self.person_combo.currentData()
-        self.recalculate_and_refresh()
-
-    def on_broker_changed(self):
-        self.selected_broker = self.broker_combo.currentData() or ""
-        self.recalculate_and_refresh()
-
-    def on_category_changed(self):
-        self.selected_category = self.category_combo.currentData() or ""
-        self.recalculate_and_refresh()
-
     def on_search_clicked(self):
+        start = self.start_month_edit.date().toString("yyyy-MM")
+        end = self.end_month_edit.date().toString("yyyy-MM")
+        if start > end:
+            self.start_month_edit.setToolTip("开始月份不能晚于结束月份")
+            self.start_month_edit.setFocus()
+            return
+        self.start_month_edit.setToolTip("")
+        self.start_month, self.end_month = start, end
         p_id = self.person_combo.currentData()
         person_changed = (p_id != self.selected_person_id)
         self.selected_person_id = p_id
@@ -2691,6 +2910,11 @@ class MonthlyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def on_reset_clicked(self):
+        self.start_month_edit.setDate(QDate(2025, 1, 1))
+        self.end_month_edit.setDate(QDate.fromString(self.max_as_of_month + "-01", "yyyy-MM-dd")
+                                    if self.max_as_of_month else QDate.currentDate())
+        self.start_month = self.start_month_edit.date().toString("yyyy-MM")
+        self.end_month = self.end_month_edit.date().toString("yyyy-MM")
         person_changed = (self.selected_person_id is not None)
         self.ticker_input.clear()
         self.search_ticker = ""

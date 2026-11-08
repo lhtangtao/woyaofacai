@@ -25,7 +25,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Navigation & History State
-  const [history, setHistory] = useState<string[]>([window.location.hash === "#ownership" ? "ownership" : "overview"]);
+  const [history, setHistory] = useState<string[]>([window.location.hash === "#ownership" ? "ownership" : window.location.hash === "#monthly-performance" ? "reports:每月持仓收益" : "overview"]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const currentRoute = history[historyIndex] || "overview";
 
@@ -60,8 +60,8 @@ export const App: React.FC = () => {
           // If user has isolated person_id, initialize with it
           if (data.user?.person_id != null) {
             setSelectedPersonId(data.user.person_id);
-          } else {
-            // 打开的时候默认展示「个人」
+          } else if (!bootstrap) {
+            // 首次进入默认展示「个人」，刷新保留当前选择。
             const geren = (data.persons || []).find((p) => p.name === "个人");
             if (geren) {
               setSelectedPersonId(geren.id);
@@ -205,6 +205,7 @@ export const App: React.FC = () => {
     if (currentRoute === "overview") return { title: "资产总览", subtitle: "全时期投资组合资产、净投入与全周期盈亏看板" };
     if (currentRoute === "holdings") return { title: "持仓管理", subtitle: "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选" };
     if (currentRoute === "trades") return { title: "交易明细", subtitle: "" };
+    if (currentRoute === "reports:每月持仓收益") return { title: "每月持仓收益", subtitle: "按月份、券商和股票查看收益与资金流向。" };
     if (currentRoute.startsWith("reports:")) {
       const repName = currentRoute.replace("reports:", "");
       return { title: repName, subtitle: `专业量化分析报表 · ${repName}` };
@@ -355,6 +356,7 @@ export const App: React.FC = () => {
             {currentRoute === "reports:每月持仓收益" && (
               <MonthlyPerformanceView
                 key={`monthly-perf:${assetResetKey}`}
+                refreshKey={refreshKey}
                 personId={selectedPersonId}
                 onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
@@ -371,7 +373,7 @@ export const App: React.FC = () => {
                 personId={selectedPersonId}
                 broker={selectedBroker}
                 onBrokerChange={setSelectedBroker}
-                reportsList={bootstrap?.reports || []}
+                reportsList={(bootstrap?.reports || []).filter(r => r.name !== "月度净投入明细")}
               />
             )}
 

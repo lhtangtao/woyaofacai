@@ -156,7 +156,8 @@ export const api = {
     page?: number,
     pageSize?: number,
     sortCol?: string,
-    sortDir?: string
+    sortDir?: string,
+    signal?: AbortSignal
   ) => {
     const query = new URLSearchParams();
     if (personId != null) query.set("person_id", String(personId));
@@ -165,7 +166,7 @@ export const api = {
     if (pageSize != null) query.set("page_size", String(pageSize));
     if (sortCol) query.set("sort_col", sortCol);
     if (sortDir) query.set("sort_dir", sortDir);
-    return requestApi<ReportDetailData>(`/api/v1/reports/${encodeURIComponent(reportName)}?${query.toString()}`);
+    return requestApi<ReportDetailData>(`/api/v1/reports/${encodeURIComponent(reportName)}?${query.toString()}`, { signal });
   },
 
   // Entities Breakdown
@@ -299,10 +300,12 @@ export const api = {
     });
     return requestApi(`/api/v1/holdings/detail?${query.toString()}`);
   },
-  stockDrawer: (ticker: string, person_id?: number | null, broker?: string) => {
+  stockDrawer: (ticker: string, person_id?: number | null, broker?: string, accountId?: number, instrumentId?: number) => {
     const query = new URLSearchParams({ ticker });
     if (person_id != null) query.set("person_id", String(person_id));
     if (broker) query.set("broker", broker);
+    if (accountId != null) query.set("account_id", String(accountId));
+    if (instrumentId != null) query.set("instrument_id", String(instrumentId));
     return requestApi(`/api/v1/holdings/stock_drawer?${query.toString()}`);
   },
 
