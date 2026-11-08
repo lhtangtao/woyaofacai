@@ -1122,9 +1122,9 @@
         <span class="icon">⇄</span>
         <span>每月微操收益</span>
       </div>
-      <div class="drawer-item" onclick="loadReport('清仓收益')">
+      <div class="drawer-item" onclick="window.location.assign('/#holdings-closed')">
         <span class="icon">👝</span>
-        <span>清仓收益</span>
+        <span>持仓管理</span>
       </div>
 
       <div class="drawer-group-title">AI 助手</div>
@@ -1223,7 +1223,6 @@
       <div class="pill-carousel">
         <div class="pill active" onclick="loadReport('当前持仓')">📊 当前持仓</div>
         <div class="pill" onclick="switchView('kline')">📈 专业K线</div>
-        <div class="pill" onclick="loadReport('清仓收益')">💰 清仓收益</div>
         <div class="pill" onclick="loadReport('收益日历')">📅 收益日历</div>
         <div class="pill" onclick="switchCharts('rank')">🏆 盈亏排行</div>
         <div class="pill" onclick="switchView('trades')">🧾 交易明细</div>
@@ -1259,7 +1258,6 @@
     <section id="view-report" class="view-page">
       <div class="pill-carousel" id="reportTabs">
         <div class="pill active" onclick="loadReport('当前持仓')">当前持仓</div>
-        <div class="pill" onclick="loadReport('清仓收益')">清仓收益</div>
         <div class="pill" onclick="loadReport('渠道汇总')">渠道汇总</div>
         <div class="pill" onclick="loadReport('分类汇总')">分类汇总</div>
         <div class="pill" onclick="loadReport('人员资产')">人员资产</div>

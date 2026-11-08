@@ -8,6 +8,8 @@ Parity with Web:
    - Header with 6 summary metrics
    - 4 Tabs: 11-column trade history with cost changes, holding analysis, pnl analysis, monthly performance.
 """
+import csv
+from dataclasses import replace
 from decimal import Decimal
 import logging
 from pathlib import Path
@@ -39,7 +41,7 @@ from portfolio.domain.analytics import Report, ReportRow, ratio
 from portfolio.domain.models import exact_text
 from portfolio.paths import DATABASE_PATH
 from portfolio.services.charts_service import Chart, Series
-from portfolio.services.holdings_management_service import HoldingsManagementService
+from portfolio.services.holdings_management_service import HoldingsManagementService, closed_account_rows, closed_columns
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.filters import PersonFilter
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
@@ -209,6 +211,7 @@ class HoldingsTableModel(FinanceModel):
         self.sort_column = -1
         self.sort_order = Qt.SortOrder.AscendingOrder
         self._raw_rows = []
+        self.nulls_last = False
 
     def columnCount(self, parent=None):
         return len(self.columns)
@@ -260,13 +263,18 @@ class HoldingsTableModel(FinanceModel):
             if val is None or val == "—":
                 return (0, 0, "")
             if isinstance(val, (int, float, Decimal)):
-                return (1, float(val), "")
+                return (1, val, "")
             return (2, 0, str(val).strip().lower())
 
         reverse = (self.sort_order == Qt.SortOrder.DescendingOrder)
+        if self.nulls_last:
+            missing = [row for row in normal_rows if row.values[col] in (None, "—")]
+            normal_rows = [row for row in normal_rows if row.values[col] not in (None, "—")]
+        else:
+            missing = []
         normal_rows.sort(key=sort_key, reverse=reverse)
         self.beginResetModel()
-        self.rows = tuple(normal_rows + total_rows)
+        self.rows = tuple(normal_rows + missing + total_rows)
         self.endResetModel()
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -291,6 +299,7 @@ class HoldingsTableModel(FinanceModel):
         col_name = self.columns[col] if col < len(self.columns) else ""
         is_total = (row.values[0] == "合计") or row.metadata.get("is_total", False)
 
+        currency = "¥" if row.metadata.get("currency") == "CNY" else "$"
         if role == Qt.ItemDataRole.DisplayRole:
             if col_name == "操作" and not is_total:
                 return "🔍 查看明细"
@@ -298,7 +307,7 @@ class HoldingsTableModel(FinanceModel):
                 if col_name == "持仓占比":
                     return f"{val * 100:.2f}%"
                 # 股票只数/买卖次数等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
-                if col_name in ("买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
+                if col_name in ("操作笔数", "买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数") or (
                     ("股票" in col_name or "次数" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金", "额"))
                 ):
                     return f"{int(round(float(val))):,d}"
@@ -307,20 +316,22 @@ class HoldingsTableModel(FinanceModel):
                 if any(w in col_name for w in ("收益率", "比例", "涨幅", "涨跌幅", "涨跌")):
                     sign = "+" if val > 0 else ""
                     return f"{sign}{val * 100:.2f}%"
-                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价")):
-                    sign = "+" if "盈亏" in col_name and val > 0 else ""
+                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价", "清仓收益")):
+                    sign = "+" if ("盈亏" in col_name or col_name == "清仓收益") and val > 0 else ""
                     if col_name == "清仓价" and row.metadata.get("is_split_adjusted"):
-                        return f"${val:,.2f}*"
-                    return f"{sign}${val:,.2f}"
+                        return f"{currency}{val:,.2f}*"
+                    return f"{sign}{currency}{val:,.2f}"
                 return f"{val:,.2f}"
             return exact_text(val)
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            if col_name == "清仓价" and row.metadata.get("is_split_adjusted"):
+            if col_name == "当前价" and row.metadata.get("quote_status"):
+                return " · ".join(filter(None,(row.metadata["quote_status"],row.metadata.get("quote_time"))))
+            if col_name == "清仓价" and val is not None and row.metadata.get("is_split_adjusted"):
                 orig = row.metadata.get("orig_close_price")
                 notes = row.metadata.get("split_notes") or ""
-                orig_str = f"${orig:,.2f}" if orig is not None else "—"
-                return f"折算后清仓价: ${val:,.2f}\n原始清仓价: {orig_str}\n清仓后除权调整: {notes}"
+                orig_str = f"{currency}{orig:,.2f}" if orig is not None else "—"
+                return f"折算后清仓价: {currency}{val:,.2f}\n原始清仓价: {orig_str}\n清仓后除权调整: {notes}"
             return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -875,6 +886,20 @@ class HoldingsPage(QWidget):
         self.status_combo.currentIndexChanged.connect(self._on_filter_changed)
         detail_bar.addWidget(self.status_combo)
 
+        self.closed_mode = QTabBar()
+        self.closed_mode.setDrawBase(False)
+        self.closed_mode.setStyleSheet(
+            "QTabBar::tab { padding: 7px 10px; background: #EFF4FB; color: #334155; border-radius: 6px; }"
+            "QTabBar::tab:selected { background: #2563EB; color: white; }"
+        )
+        self.closed_mode.addTab("按人员明细")
+        self.closed_mode.addTab("按券商账户汇总")
+        self.closed_mode.hide()
+        self.closed_mode.currentChanged.connect(self._on_filter_changed)
+        detail_bar.addWidget(self.closed_mode)
+        self._detail_states = {}
+        self._detail_mode = None
+
         # Broker filter
         self.broker_combo = QComboBox()
         self.broker_combo.addItem("全部渠道", "")
@@ -959,6 +984,7 @@ class HoldingsPage(QWidget):
         self.person_filter.blockSignals(True)
         self.person_filter.clear()
         self.person_filter.addItem("全部启用人员", None)
+        self.person_filter.addItem("他人", "OTHERS")
         for p in persons:
             if p.get("enabled", True):
                 self.person_filter.addItem(p["name"], p["id"])
@@ -1085,7 +1111,37 @@ class HoldingsPage(QWidget):
         self.switch_view_mode(mode)
 
     def _on_filter_changed(self):
+        self._close_drawer()
         self.refresh_detail()
+
+    def open_closed_positions(self):
+        self.closed_mode.setCurrentIndex(0)
+        self.status_combo.setCurrentIndex(self.status_combo.findData("已清仓"))
+        self.switch_view_mode("detail")
+
+    def _closed_person_ids(self):
+        selected = self._selected_person_filter
+        if selected == "OTHERS":
+            return tuple(person["id"] for person in self._get_persons()
+                         if person["name"] != "个人" and (person.get("enabled", True) or self.analytics.scope.include_disabled))
+        if isinstance(selected, (tuple, list)):
+            return tuple(selected)
+        return None if selected is None else (selected,)
+
+    def _closed_account_analytics(self):
+        selected = self._closed_person_ids()
+        scope = self.analytics.scope
+        if selected is None:
+            return self.analytics
+        if scope.person_ids is not None:
+            selected = tuple(person for person in selected if person in scope.person_ids)
+        if not selected:
+            return None
+        if scope.person_ids == selected:
+            return self.analytics
+        if self.main_window is None or self.main_window.analytics_service is None:
+            return None
+        return self.main_window.analytics_service.calculate(replace(scope, person_ids=selected))
 
     def _on_dist_tab_changed(self, idx):
         if not hasattr(self, "_cached_dash_data") or not self._cached_dash_data:
@@ -1249,66 +1305,67 @@ class HoldingsPage(QWidget):
         if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
             src_path = str(self.main_window.service.path)
 
-        raw_rows = HoldingsManagementService.get_holdings_detail_rows(
-            self.analytics,
-            dimension=self.dimension,
-            person_id=self._selected_person_filter,
-            broker=broker_filter,
-            status=status_filter,
-            search=search_filter,
-            db_path=src_path,
+        closed = status_filter == "已清仓"
+        self.closed_mode.setVisible(closed)
+        self.search_input.setPlaceholderText(
+            "搜索券商、账号或股票代码…" if closed and self.closed_mode.currentIndex() == 1
+            else "搜索人员、券商或股票代码…"
         )
-
-        if status_filter == "已清仓":
-            target_cols = (
-                "归属人员", "券商渠道", "Ticker", "首次买入日期", "最后清仓日期", "清仓数量",
-                "买入均价", "卖出均价", "清仓价", "当前价", "清仓后涨跌幅",
-                "买入总额", "卖出总额", "已实现盈亏", "已实现收益率", "买入次数", "卖出次数"
-            )
+        mode = ("account" if self.closed_mode.currentIndex() == 1 else "person") if closed else "open"
+        account_ids = self.main_window.accounts.selected_ids() if closed and self.main_window else None
+        if mode == "account":
+            try:
+                account_analytics = self._closed_account_analytics()
+                report = account_analytics.reports.get("清仓收益") if account_analytics else None
+                if report and self.main_window and self.main_window.quote_store:
+                    from datetime import datetime, timezone
+                    from portfolio.services.closed_quotes import closed_current_prices
+                    now = datetime.now(timezone.utc)
+                    instruments = {item["id"]: item for item in self.main_window.info.instruments}
+                    report = closed_current_prices(report, instruments, self.main_window.quote_store.load(now)[0],
+                                                   now, currency=account_analytics.scope.reporting_currency)
+                raw_rows = closed_account_rows(report, broker=broker_filter, search=search_filter,
+                                               account_ids=account_ids) if report else []
+            except Exception:
+                logger.exception("读取已清仓账户汇总失败")
+                self.detail_model.replace(())
+                self.detail_info.setText("读取账户汇总失败，请刷新重试。")
+                return
         else:
-            target_cols = (
-                "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
-                "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
+            raw_rows = HoldingsManagementService.get_holdings_detail_rows(
+                self.analytics, dimension=self.dimension, person_id=self._closed_person_ids() if closed else self._selected_person_filter,
+                broker=broker_filter, status=status_filter, search=search_filter, db_path=src_path,
+                account_ids=account_ids,
             )
 
-        if self.detail_model.columns != target_cols:
-            self.detail_model.columns = target_cols
-            self.detail_model.sort_column = -1
-            self.detail_model.sort_order = Qt.SortOrder.DescendingOrder
+        schema = closed_columns(mode) if closed else ()
+        target_cols = tuple(label for _,label,_ in schema) if closed else (
+            "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
+            "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比",
+        )
+        v_scroll = self.detail_table.verticalScrollBar().value()
+        h_scroll = self.detail_table.horizontalScrollBar().value()
+        if mode != self._detail_mode:
+            self._detail_states[self._detail_mode] = (self.detail_model.sort_column, self.detail_model.sort_order, v_scroll, h_scroll)
+            default_sort = next((i for i,(key,_,_) in enumerate(schema) if key == "last_close_date"), -1)
+            sort_column, sort_order, v_scroll, h_scroll = self._detail_states.get(
+                mode, (default_sort, Qt.SortOrder.DescendingOrder, 0, 0)
+            )
+            self.detail_model.sort_column = sort_column
+            self.detail_model.sort_order = sort_order
+            self._detail_mode = mode
+        self.detail_model.columns = target_cols
+        self.detail_model.nulls_last = closed
 
         def to_dec(val):
             return Decimal(str(val)) if val is not None else None
 
         rows = []
-        if status_filter == "已清仓":
+        if closed:
             for item in raw_rows:
-                rows.append(ReportRow((
-                    item.get("person_name"),
-                    item.get("channel"),
-                    item.get("ticker"),
-                    item.get("first_buy_date"),
-                    item.get("last_close_date"),
-                    to_dec(item.get("closed_quantity")),
-                    to_dec(item.get("avg_buy_price")),
-                    to_dec(item.get("avg_sell_price")),
-                    to_dec(item.get("close_price")),
-                    to_dec(item.get("current_price")),
-                    to_dec(item.get("post_close_change")),
-                    to_dec(item.get("total_buy_amount")),
-                    to_dec(item.get("total_sell_amount")),
-                    to_dec(item.get("realized_pnl")),
-                    to_dec(item.get("realized_pnl_rate")),
-                    item.get("buy_count"),
-                    item.get("sell_count"),
-                ), {
-                    "person_id": item.get("person_id"),
-                    "account_id": item.get("account_id"),
-                    "ticker": item.get("ticker"),
-                    "is_split_adjusted": item.get("is_split_adjusted"),
-                    "orig_close_price": to_dec(item.get("orig_close_price")),
-                    "split_notes": item.get("split_notes"),
-                    "split_factor": to_dec(item.get("split_factor")),
-                }))
+                values = tuple(to_dec(item.get(key)) if kind in ("money", "gain", "rate", "quantity")
+                               else item.get(key) for key,_,kind in schema)
+                rows.append(ReportRow(values, item))
         else:
             for item in raw_rows:
                 rows.append(ReportRow((
@@ -1331,15 +1388,17 @@ class HoldingsPage(QWidget):
                     "ticker": item.get("ticker"),
                 }))
 
-        v_scroll = self.detail_table.verticalScrollBar().value()
-        h_scroll = self.detail_table.horizontalScrollBar().value()
         self.detail_model.replace(rows)
         self.detail_table.verticalScrollBar().setValue(v_scroll)
         self.detail_table.horizontalScrollBar().setValue(h_scroll)
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(f"[桌面端持仓] 明细表格刷新完成 (状态: {status_filter})，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
-        view_title = "已清仓明细" if status_filter == "已清仓" else "当前持仓明细"
-        self.detail_info.setText(f"{view_title} · 共 {len(rows)} 条标的记录 · 点击任意行从右侧滑出抽屉")
+        view_title = ("已清仓 · " + self.closed_mode.tabText(self.closed_mode.currentIndex())) if closed else "当前持仓明细"
+        if not rows:
+            self.detail_info.setText(f"{view_title} · 没有符合筛选条件的记录")
+            return
+        note = "沿用原清仓收益报表的账本口径，操作笔数可包含划转" if mode == "account" else "点击任意行查看交易记录"
+        self.detail_info.setText(f"{view_title} · 共 {len(rows)} 条标的记录 · {note}")
 
     def _on_person_table_clicked(self, index):
         if not index.isValid():
@@ -1372,22 +1431,33 @@ class HoldingsPage(QWidget):
         if not index.isValid():
             return
         row = self.detail_model.rows[index.row()]
-        ticker = str(row.values[2])
-        self.open_stock_drawer(ticker)
+        ticker = row.metadata["ticker"]
+        if self._detail_mode in ("account", "person"):
+            self.open_stock_drawer(ticker, row=row.metadata)
+        else:
+            self.open_stock_drawer(ticker)
 
-    def open_stock_drawer(self, ticker: str):
+    def open_stock_drawer(self, ticker: str, *, row=None):
         if not ticker:
             return
         t0 = time.monotonic()
         src_path = str(DATABASE_PATH)
         if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
             src_path = str(self.main_window.service.path)
+        account_mode = row is not None and self._detail_mode == "account"
+        analytics = self._closed_account_analytics() if account_mode else self.analytics
+        if analytics is None:
+            return
+        if row and analytics.scope.reporting_currency != "USD" and self.main_window and self.main_window.analytics_service:
+            analytics = self.main_window.analytics_service.calculate(replace(analytics.scope, reporting_currency="USD"))
         drawer_data = HoldingsManagementService.get_stock_drawer_data(
             src_path,
-            self.analytics,
+            analytics,
             ticker,
-            person_id=self._selected_person_filter,
-            broker=self.broker_combo.currentData() or None,
+            person_id=row.get("person_id") if row else self._selected_person_filter,
+            broker=None if row else self.broker_combo.currentData() or None,
+            account_id=row.get("account_id") if row else None,
+            instrument_id=row.get("instrument_id") if row else None,
         )
         self.drawer.set_data(drawer_data)
         self.drawer.show()
@@ -1401,11 +1471,20 @@ class HoldingsPage(QWidget):
     def _export_detail(self):
         if not self.detail_model.rows:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "导出持仓明细", "持仓明细.csv", "CSV 文件 (*.csv)")
+        name = {
+            "account": "已清仓-按券商账户汇总.csv",
+            "person": "已清仓-按人员明细.csv",
+        }.get(self._detail_mode, "持仓明细.csv")
+        path, _ = QFileDialog.getSaveFileName(self, "导出持仓明细", name, "CSV 文件 (*.csv)")
         if not path:
             return
         headers = self.detail_model.columns
-        lines = [",".join(headers)]
-        for r in self.detail_model.rows:
-            lines.append(",".join(f'"{v}"' if v is not None else '""' for v in r.values))
-        Path(path).write_text("\ufeff" + "\n".join(lines), encoding="utf-8")
+        with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(headers)
+            for row in self.detail_model.rows:
+                if self._detail_mode in ("person", "account"):
+                    writer.writerow(f"{value * 100:.2f}%" if kind == "rate" and value is not None else value
+                                    for value, (_, _, kind) in zip(row.values, closed_columns(self._detail_mode)))
+                else:
+                    writer.writerow(row.values)

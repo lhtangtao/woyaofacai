@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import {
   Users,
@@ -23,6 +23,7 @@ interface HoldingsViewProps {
   persons?: { id: number; name: string; enabled?: boolean }[];
   onPersonChange?: (id: number | null) => void;
   broker?: string;
+  refreshKey?: number;
   onBrokerChange?: (broker: string) => void;
   initialDimension?: "person" | "broker" | "stock";
   initialStatus?: string;
@@ -34,11 +35,15 @@ interface HoldingsViewProps {
   };
 }
 
+type ClosedMode = "person" | "account";
+type ClosedColumn = [key: string, label: string, format: "text" | "money" | "gain" | "rate" | "quantity" | "count"];
+
 export const HoldingsView: React.FC<HoldingsViewProps> = ({
   personId,
   persons = [],
   onPersonChange,
   broker,
+  refreshKey = 0,
   onBrokerChange,
   initialDimension = "person",
   initialStatus = "持有中",
@@ -66,6 +71,12 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [distTab, setDistTab] = useState<"by_person" | "by_broker" | "by_stock">("by_stock");
 
   // Detail Data State
+  const [closedMode, setClosedMode] = useState<ClosedMode>("person");
+  const [closedColumns, setClosedColumns] = useState<ClosedColumn[]>([]);
+  const [detailError, setDetailError] = useState("");
+  const tableScroll = useRef<HTMLDivElement>(null);
+  const closedStates = useRef<Partial<Record<ClosedMode, {field: string; asc: boolean; page: number; left: number; top: number}>>>({});
+  const pendingScroll = useRef<{left: number; top: number} | null>(null);
   const [detailRows, setDetailRows] = useState<any[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailPage, setDetailPage] = useState(1);
@@ -118,6 +129,11 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   // Stock Drawer State (Right slide-out)
   const [drawerTicker, setDrawerTicker] = useState<string | null>(null);
+  const [drawerRow, setDrawerRow] = useState<any>(null);
+  const openDetail = (row: any) => {
+    setDrawerRow(statusFilter === "已清仓" ? row : null);
+    setDrawerTicker(row.ticker);
+  };
 
   // Sync external personId changes
   useEffect(() => {
@@ -147,36 +163,76 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       .finally(() => setDashLoading(false));
   };
 
-  // Load Detail Rows
-  const loadDetail = () => {
-    setDetailLoading(true);
-    api
-      .holdingsDetail({
-        dimension,
-        person_id: selectedPersonId,
-        broker: selectedBroker || undefined,
-        ticker: selectedTicker || undefined,
-        status: statusFilter !== "全部" ? statusFilter : undefined,
-        search: searchKeyword || undefined,
-        page: 1,
-        page_size: 200,
-      })
-      .then((res) => {
-        if (res.status === "ok") {
-          setDetailRows(res.rows || []);
-        }
-      })
-      .catch((err) => console.error("Holdings detail load error:", err))
-      .finally(() => setDetailLoading(false));
-  };
-
   useEffect(() => {
     if (viewMode === "dashboard") {
       loadDashboard();
-    } else {
-      loadDetail();
+      return;
     }
-  }, [viewMode, dimension, selectedPersonId, selectedBroker, selectedTicker, statusFilter, searchKeyword]);
+    let active = true;
+    setDetailLoading(true);
+    setDetailError("");
+    const params = {
+      dimension,
+      closed_mode: closedMode,
+      person_id: selectedPersonId,
+      broker: selectedBroker || undefined,
+      ticker: selectedTicker || undefined,
+      status: statusFilter,
+      search: searchKeyword || undefined,
+      page_size: 200,
+    };
+    const load = async () => {
+      const first = await api.holdingsDetail({...params, page: 1});
+      const rows = [...first.rows];
+      // Closed tables sort and export the full filtered dataset.
+      if (statusFilter === "已清仓") {
+        for (let page = 2; active && (page - 1) * params.page_size < first.total; page++) {
+          const next = await api.holdingsDetail({...params, page});
+          rows.push(...next.rows);
+        }
+      }
+      if (active) {
+        setDetailRows(rows);
+        setClosedColumns(first.columns || []);
+      }
+    };
+    load().catch((error) => {
+      if (active) {
+        setDetailRows([]);
+        setDetailError(error.message || "无法读取持仓明细");
+      }
+    }).finally(() => {if (active) setDetailLoading(false);});
+    return () => {active = false;};
+  }, [viewMode, dimension, selectedPersonId, selectedBroker, selectedTicker, statusFilter, searchKeyword, closedMode, refreshKey]);
+
+  useEffect(() => {
+    setDrawerTicker(null);
+  }, [viewMode, statusFilter, selectedPersonId, selectedBroker]);
+
+  const switchClosedMode = (mode: ClosedMode) => {
+    if (mode === closedMode) return;
+    closedStates.current[closedMode] = {
+      field: sortField, asc: sortAsc, page: detailPage,
+      left: tableScroll.current?.scrollLeft || 0, top: tableScroll.current?.scrollTop || 0,
+    };
+    const next = closedStates.current[mode] || {field: "last_close_date", asc: false, page: 1, left: 0, top: 0};
+    pendingScroll.current = next;
+    setDrawerTicker(null);
+    setDetailLoading(true);
+    setClosedColumns([]);
+    setClosedMode(mode);
+    setSortField(next.field);
+    setSortAsc(next.asc);
+    setDetailPage(next.page);
+  };
+
+  useEffect(() => {
+    if (!detailLoading && pendingScroll.current && tableScroll.current) {
+      const {left, top} = pendingScroll.current;
+      tableScroll.current.scrollTo({left, top});
+      pendingScroll.current = null;
+    }
+  }, [detailLoading]);
 
   // Formatters
   const formatNumber = (val: any, decimals = 2) => {
@@ -187,6 +243,15 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
     });
   };
 
+  const closedCell = (value: unknown, kind: ClosedColumn[2]) => {
+    if (value == null) return "—";
+    if (kind === "text") return String(value);
+    const number = Number(value);
+    const sign = number > 0 ? "+" : "";
+    if (kind === "rate") return `${sign}${(number * 100).toFixed(2)}%`;
+    if (kind === "gain" || kind === "money") return `${kind === "gain" ? sign : ""}$${formatNumber(number)}`;
+    return formatNumber(number, Number.isInteger(number) ? 0 : 2);
+  };
   const formatPercent = (val: any) => {
     if (val == null || isNaN(Number(val))) return "—";
     const num = Number(val) * 100;
@@ -233,8 +298,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
     if (valA == null && valB == null) return 0;
     if (valA == null) return 1;
     if (valB == null) return -1;
-    if (typeof valA === "number" && typeof valB === "number") {
-      return sortAsc ? valA - valB : valB - valA;
+    const kind = closedColumns.find(([key]) => key === sortField)?.[2];
+    if ((kind && kind !== "text") || (typeof valA === "number" && typeof valB === "number")) {
+      return sortAsc ? Number(valA) - Number(valB) : Number(valB) - Number(valA);
     }
     return sortAsc ? String(valA).localeCompare(String(valB)) : String(valB).localeCompare(String(valA));
   });
@@ -281,7 +347,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   const totalDetailCount = sortedDetailRows.length;
   const totalDetailPages = Math.max(1, Math.ceil(totalDetailCount / detailPageSize));
-  const currentDetailRows = sortedDetailRows.slice((detailPage - 1) * detailPageSize, detailPage * detailPageSize);
+  const currentPage = Math.min(detailPage, totalDetailPages);
+  const currentDetailRows = sortedDetailRows.slice((currentPage - 1) * detailPageSize, currentPage * detailPageSize);
 
   // Donut Ring Data with Top 5 + 其他 aggregation
   const sortedDist = [...distData].sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0));
@@ -349,57 +416,19 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const exportDetailCsv = () => {
     if (!sortedDetailRows.length) return;
     if (statusFilter === "已清仓") {
-      const headers = [
-        "归属人员",
-        "券商渠道",
-        "Ticker",
-        "首次买入日期",
-        "最后清仓日期",
-        "清仓数量",
-        "买入均价",
-        "卖出均价",
-        "清仓价",
-        "当前价",
-        "清仓后涨跌幅",
-        "买入总额",
-        "卖出总额",
-        "已实现盈亏",
-        "已实现收益率",
-        "买入次数",
-        "卖出次数",
-      ];
-      const lines = [headers.join(",")];
-      for (const r of sortedDetailRows) {
-        lines.push(
-          [
-            `"${r.person_name || ""}"`,
-            `"${r.channel || ""}"`,
-            `"${r.ticker || ""}"`,
-            `"${r.first_buy_date || ""}"`,
-            `"${r.last_close_date || ""}"`,
-            r.closed_quantity ?? "",
-            r.avg_buy_price ?? "",
-            r.avg_sell_price ?? "",
-            r.close_price ?? "",
-            r.current_price ?? "",
-            r.post_close_change != null ? `${(r.post_close_change * 100).toFixed(2)}%` : "",
-            r.total_buy_amount ?? "",
-            r.total_sell_amount ?? "",
-            r.realized_pnl ?? "",
-            r.realized_pnl_rate != null ? `${(r.realized_pnl_rate * 100).toFixed(2)}%` : "",
-            r.buy_count ?? "",
-            r.sell_count ?? "",
-          ].join(",")
-        );
+      const csvCell = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+      const lines = [closedColumns.map(([,label]) => csvCell(label)).join(",")];
+      for (const row of sortedDetailRows) {
+        lines.push(closedColumns.map(([key,,kind]) => csvCell(
+          kind === "rate" && row[key] != null ? `${(Number(row[key]) * 100).toFixed(2)}%` : row[key],
+        )).join(","));
       }
-      const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\r\n")], {type:"text/csv;charset=utf-8;"}));
       const link = document.createElement("a");
       link.href = url;
-      link.download = `已清仓明细_${dimension}.csv`;
-      document.body.appendChild(link);
+      link.download = closedMode === "account" ? "已清仓-按券商账户汇总.csv" : "已清仓-按人员明细.csv";
       link.click();
-      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       return;
     }
 
@@ -957,12 +986,15 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             {/* Status, Broker, Search, Export */}
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <select
+                aria-label="持仓状态"
                 value={statusFilter}
                 onChange={(e) => {
                   const nextStatus = e.target.value;
                   setStatusFilter(nextStatus);
                   setDetailPage(1);
                   if (nextStatus === "已清仓") {
+                    setClosedMode("person");
+                    setDrawerTicker(null);
                     setSortField("last_close_date");
                     setSortAsc(false);
                   } else {
@@ -977,7 +1009,15 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 <option value="已清仓">已清仓</option>
               </select>
 
+              {statusFilter === "已清仓" && <div role="group" aria-label="已清仓视图" style={{display:"flex", gap:4}}>
+                {([["person","按人员明细"],["account","按券商账户汇总"]] as const).map(([mode,label]) =>
+                  <button key={mode} type="button" className={`btn ${closedMode === mode ? "btn-primary" : "btn-quiet"}`}
+                    aria-pressed={closedMode === mode} onClick={() => switchClosedMode(mode)}>{label}</button>
+                )}
+              </div>}
+
               <select
+                aria-label="券商渠道"
                 value={selectedBroker}
                 onChange={(e) => {
                   setSelectedBroker(e.target.value);
@@ -998,7 +1038,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 <Search size={14} style={{ position: "absolute", left: "8px", top: "8px", color: "var(--text-muted)" }} />
                 <input
                   type="text"
-                  placeholder="搜索人员、券商或股票代码..."
+                  placeholder={statusFilter === "已清仓" && closedMode === "account" ? "搜索券商、账号或股票代码…" : "搜索人员、券商或股票代码…"}
                   value={searchKeyword}
                   onChange={(e) => {
                     setSearchKeyword(e.target.value);
@@ -1009,7 +1049,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 />
               </div>
 
-              <button onClick={exportDetailCsv} className="btn btn-quiet" style={{ fontSize: "12px", padding: "5px 10px" }}>
+              <button onClick={exportDetailCsv} disabled={detailLoading || !totalDetailCount} className="btn btn-quiet" style={{ fontSize: "12px", padding: "5px 10px" }}>
                 <Download size={14} style={{ marginRight: "4px" }} />
                 导出明细
               </button>
@@ -1020,74 +1060,27 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
               <Layers size={16} color="var(--brand, #2563EB)" />
               <span>
-                {statusFilter === "已清仓" ? "已清仓明细" : "当前持仓明细"} ·{" "}
-                {dimension === "person" ? "人员维度" : dimension === "broker" ? "券商维度" : "股票维度"}
+                {statusFilter === "已清仓" ? `已清仓 · ${closedMode === "account" ? "按券商账户汇总" : "按人员明细"}`
+                  : `当前持仓明细 · ${dimension === "person" ? "人员维度" : dimension === "broker" ? "券商维度" : "股票维度"}`}
               </span>
               <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 400 }}>
                 （共 {totalDetailCount} 条记录）
               </span>
             </div>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>点击任意股票行右侧滑出深度分析抽屉</span>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{statusFilter === "已清仓" && closedMode === "account" ? "沿用原清仓收益报表的账本口径，操作笔数可包含划转。" : "点击任意股票行查看交易记录"}</span>
           </div>
 
           {/* Unified Detail Table */}
-          <div className="table-container" style={{ border: "1px solid var(--border-color, #e2e8f0)", borderRadius: "8px" }}>
-            <table className="finance-table" style={{ fontSize: "12px" }}>
+          <div ref={tableScroll} className="table-container" style={{ border: "1px solid var(--border-color, #e2e8f0)", borderRadius: "8px" }}>
+            <table aria-label="持仓明细" className="finance-table" style={{ fontSize: "12px" }}>
               <thead>
                 {statusFilter === "已清仓" ? (
-                  <tr>
-                    <th onClick={() => toggleDetailSort("person_name")} style={{ cursor: "pointer" }}>
-                      归属人员 {sortField === "person_name" ? (sortAsc ? "▲" : "▼") : ""}
+                  <tr>{closedColumns.map(([key,label,kind]) =>
+                    <th key={key} onClick={() => toggleDetailSort(key)}
+                      style={{cursor:"pointer", textAlign:kind === "text" ? "left" : "right", whiteSpace:"nowrap"}}>
+                      {label} {sortField === key ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th onClick={() => toggleDetailSort("channel")} style={{ cursor: "pointer" }}>
-                      券商渠道 {sortField === "channel" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th onClick={() => toggleDetailSort("ticker")} style={{ cursor: "pointer" }}>
-                      Ticker {sortField === "ticker" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th onClick={() => toggleDetailSort("first_buy_date")} style={{ cursor: "pointer" }}>
-                      首次买入日期 {sortField === "first_buy_date" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th onClick={() => toggleDetailSort("last_close_date")} style={{ cursor: "pointer" }}>
-                      最后清仓日期 {sortField === "last_close_date" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("closed_quantity")}>
-                      清仓数量 {sortField === "closed_quantity" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("avg_buy_price")}>
-                      买入均价 {sortField === "avg_buy_price" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("avg_sell_price")}>
-                      卖出均价 {sortField === "avg_sell_price" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("close_price")}>
-                      清仓价 {sortField === "close_price" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("current_price")}>
-                      当前价 {sortField === "current_price" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("post_close_change")}>
-                      清仓后涨跌幅 {sortField === "post_close_change" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_buy_amount")}>
-                      买入总额 {sortField === "total_buy_amount" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_sell_amount")}>
-                      卖出总额 {sortField === "total_sell_amount" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("realized_pnl")}>
-                      已实现盈亏 {sortField === "realized_pnl" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("realized_pnl_rate")}>
-                      已实现收益率 {sortField === "realized_pnl_rate" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("buy_count")}>
-                      买入次数 {sortField === "buy_count" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("sell_count")}>
-                      卖出次数 {sortField === "sell_count" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                  </tr>
+                  )}</tr>
                 ) : (
                   <tr>
                     <th onClick={() => toggleDetailSort("person_name")} style={{ cursor: "pointer" }}>
@@ -1135,100 +1128,29 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
               <tbody>
                 {detailLoading ? (
                   <tr>
-                    <td colSpan={statusFilter === "已清仓" ? 17 : 13} style={{ textAlign: "center", padding: "30px", color: "var(--brand)" }}>
+                    <td colSpan={statusFilter === "已清仓" ? Math.max(1,closedColumns.length) : 13} style={{ textAlign: "center", padding: "30px", color: "var(--brand)" }}>
                       正在加载持仓明细...
                     </td>
                   </tr>
                 ) : statusFilter === "已清仓" ? (
-                  currentDetailRows.map((r, idx) => {
-                    const postChange = r.post_close_change != null ? Number(r.post_close_change) : null;
-                    const realizedPnl = r.realized_pnl != null ? Number(r.realized_pnl) : null;
-                    const realizedRate = r.realized_pnl_rate != null ? Number(r.realized_pnl_rate) : null;
-                    const closedQty = r.closed_quantity != null ? Number(r.closed_quantity) : null;
-                    return (
-                      <tr
-                        key={idx}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => setDrawerTicker(r.ticker)}
-                        title="点击从右侧打开该标的深度交易与收益抽屉"
-                      >
-                        <td style={{ fontWeight: 600 }}>{r.person_name || "—"}</td>
-                        <td>{r.channel || "—"}</td>
-                        <td style={{ fontWeight: 700, color: "var(--brand)" }}>{r.ticker || "—"}</td>
-                        <td className="font-mono">{r.first_buy_date || "—"}</td>
-                        <td className="font-mono">{r.last_close_date || "—"}</td>
-                        <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                          {closedQty != null ? formatNumber(closedQty, closedQty % 1 === 0 ? 0 : 2) : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.avg_buy_price != null ? `$${formatNumber(r.avg_buy_price, 2)}` : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.avg_sell_price != null ? `$${formatNumber(r.avg_sell_price, 2)}` : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                          {r.close_price != null ? (
-                            r.is_split_adjusted ? (
-                              <span
-                                title={`折算后清仓价: $${formatNumber(r.close_price, 2)}\n原始清仓价: $${formatNumber(r.orig_close_price, 2)}\n清仓后除权调整: ${r.split_notes || ""}`}
-                                style={{ borderBottom: "1px dashed var(--brand, #2563EB)", cursor: "help" }}
-                              >
-                                ${formatNumber(r.close_price, 2)}
-                                <span style={{ fontSize: "10px", color: "var(--brand, #2563EB)", marginLeft: "2px", fontWeight: 700 }}>*</span>
-                              </span>
-                            ) : (
-                              `$${formatNumber(r.close_price, 2)}`
-                            )
-                          ) : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
-                          {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
-                        </td>
-                        <td
-                          className="font-mono"
-                          style={{
-                            textAlign: "right",
-                            fontWeight: 600,
-                            color: postChange != null && postChange > 0 ? "var(--profit-color, #16A34A)" : postChange != null && postChange < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
-                          }}
-                        >
-                          {postChange != null ? `${postChange > 0 ? "+" : ""}${(postChange * 100).toFixed(2)}%` : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.total_buy_amount != null ? `$${formatNumber(r.total_buy_amount, 2)}` : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.total_sell_amount != null ? `$${formatNumber(r.total_sell_amount, 2)}` : "—"}
-                        </td>
-                        <td
-                          className="font-mono"
-                          style={{
-                            textAlign: "right",
-                            fontWeight: 700,
-                            color: realizedPnl != null && realizedPnl > 0 ? "var(--profit-color, #16A34A)" : realizedPnl != null && realizedPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
-                          }}
-                        >
-                          {realizedPnl != null ? `${realizedPnl > 0 ? "+" : ""}$${formatNumber(realizedPnl, 2)}` : "—"}
-                        </td>
-                        <td
-                          className="font-mono"
-                          style={{
-                            textAlign: "right",
-                            fontWeight: 600,
-                            color: realizedRate != null && realizedRate > 0 ? "var(--profit-color, #16A34A)" : realizedRate != null && realizedRate < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
-                          }}
-                        >
-                          {realizedRate != null ? `${realizedRate > 0 ? "+" : ""}${(realizedRate * 100).toFixed(2)}%` : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.buy_count != null ? r.buy_count : "—"}
-                        </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
-                          {r.sell_count != null ? r.sell_count : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })
+                  currentDetailRows.map((row) => (
+                    <tr key={`${row.person_id ?? ""}:${row.account_id}:${row.instrument_id}`} tabIndex={0}
+                      onClick={() => openDetail(row)} onKeyDown={e => {if (e.key === "Enter") openDetail(row);}}
+                      style={{cursor:"pointer"}}>
+                      {closedColumns.map(([key,,kind]) => {
+                        const value = row[key];
+                        const colored = kind === "gain" || kind === "rate";
+                        const tone = Number(value) > 0 ? "var(--profit-color)" : Number(value) < 0 ? "var(--loss-color)" : "var(--text-muted)";
+                        const split = key === "close_price" && row.is_split_adjusted && value != null;
+                        const tooltip = split ? `原始清仓价 ${closedCell(row.orig_close_price,"money")} · ${row.split_notes || ""}`
+                          : key === "current_price" ? [row.quote_status,row.quote_time].filter(Boolean).join(" · ") : undefined;
+                        return <td key={key} title={tooltip} className={kind === "text" ? undefined : "font-mono"}
+                          style={{whiteSpace:"nowrap", textAlign:kind === "text" ? "left" : "right", color:colored ? tone : key === "ticker" ? "var(--brand)" : undefined}}>
+                          {closedCell(value,kind)}{split ? "*" : ""}
+                        </td>;
+                      })}
+                    </tr>
+                  ))
                 ) : currentDetailRows.map((r, idx) => {
                   const totalPnl = r.total_pnl != null ? Number(r.total_pnl) : (r.pnl != null ? Number(r.pnl) : null);
                   const pnlRate = r.pnl_rate != null ? Number(r.pnl_rate) : null;
@@ -1237,7 +1159,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                     <tr
                       key={idx}
                       style={{ cursor: "pointer" }}
-                      onClick={() => setDrawerTicker(r.ticker)}
+                      onClick={() => openDetail(r)}
                       title="点击从右侧打开该标的深度交易与收益抽屉"
                     >
                       <td style={{ fontWeight: 600 }}>{r.person_name}</td>
@@ -1292,8 +1214,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 })}
                 {!detailLoading && !currentDetailRows.length && (
                   <tr>
-                    <td colSpan={statusFilter === "已清仓" ? 17 : 13} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
-                      没有符合当前筛选条件的持仓明细记录
+                    <td colSpan={statusFilter === "已清仓" ? Math.max(1,closedColumns.length) : 13} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                      {detailError || "没有符合当前筛选条件的持仓明细记录"}
                     </td>
                   </tr>
                 )}
@@ -1305,21 +1227,21 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           {totalDetailPages > 1 && (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
               <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-                共 {totalDetailCount} 条记录，第 {detailPage} / {totalDetailPages} 页
+                共 {totalDetailCount} 条记录，第 {currentPage} / {totalDetailPages} 页
               </span>
               <div style={{ display: "flex", gap: "6px" }}>
                 <button
                   className="btn"
-                  disabled={detailPage <= 1}
-                  onClick={() => setDetailPage(detailPage - 1)}
+                  disabled={currentPage <= 1}
+                  onClick={() => setDetailPage(currentPage - 1)}
                   style={{ fontSize: "12px", padding: "4px 10px" }}
                 >
                   上一页
                 </button>
                 <button
                   className="btn"
-                  disabled={detailPage >= totalDetailPages}
-                  onClick={() => setDetailPage(detailPage + 1)}
+                  disabled={currentPage >= totalDetailPages}
+                  onClick={() => setDetailPage(currentPage + 1)}
                   style={{ fontSize: "12px", padding: "4px 10px" }}
                 >
                   下一页
@@ -1335,8 +1257,10 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           ========================================================================= */}
       <StockDrawer
         ticker={drawerTicker}
-        personId={selectedPersonId}
-        broker={selectedBroker}
+        personId={drawerRow?.person_id ?? selectedPersonId}
+        broker={drawerRow ? null : selectedBroker}
+        accountId={drawerRow?.account_id}
+        instrumentId={drawerRow?.instrument_id}
         onClose={() => setDrawerTicker(null)}
       />
     </div>

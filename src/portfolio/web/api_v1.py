@@ -180,7 +180,6 @@ def api_bootstrap():
     _DEFAULT_REPORTS = (
         ("当前持仓", "当前持仓"),
         ("股票汇总", "股票汇总"),
-        ("清仓收益", "清仓收益"),
         ("每日持仓收益", "每日持仓收益"),
         ("每月持仓收益", "每月持仓收益"),
         ("月度净投入明细", "月度净投入明细"),
@@ -458,7 +457,7 @@ def api_holdings_dashboard():
 def api_holdings_detail():
     """Retrieve unified holdings detail rows supporting person, broker, and stock dimensions."""
     try:
-        from portfolio.services.holdings_management_service import HoldingsManagementService
+        from portfolio.services.holdings_management_service import HoldingsManagementService, closed_account_rows, closed_columns
         svc = get_analytics_service()
         dimension = request.args.get("dimension", "person")
         person_id = request.args.get("person_id", type=int)
@@ -466,19 +465,26 @@ def api_holdings_detail():
         ticker = request.args.get("ticker") or None
         status = request.args.get("status") or None
         search = request.args.get("search") or None
+        closed_mode = request.args.get("closed_mode", "person")
         page = request.args.get("page", 1, type=int)
         page_size = request.args.get("page_size", 50, type=int)
+        if page < 1 or page_size < 1 or closed_mode not in ("person", "account"):
+            return jsonify(status="error", message="无效的持仓明细参数"), 400
 
         scope = get_user_query_scope(person_id=person_id)
         analytics = svc.calculate(scope)
-        rows = HoldingsManagementService.get_holdings_detail_rows(
-            analytics, dimension=dimension, person_id=person_id, broker=broker, ticker=ticker, status=status, search=search
-        )
-        total = len(rows)
+        if status == "已清仓" and closed_mode == "account":
+            report = get_today_service().closed_report(analytics)
+            rows = closed_account_rows(report, broker=broker, ticker=ticker, search=search)
+        else:
+            rows = HoldingsManagementService.get_holdings_detail_rows(
+                analytics, dimension=dimension, person_id=person_id, broker=broker, ticker=ticker, status=status,
+                search=search, db_path=svc.path,
+            )
         start = (page - 1) * page_size
-        end = start + page_size
-        paged_rows = rows[start:end]
-        return jsonify(status="ok", rows=paged_rows, total=total, page=page, page_size=page_size)
+        columns = closed_columns(closed_mode) if status == "已清仓" else ()
+        return jsonify(status="ok", rows=rows[start:start + page_size], total=len(rows), page=page,
+                       page_size=page_size, columns=columns)
     except Exception as e:
         logger.exception("Holdings detail error")
         return jsonify(status="error", message=str(e)), 500
@@ -545,7 +551,6 @@ def api_reports_list():
         {"name": "每月持仓收益", "group": "收益分析", "description": "按月度汇总持仓收益、微操贡献及月末净值"},
         {"name": "每月微操收益", "group": "收益分析", "description": "日内或短期高抛低吸做T微操闭环盈利确认与配对记录"},
         {"name": "微操配对证据", "group": "收益分析", "description": "高精度配对算法留存的微操买卖对应证据链"},
-        {"name": "清仓收益", "group": "收益分析", "description": "已完全平仓标的的累计已实现净收益汇总"},
         {"name": "月度净投入明细", "group": "收益分析", "description": "每月出入金、转账及本金净流入流出记录"},
         {"name": "完整交易净投入", "group": "收益分析", "description": "全生命周期累计现金投入与本金回放"},
         {"name": "交易回放", "group": "交易与流水", "description": "包含拆股、人员划转及结算的账本完整时间线回放"},

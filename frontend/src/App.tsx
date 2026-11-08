@@ -7,6 +7,7 @@ import { TradesView } from "./views/TradesView";
 import { ReportsView } from "./views/ReportsView";
 import { DailyPerformanceView } from "./views/DailyPerformanceView";
 import { MonthlyPerformanceView } from "./views/MonthlyPerformanceView";
+import { MonthlyScalpingView } from "./views/MonthlyScalpingView";
 import { MonitorView } from "./views/MonitorView";
 import { HistoricalTrendView } from "./views/HistoricalTrendView";
 import { ChartsView } from "./views/ChartsView";
@@ -25,7 +26,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   // Navigation & History State
-  const [history, setHistory] = useState<string[]>([window.location.hash === "#ownership" ? "ownership" : window.location.hash === "#monthly-performance" ? "reports:每月持仓收益" : "overview"]);
+  const [history, setHistory] = useState<string[]>([window.location.hash === "#holdings-closed" ? "holdings:closed" : window.location.hash === "#ownership" ? "ownership" : window.location.hash === "#monthly-performance" ? "reports:每月持仓收益" : "overview"]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const currentRoute = history[historyIndex] || "overview";
 
@@ -104,6 +105,7 @@ export const App: React.FC = () => {
   // Navigation handlers
   const navigate = (newRoute: string) => {
     if(newRoute === "reports:股票归属")newRoute="ownership";
+    if (newRoute === "reports:清仓收益") newRoute = "holdings:closed";
     if (newRoute === currentRoute) return;
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newRoute);
@@ -130,7 +132,7 @@ export const App: React.FC = () => {
     setRefreshKey((k) => k + 1);
   };
 
-  const assetRoute = NAV_GROUPS[0].entries.some((entry) => entry.id === currentRoute);
+  const assetRoute = currentRoute === "holdings:closed" || NAV_GROUPS[0].entries.some((entry) => entry.id === currentRoute);
   const [ownershipReset,setOwnershipReset]=useState(0);
   const resetAssetFilters = () => {
     if(currentRoute === "ownership"){setOwnershipReset(v=>v+1);return;}
@@ -203,7 +205,7 @@ export const App: React.FC = () => {
   // Get Page Title & Subtitle based on Route
   const getHeaderMeta = () => {
     if (currentRoute === "overview") return { title: "资产总览", subtitle: "全时期投资组合资产、净投入与全周期盈亏看板" };
-    if (currentRoute === "holdings") return { title: "持仓管理", subtitle: "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选" };
+    if (currentRoute === "holdings" || currentRoute === "holdings:closed") return { title: "持仓管理", subtitle: "统一查看人员、券商、股票的持仓与收益，支持多维度切换和筛选" };
     if (currentRoute === "trades") return { title: "交易明细", subtitle: "" };
     if (currentRoute === "reports:每月持仓收益") return { title: "每月持仓收益", subtitle: "按月份、券商和股票查看收益与资金流向。" };
     if (currentRoute.startsWith("reports:")) {
@@ -240,7 +242,7 @@ export const App: React.FC = () => {
       {/* Native-identical Sidebar */}
       <Sidebar
         canViewOwnership={bootstrap?.user?.can_view_ownership === true}
-        currentRoute={currentRoute}
+        currentRoute={currentRoute === "holdings:closed" ? "holdings" : currentRoute}
         onRouteChange={navigate}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -282,15 +284,17 @@ export const App: React.FC = () => {
               />
             )}
 
-            {currentRoute === "holdings" && (
+            {(currentRoute === "holdings" || currentRoute === "holdings:closed") && (
               <HoldingsView
-                key={assetResetKey}
+                key={`${currentRoute}:${assetResetKey}`}
+                refreshKey={refreshKey}
                 personId={selectedPersonId}
                 onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
                 onBrokerChange={setSelectedBroker}
                 persons={bootstrap?.persons || []}
-                initialMode="dashboard"
+                initialMode={currentRoute === "holdings:closed" ? "detail" : "dashboard"}
+                initialStatus={currentRoute === "holdings:closed" ? "已清仓" : "持有中"}
               />
             )}
             {currentRoute === "reports:当前持仓" && (
@@ -365,8 +369,20 @@ export const App: React.FC = () => {
               />
             )}
 
+            {currentRoute === "reports:每月微操收益" && (
+              <MonthlyScalpingView
+                key={`monthly-scalping:${assetResetKey}`}
+                refreshKey={refreshKey}
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+                broker={selectedBroker}
+                onBrokerChange={setSelectedBroker}
+                persons={bootstrap?.persons || []}
+              />
+            )}
+
             {currentRoute.startsWith("reports:") &&
-              !["reports:当前持仓", "reports:股票汇总", "reports:每日持仓收益", "reports:每月持仓收益"].includes(currentRoute) && (
+              !["reports:当前持仓", "reports:股票汇总", "reports:每日持仓收益", "reports:每月持仓收益", "reports:每月微操收益"].includes(currentRoute) && (
               <ReportsView
                 key={`${currentRoute}:${assetResetKey}`}
                 initialReportName={currentRoute.replace("reports:", "")}

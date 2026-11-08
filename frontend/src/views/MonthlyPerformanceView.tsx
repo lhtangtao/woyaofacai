@@ -167,7 +167,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   const [activeTab, setActiveTab] = useState<"month" | "channel" | "stock" | "flow">("month");
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState(20);
-  const [flowSort, setFlowSort] = useState({ column: NET_QUANTITY_COLUMN, ascending: false });
+  const [flowSort, setFlowSort] = useState({ monthAscending: false, netAscending: false });
 
   // Sorting
   const [sortField, setSortField] = useState<string>("");
@@ -317,15 +317,12 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 
   const flowRows = useMemo(() => cashFlowRows(netEntries, entries).filter(matchesEntry).sort((a,b) => {
     const monthOrder = String(a.values[0]).localeCompare(String(b.values[0]));
+    if (monthOrder) return flowSort.monthAscending ? monthOrder : -monthOrder;
     const left = a.values[NET_QUANTITY_COLUMN];
     const right = b.values[NET_QUANTITY_COLUMN];
-    let order = monthOrder;
-    if (flowSort.column === NET_QUANTITY_COLUMN) {
-      if (left == null && right != null) return 1;
-      if (right == null && left != null) return -1;
-      order = left == null ? 0 : left - right;
-    }
-    return (flowSort.ascending ? order : -order) || -monthOrder ||
+    const rank = (value: number | null) => value == null ? 2 : value === 0 ? 1 : 0;
+    const netOrder = (left ?? 0) - (right ?? 0);
+    return rank(left) - rank(right) || (flowSort.netAscending ? netOrder : -netOrder) ||
       String(a.values[1]).localeCompare(String(b.values[1])) || String(a.values[3]).localeCompare(String(b.values[3]));
   }), [netEntries, entries, appliedFilters, flowSort]);
   const scopedMonthly = useMemo(() => entries.filter(matchesEntry), [entries, appliedFilters]);
@@ -1443,7 +1440,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               📈 按股票明细
             </button>
             <button className={`tab-btn ${activeTab === "flow" ? "active" : ""}`} onClick={() => {
-              setActiveTab("flow"); setFlowSort({ column: NET_QUANTITY_COLUMN, ascending: false }); setFlowSelection(null);
+              setActiveTab("flow"); setFlowSort({ monthAscending: false, netAscending: false }); setFlowSelection(null);
             }}>资金流向明细</button>
           </div>
           <span className="table-record-count">
@@ -1463,9 +1460,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           </div>
           <div className="modern-table-wrap"><table className="modern-table monthly-flow-table">
             <thead><tr>{CASH_COLUMNS.map((name,i) => <th key={name} className={i >= 4 ? "numeric" : ""}>
-              {i === 0 || i === NET_QUANTITY_COLUMN ? <button type="button" onClick={() =>
-                setFlowSort({ column: i, ascending: flowSort.column === i && !flowSort.ascending })
-              }>{name}{flowSort.column === i ? flowSort.ascending ? " ↑" : " ↓" : ""}</button> : name}
+              {i === 0 || i === NET_QUANTITY_COLUMN ? <button type="button" onClick={() => {
+                const key = i === 0 ? "monthAscending" : "netAscending";
+                setFlowSort(sort => ({ ...sort, [key]: !sort[key] }));
+              }}>{name}{(i === 0 ? flowSort.monthAscending : flowSort.netAscending) ? " ↑" : " ↓"}</button> : name}
             </th>)}</tr></thead>
             <tbody>{flowRows.map((row,i) =>
               <tr key={i} className={flowSelection === row ? "flow-selected" : ""} onClick={() => setFlowSelection(row)}

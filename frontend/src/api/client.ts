@@ -286,6 +286,7 @@ export const api = {
   },
   holdingsDetail: (params: {
     dimension?: string;
+    closed_mode?: "person" | "account";
     person_id?: number | null;
     broker?: string;
     ticker?: string;

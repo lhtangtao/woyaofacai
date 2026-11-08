@@ -725,6 +725,8 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.daily_performance_page.update_data(analytics)
         if hasattr(self, "monthly_performance_page"):
             self.monthly_performance_page.update_data(analytics)
+        if hasattr(self, "monthly_scalping_page"):
+            self.monthly_scalping_page.update_data(analytics)
         self.stock_detail.set_analytics(analytics)
         for page in self.report_pages:
             page.set_reports(analytics.reports)
@@ -784,7 +786,11 @@ class MainWindow(InteractionMixin, QMainWindow):
             return
         if kind == "metric":
             index = int(key)
-            target = "清仓收益" if index == 3 else "每月微操收益" if index in (12, 13) else "每日持仓收益"
+            if index == 3:
+                self.holdings_page.open_closed_positions()
+                self.navigation.select(22, None)
+                return
+            target = "每月微操收益" if index in (12, 13) else "每日持仓收益"
             self.performance_page.selector.setCurrentText(target)
             self.navigation.setCurrentRow(4)
             return

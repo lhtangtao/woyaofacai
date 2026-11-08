@@ -516,6 +516,7 @@ class ModernTableModel(QAbstractTableModel):
         self.page = 1
         self.page_size = 20
         self.show_all_rows = False
+        self.flow_sort_orders = {0: False, NET_QUANTITY_COLUMN: False}
         self.sort_column: int = -1
         self.sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
         self.highlight_month: str = ""
@@ -530,6 +531,8 @@ class ModernTableModel(QAbstractTableModel):
         if orientation == Qt.Orientation.Horizontal and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             if 0 <= section < len(self.columns):
                 col_name = self.columns[section]
+                if self.show_all_rows and section in self.flow_sort_orders:
+                    return f"{col_name} {'▲' if self.flow_sort_orders[section] else '▼'}"
                 if self.sort_column == section:
                     arrow = " ▲" if self.sort_order == Qt.SortOrder.AscendingOrder else " ▼"
                     return f"{col_name}{arrow}"
@@ -602,6 +605,11 @@ class ModernTableModel(QAbstractTableModel):
         """点击表头：首次点击正排，再次点击倒排。"""
         if column < 0 or column >= len(self.columns):
             return
+        if self.show_all_rows:
+            if column in self.flow_sort_orders:
+                self.flow_sort_orders[column] = not self.flow_sort_orders[column]
+                self.apply_sort_and_page()
+            return
         if self.sort_column == column:
             if self.sort_order == Qt.SortOrder.AscendingOrder:
                 self.sort_order = Qt.SortOrder.DescendingOrder
@@ -629,15 +637,22 @@ class ModernTableModel(QAbstractTableModel):
             return s
 
     def _update_visible_rows(self):
-        if self.sort_column >= 0:
+        if self.show_all_rows:
+            net_ascending = self.flow_sort_orders[NET_QUANTITY_COLUMN]
+
+            def net_key(row):
+                net = row[NET_QUANTITY_COLUMN]
+                if net is None:
+                    return 2, 0
+                if net == 0:
+                    return 1, 0
+                return 0, net if net_ascending else -net
+
+            self.all_rows.sort(key=net_key)
+            self.all_rows.sort(key=lambda row: row[0], reverse=not self.flow_sort_orders[0])
+        elif self.sort_column >= 0:
             descending = self.sort_order == Qt.SortOrder.DescendingOrder
-            if self.show_all_rows and self.sort_column == NET_QUANTITY_COLUMN:
-                self.all_rows.sort(key=lambda row: (
-                    (row[NET_QUANTITY_COLUMN] is not None) if descending else (row[NET_QUANTITY_COLUMN] is None),
-                    row[NET_QUANTITY_COLUMN] or Decimal(0),
-                ), reverse=descending)
-            else:
-                self.all_rows.sort(key=lambda row: self._parse_sort_key(row, self.sort_column), reverse=descending)
+            self.all_rows.sort(key=lambda row: self._parse_sort_key(row, self.sort_column), reverse=descending)
         start = (self.page - 1) * self.page_size
         self.rows = self.all_rows if self.show_all_rows else self.all_rows[start:start + self.page_size]
 
@@ -2245,9 +2260,9 @@ class MonthlyPerformancePage(QWidget):
 
     def on_table_tab_changed(self, idx: int):
         self.table_model.page = 1
-        self.table_model.sort_column = NET_QUANTITY_COLUMN if idx == 3 else -1
+        self.table_model.sort_column = -1
         if idx == 3:
-            self.table_model.sort_order = Qt.SortOrder.DescendingOrder
+            self.table_model.flow_sort_orders = {0: False, NET_QUANTITY_COLUMN: False}
         if idx != 2:
             self.stock_filter_month = ""
             self.stock_pnl_filter = "all"
@@ -2275,9 +2290,8 @@ class MonthlyPerformancePage(QWidget):
         if is_flow:
             rows = []
             self.cash_table_records = {}
-            # Stable tie order for records in the same month.
+            # Stable tie order for records with equal month and net change.
             ordered = sorted(self.filtered_cash_rows, key=lambda entry: (entry[0][1], entry[0][3]))
-            ordered.sort(key=lambda entry: entry[0][0], reverse=True)
             for values, meta in ordered:
                 display = [values[0], fmt_broker_cn(values[1]), *values[2:4]]
                 display.extend(

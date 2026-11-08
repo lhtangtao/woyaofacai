@@ -114,7 +114,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   };
 
   // Combine reports list ensuring 今日盈亏 is present
-  const allReports = [...reportsList];
+  const allReports = reportsList.filter(report => report.name !== "清仓收益");
   if (!allReports.find((r) => r.name === "今日盈亏")) {
     allReports.unshift({
       name: "今日盈亏",
