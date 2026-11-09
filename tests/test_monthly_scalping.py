@@ -251,9 +251,11 @@ def test_monthly_scalping_trend_month_drill_keeps_full_range(app, demo_path):
     assert page.applied_end_month == init_end
     assert len(page.trend_canvas.data_points) == total_months_count
 
-    # 验证再次点击取消反选
+    # 验证再次点击当前月份时相当于没有点击，保持单月锁定，绝不退回全周期汇总
+    page.on_trend_month_clicked(target_month)
+    assert page.active_chart_month == target_month
     page.on_trend_month_clicked("")
-    assert page.active_chart_month == ""
+    assert page.active_chart_month == target_month
     assert len(page.trend_canvas.data_points) == total_months_count
 
 

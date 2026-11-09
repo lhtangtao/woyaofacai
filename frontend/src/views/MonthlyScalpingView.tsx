@@ -729,46 +729,6 @@ export const MonthlyScalpingView: React.FC<MonthlyScalpingViewProps> = ({
         </div>
       </div>
 
-      {/* 生效条件 Chips 栏 */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 4px", minHeight: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-          <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 500 }}>
-            {persons.find((p) => p.id === personId)?.name || "全部人员"}
-          </span>
-          <X size={12} style={{ cursor: "pointer", color: "#2563EB" }} onClick={() => onPersonChange && onPersonChange(null)} />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-          <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 500 }}>{appliedBroker || "全部渠道"}</span>
-          <X size={12} style={{ cursor: "pointer", color: "#2563EB" }} onClick={() => onBrokerChange && onBrokerChange("")} />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-          <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 500 }}>{appliedCategory || "全部分类"}</span>
-          <X size={12} style={{ cursor: "pointer", color: "#2563EB" }} onClick={() => setAppliedCategory("")} />
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-          <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 500 }}>
-            {appliedStartMonth && appliedEndMonth ? `${appliedStartMonth} 至 ${appliedEndMonth}` : "全周期"}
-          </span>
-        </div>
-
-        {activeMonth && (
-          <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-            <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 600 }}>月份: {activeMonth}</span>
-            <X size={12} style={{ cursor: "pointer", color: "#2563EB" }} onClick={() => setActiveMonth("")} />
-          </div>
-        )}
-
-        {activeRankingTicker && (
-          <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 12, padding: "2px 8px" }}>
-            <span style={{ fontSize: 11.5, color: "#1D4ED8", fontWeight: 600 }}>股票: {activeRankingTicker}</span>
-            <X size={12} style={{ cursor: "pointer", color: "#2563EB" }} onClick={() => setActiveRankingTicker("")} />
-          </div>
-        )}
-      </div>
-
       {/* 2. 中部：月度微操趋势图 + 选中月份摘要 (高度约 260px) */}
       <div className="charts-split-section" style={{ display: "grid", gridTemplateColumns: "68% calc(32% - 10px)", gap: 10 }}>
         {/* 左侧：月度微操收益趋势 */}
@@ -793,8 +753,8 @@ export const MonthlyScalpingView: React.FC<MonthlyScalpingViewProps> = ({
               style={{ height: "100%", width: "100%" }}
               onEvents={{
                 click: (params: any) => {
-                  if (params.name) {
-                    setActiveMonth((prev) => (prev === params.name ? "" : params.name));
+                  if (params.name && activeMonth !== params.name) {
+                    setActiveMonth(params.name);
                   }
                 },
               }}
@@ -1002,35 +962,36 @@ export const MonthlyScalpingView: React.FC<MonthlyScalpingViewProps> = ({
         </div>
       </div>
 
-      {/* 4. 微操收益明细表格卡片 (16列) */}
+      {/* 4. 微操收益明细表格卡片 (直接全部展示，无内部滚动条) */}
       <div className="table-card" style={{ background: "#FFF", borderRadius: 6, border: "1px solid #E2E8F0", padding: "12px 16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#0F172A" }}>微操收益明细</h3>
             <span style={{ fontSize: 11, color: "#64748B" }}>
-              共 {sortedTableRows.length} 条记录 {activeMonth ? `(已筛选 ${activeMonth})` : ""} · 点击行查看详情，双击行进入交易回放
+              共 {sortedTableRows.length} 条记录 {activeMonth ? `(已选月份 ${activeMonth})` : ""} · 点击行查看详情，双击行进入交易回放
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#64748B" }}>
-            <span>每页 {pageSize} 条</span>
-            <button
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-              style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid #CBD5E1", background: "#FFF", cursor: page <= 1 ? "not-allowed" : "pointer" }}
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <span style={{ fontWeight: 600, color: "#1E293B" }}>
-              {page} / {totalPages}
-            </span>
-            <button
-              disabled={page >= totalPages}
-              onClick={() => setPage(page + 1)}
-              style={{ padding: "2px 6px", borderRadius: 4, border: "1px solid #CBD5E1", background: "#FFF", cursor: page >= totalPages ? "not-allowed" : "pointer" }}
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
+          <button
+            className="primary-btn"
+            onClick={handleExport}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              height: 28,
+              padding: "0 12px",
+              backgroundColor: "#2563EB",
+              color: "#FFF",
+              borderRadius: 6,
+              border: "none",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            <Download size={13} />
+            <span>导出 CSV</span>
+          </button>
         </div>
 
         <div style={{ overflowX: "auto" }}>
@@ -1074,14 +1035,14 @@ export const MonthlyScalpingView: React.FC<MonthlyScalpingViewProps> = ({
               </tr>
             </thead>
             <tbody>
-              {paginatedRows.length === 0 ? (
+              {sortedTableRows.length === 0 ? (
                 <tr>
                   <td colSpan={16} style={{ textAlign: "center", padding: "24px", color: "#94A3B8" }}>
                     当前筛选条件下暂无微操收益明细
                   </td>
                 </tr>
               ) : (
-                paginatedRows.map((r, i) => (
+                sortedTableRows.map((r, i) => (
                   <tr
                     key={i}
                     onClick={() => setActiveDrawerRow(r)}

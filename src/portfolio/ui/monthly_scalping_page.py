@@ -447,13 +447,11 @@ class MonthlyScalpingTrendCanvas(QWidget):
                 idx = int((event.position().x() - margin_left) / slot_w)
                 idx = max(0, min(n - 1, idx))
                 clicked_m = self.points_info[idx]["month"]
-                if self.selected_month == clicked_m:
-                    self.selected_month = ""  # 再次点击取消反选
-                    self.month_selected.emit("")
-                else:
+                if self.selected_month != clicked_m:
                     self.selected_month = clicked_m
                     self.month_selected.emit(clicked_m)
-                self.update()
+                    self.update()
+                # 再次点击同一月份时，相当于没有点击，保持单月选中状态不变
         super().mousePressEvent(event)
 
 
@@ -665,49 +663,12 @@ class MonthlyScalpingPage(QWidget):
         content_layout.setContentsMargins(18, 14, 18, 20)
         content_layout.setSpacing(12)
 
-        # 1. 顶部 Header
-        header_row = QHBoxLayout()
-        header_text_vbox = QVBoxLayout()
-        header_text_vbox.setSpacing(2)
-
+        # 1. 顶部 Header 控件（保留对象供外部调用或测试使用）
         self.title_lbl = QLabel("每月微操收益")
-        self.title_lbl.setFont(QFont(".AppleSystemUIFont", 18, QFont.Weight.Bold))
-        self.title_lbl.setStyleSheet("color: #0F172A;")
-        header_text_vbox.addWidget(self.title_lbl)
-
-        sub_desc = QLabel("跟踪每月通过短线微操（同月买卖配对）获得的收益，评估你的短线交易表现。")
-        sub_desc.setStyleSheet("color: #64748B; font-size: 12px;")
-        header_text_vbox.addWidget(sub_desc)
-
-        header_row.addLayout(header_text_vbox)
-        header_row.addStretch()
-
         self.refresh_btn = QPushButton("刷新")
-        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.refresh_btn.setStyleSheet("""
-            QPushButton {
-                background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px;
-                padding: 6px 14px; font-size: 12px; font-weight: 500; color: #334155;
-            }
-            QPushButton:hover { background: #F1F5F9; border-color: #94A3B8; }
-        """)
         self.refresh_btn.clicked.connect(self.recalculate_and_refresh)
-        header_row.addWidget(self.refresh_btn)
 
-        self.export_btn = QPushButton("导出 CSV")
-        self.export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.export_btn.setStyleSheet("""
-            QPushButton {
-                background: #2563EB; border: 1px solid #1D4ED8; border-radius: 6px;
-                padding: 6px 16px; font-size: 12px; font-weight: 600; color: #FFFFFF;
-            }
-            QPushButton:hover { background: #1D4ED8; }
-        """)
-        self.export_btn.clicked.connect(self.export_csv)
-        header_row.addWidget(self.export_btn)
-        content_layout.addLayout(header_row)
-
-        # 2. 统计口径说明卡片 (浅蓝色背景)
+        # 2. 统计口径说明卡片 (浅蓝色背景置顶展示)
         desc_card = QFrame()
         desc_card.setStyleSheet("""
             QFrame {
@@ -869,7 +830,8 @@ class MonthlyScalpingPage(QWidget):
         self.chip_ticker_drill.hide()
 
         chips_layout.addStretch()
-        content_layout.addWidget(self.chips_bar)
+        # 根据用户明确要求，彻底隐藏不展示第二行 Chips 生效标签栏
+        self.chips_bar.hide()
 
         # 5. 中部图表与选中月份摘要 (Splitter: 68% : 32%)
         self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1036,33 +998,24 @@ class MonthlyScalpingPage(QWidget):
         table_top_h.addWidget(self.table_sub_lbl)
         table_top_h.addStretch()
 
-        self.page_size_lbl = QLabel("每页 50 条")
-        self.page_size_lbl.setStyleSheet("font-size: 11px; color: #64748B; margin-right: 8px;")
-        table_top_h.addWidget(self.page_size_lbl)
+        # 导出 CSV 按钮（放置在表格右上角）
+        self.export_btn = QPushButton("导出 CSV")
+        self.export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.export_btn.setStyleSheet("""
+            QPushButton {
+                background: #2563EB; border: 1px solid #1D4ED8; border-radius: 6px;
+                padding: 4px 14px; font-size: 12px; font-weight: 600; color: #FFFFFF;
+            }
+            QPushButton:hover { background: #1D4ED8; }
+        """)
+        self.export_btn.clicked.connect(self.export_csv)
+        table_top_h.addWidget(self.export_btn)
 
-        # 分页控制器
-        self.prev_page_btn = QPushButton("‹")
-        self.next_page_btn = QPushButton("›")
-        for btn in (self.prev_page_btn, self.next_page_btn):
-            btn.setFixedSize(26, 26)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
-                    font-size: 13px; font-weight: bold; color: #334155;
-                }
-                QPushButton:hover:!disabled { background: #EFF6FF; border-color: #3B82F6; color: #2563EB; }
-                QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; background: #F8FAFC; }
-            """)
-        self.prev_page_btn.clicked.connect(lambda: self.change_page(-1))
-        self.next_page_btn.clicked.connect(lambda: self.change_page(1))
-
-        self.page_num_lbl = QLabel("1 / 1")
-        self.page_num_lbl.setStyleSheet("font-size: 11px; color: #1E293B; font-weight: 600; margin: 0 4px;")
-
-        table_top_h.addWidget(self.prev_page_btn)
-        table_top_h.addWidget(self.page_num_lbl)
-        table_top_h.addWidget(self.next_page_btn)
+        # 保持属性兼容对象
+        self.page_size_lbl = QLabel()
+        self.prev_page_btn = QPushButton()
+        self.next_page_btn = QPushButton()
+        self.page_num_lbl = QLabel()
 
         table_vbox.addLayout(table_top_h)
 
@@ -1080,7 +1033,9 @@ class MonthlyScalpingPage(QWidget):
         self.table_view.horizontalHeader().setHighlightSections(False)
         self.table_view.horizontalHeader().setSectionsClickable(True)
         self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
-        self.table_view.setMinimumHeight(360)
+        # 彻底去除滚动条，高度由内容自适应撑开直接全部展示
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
@@ -1500,8 +1455,8 @@ class MonthlyScalpingPage(QWidget):
                 "has_pair": has_pair,
             })
 
-        # 如果当前选中的月份不在区间内，则选区间内最后一个月份
-        if self.active_chart_month and self.active_chart_month not in all_months_in_scope:
+        # 严格锁定单月：若未选或不在区间内，强制默认选中区间内最后一个月（最新月），绝不汇总全周期
+        if not self.active_chart_month or self.active_chart_month not in all_months_in_scope:
             self.active_chart_month = all_months_in_scope[-1] if all_months_in_scope else ""
 
         self.trend_canvas.set_data(trend_points, self.active_chart_month)
@@ -1596,17 +1551,19 @@ class MonthlyScalpingPage(QWidget):
 
         self.table_model.highlight_month = self.active_chart_month
         self.table_model.highlight_ticker = self.active_ranking_ticker
+        self.table_model.page_size = max(1000, len(table_rows))
+        self.table_model.page = 1
         self.table_model.set_columns_and_rows(self.table_model.columns, table_rows)
 
-        # 更新表格副标题与分页信息
+        # 更新表格副标题，直接全部展示，根据行数自适应高度，绝不出现内部垂直滚动条
         total_rows = len(table_rows)
-        active_m_hint = f"（已筛选 {self.active_chart_month}）" if self.active_chart_month else ""
+        active_m_hint = f"（已选月份 {self.active_chart_month}）" if self.active_chart_month else ""
         self.table_sub_lbl.setText(f"共 {total_rows} 条记录 {active_m_hint}· 点击行查看详情，双击行进入交易回放")
 
-        total_pages = max(1, (total_rows + self.table_model.page_size - 1) // self.table_model.page_size)
-        self.page_num_lbl.setText(f"{self.table_model.page} / {total_pages}")
-        self.prev_page_btn.setEnabled(self.table_model.page > 1)
-        self.next_page_btn.setEnabled(self.table_model.page < total_pages)
+        calc_height = 34 + max(1, total_rows) * 34 + 4
+        self.table_view.setFixedHeight(calc_height)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.apply_proportional_column_widths()
 
@@ -1740,10 +1697,13 @@ class MonthlyScalpingPage(QWidget):
         self.recalculate_and_refresh()
 
     def on_trend_month_clicked(self, month: str):
-        """点击趋势图月份柱体进行下钻联动"""
-        self.active_chart_month = month
-        self.table_model.page = 1
-        self.recalculate_and_refresh()
+        """点击趋势图月份柱体进行切换；若为空或与当前一致，相当于没有点击，保持单月选中不变"""
+        if not month:
+            return
+        if self.active_chart_month != month:
+            self.active_chart_month = month
+            self.table_model.page = 1
+            self.recalculate_and_refresh()
 
     def change_page(self, delta: int):
         self.table_model.set_page(self.table_model.page + delta)

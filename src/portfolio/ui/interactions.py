@@ -329,7 +329,7 @@ class InteractionMixin:
             self.update_history_buttons();return
         if page == 25 and hasattr(self, "monthly_scalping_page"):
             self.heading.setText("每月微操收益")
-            self.description.setText("分析主动交易的操作效果，比较不同月份、券商和股票的微操收益表现。")
+            self.description.setText("跟踪每月通过短线微操（同月买卖配对）获得的收益，评估你的短线交易表现。")
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
             if hasattr(self.monthly_scalping_page, "sync_person_from_main"):
