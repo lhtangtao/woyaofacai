@@ -27,10 +27,12 @@ def test_distribution_service_summary(analytics):
     assert summary is not None
     # 验证股票市值大于 0
     assert summary.current_market_value > Decimal("0")
-    # 验证去重标的数
+    # 验证去重标的数及变动
     assert summary.holding_count > 0
-    # 验证前五大集中度处于 0~100% 之间
+    assert isinstance(summary.holding_count_change, int)
+    # 验证前五大集中度处于 0~100% 之间及变动
     assert Decimal("0") < summary.top5_concentration <= Decimal("100")
+    assert isinstance(summary.top5_concentration_diff_pp, Decimal)
     # 验证 Top 5 股票列表存在
     assert len(summary.stocks_top) <= 6  # 5 + 其他
     # 验证渠道列表存在

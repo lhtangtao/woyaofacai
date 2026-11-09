@@ -64,7 +64,13 @@ class DistributionSummary:
     value_change: Decimal
     value_change_rate: Optional[Decimal]
     holding_count: int
+    prev_holding_count: int
+    holding_count_change: int
+    holding_count_change_rate: Optional[Decimal]
     top5_concentration: Decimal
+    prev_top5_concentration: Decimal
+    top5_concentration_diff_pp: Decimal
+    top5_concentration_change_rate: Optional[Decimal]
     as_of_label: str
     prev_as_of_label: str
 
@@ -366,13 +372,40 @@ def calculate_distribution(
         it.prev_weight = (pmv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         it.diff_pp = it.weight - it.prev_weight
 
+    # 8. 对比期标的数及变化
+    prev_unique_tickers = {it.ticker for it in filtered_prev}
+    prev_holding_count = len(prev_unique_tickers)
+    holding_count_change = holding_count - prev_holding_count
+    holding_count_change_rate = (
+        (Decimal(holding_count_change) / Decimal(prev_holding_count) * Decimal("100"))
+        if prev_holding_count > 0
+        else None
+    )
+
+    # 9. 对比期前五大持仓集中度及变化
+    sorted_prev_tickers = sorted(ticker_prev.values(), reverse=True)
+    prev_top5_mv = sum(sorted_prev_tickers[:5], ZERO)
+    prev_top5_concentration = (prev_top5_mv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
+    top5_concentration_diff_pp = top5_concentration - prev_top5_concentration
+    top5_concentration_change_rate = (
+        (top5_concentration_diff_pp / prev_top5_concentration * Decimal("100"))
+        if prev_top5_concentration > ZERO
+        else None
+    )
+
     return DistributionSummary(
         current_market_value=curr_total_mv,
         prev_market_value=prev_total_mv,
         value_change=value_change,
         value_change_rate=value_change_rate,
         holding_count=holding_count,
+        prev_holding_count=prev_holding_count,
+        holding_count_change=holding_count_change,
+        holding_count_change_rate=holding_count_change_rate,
         top5_concentration=top5_concentration,
+        prev_top5_concentration=prev_top5_concentration,
+        top5_concentration_diff_pp=top5_concentration_diff_pp,
+        top5_concentration_change_rate=top5_concentration_change_rate,
         as_of_label=as_of_label,
         prev_as_of_label=prev_as_of_label,
         stocks_top=stocks_top,

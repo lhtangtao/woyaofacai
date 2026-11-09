@@ -648,19 +648,16 @@ class HoldingsDistributionPage(QWidget):
         self.page_layout.setContentsMargins(24, 20, 24, 28)
         self.page_layout.setSpacing(20)
 
-        # 1. 顶部 Header 栏
-        self._build_header()
-
-        # 2. 筛选栏
+        # 1. 筛选栏（含刷新与导出）
         self._build_filter_bar()
 
-        # 3. 4 张 KPI 卡片
+        # 2. 4 张 KPI 卡片
         self._build_kpi_cards()
 
-        # 4. 三个核心分布模块
+        # 3. 三个核心分布模块
         self._build_distribution_modules()
 
-        # 5. 底部 3 Tab 汇总表格
+        # 4. 底部 3 Tab 汇总表格
         self._build_detail_tabs()
 
         self.scroll_area.setWidget(self.page_container)
@@ -684,64 +681,6 @@ class HoldingsDistributionPage(QWidget):
             win.drill_record(meta)
         else:
             self.drill.emit("symbol", meta.get("symbol", ""))
-
-    def _build_header(self):
-        row = QHBoxLayout()
-        left_info = QVBoxLayout()
-        left_info.setSpacing(4)
-
-        title = QLabel("持仓分布")
-        title.setStyleSheet("font-size: 22px; font-weight: 700; color: #17253D;")
-        left_info.addWidget(title)
-
-        sub_row = QHBoxLayout()
-        sub_row.setSpacing(12)
-        desc = QLabel("查看股票、券商渠道及股票分类的仓位结构与变化，分析你的投资组合集中度与配置情况。")
-        desc.setStyleSheet("font-size: 13px; color: #64748B;")
-        sub_row.addWidget(desc)
-
-        db_badge = QLabel("🗄️ 数据来源: money.sqlite3")
-        db_badge.setStyleSheet("font-size: 12px; color: #94A3B8;")
-        sub_row.addWidget(db_badge)
-        sub_row.addStretch()
-        left_info.addLayout(sub_row)
-        row.addLayout(left_info)
-
-        row.addStretch()
-
-        # 刷新与导出按钮
-        refresh_btn = QPushButton("↻ 刷新")
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-size: 12px;
-                color: #334155;
-            }
-            QPushButton:hover { background: #F8FAFC; }
-        """)
-        refresh_btn.clicked.connect(self.update_distribution)
-        row.addWidget(refresh_btn)
-
-        export_btn = QPushButton("⤓ 导出 PNG")
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background: #2563EB;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-size: 12px;
-                font-weight: 600;
-                color: #FFFFFF;
-            }
-            QPushButton:hover { background: #1D4ED8; }
-        """)
-        export_btn.clicked.connect(self.export)
-        row.addWidget(export_btn)
-
-        self.page_layout.addLayout(row)
 
     def _build_filter_bar(self):
         filter_card = QFrame()
@@ -821,6 +760,39 @@ class HoldingsDistributionPage(QWidget):
         row.addWidget(reset_btn)
 
         row.addStretch()
+
+        # 刷新与导出按钮
+        refresh_btn = QPushButton("↻ 刷新")
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 12px;
+                color: #334155;
+            }
+            QPushButton:hover { background: #F8FAFC; }
+        """)
+        refresh_btn.clicked.connect(self.update_distribution)
+        row.addWidget(refresh_btn)
+
+        export_btn = QPushButton("⤓ 导出 PNG")
+        export_btn.setStyleSheet("""
+            QPushButton {
+                background: #2563EB;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #FFFFFF;
+            }
+            QPushButton:hover { background: #1D4ED8; }
+        """)
+        export_btn.clicked.connect(self.export)
+        row.addWidget(export_btn)
+
         self.page_layout.addWidget(filter_card)
 
     def _build_kpi_cards(self):
@@ -1169,35 +1141,49 @@ class HoldingsDistributionPage(QWidget):
             self.table_categories.setRowCount(0)
             return
 
-        # 1. 刷新 4 张 KPI 卡片
+        # 1. 刷新 4 张 KPI 卡片（直接展示变化金额与幅度，无冗余文案）
         # 市值
         chg_sign = "+" if summary.value_change >= 0 else ""
         chg_rate_str = f"({chg_sign}{summary.value_change_rate:.2f}%)" if summary.value_change_rate is not None else ""
         chg_color = "#16A34A" if summary.value_change >= 0 else "#DC2626"
+
+        # 卡片 1：当前股票市值 -> 下方直接展示变化金额与幅度
         self.kpi_mv.set_content(
             f"${summary.current_market_value:,.2f}",
-            f"较上期末: {chg_sign}${summary.value_change:,.2f} {chg_rate_str}",
+            f"{chg_sign}${summary.value_change:,.2f} {chg_rate_str}".strip(),
             chg_color,
         )
 
-        # 变化
+        # 卡片 2：较上期市值变化 -> 下方直接展示变化幅度
+        rate_val_str = f"{chg_sign}{summary.value_change_rate:.2f}%" if summary.value_change_rate is not None else "--"
         self.kpi_change.set_content(
             f"{chg_sign}${summary.value_change:,.2f}",
-            f"本期 ({summary.as_of_label}) - {summary.prev_as_of_label}",
+            rate_val_str,
             chg_color,
         )
 
-        # 标的数
+        # 卡片 3：持仓标的数 -> 下方展示标的数变动及百分比变动
+        cnt_diff = summary.holding_count_change
+        cnt_sign = "+" if cnt_diff > 0 else ""
+        cnt_color = "#16A34A" if cnt_diff > 0 else ("#DC2626" if cnt_diff < 0 else "#64748B")
+        cnt_rate_str = f"({cnt_sign}{summary.holding_count_change_rate:.2f}%)" if summary.holding_count_change_rate is not None else ""
+        cnt_sub = f"{cnt_sign}{cnt_diff} 只 {cnt_rate_str}".strip() if cnt_diff != 0 else "0 只 (0.00%)"
         self.kpi_count.set_content(
             f"{summary.holding_count} 只",
-            "当前有效持仓 (去重 Ticker)",
+            cnt_sub,
+            cnt_color,
         )
 
-        # 集中度
+        # 卡片 4：前五大持仓集中度 -> 下方展示集中度百分点变动及百分比变动
+        conc_diff = summary.top5_concentration_diff_pp
+        conc_sign = "+" if conc_diff > Decimal("0.001") else ""
+        conc_color = "#16A34A" if conc_diff > Decimal("0.001") else ("#DC2626" if conc_diff < Decimal("-0.001") else "#64748B")
+        conc_rate_str = f"({conc_sign}{summary.top5_concentration_change_rate:.2f}%)" if summary.top5_concentration_change_rate is not None else ""
+        conc_sub = f"{conc_sign}{conc_diff:.2f}pp {conc_rate_str}".strip() if abs(conc_diff) >= Decimal("0.001") else "0.00pp (0.00%)"
         self.kpi_conc.set_content(
             f"{summary.top5_concentration:.2f}%",
-            "前五大股票市值 / 总市值",
-            "#2563EB",
+            conc_sub,
+            conc_color,
         )
 
         # 2. 刷新三大分布模块
