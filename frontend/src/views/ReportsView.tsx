@@ -10,7 +10,7 @@ interface ReportsViewProps {
   personId: number | null;
   reportsList: ReportMeta[];
   broker?: string;
-  onBrokerChange?: (broker: string) => void;
+  ticker?: string;
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({
@@ -18,7 +18,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   personId,
   reportsList,
   broker,
-  onBrokerChange,
+  ticker,
 }) => {
   const [currentReport, setCurrentReport] = useState<string>(initialReportName);
   const [reportData, setReportData] = useState<ReportDetailData | null>(null);
@@ -130,7 +130,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   if (currentReport === "今日盈亏") return (
     <ErrorBoundary fallbackTitle="今日盈亏渲染异常">
-      <TodayPnlView personId={personId} channel={broker} onChannelChange={onBrokerChange} />
+      <TodayPnlView personId={personId} channel={broker} ticker={ticker} />
     </ErrorBoundary>
   );
 

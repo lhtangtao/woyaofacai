@@ -42,8 +42,6 @@ class DashboardPage(QWidget):
         self.daily_rows, self.live_day = (), None
         self.cards, self.widgets = [], []
         outer = QVBoxLayout(self)
-        self.dates = QLabel("等待只读计算结果")
-        outer.addWidget(self.dates)
         scroll = QScrollArea()
         self.scroll = scroll
         scroll.setWidgetResizable(True)
@@ -166,7 +164,6 @@ class DashboardPage(QWidget):
 
     def set_analytics(self, analytics):
         self.analytics = analytics
-        self.dates.setText(f"历史估值日：{', '.join(analytics.valuation_days) or '无有效估值'}　历史收益最新日：{analytics.latest_profit_day or '无'}　口径：EXCEL_COMPAT　币种：{analytics.scope.reporting_currency}")
         self.set_metrics(analytics.metrics)
         self.summaries.set_reports(analytics.reports)
     def set_metrics(self, metrics):

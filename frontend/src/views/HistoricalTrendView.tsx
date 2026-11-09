@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api/client";
 
-export function HistoricalTrendView({ personId, initialKind = "month", embedded = false, selectedChannel = "", selectedTicker = "", search = "" }: {
-  personId: number | null; initialKind?: string; embedded?: boolean; selectedChannel?: string; selectedTicker?: string; search?: string;
+export function HistoricalTrendView({ personId, initialKind = "month", embedded = false, selectedChannel = "", selectedTicker = "", search = "", assetBroker = "", assetTicker = "" }: {
+  personId: number | null; initialKind?: string; embedded?: boolean; selectedChannel?: string; selectedTicker?: string; search?: string; assetBroker?: string; assetTicker?: string;
 }) {
   const [kind, setKind] = useState(initialKind);
   const [period, setPeriod] = useState(initialKind === "year" ? new Date().getFullYear().toString() : new Date().toLocaleDateString("sv-SE").slice(0, 7));
@@ -21,7 +21,7 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   const marketDay = useRef("");
   const filterChannels = embedded ? (selectedChannel ? [selectedChannel] : []) : channels;
   const filterTicker = embedded ? selectedTicker : ticker;
-  const requestKey = JSON.stringify([kind, period, mode, filterChannels, filterTicker, personId, search]);
+  const requestKey = JSON.stringify([kind, period, mode, filterChannels, filterTicker, personId, search, assetBroker, assetTicker]);
   const data = dataKey === requestKey ? storedData : null;
   useEffect(() => {
     let active = true;
@@ -43,14 +43,14 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   }, [initialKind]);
   useEffect(() => {
     let active = true;
-    const load = () => { setLoading(true); return api.historicalTrend({ kind, period, mode, channels: filterChannels, ticker: filterTicker, personId, search })
+    const load = () => { setLoading(true); return api.historicalTrend({ kind, period, mode, channels: filterChannels, ticker: filterTicker, personId, search, assetBroker, assetTicker })
       .then((result: any) => { if (active) { setData(result); setDataKey(requestKey); setError(""); } })
       .catch((err: any) => { if (active) { setData(null); setError(err.message || "历史数据读取失败"); } })
       .finally(() => { if (active) setLoading(false); }); };
     load();
     const timer = window.setInterval(load, 60000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [kind, period, mode, JSON.stringify(filterChannels), filterTicker, personId, search, refresh]);
+  }, [kind, period, mode, JSON.stringify(filterChannels), filterTicker, personId, search, assetBroker, assetTicker, refresh]);
   const option = useMemo(() => {
     const points = data?.chart?.series?.[0]?.points || [];
     const valid = points.filter((p: any) => p[1] !== null).map((p: any) => [p[0], Number(p[1])]);

@@ -196,6 +196,7 @@ def build_workspace(self):
     reset.setFixedWidth(34)
     reset.setToolTip("重置全部筛选")
     reset.clicked.connect(self.reset_filters)
+    self.filter_reset = reset
     common.addWidget(reset)
     filters.addLayout(common)
     self.advanced_panel = QWidget()

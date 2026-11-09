@@ -8,7 +8,6 @@ import {
   Layers,
   ArrowRight,
   Filter,
-  Search,
   Download,
   Wallet,
   Activity,
@@ -20,11 +19,9 @@ import { StockDrawer } from "../components/StockDrawer";
 
 interface HoldingsViewProps {
   personId?: number | null;
-  persons?: { id: number; name: string; enabled?: boolean }[];
-  onPersonChange?: (id: number | null) => void;
+  ticker?: string;
   broker?: string;
   refreshKey?: number;
-  onBrokerChange?: (broker: string) => void;
   initialDimension?: "person" | "broker" | "stock";
   initialStatus?: string;
   initialMode?: "dashboard" | "detail";
@@ -40,11 +37,9 @@ type ClosedColumn = [key: string, label: string, format: "text" | "money" | "gai
 
 export const HoldingsView: React.FC<HoldingsViewProps> = ({
   personId,
-  persons = [],
-  onPersonChange,
+  ticker = "",
   broker,
   refreshKey = 0,
-  onBrokerChange,
   initialDimension = "person",
   initialStatus = "持有中",
   initialMode = "dashboard",
@@ -62,7 +57,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const [selectedBroker, setSelectedBroker] = useState<string>(
     broker !== undefined ? broker : initialFilter.broker || ""
   );
-  const [selectedTicker, setSelectedTicker] = useState<string>(initialFilter.ticker || "");
+  const selectedTicker = ticker || initialFilter.ticker || "";
   const [searchKeyword, setSearchKeyword] = useState<string>("");
 
   // Dashboard Data State
@@ -153,7 +148,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const loadDashboard = () => {
     setDashLoading(true);
     api
-      .holdingsDashboard(selectedPersonId)
+      .holdingsDashboard(personId ?? initialFilter.person_id, broker ?? initialFilter.broker, selectedTicker)
       .then((res) => {
         if (res.status === "ok") {
           setDashboardData(res);
@@ -175,8 +170,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       dimension,
       closed_mode: closedMode,
       person_id: selectedPersonId,
-      broker: selectedBroker || undefined,
-      ticker: selectedTicker || undefined,
+      broker: selectedBroker && selectedBroker !== broker ? selectedBroker : undefined,
+      asset_broker: broker || undefined,
+      asset_ticker: selectedTicker || undefined,
       status: statusFilter,
       search: searchKeyword || undefined,
       page_size: 200,
@@ -203,7 +199,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       }
     }).finally(() => {if (active) setDetailLoading(false);});
     return () => {active = false;};
-  }, [viewMode, dimension, selectedPersonId, selectedBroker, selectedTicker, statusFilter, searchKeyword, closedMode, refreshKey]);
+  }, [viewMode, dimension, selectedPersonId, selectedBroker, broker, selectedTicker, statusFilter, searchKeyword, closedMode, refreshKey]);
 
   useEffect(() => {
     setDrawerTicker(null);
@@ -266,15 +262,12 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   const drillToPerson = (pId: number | null) => {
     setSelectedPersonId(pId);
-    if (onPersonChange) onPersonChange(pId);
     setDimension("person");
     setViewMode("detail");
   };
 
   const drillToBroker = (brokerName: string) => {
     setSelectedBroker(brokerName);
-    if (onBrokerChange) onBrokerChange(brokerName);
-    setSelectedTicker("");
     setSearchKeyword("");
     setDimension("broker");
     setDetailPage(1);
@@ -282,9 +275,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   };
 
   const drillToStock = (tk: string) => {
-    setSelectedBroker("");
-    if (onBrokerChange) onBrokerChange("");
-    setSelectedTicker("");
+    setSelectedBroker(broker || "");
     setSearchKeyword(tk);
     setDimension("stock");
     setDetailPage(1);
@@ -477,7 +468,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
     document.body.removeChild(link);
   };
 
-  const enabledPersons = persons.filter((p) => p.enabled !== false);
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto", position: "relative" }}>
@@ -493,25 +483,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           gap: "10px",
         }}
       >
-        {/* Left: Person Filter Dropdown (与前面页面统一的下拉选择框风格) */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <select
-            value={selectedPersonId == null ? "" : String(selectedPersonId)}
-            onChange={(e) => {
-              const val = e.target.value ? Number(e.target.value) : null;
-              setSelectedPersonId(val);
-              if (onPersonChange) onPersonChange(val);
-            }}
-            className="input-control"
-            style={{ fontSize: "13px", padding: "6px 12px", minWidth: "140px", borderRadius: "8px" }}
-          >
-            <option value="">全部启用人员</option>
-            {enabledPersons.map((p) => (
-              <option key={p.id} value={String(p.id)}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-
         {/* Right: View Mode Toggle (仪表板总览 vs 持仓明细页) */}
         <div
           style={{
@@ -1016,39 +987,6 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 )}
               </div>}
 
-              <select
-                aria-label="券商渠道"
-                value={selectedBroker}
-                onChange={(e) => {
-                  setSelectedBroker(e.target.value);
-                  if (onBrokerChange) onBrokerChange(e.target.value);
-                  setDetailPage(1);
-                }}
-                className="input-control"
-                style={{ fontSize: "12px", padding: "5px 10px" }}
-              >
-                <option value="">全部渠道</option>
-                <option value="长桥">长桥</option>
-                <option value="BBAE">BBAE</option>
-                <option value="第一证券">第一证券</option>
-                <option value="嘉信">嘉信</option>
-              </select>
-
-              <div style={{ position: "relative" }}>
-                <Search size={14} style={{ position: "absolute", left: "8px", top: "8px", color: "var(--text-muted)" }} />
-                <input
-                  type="text"
-                  placeholder={statusFilter === "已清仓" && closedMode === "account" ? "搜索券商、账号或股票代码…" : "搜索人员、券商或股票代码…"}
-                  value={searchKeyword}
-                  onChange={(e) => {
-                    setSearchKeyword(e.target.value);
-                    setDetailPage(1);
-                  }}
-                  className="input-control"
-                  style={{ paddingLeft: "28px", fontSize: "12px", width: "190px" }}
-                />
-              </div>
-
               <button onClick={exportDetailCsv} disabled={detailLoading || !totalDetailCount} className="btn btn-quiet" style={{ fontSize: "12px", padding: "5px 10px" }}>
                 <Download size={14} style={{ marginRight: "4px" }} />
                 导出明细
@@ -1258,7 +1196,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       <StockDrawer
         ticker={drawerTicker}
         personId={drawerRow?.person_id ?? selectedPersonId}
-        broker={drawerRow ? null : selectedBroker}
+        assetBroker={selectedBroker}
         accountId={drawerRow?.account_id}
         instrumentId={drawerRow?.instrument_id}
         onClose={() => setDrawerTicker(null)}

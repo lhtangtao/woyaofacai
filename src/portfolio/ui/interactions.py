@@ -34,7 +34,10 @@ class InteractionMixin:
         return self.pages.currentIndex() == 4 and self.performance_page.selector.currentText() in ('每月持仓收益', '每月微操收益', '月度净投入明细')
 
     def fixed_asset_period(self):
-        return self.pages.currentIndex() in (2, 3, 14, 15, 16, 17, 18)
+        return self.pages.currentIndex() in (2, 3, 14, 15, 16, 17, 18, 22)
+
+    def shared_asset_page(self):
+        return self.pages.currentIndex() in (2, 14, 22) or self.today_snapshot()
 
     def today_snapshot(self):
         return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '今日盈亏'
@@ -47,9 +50,14 @@ class InteractionMixin:
 
     def sync_date_granularity(self, *_):
         self.holding_date.setVisible(self.today_snapshot() or self.broker_people_view())
-        self.person.setVisible(not self.broker_people_view())
+        overview = self.pages.currentIndex() == 2
+        only_overview = self.shared_asset_page() and not overview
+        self.person.setVisible(not (only_overview or self.broker_people_view()))
+        for control in (self.accounts, self.stock, self.search, self.advanced_button, self.filter_reset):
+            control.setVisible(not only_overview)
+        self.advanced_panel.setVisible(not only_overview and self.advanced_button.isChecked())
         self.ledger.setEnabled(not self.broker_people_view())
-        self.live_panel.summary.setVisible(not self.broker_people_view())
+        self.live_panel.summary.setVisible(not (overview or self.broker_people_view()))
         self.date_button.setVisible(not self.fixed_asset_period())
         if self.fixed_asset_period():
             self.date_button.menu().hide()
@@ -70,12 +78,14 @@ class InteractionMixin:
         self.date_button.setText(f"{start} – {end}")
         chips = []
         for name in COMBOS:
+            if self.shared_asset_page() and name in ("person", "stock"):
+                continue
             if self.broker_people_view() and name in ('person', 'ledger'):
                 continue
             control = getattr(self, name)
             if control.currentIndex():
                 chips.append((name, control.currentText()))
-        if self.accounts.selected_ids():
+        if self.accounts.selected_ids() and not self.shared_asset_page():
             chips.append(("accounts", self.accounts.text()))
         for name in CHECKS:
             if name == 'start_enabled' and self.fixed_asset_period():
@@ -87,7 +97,7 @@ class InteractionMixin:
             value = getattr(self, name).text().strip()
             if value:
                 chips.append((name, value[:18] + ("…" if len(value) > 18 else "")))
-        self.chips.set_filters(chips)
+        self.chips.set_filters(() if self.today_snapshot() else chips)
 
     def clear_filter(self, name):
         control = getattr(self, name)
@@ -358,10 +368,10 @@ class InteractionMixin:
                 self.asset_page.selector.currentText() in ('今日盈亏', '当前持仓', '实时持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总', '股票归属')
             )
         )
-        self.asset_reset_button.setVisible(is_asset)
+        self.asset_reset_button.setVisible(is_asset and not (page == 14 or self.today_snapshot()))
         if hasattr(self.live_panel, 'trend_tabs'):
             self.live_panel.trend_tabs.setVisible(self.today_snapshot())
-        self.filters_widget.setVisible(page in range(2, 11) or page in (0, 14, 17))
+        self.filters_widget.setVisible(page in range(2, 11) or page in (0, 17))
         if page == 0 and self.current_page:
             self.banner.setText(getattr(self, "_trade_notice", ""))
             self.banner.setVisible(not self.current_page.rows or self.include_reversed.isChecked() or self.include_reference.isChecked())
@@ -376,11 +386,6 @@ class InteractionMixin:
         if page == 18 and hasattr(self, 'monthly_realtime_page'):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             self.monthly_realtime_page.set_analytics(self.analytics)
-        if page == 22 and hasattr(self, 'holdings_page'):
-            self.holdings_page.sync_person_from_main(self.person.currentData())
-            self.holdings_page.sync_broker_from_main(self.accounts.current_broker_name())
-            if self.analytics:
-                self.holdings_page.set_analytics(self.get_holdings_analytics())
         self.ensure_analytics()
         if page == 0 and self.info is not None and (self.current_page is None or self.current_page.scope != self.make_scope()):
             self.refresh()
@@ -402,6 +407,9 @@ class InteractionMixin:
         self._history_index = index
         route, state = self._history[index]
         self._restoring_history = True
+        if route[0] in (2, 14, 22) or route in ((3, "今日盈亏"), (3, "股票归属")):
+            current = self.capture_state()
+            state = {**state, **{key: current[key] for key in ("person", "stock", "accounts")}}
         self.apply_state(state)
         self.navigation.select(*route)
         for page, report in zip((self.asset_page, self.performance_page), state.get("reports", ())):
@@ -428,7 +436,7 @@ class InteractionMixin:
         if not self._filter_batch and self.pages.currentIndex() == 14:
             self.earnings_page.activate()
             return
-        if self._filter_batch or self.info is None or not self.filters_widget.isEnabled() or self.pages.currentIndex() not in (*range(2, 11), 15, 16, 17, 18):
+        if self._filter_batch or self.info is None or not self.filters_widget.isEnabled() or self.pages.currentIndex() not in (*range(2, 11), 15, 16, 17, 18, 22):
             return
         scope = self.make_scope()
         if self.broker_people_view():
@@ -447,6 +455,8 @@ class InteractionMixin:
             self._submit('people', lambda cancel: self.analytics_service.calculate_people(scope, cancel=cancel), self._people_ready)
             return
         if (self.analytics and self.analytics.scope == scope) or self._analytics_scope == scope:
+            if self.analytics and self.analytics.scope == scope and self.pages.currentIndex() == 22:
+                self.holdings_page.set_analytics(self.analytics)
             if self.analytics and self.pages.currentIndex() == 17 and self.top_days_page.analytics is not self.analytics:
                 self.top_days_page.set_analytics(self.analytics)
             if self.analytics and self.pages.currentIndex() == 18 and hasattr(self, 'monthly_realtime_page'):

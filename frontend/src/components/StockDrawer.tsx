@@ -9,11 +9,12 @@ interface StockDrawerProps {
   broker?: string | null;
   accountId?: number;
   instrumentId?: number;
+  assetBroker?: string;
   onClose: () => void;
   className?: string;
 }
 
-export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, broker, accountId, instrumentId, onClose, className="" }) => {
+export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, broker, accountId, instrumentId, assetBroker, onClose, className="" }) => {
   const [activeTab, setActiveTab] = useState<"trades" | "holdings" | "pnl" | "monthly">("trades");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -35,7 +36,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
     setPage(1);
     let active=true;
     api
-      .stockDrawer(ticker, personId, broker || undefined, accountId, instrumentId)
+      .stockDrawer(ticker, personId, broker || undefined, accountId, instrumentId, assetBroker)
       .then((res) => {
         if(!active)return;
         if (res.status === "ok") {
@@ -49,7 +50,7 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
       })
       .finally(() => {if(active)setLoading(false)});
     return()=>{active=false};
-  }, [ticker, personId, broker, accountId, instrumentId]);
+  }, [ticker, personId, broker, accountId, instrumentId, assetBroker]);
 
   if (!ticker) return null;
 

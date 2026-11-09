@@ -296,6 +296,7 @@ class ReportPage(QWidget):
         self.report = self.reports.get(name)
         self.stock_status_filter.setVisible(bool(self.report and name in ('股票汇总', '人员资产') and '当前状态' in self.report.columns))
         is_today = bool(self.report and name == '今日盈亏')
+        self.local_search.setVisible(name != '今日盈亏')
         self.details.setVisible(not is_today)
         self.today_overview.setVisible(is_today)
         trend_mode = getattr(self, 'trend_mode', 0)

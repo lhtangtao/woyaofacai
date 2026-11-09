@@ -457,9 +457,6 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.page_number = 0
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
-        if hasattr(self, "holdings_page"):
-            self.holdings_page.sync_person_from_main(self.person.currentData())
-            self.holdings_page.sync_broker_from_main(self.accounts.current_broker_name())
         if hasattr(self, "daily_performance_page"):
             self.daily_performance_page.sync_person_from_main(self.person.currentData())
             self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
@@ -619,28 +616,6 @@ class MainWindow(InteractionMixin, QMainWindow):
                 page.clear()
             self.reconcile_page.clear("选择 Excel 进行当前范围对账")
 
-    def get_holdings_analytics(self):
-        """Return analytics instance with all-people and all-accounts scope for modern HoldingsPage."""
-        if not self.analytics_service or self.info is None:
-            return None
-        # 如果当前全局 analytics 就是全部启用人员且为全渠道人员账本，直接复用
-        if (
-            self.analytics
-            and getattr(self.analytics, "scope", None)
-            and self.analytics.scope.person_ids is None
-            and self.analytics.scope.account_ids is None
-            and self.analytics.scope.ledger == Ledger.PERSON
-        ):
-            return self.analytics
-        try:
-            from dataclasses import replace
-            base_scope = self.make_scope()
-            all_scope = replace(base_scope, ledger=Ledger.PERSON, person_ids=None, account_ids=None)
-            return self.analytics_service.calculate(all_scope)
-        except Exception as e:
-            logger.warning(f"[持仓管理] 获取全员全渠道分析对象失败，降级复用当前分析对象: {e}")
-            return self.analytics
-
     def preload_people_bundle(self):
         if self.info is None or not self.analytics_service or self.broker_people_view():
             return
@@ -722,8 +697,8 @@ class MainWindow(InteractionMixin, QMainWindow):
                 self.earnings_page.signature = None
                 logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
         self.preload_people_bundle()
-        if hasattr(self, "holdings_page"):
-            self.holdings_page.set_analytics(self.get_holdings_analytics())
+        if self.pages.currentIndex() == 22:
+            self.holdings_page.set_analytics(analytics)
         if hasattr(self, "daily_performance_page"):
             self.daily_performance_page.update_data(analytics)
         if hasattr(self, "monthly_performance_page"):

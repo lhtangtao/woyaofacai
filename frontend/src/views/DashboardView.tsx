@@ -1,23 +1,28 @@
 import React, { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { TrendingUp, TrendingDown, DollarSign, PieChart, ShieldCheck } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, PieChart } from "lucide-react";
 import { api } from "../api/client";
 
 interface DashboardViewProps {
   personId: number | null;
+  broker: string;
+  ticker: string;
+  refreshKey: number;
 }
 
-export const DashboardView: React.FC<DashboardViewProps> = ({ personId }) => {
+export const DashboardView: React.FC<DashboardViewProps> = ({ personId, broker, ticker, refreshKey }) => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = () => {
+  useEffect(() => {
+    let active = true;
     setLoading(true);
     setError(null);
     api
-      .overview(personId)
+      .overview(personId, "USD", broker, ticker)
       .then((res) => {
+        if (!active) return;
         if (res.status === "ok") {
           setData(res);
         } else {
@@ -25,14 +30,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ personId }) => {
         }
       })
       .catch((err) => {
-        setError(err.message || "请求概况出错");
+        if (active) setError(err.message || "请求概况出错");
       })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [personId]);
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [personId, broker, ticker, refreshKey]);
 
   if (loading) {
     return (
@@ -190,26 +192,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ personId }) => {
         </div>
       </div>
 
-      {/* Baseline Verification Notice */}
-      <div
-        style={{
-          background: "var(--table-alternate)",
-          border: "1px solid var(--border-color)",
-          borderRadius: "8px",
-          padding: "10px 14px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          fontSize: "12px",
-          color: "var(--text-muted)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <ShieldCheck size={16} color="#16A34A" />
-          <span>核心财务数据源自 money.sqlite3，与原 Mac 原生桌面端使用相同计算引擎，两端数据完全一致。</span>
-        </div>
-        <span>基准估值日期: {data?.data_asof || data?.as_of || "最新交易日"}</span>
-      </div>
     </div>
   );
 };

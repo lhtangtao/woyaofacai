@@ -3,6 +3,8 @@ import { SystemBootstrap, TradeItem, WatchlistItem, ReportDetailData } from "../
 export interface TodayFilters {
   person_id?: number | null;
   as_of?: string;
+  asset_broker?: string;
+  asset_ticker?: string;
   ticker?: string;
   channel?: string;
   search?: string;
@@ -97,10 +99,12 @@ export const api = {
   bootstrap: () => requestApi<SystemBootstrap>("/api/v1/bootstrap"),
 
   // Portfolio Overview & KPIs
-  overview: (personId?: number | null, currency = "USD") => {
+  overview: (personId?: number | null, currency = "USD", broker = "", ticker = "") => {
     const query = new URLSearchParams();
     if (personId != null) query.set("person_id", String(personId));
     if (currency) query.set("currency", currency);
+    if (broker) query.set("broker", broker);
+    if (ticker) query.set("ticker", ticker);
     return requestApi(`/api/v1/portfolio/overview?${query.toString()}`);
   },
 
@@ -174,21 +178,26 @@ export const api = {
   brokers: () => requestApi("/api/v1/brokers"),
   ownership: () => requestApi("/api/v1/ownership"),
   ownershipAnalysis: (filters: Record<string,string>) => requestApi("/api/v1/ownership?" + new URLSearchParams(filters).toString()),
-  earningsCalendar: (year?: number, month?: number, sortDir?: string) => {
+  earningsCalendar: (year?: number, month?: number, sortDir?: string, personId?: number | null, broker = "", ticker = "") => {
     const query = new URLSearchParams();
     if (year != null) query.set("year", String(year));
     if (month != null) query.set("month", String(month));
     if (sortDir) query.set("sort_dir", sortDir);
+    if (personId != null) query.set("person_id", String(personId));
+    if (broker) query.set("broker", broker);
+    if (ticker) query.set("ticker", ticker);
     return requestApi(`/api/v1/earnings-calendar?${query.toString()}`);
   },
 
   // Charts
   derivedProgress: () => requestApi("/api/v1/system/derived-progress"),
-  historicalTrend: (filters: { kind: string; period: string; mode: string; channels: string[]; ticker: string; personId: number | null; search?: string }) => {
+  historicalTrend: (filters: { kind: string; period: string; mode: string; channels: string[]; ticker: string; personId: number | null; search?: string; assetBroker?: string; assetTicker?: string }) => {
     const query = new URLSearchParams({ kind: filters.kind, period: filters.period, mode: filters.mode });
     if (filters.personId != null) query.set("person_id", String(filters.personId));
     if (filters.ticker) query.set("ticker", filters.ticker);
     if (filters.search) query.set("search", filters.search);
+    if (filters.assetBroker) query.set("asset_broker", filters.assetBroker);
+    if (filters.assetTicker) query.set("asset_ticker", filters.assetTicker);
     filters.channels.forEach(channel => query.append("channel", channel));
     return requestApi(`/api/v1/charts/history?${query.toString()}`);
   },
@@ -283,10 +292,11 @@ export const api = {
     }),
 
   // Unified Holdings Management
-  holdingsDashboard: (person_id?: number | null, broker?: string) => {
+  holdingsDashboard: (person_id?: number | null, broker?: string, ticker?: string) => {
     const params = new URLSearchParams();
     if (person_id != null) params.set("person_id", String(person_id));
     if (broker) params.set("broker", broker);
+    if (ticker) params.set("ticker", ticker);
     const q = params.size ? `?${params}` : "";
     return requestApi(`/api/v1/holdings/dashboard${q}`);
   },
@@ -296,6 +306,8 @@ export const api = {
     person_id?: number | null;
     broker?: string;
     ticker?: string;
+    asset_broker?: string;
+    asset_ticker?: string;
     status?: string;
     search?: string;
     page?: number;
@@ -307,12 +319,13 @@ export const api = {
     });
     return requestApi(`/api/v1/holdings/detail?${query.toString()}`);
   },
-  stockDrawer: (ticker: string, person_id?: number | null, broker?: string, accountId?: number, instrumentId?: number) => {
+  stockDrawer: (ticker: string, person_id?: number | null, broker?: string, accountId?: number, instrumentId?: number, assetBroker?: string) => {
     const query = new URLSearchParams({ ticker });
     if (person_id != null) query.set("person_id", String(person_id));
     if (broker) query.set("broker", broker);
     if (accountId != null) query.set("account_id", String(accountId));
     if (instrumentId != null) query.set("instrument_id", String(instrumentId));
+    if (assetBroker) query.set("asset_broker", assetBroker);
     return requestApi(`/api/v1/holdings/stock_drawer?${query.toString()}`);
   },
 

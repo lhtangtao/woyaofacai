@@ -644,6 +644,7 @@ class HoldingsPage(QWidget):
         self.person_filter.setMinimumWidth(136)
         self.person_filter.changed.connect(self._on_person_filter_changed)
         top_bar.addWidget(self.person_filter)
+        self.person_filter.hide()
         top_bar.addStretch(1)
 
         # Right: Mode Switcher (仪表板总览 vs 持仓明细页)
@@ -909,6 +910,7 @@ class HoldingsPage(QWidget):
         self.broker_combo.addItem("嘉信", "嘉信")
         self.broker_combo.currentIndexChanged.connect(self._on_broker_combo_changed)
         detail_bar.addWidget(self.broker_combo)
+        self.broker_combo.hide()
 
         # Search input
         self.search_input = QLineEdit()
@@ -916,6 +918,7 @@ class HoldingsPage(QWidget):
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._on_filter_changed)
         detail_bar.addWidget(self.search_input)
+        self.search_input.hide()
 
         detail_bar.addStretch()
 
@@ -990,22 +993,11 @@ class HoldingsPage(QWidget):
                 self.person_filter.addItem(p["name"], p["id"])
 
         # 优先与主窗口全局人员筛选状态联动对齐
-        if self._selected_person_filter is None and self.main_window and hasattr(self.main_window, "person"):
-            p_val = self.main_window.person.currentData()
-            if isinstance(p_val, int):
-                self._selected_person_filter = p_val
-
         if self._selected_person_filter is not None:
             self.person_filter.set_person_id(self._selected_person_filter)
         else:
             self.person_filter.reset()
         self.person_filter.blockSignals(False)
-
-        # 首次初始化时也与主窗口全局渠道筛选状态联动对齐
-        if self.main_window and hasattr(self.main_window, "accounts"):
-            b_name = self.main_window.accounts.current_broker_name()
-            if b_name:
-                self.sync_broker_from_main(b_name)
 
     def _on_person_filter_changed(self):
         p_id = self.person_filter.currentData()
@@ -1014,70 +1006,18 @@ class HoldingsPage(QWidget):
             self.refresh_dashboard()
         else:
             self.refresh_detail()
-        # 双向联动：反向同步给主窗口全局人员筛选器
-        if not getattr(self, "_syncing_person", False) and self.main_window:
-            if hasattr(self.main_window, "sync_person_from_holdings"):
-                self.main_window.sync_person_from_holdings(p_id)
-
     def _on_broker_combo_changed(self, *_):
         if self.view_mode == "dashboard":
             self.refresh_dashboard()
         else:
             self.refresh_detail()
-        # 双向联动：反向同步给主窗口全局渠道筛选器
-        if not getattr(self, "_syncing_broker", False) and self.main_window:
-            broker_name = self.broker_combo.currentData() or ""
-            if hasattr(self.main_window, "sync_broker_from_holdings"):
-                self.main_window.sync_broker_from_holdings(broker_name)
-
-    def sync_person_from_main(self, person_id: int | None):
-        """主窗口全局人员变更时，同步更新持仓管理的人员下拉框。"""
-        if getattr(self, "_syncing_person", False):
-            return
-        if self._selected_person_filter == person_id:
-            return
-        self._syncing_person = True
-        try:
-            self._selected_person_filter = person_id
-            self.person_filter.blockSignals(True)
-            self.person_filter.set_person_id(person_id)
-            self.person_filter.blockSignals(False)
-            if self.view_mode == "dashboard":
-                self.refresh_dashboard()
-            else:
-                self.refresh_detail()
-        finally:
-            self._syncing_person = False
-
-    def sync_broker_from_main(self, broker_name: str | None):
-        """主窗口全局渠道变更时，同步更新持仓管理的渠道下拉框。"""
-        if getattr(self, "_syncing_broker", False):
-            return
-        clean = (broker_name or "").strip()
-        curr_b = self.broker_combo.currentData() or ""
-        if curr_b == clean:
-            return
-        self._syncing_broker = True
-        try:
-            idx = self.broker_combo.findData(clean)
-            if idx < 0 and clean:
-                idx = self.broker_combo.findText(clean)
-            self.broker_combo.blockSignals(True)
-            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
-            self.broker_combo.blockSignals(False)
-            if self.view_mode == "dashboard":
-                self.refresh_dashboard()
-            else:
-                self.refresh_detail()
-        finally:
-            self._syncing_broker = False
-
     def switch_view_mode(self, mode: str):
         self.view_mode = mode
         self.mode_dash_btn.setChecked(mode == "dashboard")
         self.mode_detail_btn.setChecked(mode == "detail")
         self.stack.setCurrentIndex(0 if mode == "dashboard" else 1)
         if mode == "dashboard":
+            self.clear_detail_filters()
             self.refresh_dashboard()
         else:
             self.refresh_detail()
@@ -1153,7 +1093,18 @@ class HoldingsPage(QWidget):
         total_mv = float(cards.get("total_market_value") or 0)
         self.dist_donut.set_data(total_mv, dist)
 
+    def clear_detail_filters(self):
+        self._selected_person_filter = None
+        for control, reset in ((self.person_filter, self.person_filter.reset),
+                               (self.broker_combo, lambda: self.broker_combo.setCurrentIndex(0)),
+                               (self.search_input, self.search_input.clear)):
+            blocked = control.blockSignals(True)
+            reset()
+            control.blockSignals(blocked)
+
     def set_analytics(self, analytics):
+        if self.analytics is not None and self.analytics.scope != analytics.scope:
+            self.clear_detail_filters()
         self.analytics = analytics
         if self.person_filter.count() <= 1:
             self._populate_persons()

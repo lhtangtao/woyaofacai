@@ -1,33 +1,36 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Calendar, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 
-export const EarningsView: React.FC = () => {
+export const EarningsView: React.FC<{ personId: number | null; broker: string; ticker: string; refreshKey: number }> = ({ personId, broker, ticker, refreshKey }) => {
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth() + 1);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const requestId = useRef(0);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const fetchCalendar = (y: number, m: number, dir = sortDir) => {
+    const id = ++requestId.current;
     setLoading(true);
     api
-      .earningsCalendar(y, m, dir)
+      .earningsCalendar(y, m, dir, personId, broker, ticker)
       .then((res: any) => {
+        if (id !== requestId.current) return;
         if (res.status === "ok") {
           setData(res);
           if (res.sort_dir) setSortDir(res.sort_dir as "asc" | "desc");
         }
       })
       .catch((err) => console.error("Failed to load earnings calendar:", err))
-      .finally(() => setLoading(false));
+      .finally(() => { if (id === requestId.current) setLoading(false); });
   };
 
   useEffect(() => {
     fetchCalendar(year, month, sortDir);
-  }, [year, month]);
+  }, [year, month, personId, broker, ticker, refreshKey]);
 
   const handleToggleSort = () => {
     const newDir = sortDir === "desc" ? "asc" : "desc";

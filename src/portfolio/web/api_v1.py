@@ -126,6 +126,32 @@ def get_user_query_scope(as_of: Optional[date] = None, currency: str = "USD", pe
     )
 
 
+def asset_filter_scope(service, scope, *, broker_param="broker", ticker_param="ticker"):
+    from portfolio.db.connection import readonly_connection
+
+    from portfolio.services.holdings_management_service import CHANNEL_LABELS
+
+    broker = (request.args.get(broker_param) or "").strip()
+    ticker = (request.args.get(ticker_param) or "").strip().upper()
+    if not broker and not ticker:
+        return scope
+    with readonly_connection(service.path) as connection:
+        if broker:
+            code = next((code for code, label in CHANNEL_LABELS.items() if label == broker), broker)
+            rows = connection.execute(
+                "SELECT id FROM broker_accounts WHERE broker_code=? COLLATE NOCASE OR display_name=?",
+                (code, broker),
+            )
+            scope = replace(scope, account_ids=tuple(row[0] for row in rows) or (-99999,))
+        if ticker:
+            rows = connection.execute(
+                "SELECT id FROM instruments WHERE upper(symbol)=? OR upper(symbol || '.' || market)=?",
+                (ticker, ticker),
+            )
+            scope = replace(scope, instrument_ids=tuple(row[0] for row in rows) or (-99999,))
+    return scope
+
+
 def get_current_user_scope() -> Tuple[Optional[int], Optional[str]]:
     ctx: AuthContext = getattr(g, "auth_context", None)
     if not ctx or ctx.is_lan_viewer() or ctx.is_admin():
@@ -275,7 +301,7 @@ def api_portfolio_overview():
         svc = get_analytics_service()
         person_id = request.args.get("person_id", type=int)
         currency = request.args.get("currency", "USD")
-        scope = get_user_query_scope(currency=currency, person_id=person_id)
+        scope = asset_filter_scope(svc, get_user_query_scope(currency=currency, person_id=person_id))
 
         res = svc.calculate(scope)
         from portfolio.services.overview_metrics import overview_metrics
@@ -380,7 +406,9 @@ def today_payload(*, include_curve=True):
     scope = get_user_query_scope(as_of=selected, person_id=request.args.get("person_id", type=int))
     # Whole-security search preserves all cost history, exactly as native global search.
     scope = replace(scope, search=(request.args.get("search") or "").strip())
-    return get_today_service().snapshot(
+    service = get_today_service()
+    scope = asset_filter_scope(service, scope, broker_param="asset_broker", ticker_param="asset_ticker")
+    return service.snapshot(
         scope, ticker=(request.args.get("ticker") or "").strip(),
         channel=request.args.get("channel") or None,
         enabled=request.args.get("live", "1") != "0",
@@ -417,6 +445,7 @@ def api_saved_today_curve():
         scope=get_user_query_scope(as_of=selected,person_id=request.args.get('person_id',type=int))
         scope=replace(scope,search=(request.args.get('search') or '').strip())
         service=get_today_service()
+        scope=asset_filter_scope(service, scope, broker_param="asset_broker", ticker_param="asset_ticker")
         _,days,halves,_=service.store.load(now)
         if selected==today:scope=replace(scope,as_of=market_trade_day(now,days,halves))
         context=SimpleNamespace(scope=scope,trading_days=tuple(d.isoformat() for d in sorted(days)))
@@ -443,9 +472,9 @@ def api_holdings_dashboard():
         from portfolio.services.holdings_management_service import HoldingsManagementService
         svc = get_analytics_service()
         person_id = request.args.get("person_id", type=int)
-        scope = get_user_query_scope(person_id=person_id)
+        scope = asset_filter_scope(svc, get_user_query_scope(person_id=person_id))
         analytics = svc.calculate(scope)
-        data = HoldingsManagementService.get_dashboard_data(analytics, scope, person_id=person_id, broker=request.args.get("broker") or None)
+        data = HoldingsManagementService.get_dashboard_data(analytics, scope, person_id=person_id)
         return jsonify(status="ok", **data)
     except Exception as e:
         logger.exception("Holdings dashboard error")
@@ -471,7 +500,8 @@ def api_holdings_detail():
         if page < 1 or page_size < 1 or closed_mode not in ("person", "account"):
             return jsonify(status="error", message="无效的持仓明细参数"), 400
 
-        scope = get_user_query_scope(person_id=person_id)
+        scope = asset_filter_scope(svc, get_user_query_scope(person_id=person_id),
+                                   broker_param="asset_broker", ticker_param="asset_ticker")
         analytics = svc.calculate(scope)
         if status == "已清仓" and closed_mode == "account":
             report = get_today_service().closed_report(analytics)
@@ -518,7 +548,8 @@ def api_holdings_stock_drawer():
         svc = get_analytics_service()
         person_id = request.args.get("person_id", type=int)
         broker = request.args.get("broker") or None
-        scope = get_user_query_scope(person_id=person_id)
+        scope = asset_filter_scope(svc, get_user_query_scope(person_id=person_id),
+                                   broker_param="asset_broker", ticker_param="asset_ticker")
         analytics = svc.calculate(scope)
         data = HoldingsManagementService.get_stock_drawer_data(
             str(svc.path), analytics, ticker, person_id=person_id, broker=broker,
@@ -1061,21 +1092,28 @@ def api_earnings_calendar():
 
         svc = get_earnings_service()
         a_svc = get_analytics_service()
-        res = a_svc.calculate(get_user_query_scope())
-        holdings_symbols = []
-        if "当前持仓" in res.reports:
-            holdings_symbols = [r.values[2] for r in res.reports["当前持仓"].rows if r.values[2]]
+        from portfolio.db.connection import readonly_connection
+        from portfolio.db.repositories.analytics import instrument_catalog
+        from portfolio.services.earnings_service import holding_targets
 
+        scope = asset_filter_scope(a_svc, get_user_query_scope())
+        res = a_svc.calculate(scope)
+        with readonly_connection(a_svc.path) as connection:
+            targets = holding_targets(res, instrument_catalog(connection), {})
+
+        target_symbols = {target for target, _ in targets.values()}
         events_data = []
         try:
-            cached_events = svc.get_cached(DATABASE_PATH, year, month, ("US",))
+            cached_events = svc.get_cached(a_svc.path, year, month, ("US",), max_age_seconds=None)
             if cached_events:
-                for ev in cached_events:
+                for ev in cached_events.events:
+                    if ev.symbol not in target_symbols:
+                        continue
                     events_data.append({
                         "symbol": ev.symbol if hasattr(ev, "symbol") else getattr(ev, "ticker", ""),
                         "company_name": getattr(ev, "name", ""),
-                        "date": serialize_val(getattr(ev, "date", "")),
-                        "market_session": getattr(ev, "session", "盘前"),
+                        "date": serialize_val(ev.day),
+                        "market_session": ev.time_label,
                         "estimated_eps": serialize_val(getattr(ev, "estimate_eps", None)),
                         "actual_eps": serialize_val(getattr(ev, "actual_eps", None)),
                         "status": getattr(ev, "status", "待发布"),
@@ -2199,6 +2237,7 @@ def api_shared_history():
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
         scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
         scope=replace(scope,start_date=None,search=request.args.get("search", ""))
+        scope=asset_filter_scope(get_analytics_service(), scope, broker_param="asset_broker", ticker_param="asset_ticker")
         quotes=desktop_quote_store();quotes.source=DATABASE_PATH
         from portfolio.services.derived_store import DerivedStore
         if not DerivedStore(DATABASE_PATH).readiness()['ready']:

@@ -34,6 +34,7 @@ export const App: React.FC = () => {
   // Filter States (Unified across all Asset Management views)
   const [selectedPersonId, setSelectedPersonId] = useState<number | null>(null);
   const [selectedBroker, setSelectedBroker] = useState<string>("");
+  const [selectedTicker, setSelectedTicker] = useState("");
   const [assetResetKey, setAssetResetKey] = useState(0);
   const [ownershipRefresh,setOwnershipRefresh]=useState(0);
 
@@ -141,6 +142,7 @@ export const App: React.FC = () => {
     const personalId = bootstrap?.persons?.find((person) => person.name === "个人")?.id ?? null;
     setSelectedPersonId(isolatedId ?? personalId);
     setSelectedBroker("");
+    setSelectedTicker("");
     setAssetResetKey((key) => key + 1);
   };
 
@@ -262,10 +264,11 @@ export const App: React.FC = () => {
           onGoBack={goBack}
           onGoForward={goForward}
           onRefresh={handleRefresh}
-          onResetFilters={assetRoute ? resetAssetFilters : undefined}
+          onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
           dbName={bootstrap?.database?.name || "money.sqlite3"}
           user={bootstrap?.user || null}
-          hidePersonSelector={currentRoute === "ownership" || currentRoute === "trades"}
+          hidePersonSelector={currentRoute === "trades" || (assetRoute && currentRoute !== "overview") ||
+            ["people", "brokers", "reports:当前持仓", "reports:股票汇总"].includes(currentRoute)}
           persons={bootstrap?.persons || []}
           currentPersonId={selectedPersonId}
           onPersonChange={setSelectedPersonId}
@@ -276,7 +279,23 @@ export const App: React.FC = () => {
         {/* Dynamic Route Body */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
           <ErrorBoundary fallbackTitle="页面视图渲染异常">
-            {currentRoute === "overview" && <DashboardView key={assetResetKey} personId={selectedPersonId} />}
+            {currentRoute === "overview" && <>
+              <form key={assetResetKey} className="card-panel" style={{ display: "flex", gap: 8, marginBottom: 12, padding: 12, flexWrap: "wrap" }}
+                onSubmit={event => {
+                  event.preventDefault();
+                  const form = new FormData(event.currentTarget);
+                  setSelectedTicker(String(form.get("ticker") || "").trim().toUpperCase());
+                }}>
+                <select className="input-control" aria-label="券商渠道" value={selectedBroker} onChange={event => setSelectedBroker(event.target.value)}>
+                  <option value="">全部渠道</option>
+                  {[...new Set([...(bootstrap?.accounts || []), ...(selectedBroker ? [selectedBroker] : [])])].map(channel =>
+                    <option key={channel} value={channel}>{channel}</option>)}
+                </select>
+                <input name="ticker" className="input-control" aria-label="股票代码" placeholder="全部股票（输入 Ticker）" defaultValue={selectedTicker} />
+                <button className="btn" type="submit">应用股票筛选</button>
+              </form>
+              <DashboardView personId={selectedPersonId} broker={selectedBroker} ticker={selectedTicker} refreshKey={refreshKey} />
+            </>}
 
             {currentRoute === "trades" && (
               <TradesView
@@ -291,10 +310,8 @@ export const App: React.FC = () => {
                 key={`${currentRoute}:${assetResetKey}`}
                 refreshKey={refreshKey}
                 personId={selectedPersonId}
-                onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
-                persons={bootstrap?.persons || []}
+                ticker={selectedTicker}
                 initialMode={currentRoute === "holdings:closed" ? "detail" : "dashboard"}
                 initialStatus={currentRoute === "holdings:closed" ? "已清仓" : "持有中"}
               />
@@ -303,10 +320,8 @@ export const App: React.FC = () => {
               <HoldingsView
                 key={`open:${assetResetKey}`}
                 personId={selectedPersonId}
-                onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
-                persons={bootstrap?.persons || []}
+                ticker={selectedTicker}
                 initialMode="detail"
                 initialStatus="持有中"
               />
@@ -315,10 +330,8 @@ export const App: React.FC = () => {
               <HoldingsView
                 key={`stock:${assetResetKey}`}
                 personId={selectedPersonId}
-                onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
-                persons={bootstrap?.persons || []}
+                ticker={selectedTicker}
                 initialMode="detail"
                 initialDimension="stock"
               />
@@ -327,10 +340,8 @@ export const App: React.FC = () => {
               <HoldingsView
                 key={`people:${assetResetKey}`}
                 personId={selectedPersonId}
-                onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
-                persons={bootstrap?.persons || []}
+                ticker={selectedTicker}
                 initialMode="detail"
                 initialDimension="person"
               />
@@ -339,10 +350,8 @@ export const App: React.FC = () => {
               <HoldingsView
                 key={`brokers:${assetResetKey}`}
                 personId={selectedPersonId}
-                onPersonChange={setSelectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
-                persons={bootstrap?.persons || []}
+                ticker={selectedTicker}
                 initialMode="detail"
                 initialDimension="broker"
               />
@@ -390,7 +399,7 @@ export const App: React.FC = () => {
                 initialReportName={currentRoute.replace("reports:", "")}
                 personId={selectedPersonId}
                 broker={selectedBroker}
-                onBrokerChange={setSelectedBroker}
+                ticker={selectedTicker}
                 reportsList={(bootstrap?.reports || []).filter(r => r.name !== "月度净投入明细")}
               />
             )}
@@ -399,7 +408,7 @@ export const App: React.FC = () => {
 
             {currentRoute === "ownership" && (bootstrap?.user?.can_view_ownership ? <OwnershipAnalysisView refresh={ownershipRefresh} reset={ownershipReset} /> : <div role="alert">当前设备或账号无权访问股票归属与成本分析。</div>)}
 
-            {currentRoute === "earnings" && <EarningsView key={assetResetKey} />}
+            {currentRoute === "earnings" && <EarningsView personId={selectedPersonId} broker={selectedBroker} ticker={selectedTicker} refreshKey={refreshKey} />}
 
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}

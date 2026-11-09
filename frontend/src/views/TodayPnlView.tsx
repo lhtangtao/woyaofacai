@@ -25,22 +25,14 @@ const order = [0, 1, 2, 9, 3, 4, 12, 11, 13, 5, 6, 10, 7, 8];
 export const TodayPnlView: React.FC<{
   personId: number | null;
   channel?: string;
-  onChannelChange?: (channel: string) => void;
-}> = ({ personId, channel: propChannel, onChannelChange }) => {
+  ticker?: string;
+}> = ({ personId, channel: sharedChannel = "", ticker = "" }) => {
   const [curveKind, setCurveKind] = useState("day");
   const [day, setDay] = useState(beijingDate);
-  const [ticker, setTicker] = useState("");
-  const [channel, setChannel] = useState(propChannel || "");
-
-  useEffect(() => {
-    if (propChannel !== undefined) {
-      setChannel(propChannel);
-    }
-  }, [propChannel]);
-
-  const handleChannelChange = (val: string) => {
-    setChannel(val);
-    if (onChannelChange) onChannelChange(val);
+  const [localChannel, setLocalChannel] = useState("");
+  const channel = localChannel;
+  const handleChannelChange = (value: string) => {
+    if (!sharedChannel) setLocalChannel(value);
   };
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -56,10 +48,10 @@ export const TodayPnlView: React.FC<{
   const [savedCurveKey, setSavedCurveKey] = useState("");
   const [curveError, setCurveError] = useState("");
   const generation = useRef(0);
-  const filters: TodayFilters = { person_id: personId, as_of: day, ticker, channel, search,
+  const filters: TodayFilters = { person_id: personId, as_of: day, asset_ticker: ticker, asset_broker: sharedChannel, channel, search,
     live: live ? "1" : "0", sort_col: sort.col, sort_dir: sort.dir };
   const key = todayQuery(filters);
-  const curveKey = JSON.stringify([personId, day, channel, ticker, search]);
+  const curveKey = JSON.stringify([personId, day, sharedChannel, channel, ticker, search]);
   useEffect(() => {
     const controller = new AbortController();
     let busy = false;
@@ -156,13 +148,6 @@ export const TodayPnlView: React.FC<{
     <div className="card-panel today-toolbar">
       <label>持仓日期 <input aria-label="持仓日期" type="date" className="input-control" value={day} max={beijingDate()}
         onChange={e => { if (e.target.value) setDay(e.target.value); }} /></label>
-      <label>渠道 <select aria-label="渠道" className="input-control" value={channel} onChange={e => handleChannelChange(e.target.value)}>
-        <option value="">全部渠道</option>
-        {[...new Set([...(snapshot?.available_channels || []), ...(channel ? [channel] : [])])].map(c => <option key={c}>{c}</option>)}
-      </select></label>
-      <input className="input-control" aria-label="Ticker 筛选" placeholder="输入 Ticker 自动提示 / 模糊筛选…"
-        list="today-tickers" value={ticker} onChange={e => setTicker(e.target.value)} />
-      <datalist id="today-tickers">{(snapshot?.tickers || []).map(t => <option key={t} value={t} />)}</datalist>
       <form onSubmit={e => { e.preventDefault(); setSearch(searchDraft.trim()); }}>
         <input className="input-control" aria-label="组合搜索" placeholder="组合搜索：Ticker、渠道、人员…" value={searchDraft}
           onChange={e => setSearchDraft(e.target.value)} /> <button className="btn">搜索</button>
@@ -171,7 +156,7 @@ export const TodayPnlView: React.FC<{
         onChange={e => { const p = presets[Number(e.target.value)]; if (p) setSort({ col: p[1], dir: p[2] }); }}>
         <option value={-1}>自定义排序</option>{presets.map((p, i) => <option key={p[0]} value={i}>{p[0]}</option>)}
       </select>
-      <button className="btn" onClick={() => { setChannel(""); setTicker(""); setSearch(""); setSearchDraft(""); }}>清除筛选</button>
+      <button className="btn" onClick={() => { setLocalChannel(""); setSearch(""); setSearchDraft(""); }}>清除筛选</button>
       <button className="btn" onClick={() => setRefresh(v => v + 1)} disabled={loading}>刷新</button>
       <a className="btn" href={`/api/v1/export/report/${encodeURIComponent("今日盈亏")}?${key}`}>导出 CSV</a>
     </div>
@@ -200,7 +185,7 @@ export const TodayPnlView: React.FC<{
       {[["day", "当日走势"], ["month", "当月"], ["year", "当年"]].map(([value, label]) =>
         <button key={value} role="tab" aria-selected={curveKind === value} className="btn" onClick={() => setCurveKind(value)}>{label}</button>)}
     </div>
-    {curveKind !== "day" ? <HistoricalTrendView key={curveKind} personId={personId} initialKind={curveKind} embedded selectedChannel={channel} selectedTicker={ticker} search={search} /> : <section className="card-panel today-curve" aria-label="当日盈亏走势图">
+    {curveKind !== "day" ? <HistoricalTrendView key={curveKind} personId={personId} initialKind={curveKind} embedded selectedChannel={channel} assetBroker={sharedChannel} assetTicker={ticker} search={search} /> : <section className="card-panel today-curve" aria-label="当日盈亏走势图">
       <h3>当日全部交易盈亏五分钟走势（含当日清仓，USD） · {curve?.day || day}</h3>
       {curveError && <p role="alert" className="today-warning">{curveError}</p>}
       {curve?.fallback && <p className="today-warning">所选日期 {curve.target_day} 非美股交易日，已回溯至 {curve.day}</p>}
@@ -244,7 +229,7 @@ export const TodayPnlView: React.FC<{
         {snapshot?.channels.filter(c => c.asset == null).map(c => <p key={c.channel} className="today-warning">{c.channel}：持仓市值数据缺失</p>)}
         <table className="finance-table"><thead><tr><th>当前范围</th><th>当日盈亏</th><th>持仓市值</th></tr></thead>
           <tbody>{snapshot?.selected_channels.map(c => <tr key={c.channel}><td>{c.channel}</td><td>{money(c.pnl)}</td><td>{money(c.asset)}</td></tr>)}</tbody></table>
-        {channel && <button className="btn" onClick={() => handleChannelChange("")}>恢复全部渠道</button>}
+        {localChannel && !sharedChannel && <button className="btn" onClick={() => handleChannelChange("")}>恢复当前范围的全部渠道</button>}
       </div>
     </section>
     <p className="today-note">{snapshot?.note || "正在读取今日盈亏，缺报价或基准的指标保持未知。"}</p>

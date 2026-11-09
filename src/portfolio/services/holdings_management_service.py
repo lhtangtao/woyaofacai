@@ -65,6 +65,23 @@ CLOSED_ACCOUNT_COLUMNS = (
 CHANNEL_LABELS = {"LONGBRIDGE": "长桥", "FIRSTRADE": "第一证券", "SCHWAB": "嘉信"}
 
 
+def _match_broker(broker_filter: str | None, channel: str | None = None, code: str | None = None) -> bool:
+    """中英文券商名称与代码双向容错匹配"""
+    if not broker_filter:
+        return True
+    bf = broker_filter.strip().casefold()
+    ch = (channel or "").strip().casefold()
+    cd = (code or "").strip().casefold()
+    lbl = CHANNEL_LABELS.get((code or "").upper(), "").casefold()
+    rev = ""
+    for k, v in CHANNEL_LABELS.items():
+        if v.casefold() == bf or k.casefold() == bf:
+            rev = k.casefold()
+            break
+    candidates = {c for c in (ch, cd, lbl, rev) if c}
+    return any(bf in c or c in bf for c in candidates)
+
+
 def closed_columns(mode):
     return CLOSED_ACCOUNT_COLUMNS if mode == "account" else CLOSED_PERSON_COLUMNS
 
@@ -943,7 +960,7 @@ class HoldingsManagementService:
             and (person_id is None or r.metadata.get("person_id") == person_id)
             and (account_id is None or r.metadata.get("account_id") == account_id)
             and (instrument_id is None or r.metadata.get("instrument_id") == instrument_id)
-            and (broker is None or (r.values[1] and broker.upper() in r.values[1].upper()))
+            and _match_broker(broker, r.values[1], r.metadata.get("broker_code"))
         ]
 
         active_rows = [r for r in pa_rows if r.values[4] == "持有中"]
@@ -997,15 +1014,20 @@ class HoldingsManagementService:
 
         # 2. Tab 1: 交易记录 (11 Columns)
         ts = TradesService(source_path)
-        scoped_drawer = account_id is not None or instrument_id is not None
+        scoped_drawer = account_id is not None or instrument_id is not None or scope.account_ids is not None or scope.instrument_ids is not None
         person_ids = scope.person_ids
         if person_id is not None:
             person_ids = (person_id,) if person_ids is None or person_id in person_ids else (-99999,)
         if scoped_drawer:
+            def narrow(ids, selected):
+                if selected is None:
+                    return ids
+                return (selected,) if ids is None or selected in ids else (-99999,)
+
             trade_scope = replace(
                 scope, as_of=as_of, start_date=None, search=ticker,
-                account_ids=(account_id,) if account_id is not None else scope.account_ids,
-                instrument_ids=(instrument_id,) if instrument_id is not None else scope.instrument_ids,
+                account_ids=narrow(scope.account_ids, account_id),
+                instrument_ids=narrow(scope.instrument_ids, instrument_id),
                 person_ids=person_ids,
             )
         else:
@@ -1021,7 +1043,7 @@ class HoldingsManagementService:
                 matched_trades.extend(ts.get_trades(trade_scope, size=1000, page=page).rows)
         matched_trades = [
             row for row in matched_trades if (row.values[3] or "").upper() == ticker
-            and (scoped_drawer or not broker or broker.upper() in (row.values[1] or "").upper())
+            and (scoped_drawer or _match_broker(broker, row.metadata.get("display_name"), row.values[1]))
         ]
 
         trade_records = []
