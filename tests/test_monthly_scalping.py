@@ -303,3 +303,29 @@ def test_monthly_scalping_drawer_and_interactions(app, demo_path):
 
         page.filter_by_ticker(sym)
         assert page.active_ranking_ticker == ""
+
+
+def test_monthly_scalping_open_stock_replay(app, demo_path):
+    """测试点击交易回放/双击行能够正常触发 open_stock_replay 并发射 drill 信号"""
+    service = AnalyticsService(demo_path)
+    scope = QueryScope(as_of=date.today(), ledger=Ledger.PERSON)
+    analytics = service.calculate(scope)
+
+    page = MonthlyScalpingPage()
+    page.show()
+    page.update_data(analytics)
+    page.activate()
+
+    emitted = []
+    page.drill.connect(lambda kind, sym, extra: emitted.append((kind, sym, extra)))
+
+    if page.raw_rows:
+        row = list(page.table_model.all_rows[0])
+        sym = str(row[3])
+        m = str(row[0])
+        # 测试直接调用 open_stock_replay
+        page.open_stock_replay(sym, month=m)
+        assert len(emitted) == 1
+        assert emitted[0][0] == "drill_trades"
+        assert emitted[0][1] == sym
+        assert emitted[0][2]["month"] == m

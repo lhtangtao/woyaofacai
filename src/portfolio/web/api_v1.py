@@ -39,7 +39,7 @@ from portfolio.services.ai_service import CodexAIService as AIService
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.charts_service import build_charts, rank_chart
 from portfolio.services.earnings_service import EarningsService
-from portfolio.services.monitor_store import MonitorRule, MonitorStore
+from portfolio.services.monitor_store import BASIS, MonitorRule, MonitorStore
 from portfolio.services.notification_service import notification_service
 from portfolio.services.trades_service import TradesService
 from portfolio.web.security.audit import record_audit_event
@@ -1286,51 +1286,75 @@ def api_charts_ranking():
 @require_capability(CAP_VIEW_MARKET)
 def api_monitoring_watchlist():
     """Retrieve monitored symbols, live quotes, and technical indicators."""
+    from portfolio.services.monitor_service import key_for, observation_sources
+
     store = get_monitor_store()
-    if not store:
-        return jsonify({"status": "error", "message": "监控数据库未配置"}), 404
-
     try:
-        with store.connect() as db:
-            targets = db.execute("SELECT DISTINCT analysis_symbol FROM watch_targets ORDER BY analysis_symbol").fetchall()
-            result = []
-            for row in targets:
-                sym = row[0]
-                ms_row = db.execute("SELECT payload FROM market_state WHERE analysis_symbol=?", (sym,)).fetchone()
-                ic_row = db.execute("SELECT payload FROM indicator_cache WHERE analysis_symbol=?", (sym,)).fetchone()
+        scope = get_user_query_scope()
+        path = str(get_analytics_service().path)
+        symbols = {source["analysis_symbol"] for source in observation_sources(path, scope)}
+        manual = set()
+        market = {}
+        metrics = {}
+        if store:
+            with store.connect() as db:
+                for target in db.execute(
+                    """SELECT scope_key, analysis_symbol, source_type FROM watch_targets
+                       WHERE archive_state='HELD' AND (scope_key=? OR (scope_key='PORTFOLIO' AND source_type='MANUAL'))""",
+                    (key_for(path, scope),),
+                ):
+                    symbols.add(target["analysis_symbol"])
+                    if target["scope_key"] == "PORTFOLIO":
+                        manual.add(target["analysis_symbol"])
+                ordered = sorted(symbols)
+                for start in range(0, len(ordered), 400):
+                    chunk = ordered[start:start + 400]
+                    placeholders = ",".join("?" for _ in chunk)
+                    for symbol, payload in db.execute(
+                        f"SELECT analysis_symbol,payload FROM market_state WHERE analysis_symbol IN ({placeholders})", chunk
+                    ):
+                        market[symbol] = json.loads(payload)
+                    for symbol, payload in db.execute(
+                        f"SELECT analysis_symbol,payload FROM indicator_cache WHERE basis=? AND analysis_symbol IN ({placeholders})",
+                        (BASIS, *chunk),
+                    ):
+                        metrics[symbol] = json.loads(payload)
 
-                ms = json.loads(ms_row[0]) if ms_row else {}
-                m = json.loads(ic_row[0]) if ic_row else {}
-                quote = ms.get("quote", {})
-                price = quote.get("price")
-                prev_close = quote.get("prev_close")
-                change_pct = "—"
-                if price and prev_close:
-                    try:
-                        p_f = float(price)
-                        pc_f = float(prev_close)
-                        change_pct = f"{((p_f - pc_f) / pc_f) * 100:+.2f}%"
-                    except Exception:
-                        pass
+        result = []
+        for sym in sorted(symbols):
+            ms = market.get(sym, {})
+            m = metrics.get(sym, {})
+            quote = ms.get("quote", {})
+            price = quote.get("price")
+            prev_close = quote.get("prev_close")
+            change_pct = "—"
+            if price and prev_close:
+                try:
+                    p_f = float(price)
+                    pc_f = float(prev_close)
+                    change_pct = f"{((p_f - pc_f) / pc_f) * 100:+.2f}%"
+                except Exception:
+                    pass
 
-                clean_sym = sym.removesuffix(".US")
-                result.append({
-                    "symbol": clean_sym,
-                    "full_symbol": sym,
-                    "price": price or "—",
-                    "change": change_pct,
-                    "day": ms.get("bar_date", "—"),
-                    "ma5": m.get("MA5"),
-                    "ma10": m.get("MA10"),
-                    "ma20": m.get("MA20"),
-                    "ma50": m.get("MA50"),
-                    "ma200": m.get("MA200"),
-                    "rsi": m.get("RSI14"),
-                    "trend_short": m.get("SHORT", "—"),
-                    "trend_medium": m.get("MEDIUM", "—"),
-                    "trend_long": m.get("LONG", "—"),
-                    "cross": m.get("CROSS", "—"),
-                })
+            clean_sym = sym.removesuffix(".US")
+            result.append({
+                "symbol": clean_sym,
+                "full_symbol": sym,
+                "manual": sym in manual,
+                "price": price or "—",
+                "change": change_pct,
+                "day": ms.get("bar_date", "—"),
+                "ma5": m.get("MA5"),
+                "ma10": m.get("MA10"),
+                "ma20": m.get("MA20"),
+                "ma50": m.get("MA50"),
+                "ma200": m.get("MA200"),
+                "rsi": m.get("RSI14"),
+                "trend_short": m.get("SHORT", "—"),
+                "trend_medium": m.get("MEDIUM", "—"),
+                "trend_long": m.get("LONG", "—"),
+                "cross": m.get("CROSS", "—"),
+            })
         return jsonify({"status": "ok", "items": result, "count": len(result)})
     except Exception as e:
         logger.exception("Monitoring watchlist error")
@@ -1341,18 +1365,23 @@ def api_monitoring_watchlist():
 @require_capability(CAP_MANAGE_RULES)
 def api_monitoring_watchlist_add():
     """Add a stock symbol to manual watchlist."""
-    store = get_monitor_store()
-    if not store:
-        return jsonify({"status": "error", "message": "监控数据库未配置"}), 404
+    from portfolio.services.monitor_service import manual_symbols
+    from portfolio.web.app import get_monitor_store as open_monitor_store
 
     data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
-    if not symbol:
-        return jsonify({"status": "error", "message": "请输入股票代码"}), 400
+    text = data.get("symbol") if isinstance(data, dict) else None
+    if not isinstance(text, str):
+        return jsonify(status="error", message="请输入股票代码。"), 400
+    try:
+        symbols = manual_symbols(text)
+    except ValueError as error:
+        return jsonify(status="error", message=str(error)), 400
 
-    target_sym = symbol if symbol.endswith(".US") else f"{symbol}.US"
-    store.add_manual_target("PORTFOLIO", target_sym)
-    return jsonify({"status": "ok", "message": f"标的 {symbol} 已加入观察列表"})
+    store = open_monitor_store(create=True)
+    if not store:
+        return jsonify(status="error", message="监控数据库未配置"), 404
+    store.add_manual_targets("PORTFOLIO", symbols)
+    return jsonify(status="ok", message=f"已添加 {len(symbols)} 个自选标的")
 
 
 @api_v1.route("/monitoring/watchlist/delete", methods=["POST"])
@@ -1363,11 +1392,19 @@ def api_monitoring_watchlist_delete():
     if not store:
         return jsonify({"status": "error", "message": "监控数据库未配置"}), 404
 
+    from portfolio.services.monitor_mapping import normalize
+
     data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
-    target_sym = symbol if symbol.endswith(".US") else f"{symbol}.US"
-    store.remove_manual_target("PORTFOLIO", target_sym)
-    return jsonify({"status": "ok", "message": f"标的 {symbol} 已从自选列表移除"})
+    text = data.get("symbol") if isinstance(data, dict) else None
+    if not isinstance(text, str):
+        return jsonify(status="error", message="请输入股票代码。"), 400
+    try:
+        symbol = normalize(text, "US")
+    except ValueError as error:
+        return jsonify(status="error", message=str(error)), 400
+    if not store.remove_manual_target("PORTFOLIO", symbol):
+        return jsonify(status="error", message="该标的不在手动自选列表中。"), 404
+    return jsonify(status="ok", message=f"标的 {symbol} 已移除手动自选")
 
 
 @api_v1.route("/monitoring/rules", methods=["GET"])

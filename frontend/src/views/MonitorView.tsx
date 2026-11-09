@@ -13,11 +13,12 @@ import {
 import { api } from "../api/client";
 import { WatchlistItem } from "../types";
 
-export const MonitorView: React.FC = () => {
+export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   const [items, setItems] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [newSymbol, setNewSymbol] = useState("");
   const [adding, setAdding] = useState(false);
+  const [watchlistError, setWatchlistError] = useState("");
 
   // Tab state
   const [tab, setTab] = useState<"watchlist" | "alerts">("watchlist");
@@ -38,6 +39,7 @@ export const MonitorView: React.FC = () => {
 
   const fetchWatchlist = () => {
     setLoading(true);
+    setWatchlistError("");
     api
       .monitoringWatchlist()
       .then((res) => {
@@ -45,7 +47,7 @@ export const MonitorView: React.FC = () => {
           setItems(res.items || []);
         }
       })
-      .catch((err) => console.error("Failed to load watchlist:", err))
+      .catch(() => setWatchlistError("观察列表读取失败，请刷新后重试。"))
       .finally(() => setLoading(false));
   };
 
@@ -94,7 +96,7 @@ export const MonitorView: React.FC = () => {
   };
 
   const handleAddSymbol = async () => {
-    if (!newSymbol.trim()) return;
+    if (!canWrite || adding || !newSymbol.trim()) return;
     setAdding(true);
     try {
       await api.addWatchlist(newSymbol.trim().toUpperCase());
@@ -263,24 +265,25 @@ export const MonitorView: React.FC = () => {
 
         {tab === "watchlist" ? (
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <input
+            {canWrite && <><input
               type="text"
-              placeholder="输入代码 (如 NVDA.US)"
+              placeholder="如 NVDA, AAPL, TSLA"
+              aria-label="自选股票代码，可用逗号或空格分隔"
               value={newSymbol}
               onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
               onKeyDown={(e) => e.key === "Enter" && handleAddSymbol()}
               className="input-control"
-              style={{ width: "160px" }}
+              style={{ width: "200px" }}
             />
             <button
               onClick={handleAddSymbol}
-              disabled={adding}
+              disabled={adding || !newSymbol.trim()}
               className="btn btn-primary"
               style={{ height: "32px" }}
             >
               <Plus size={14} />
-              <span>添加标的</span>
-            </button>
+              <span>添加自选股票</span>
+            </button></>}
 
             <button onClick={openRules} className="btn" style={{ height: "32px" }}>
               <Bell size={14} />
@@ -303,6 +306,8 @@ export const MonitorView: React.FC = () => {
       </div>
 
       {tab === "watchlist" ? (
+        <>
+        {watchlistError && <p role="status">{watchlistError}</p>}
         /* Main Watchlist Table (Matching desktop monitor_table with UN-TRUNCATED MAs) */
         <div className="table-container">
           <table className="finance-table">
@@ -329,7 +334,7 @@ export const MonitorView: React.FC = () => {
               {items.length === 0 ? (
                 <tr>
                   <td colSpan={14} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
-                    {loading ? "正在加载行情技术面指标..." : "暂无监控标的，请在上方添加"}
+                    {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
               ) : (
@@ -338,7 +343,7 @@ export const MonitorView: React.FC = () => {
                   const isDown = row.change?.startsWith("-");
 
                   return (
-                    <tr key={row.symbol}>
+                    <tr key={row.full_symbol}>
                       {/* 标的 */}
                       <td style={{ fontWeight: 700, color: "var(--text-heading)" }}>
                         {row.symbol}
@@ -409,7 +414,7 @@ export const MonitorView: React.FC = () => {
                       <td style={{ textAlign: "center" }}>
                         <div style={{ display: "inline-flex", gap: "4px" }}>
                           <button
-                            onClick={() => openKline(row.symbol)}
+                            onClick={() => openKline(row.full_symbol)}
                             className="btn btn-quiet"
                             style={{ padding: "3px 6px", fontSize: "11px" }}
                             title="查看专业 K 线图"
@@ -417,14 +422,14 @@ export const MonitorView: React.FC = () => {
                             <LineChart size={13} />
                             <span>K线</span>
                           </button>
-                          <button
-                            onClick={() => handleDeleteSymbol(row.symbol)}
+                          {canWrite && row.manual && <button
+                            onClick={() => handleDeleteSymbol(row.full_symbol)}
                             className="btn btn-quiet"
                             style={{ padding: "3px 6px", color: "var(--loss-color)" }}
                             title="从监控中移除"
                           >
                             <Trash2 size={13} />
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>

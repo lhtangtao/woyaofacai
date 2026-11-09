@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from portfolio.domain.models import Ledger, QueryScope, TradeFilters, TradePage, TradeRow, TradeStats, from_e8
@@ -130,6 +131,17 @@ def _base_query(scope: QueryScope, filters: TradeFilters | None = None, *, fees_
         if filters.include_reference is False:
             where.append("(t.id IS NULL OR t.accounting_role='ACCOUNT_LEDGER')" if person else "t.accounting_role='ACCOUNT_LEDGER'")
     return query + " WHERE " + " AND ".join(where), values
+
+
+def purchased_instruments(connection, scope: QueryScope):
+    """List real market buys across the full authorized history."""
+    scope = replace(scope, start_date=None, search="", audit=False)
+    query, params = _base_query(scope, all_currencies=True)
+    return connection.execute(
+        f"""SELECT DISTINCT symbol, market, category, instrument_name, account_id, person_id
+            FROM ({query}) WHERE side='BUY' AND kind='MARKET_TRADE' AND quantity_e8>0""",
+        params,
+    ).fetchall()
 
 
 def query_trades(connection, scope: QueryScope, *, page=0, size=200, sort_column=0, descending=True, filters=None):

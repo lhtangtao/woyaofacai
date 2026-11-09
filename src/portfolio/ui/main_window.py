@@ -782,7 +782,14 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.navigation.setCurrentRow(0)
 
     @batch_drill
-    def drill_chart(self, kind, key):
+    def drill_chart(self, kind, key, *args):
+        if kind in ("drill_trades", "replay"):
+            extra = args[0] if args and isinstance(args[0], dict) else {}
+            symbol = key or extra.get("symbol", "")
+            month = extra.get("month", "")
+            if hasattr(self, "monthly_scalping_page"):
+                self.monthly_scalping_page.open_stock_replay(symbol, month=month)
+            return
         if kind == "live_day":
             self.holding_date.setDate(QDate.currentDate())
             self.navigation.select(3, "今日盈亏")

@@ -4,13 +4,14 @@ import hashlib
 import threading
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
+import re
 from zoneinfo import ZoneInfo
 
 from portfolio.domain.live_quotes import us_session
 from portfolio.domain.monitor_rules import AlertEvent, MonitorRule, RuntimeState
 from portfolio.domain.technical_indicators import DailyBar, deviation, technicals
 from portfolio.services.live_quotes import _SDK_VALUES_LOCK, create_context
-from portfolio.services.monitor_mapping import normalize, resolve
+from portfolio.services.monitor_mapping import Mapping, normalize, resolve
 from portfolio.services.monitor_store import BASIS
 from portfolio.services.notification_service import notification_service
 from portfolio.services.rule_evaluator import RuleEvaluator
@@ -62,6 +63,42 @@ def holding_sources(analytics, instruments, overrides):
                 )
             )
     return sources
+
+
+def observation_sources(path, scope, holdings=(), *, cancel=None):
+    """Keep existing mappings and add each purchased ticker itself."""
+    from portfolio.db.connection import readonly_connection
+    from portfolio.db.repositories.trades import purchased_instruments
+
+    by_position = {(s["held_symbol"], s["market"], s["account_id"], s["person_id"]): s for s in holdings}
+    sources = {(s["analysis_symbol"], *key): s for key, s in by_position.items()}
+    with readonly_connection(path, cancel=cancel) as connection:
+        purchases = purchased_instruments(connection, scope)
+    for row in purchases:
+        market = (row["market"] or "").upper()
+        if not market:
+            continue
+        try:
+            symbol = normalize(row["symbol"], market)
+        except ValueError:
+            continue
+        key = (symbol, market, row["account_id"], row["person_id"])
+        current = by_position.get(key)
+        sources.setdefault((symbol, *key), {
+            **Mapping(symbol, symbol, product_name=row["instrument_name"] or "").record(),
+            "market": market, "account_id": row["account_id"], "person_id": row["person_id"],
+            "quantity": current["quantity"] if current else None,
+            "holding_status": current["holding_status"] if current else "历史买入",
+            "history_only": current is None,
+        })
+    return list(sources.values())
+
+
+def manual_symbols(text, market="US"):
+    symbols = tuple(dict.fromkeys(normalize(token, market) for token in re.split(r"[\s,，;；]+", text.strip()) if token))
+    if not symbols:
+        raise ValueError("请输入至少一个股票代码。")
+    return symbols
 
 
 class LongbridgeMonitorProvider:

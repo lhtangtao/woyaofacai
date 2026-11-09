@@ -367,7 +367,7 @@ def get_trades_service() -> TradesService:
     return _trades_svc
 
 
-def get_monitor_store() -> Optional[MonitorStore]:
+def get_monitor_store(*, create=False) -> Optional[MonitorStore]:
     global _monitor_store
     if _monitor_store is not None:
         return _monitor_store
@@ -385,6 +385,9 @@ def get_monitor_store() -> Optional[MonitorStore]:
                 return st
             except Exception as e:
                 logger.warning(f"Failed to open {p}: {e}")
+    if create:
+        _monitor_store = MonitorStore(candidates[0])
+        return _monitor_store
     return None
 
 

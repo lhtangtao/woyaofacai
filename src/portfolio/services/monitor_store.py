@@ -175,25 +175,40 @@ class MonitorStore:
         Preserve manual watch targets (source_type == 'MANUAL').
         """
         stamp = now.isoformat()
+        automatic_types = {}
+        for source in sources:
+            key = source["analysis_symbol"], source["market"]
+            if not source.get("history_only"):
+                automatic_types[key] = "HOLDING"
+            else:
+                automatic_types.setdefault(key, "HISTORY")
         with self.connect() as db:
             # Only mark non-manual holdings as NOT_HELD
             db.execute(
                 "UPDATE watch_targets SET archive_state='NOT_HELD' WHERE scope_key=? AND (source_type != 'MANUAL' OR source_type IS NULL)",
                 (scope_key,),
             )
-            for symbol, market in {(s["analysis_symbol"], s["market"]) for s in sources}:
+            db.execute(
+                """DELETE FROM watch_sources WHERE scope_key=? AND EXISTS (
+                    SELECT 1 FROM watch_targets t WHERE t.scope_key=watch_sources.scope_key
+                    AND t.analysis_symbol=watch_sources.analysis_symbol AND t.market=watch_sources.market
+                    AND t.source_type='MANUAL')""", (scope_key,),
+            )
+            for (symbol, market), source_type in automatic_types.items():
                 db.execute(
                     "DELETE FROM watch_sources WHERE scope_key=? AND analysis_symbol=? AND market=?",
                     (scope_key, symbol, market),
                 )
-            for source in sources:
-                symbol, market = source["analysis_symbol"], source["market"]
                 db.execute(
                     """INSERT INTO watch_targets (scope_key, analysis_symbol, market, alerts_enabled, archive_state, source_type, created_at, last_synced_at)
-                    VALUES(?,?,?,0,'HELD','HOLDING',?,?)
-                    ON CONFLICT(scope_key,analysis_symbol,market) DO UPDATE SET archive_state='HELD', source_type='HOLDING', last_synced_at=excluded.last_synced_at""",
-                    (scope_key, symbol, market, stamp, stamp),
+                    VALUES(?,?,?,0,'HELD',?,?,?)
+                    ON CONFLICT(scope_key,analysis_symbol,market) DO UPDATE SET archive_state='HELD',
+                    source_type=CASE WHEN watch_targets.source_type='MANUAL' THEN 'MANUAL' ELSE excluded.source_type END,
+                    last_synced_at=excluded.last_synced_at""",
+                    (scope_key, symbol, market, source_type, stamp, stamp),
                 )
+            for source in sources:
+                symbol, market = source["analysis_symbol"], source["market"]
                 db.execute(
                     "INSERT INTO watch_sources VALUES(?,?,?,?,?,?,?)",
                     (
@@ -210,26 +225,41 @@ class MonitorStore:
 
     def add_manual_target(self, scope_key: str, symbol: str, market: str = "US") -> bool:
         """Manually add an unheld stock to watch targets."""
-        stamp = datetime.now(timezone.utc).isoformat()
         clean_symbol = symbol.strip().upper()
         if not clean_symbol:
             return False
+        self.add_manual_targets(scope_key, (clean_symbol,), market)
+        return True
+
+    def add_manual_targets(self, scope_key: str, symbols, market: str = "US"):
+        stamp = datetime.now(timezone.utc).isoformat()
         with self.connect() as db:
-            db.execute(
+            db.executemany(
                 """INSERT INTO watch_targets (scope_key, analysis_symbol, market, alerts_enabled, archive_state, source_type, created_at, last_synced_at)
                 VALUES(?,?,?,0,'HELD','MANUAL',?,?)
                 ON CONFLICT(scope_key,analysis_symbol,market) DO UPDATE SET archive_state='HELD', source_type='MANUAL', last_synced_at=excluded.last_synced_at""",
-                (scope_key, clean_symbol, market.upper(), stamp, stamp),
+                ((scope_key, symbol, market.upper(), stamp, stamp) for symbol in symbols),
             )
-        return True
 
     def remove_manual_target(self, scope_key: str, symbol: str, market: str = "US") -> bool:
         """Remove a manual target or archive it."""
         with self.connect() as db:
-            db.execute(
+            key = (scope_key, symbol, market)
+            sources = db.execute(
+                "SELECT payload FROM watch_sources WHERE scope_key=? AND analysis_symbol=? AND market=?", key
+            ).fetchall()
+            if sources:
+                source_type = "HISTORY" if all(json.loads(row[0]).get("history_only") for row in sources) else "HOLDING"
+                return bool(db.execute(
+                    """UPDATE watch_targets SET source_type=? WHERE scope_key=? AND analysis_symbol=? AND market=?
+                       AND source_type='MANUAL'""", (source_type, *key)
+                ).rowcount)
+            removed = db.execute(
                 "DELETE FROM watch_targets WHERE scope_key=? AND analysis_symbol=? AND market=? AND source_type='MANUAL'",
-                (scope_key, symbol, market),
-            )
+                key,
+            ).rowcount
+            if not removed:
+                return False
             # Also deactivate rules on this symbol
             db.execute(
                 "UPDATE monitor_rules SET enabled=0 WHERE scope_key=? AND analysis_symbol=?",

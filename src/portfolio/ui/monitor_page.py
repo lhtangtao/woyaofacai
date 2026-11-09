@@ -52,6 +52,8 @@ from portfolio.services.monitor_service import (
     MonitorService,
     holding_sources,
     key_for,
+    manual_symbols,
+    observation_sources,
 )
 from portfolio.services.monitor_store import MonitorStore
 from portfolio.services.notification_service import notification_service
@@ -103,7 +105,7 @@ class AddStockDialog(QDialog):
         form.addRow("交易市场:", self.market_combo)
         layout.addLayout(form)
 
-        hint = QLabel("提示：添加后将纳入技术指标计算与监控观察列表，默认不创建监控规则。")
+        hint = QLabel("可输入多个代码，用逗号或空格分隔。添加后进入观察列表。")
         hint.setStyleSheet("color: #64748B; font-size: 12px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -115,18 +117,16 @@ class AddStockDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self.symbol = ""
+        self.symbols = ()
         self.market = "US"
 
     def _accept(self):
-        sym = self.symbol_input.text().strip().upper()
-        if not sym:
-            QMessageBox.warning(self, "输入错误", "请输入有效的股票代码！")
-            return
-        if "." not in sym:
-            sym = f"{sym}.US"
-        self.symbol = sym
         self.market = self.market_combo.currentData()
+        try:
+            self.symbols = manual_symbols(self.symbol_input.text(), self.market)
+        except ValueError as error:
+            QMessageBox.warning(self, "输入错误", str(error))
+            return
         self.accept()
 
 
@@ -291,13 +291,13 @@ class MonitoringPage(QWidget):
         toolbar.setSpacing(10)
 
         self.owner = QComboBox()
-        self.owner.addItems(["仅本人持仓", "全部账户持仓（所有人）"])
+        self.owner.addItems(["仅本人买入与持仓", "全部人员买入与持仓"])
         toolbar.addWidget(self.owner)
 
         self.accounts = AccountFilter()
         toolbar.addWidget(self.accounts)
 
-        self.sync_button = QPushButton("同步持仓")
+        self.sync_button = QPushButton("同步观察标的")
         self.sync_button.setStyleSheet("font-weight: 500;")
         toolbar.addWidget(self.sync_button)
 
@@ -339,7 +339,7 @@ class MonitoringPage(QWidget):
             stats.addWidget(panel)
         root.addLayout(stats)
 
-        self.notice = label("从当前持仓自动导入；新规则默认暂停，仅在程序打开时监控。")
+        self.notice = label("自动同步当前持仓和历史买入；新规则默认暂停，仅在程序打开时监控。")
         self.notice.setStyleSheet("color: #64748B; font-size: 12px;")
         root.addWidget(self.notice)
 
@@ -853,13 +853,16 @@ class MonitoringPage(QWidget):
             self.service = MonitorService(cache, LongbridgeMonitorProvider(credential))
 
         service = self.service
-        self.notice.setText("正在只读计算当前持仓并同步技术观察列表…")
+        self.notice.setText("正在读取当前持仓和历史买入，更新观察列表…")
 
         def task(cancel):
             analytics = analytics_service.calculate(scope, cancel=cancel)
             if cancel.is_set():
                 return None
-            sources = holding_sources(analytics, instruments, service.store.overrides(namespace))
+            holdings = holding_sources(analytics, instruments, service.store.overrides(namespace))
+            sources = observation_sources(path, scope, holdings, cancel=cancel)
+            if cancel.is_set():
+                return None
             targets = service.store.sync(key, sources, datetime.now(ZoneInfo("Asia/Shanghai")))
             market = service.load(targets, cancel, network=False)
             return targets, market
@@ -1029,6 +1032,8 @@ class MonitoringPage(QWidget):
 
             if target.get("archive_state") != "HELD":
                 source_label = "已不再持有（保留配置）"
+            elif target.get("source_type") == "HISTORY":
+                source_label = "历史买入"
 
             act_rules = rule_counts.get(symbol, 0)
             rules_badge = f"{act_rules}条" if act_rules > 0 else "无"
@@ -1167,7 +1172,9 @@ class MonitoringPage(QWidget):
         sources = target.get("sources", [])
         is_manual = (target.get("source_type") == "MANUAL")
 
-        if is_manual:
+        if target.get("source_type") == "HISTORY":
+            source_desc = "历史买入标的"
+        elif is_manual:
             source_desc = "手动添加自选股票"
         else:
             source_desc = "；".join(
@@ -1621,7 +1628,7 @@ class MonitoringPage(QWidget):
             return
         dialog = AddStockDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.store.add_manual_target(self.scope_key, dialog.symbol, dialog.market)
+            self.store.add_manual_targets(self.scope_key, dialog.symbols, dialog.market)
             self.activate(force=True)
 
     def _on_remove_stock(self):
@@ -1631,12 +1638,12 @@ class MonitoringPage(QWidget):
         if not target:
             return
         if target.get("source_type") != "MANUAL":
-            QMessageBox.information(self, "无法移除", "该标的来自真实持仓自动同步，不可直接手动移除；清仓后将自动归入“已不再持有”。")
+            QMessageBox.information(self, "无法移除", "该标的来自持仓或历史买入记录，自动同步时会保留。")
             return
         reply = QMessageBox.question(
             self,
             "确认移除",
-            f"确定要从观察列表中移除自选标的【{self.selected}】吗？关联规则将自动停用。",
+            f"移除【{self.selected}】的手动自选？自动同步的标的会保留，完全移出观察列表的标的将停用关联规则。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:

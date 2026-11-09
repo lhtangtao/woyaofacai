@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -1734,7 +1735,8 @@ class MonthlyScalpingPage(QWidget):
             # 双击进入交易回放
             sym = str(row_data[3])
             m = str(row_data[0])
-            self.drill.emit("drill_trades", sym, {"month": m, "symbol": sym})
+            broker = str(row_data[1]) if len(row_data) > 1 else ""
+            self.open_stock_replay(sym, month=m, broker=broker)
 
     def open_drawer(self, row: List[Any]):
         self.drawer_title.setText(f"{row[3]} 微操详情")
@@ -1796,7 +1798,8 @@ class MonthlyScalpingPage(QWidget):
         """)
         sym = str(row[3])
         m = str(row[0])
-        btn_replay.clicked.connect(lambda: self.drill.emit("drill_trades", sym, {"month": m, "symbol": sym}))
+        broker = str(row[1]) if len(row) > 1 else ""
+        btn_replay.clicked.connect(lambda: self.open_stock_replay(sym, month=m, broker=broker))
         self.drawer_list_layout.addWidget(btn_replay)
         self.drawer_list_layout.addStretch()
 
@@ -1807,6 +1810,98 @@ class MonthlyScalpingPage(QWidget):
         self.drawer_frame.show()
         self.drawer_overlay.raise_()
         self.drawer_frame.raise_()
+
+    def open_stock_replay(self, sym: str, month: str = "", broker: str = ""):
+        """打开该标的的完整交易回放抽屉弹窗（含走势图、买卖点、11列交易记录与月度表现）"""
+        from portfolio.services.holdings_management_service import HoldingsManagementService
+        from portfolio.ui.holdings_page import StockDrawerWidget
+
+        host = self.window()
+        src_path = str(getattr(getattr(host, "service", None), "path", "")) or "数据库/money.sqlite3"
+        analytics = self.analytics or getattr(host, "analytics", None)
+
+        person_id = self.applied_person
+        if person_id is None and self.person_combo.currentIndex() > 0:
+            person_id = self.person_combo.currentData()
+        if person_id is None and host and hasattr(host, "person"):
+            person_id = host.person.currentData()
+
+        broker_name = broker or (self.broker_combo.currentText() if self.broker_combo.currentIndex() > 0 else None)
+        if broker_name in ("全部渠道", ""):
+            broker_name = None
+
+        def show_detail(data):
+            if not data:
+                return
+            dialog = QDialog(self)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            title_text = f"交易回放 · {sym}" + (f" · {month}" if month else "")
+            dialog.setWindowTitle(title_text)
+            dialog.setStyleSheet("QDialog { background-color: #F8FAFC; }")
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(16, 14, 16, 16)
+            layout.setSpacing(10)
+
+            top_bar = QHBoxLayout()
+            desc = f"标的代码：<b style='color:#1E293B;'>{sym}</b>"
+            if month:
+                desc += f"&nbsp;&nbsp;·&nbsp;&nbsp;观察月份：<span style='color:#2563EB; font-weight:600;'>{month}</span>"
+            if broker_name:
+                desc += f"&nbsp;&nbsp;·&nbsp;&nbsp;券商渠道：<span style='color:#475569;'>{broker_name}</span>"
+            lbl_info = QLabel(desc)
+            lbl_info.setStyleSheet("font-size: 13px; color: #334155;")
+            top_bar.addWidget(lbl_info)
+            top_bar.addStretch()
+
+            btn_go_trades = QPushButton("在全量「交易明细」中查看 →")
+            btn_go_trades.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_go_trades.setStyleSheet("""
+                QPushButton {
+                    background: #FFFFFF; color: #2563EB; font-weight: 600; font-size: 12px;
+                    border: 1px solid #BFDBFE; border-radius: 6px; padding: 6px 14px;
+                }
+                QPushButton:hover { background: #EFF6FF; border-color: #93C5FD; }
+            """)
+
+            def go_trade_center():
+                dialog.close()
+                self.close_drawer()
+                if host and hasattr(host, "trade_center"):
+                    host.trade_center.fields["symbol"].setText(sym)
+                    host.trade_center.query()
+                if host and hasattr(host, "navigation"):
+                    host.navigation.setCurrentRow(0)
+
+            btn_go_trades.clicked.connect(go_trade_center)
+            top_bar.addWidget(btn_go_trades)
+            layout.addLayout(top_bar)
+
+            drawer = StockDrawerWidget(dialog)
+            drawer.setMaximumWidth(16777215)
+            drawer.set_data(data)
+            drawer.closed.connect(dialog.close)
+            layout.addWidget(drawer, 1)
+
+            dialog.resize(980, 720)
+            dialog.show()
+
+        if host and hasattr(host, "_submit"):
+            host._submit(
+                f"scalping_stock_replay_{sym}",
+                lambda cancel: HoldingsManagementService.get_stock_drawer_data(
+                    src_path, analytics, sym, person_id=person_id if isinstance(person_id, int) else None,
+                    broker=broker_name,
+                ),
+                show_detail
+            )
+        else:
+            data = HoldingsManagementService.get_stock_drawer_data(
+                src_path, analytics, sym, person_id=person_id if isinstance(person_id, int) else None,
+                broker=broker_name,
+            )
+            show_detail(data)
+
+        self.drill.emit("drill_trades", sym, {"month": month, "symbol": sym})
 
     def close_drawer(self):
         self.drawer_overlay.hide()
