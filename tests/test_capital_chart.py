@@ -3,6 +3,7 @@ from decimal import Decimal as D
 
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent
+from PySide6.QtWidgets import QSizePolicy
 
 from portfolio.domain.analytics import Report, ReportRow
 from portfolio.domain.models import QueryScope
@@ -101,6 +102,9 @@ def test_capital_kpi_cards_calculation_and_sparklines(qtbot):
     assert "↘" in page.card_diff.badge.text()
     assert "-10.0%" in page.card_diff.badge.text()
     assert len(page.card_market_val.sparkline.points_data) == 2
+    # 验证折线图拉长：最小宽度 >= 140 且支持横向自适应伸展
+    assert page.card_market_val.sparkline.minimumWidth() >= 140
+    assert page.card_market_val.sparkline.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
 
 
 def test_capital_filter_card_interactions_and_chips(qtbot):
@@ -114,6 +118,9 @@ def test_capital_filter_card_interactions_and_chips(qtbot):
     assert not hasattr(fc, "btn_advanced")
     # 验证多余的 db_label 哈希标识彻底不展示
     assert not hasattr(page, "db_label")
+    # 验证红框内的图表切换下拉框已隐藏
+    page.show_chart()
+    assert not page.selector.isVisible()
 
     # 测试人员 Chips 标签同步
     assert fc.chip_person.isVisible()

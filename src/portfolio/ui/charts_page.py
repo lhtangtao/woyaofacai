@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -50,8 +51,9 @@ class SparklineWidget(QWidget):
         self.fill = fill
         self.points_data = []
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setFixedHeight(44)
-        self.setMinimumWidth(80)
+        self.setFixedHeight(48)
+        self.setMinimumWidth(160)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_data(self, points):
         self.points_data = [float(v) for v in points if v is not None]
@@ -63,7 +65,7 @@ class SparklineWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
-        pad_x, pad_y = 4.0, 4.0
+        pad_x, pad_y = 6.0, 5.0
         draw_w = w - pad_x * 2
         draw_h = h - pad_y * 2
 
@@ -207,12 +209,12 @@ class AssetKpiCard(QFrame):
         )
         info_layout.addWidget(self.lbl_value)
 
-        main_layout.addLayout(info_layout, 1)
+        main_layout.addLayout(info_layout)
 
         self.sparkline = SparklineWidget(
             self, color="#2563EB" if icon_type != "pnl" else "#16A34A"
         )
-        main_layout.addWidget(self.sparkline)
+        main_layout.addWidget(self.sparkline, 1)
 
     def set_value(self, text, is_gain=None, badge_text=None, history=None):
         self.lbl_value.setText(text)
@@ -1403,12 +1405,13 @@ class ChartsPage(QWidget):
         self.btn_export_png.clicked.connect(self.export)
         h_layout.addWidget(self.btn_export_png)
 
-        # 小型图表切换下拉框
+        # 小型图表切换下拉框（在资产走势图专属视图中隐藏）
         self.selector = QComboBox()
         self.selector.setMinimumWidth(180)
         self.selector.setStyleSheet(
             "QComboBox { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; padding: 2px 6px; font-size: 12px; }"
         )
+        self.selector.hide()
         h_layout.addWidget(self.selector)
 
         self.page_layout.addWidget(self.asset_header)
@@ -1563,12 +1566,14 @@ class ChartsPage(QWidget):
             self.rank_order.hide()
             self.month_label.hide()
             self.month.hide()
+            self.selector.hide()
             return
         chart = self.charts[self.selector.currentIndex()]
         is_capital = chart.id == 18
 
         self.kpi_container.setVisible(is_capital)
         self.filter_card.setVisible(is_capital)
+        self.selector.setVisible(not is_capital)
 
         if is_capital:
             self.monthly_chart_18 = chart
