@@ -31,6 +31,7 @@ class Chart:
     break_keys: tuple[str, ...] = ()
     line_width: float = 2.0
     calendar_axis: str = ""
+    extra: dict = field(default_factory=dict)
 
 
 def rank_chart(chart, order='profit', offset=0):
@@ -68,7 +69,9 @@ def cumulative(data):
 def build_charts(analytics, *, selected_month=None):
     reports = analytics.reports
     holdings, closed, stocks = (reports[n].rows for n in ("当前持仓", "清仓收益", "股票汇总"))
-    monthly, daily, micro, net = (reports[n].rows for n in ("每月持仓收益", "每日持仓收益", "每月微操收益", "月度净投入明细"))
+    net_report = reports.get("完整交易净投入") or reports["月度净投入明细"]
+    monthly, daily, micro = (reports[n].rows for n in ("每月持仓收益", "每日持仓收益", "每月微操收益"))
+    net = net_report.rows
     month_gain = aggregate(monthly, 0, 20)
     months = sorted(month_gain)
     latest_month = analytics.latest_profit_day[:7] if analytics.latest_profit_day else analytics.scope.as_of.isoformat()[:7]
@@ -82,10 +85,16 @@ def build_charts(analytics, *, selected_month=None):
     daily_gain = aggregate(daily, 0, 19)
     result = []
 
-    def add(id, datasets, kind="bar", *, percentage=False, link=""):
+    def add(id, datasets, kind="bar", *, percentage=False, link="", extra=None):
         series = tuple(Series(name, tuple(data.items())) for name, data in datasets.items())
         complete = all(value is not None for s in series for key, value in s.points if key.strip())
-        note = f"EXCEL_COMPAT · {analytics.scope.reporting_currency} · 基准 {analytics.scope.as_of} · 人员 {analytics.scope.person_ids or '全部启用'} · 账户 {analytics.scope.account_ids or '全部'} · " + ("含待审/口径提示" if analytics.issues else "完整")
+        if id == 18:
+            as_of_str = str(analytics.latest_profit_day or analytics.scope.as_of)
+            persons_str = "全部人员" if not analytics.scope.person_ids else "、".join(str(p) for p in analytics.scope.person_ids)
+            accounts_str = "全部渠道" if not analytics.scope.account_ids else "、".join(str(a) for a in analytics.scope.account_ids)
+            note = f"Excel兼容口径 · 币种 {analytics.scope.reporting_currency} · 统计截止 {as_of_str} · 人员：{persons_str} · 渠道：{accounts_str}"
+        else:
+            note = f"EXCEL_COMPAT · {analytics.scope.reporting_currency} · 基准 {analytics.scope.as_of} · 人员 {analytics.scope.person_ids or '全部启用'} · 账户 {analytics.scope.account_ids or '全部'} · " + ("含待审/口径提示" if analytics.issues else "完整")
         if not complete:
             note += " · 含缺失值，缺失点不绘制，不补零"
         title = TITLES[id - 1].replace("USD", analytics.scope.reporting_currency)
@@ -96,7 +105,7 @@ def build_charts(analytics, *, selected_month=None):
                 stamp = f'{snapshot_month}（截至 {analytics.latest_profit_day}）'
             title = title.replace('当前', stamp).replace('上月末', stamp)
             note += f' · 月度快照 {stamp}'
-        result.append(Chart(id, title, kind, series, note, percentage, link))
+        result.append(Chart(id, title, kind, series, note, percentage, link, extra=extra or {}))
 
     def top_two(data):
         if any(v is None for v in data.values()):
@@ -136,9 +145,18 @@ def build_charts(analytics, *, selected_month=None):
     add(16, {"浮动盈亏($)": {f"{r.values[0]} · {r.values[2]}": r.values[10] for r in holdings}}, "horizontal", link="symbol_suffix")
     contributions = aggregate(stocks, 2, 17)
     add(17, {"盈利": {s: max(v, ZERO) if v is not None else None for s, v in contributions.items()}, "亏损": {s: min(v, ZERO) if v is not None else None for s, v in contributions.items()}}, "horizontal", link="symbol")
+    extra_18 = {
+        "monthly_investments": {mo: investments.get(mo, ZERO) for mo in months},
+        "principal": principal,
+        "market_values": values,
+        "latest_profit_day": analytics.latest_profit_day,
+        "latest_month": latest_month,
+        "reporting_currency": analytics.scope.reporting_currency,
+        "as_of": str(analytics.latest_profit_day or analytics.scope.as_of),
+    }
     add(18, {"累计本金基柱": {mo: min(principal[mo], values[mo]) if principal[mo] is not None and values[mo] is not None else None for mo in months},
              "资产高于本金": {mo: max(values[mo] - principal[mo], ZERO) if principal[mo] is not None and values[mo] is not None else None for mo in months},
-             "资产低于本金": {mo: max(principal[mo] - values[mo], ZERO) if principal[mo] is not None and values[mo] is not None else None for mo in months}, "总资产": values}, "capital_assets", link="month")
+             "资产低于本金": {mo: max(principal[mo] - values[mo], ZERO) if principal[mo] is not None and values[mo] is not None else None for mo in months}, "总资产": values}, "capital_assets", link="month", extra=extra_18)
     add(19, {"净投入": investments, "月度收益": month_gain}, link="month")
     for id, mo in ((20, latest_month), (21, selected_month or latest_month)):
         data = {day: value for day, value in daily_gain.items() if day.startswith(mo)}

@@ -1128,6 +1128,13 @@ def api_charts_all():
                     "name": s.name,
                     "points": [[str(k), float(v) if v is not None else None] for k, v in s.points],
                 })
+            extra_serialized = {}
+            if getattr(c, "extra", None):
+                for ek, ev in c.extra.items():
+                    if isinstance(ev, dict):
+                        extra_serialized[ek] = {str(k): float(v) if v is not None else None for k, v in ev.items()}
+                    elif isinstance(ev, (int, float, str, bool)) or ev is None:
+                        extra_serialized[ek] = ev
             serialized_charts.append({
                 "id": c.id,
                 "title": c.title,
@@ -1136,6 +1143,7 @@ def api_charts_all():
                 "ratio": getattr(c, "ratio", False),
                 "link": getattr(c, "link", ""),
                 "series": serialized_series,
+                "extra": extra_serialized,
             })
 
         return jsonify({"status": "ok", "charts": serialized_charts, "count": len(serialized_charts)})

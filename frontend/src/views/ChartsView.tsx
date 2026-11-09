@@ -49,6 +49,109 @@ function convertToEchartsOption(chart: any) {
     };
   }
 
+  if (chart.kind === "capital_assets") {
+    const seriesList = chart.series || [];
+    const xCategories: string[] = [];
+    seriesList.forEach((s: any) => {
+      (s.points || []).forEach(([k]: any) => {
+        const kStr = String(k);
+        if (!xCategories.includes(kStr)) xCategories.push(kStr);
+      });
+    });
+
+    const pt0 = new Map((seriesList[0]?.points || []).map(([k, v]: any) => [String(k), v]));
+    const pt1 = new Map((seriesList[1]?.points || []).map(([k, v]: any) => [String(k), v]));
+    const pt2 = new Map((seriesList[2]?.points || []).map(([k, v]: any) => [String(k), v]));
+    const pt3 = new Map((seriesList[3]?.points || []).map(([k, v]: any) => [String(k), v]));
+
+    return {
+      title: {
+        text: "累计净买入与股票市值变化",
+        left: "left",
+        top: 10,
+        textStyle: { fontSize: 15, fontWeight: 700, color: "#1F2937" },
+      },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "line", lineStyle: { type: "dashed", color: "#9CA3AF" } },
+        formatter: (params: any) => {
+          if (!params || !params.length) return "";
+          const xName = params[0].name;
+          const origKey = xCategories.find((k) => (k.length === 7 ? k.slice(2) : k) === xName) || xName;
+          const m = Number(pt3.get(origKey) ?? 0);
+          const v0 = Number(pt0.get(origKey) ?? 0);
+          const v2 = Number(pt2.get(origKey) ?? 0);
+          const c = v2 > 0 ? v0 + v2 : v0;
+          const diff = m - c;
+          const isProf = diff >= 0;
+          return `
+            <div style="font-weight:700;margin-bottom:6px;border-bottom:1px solid #F1F5F9;padding-bottom:4px;">${origKey.replace("-", "年")}月</div>
+            <div style="display:flex;justify-content:space-between;gap:16px;color:#1E293B;"><span>● 股票市值:</span><span style="font-weight:700;">$${Number(m).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+            <div style="display:flex;justify-content:space-between;gap:16px;color:#475569;"><span>● 累计净买入:</span><span style="font-weight:700;">$${Number(c).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+            <div style="display:flex;justify-content:space-between;gap:16px;color:${isProf ? '#16A34A' : '#DC2626'};"><span>市值差额:</span><span style="font-weight:700;">${isProf ? '+' : ''}$${Number(diff).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+          `;
+        },
+      },
+      legend: {
+        top: 12,
+        left: "center",
+        data: ["累计净买入基柱", "市值高于净买入", "市值低于净买入", "股票市值"],
+        textStyle: { fontSize: 12, color: "#334155" },
+      },
+      grid: { left: "4%", right: "4%", top: 55, bottom: 25, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: xCategories.map((x) => (x.length === 7 ? x.slice(2) : x)),
+        axisLabel: { fontSize: 11, color: "#64748B" },
+      },
+      yAxis: {
+        type: "value",
+        name: "金额 (USD)",
+        splitLine: { lineStyle: { color: "#E2E8F0" } },
+        axisLabel: {
+          fontSize: 11,
+          color: "#64748B",
+          formatter: (v: number) => v.toLocaleString(),
+        },
+      },
+      series: [
+        {
+          name: "累计净买入基柱",
+          type: "bar",
+          stack: "total",
+          data: xCategories.map((x) => pt0.get(x) ?? null),
+          itemStyle: { color: "#B8CBD7" },
+          barMaxWidth: 36,
+        },
+        {
+          name: "市值高于净买入",
+          type: "bar",
+          stack: "total",
+          data: xCategories.map((x) => pt1.get(x) ?? null),
+          itemStyle: { color: "#70AD47" },
+          barMaxWidth: 36,
+        },
+        {
+          name: "市值低于净买入",
+          type: "bar",
+          stack: "total",
+          data: xCategories.map((x) => pt2.get(x) ?? null),
+          itemStyle: { color: "#C00000" },
+          barMaxWidth: 36,
+        },
+        {
+          name: "股票市值",
+          type: "line",
+          data: xCategories.map((x) => pt3.get(x) ?? null),
+          itemStyle: { color: "#4472C4" },
+          lineStyle: { width: 2.5 },
+          symbol: "circle",
+          symbolSize: 6,
+        },
+      ],
+    };
+  }
+
   // Line or Bar chart
   const seriesList = chart.series || [];
   const xCategories: string[] = [];
@@ -387,6 +490,24 @@ export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
     if (displayedCharts.length === 0) displayedCharts = allCharts.slice(0, 6);
   }
 
+  const chart18 = allCharts.find((c: any) => c.kind === "capital_assets" || c.id === 18);
+  let kpiData: { marketVal: number; netBuy: number; diff: number; ratio: number } | null = null;
+  if (chart18 && chart18.series && chart18.series.length >= 4) {
+    const s0 = chart18.series[0]?.points || [];
+    const s2 = chart18.series[2]?.points || [];
+    const s3 = chart18.series[3]?.points || [];
+    if (s3.length > 0) {
+      const lastIdx = s3.length - 1;
+      const m = Number(s3[lastIdx]?.[1] ?? 0);
+      const v0 = Number(s0[lastIdx]?.[1] ?? 0);
+      const v2 = Number(s2[lastIdx]?.[1] ?? 0);
+      const c = v2 > 0 ? v0 + v2 : v0;
+      const diff = m - c;
+      const ratio = c > 0 ? (diff / c) * 100 : 0;
+      kpiData = { marketVal: m, netBuy: c, diff, ratio };
+    }
+  }
+
   return (
     <ErrorBoundary fallbackTitle="图表集渲染异常">
       <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px", overflowY: "auto" }}>
@@ -394,6 +515,45 @@ export const ChartsView: React.FC<ChartsViewProps> = ({ mode, personId }) => {
           {pageIcon}
           <span>{pageTitle}</span>
         </div>
+
+        {mode === "asset" && kpiData && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "16px" }}>
+            <div className="card-panel" style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ fontSize: "13px", color: "var(--text-muted)", fontWeight: 500 }}>股票市值</div>
+              <div className="font-mono" style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-heading)" }}>
+                ${kpiData.marketVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+            <div className="card-panel" style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ fontSize: "13px", color: "var(--text-muted)", fontWeight: 500 }}>累计净买入</div>
+              <div className="font-mono" style={{ fontSize: "22px", fontWeight: 700, color: "var(--text-heading)" }}>
+                ${kpiData.netBuy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+            <div className="card-panel" style={{ padding: "14px 18px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "13px", color: "var(--text-muted)", fontWeight: 500 }}>市值差额</span>
+                <span style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  padding: "1px 6px",
+                  borderRadius: "4px",
+                  backgroundColor: kpiData.diff >= 0 ? "var(--profit-bg, #DCFCE7)" : "var(--loss-bg, #FEE2E2)",
+                  color: kpiData.diff >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+                }}>
+                  {kpiData.diff >= 0 ? `↗ +${kpiData.ratio.toFixed(1)}%` : `↘ ${kpiData.ratio.toFixed(1)}%`}
+                </span>
+              </div>
+              <div className="font-mono" style={{
+                fontSize: "22px",
+                fontWeight: 700,
+                color: kpiData.diff >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
+              }}>
+                {kpiData.diff >= 0 ? "+" : ""}${kpiData.diff.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: "16px" }}>
           {displayedCharts.length === 0 ? (
