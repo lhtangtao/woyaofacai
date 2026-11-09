@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from portfolio.domain.analytics import ZERO
-from portfolio.services.charts_service import build_charts, rank_chart
+from portfolio.domain.analytics import ZERO, strict_sum
+from portfolio.services.charts_service import Chart, Series, build_charts, rank_chart
 from portfolio.ui.theme import tokens
 
 
@@ -140,18 +140,15 @@ class CardIconWidget(QWidget):
 
         cx, cy = rect.center().x(), rect.center().y()
         if self.icon_type == "stock":
-            # 图层堆叠图标
             painter.drawRoundedRect(QRectF(cx - 8, cy - 8, 16, 6), 2, 2)
             painter.drawLine(QPointF(cx - 7, cy + 2), QPointF(cx + 7, cy + 2))
             painter.drawLine(QPointF(cx - 7, cy + 7), QPointF(cx + 7, cy + 7))
         elif self.icon_type == "invest":
-            # 入金/下箭头买入图标
             painter.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 4))
             painter.drawLine(QPointF(cx - 4, cy), QPointF(cx, cy + 4))
             painter.drawLine(QPointF(cx + 4, cy), QPointF(cx, cy + 4))
             painter.drawLine(QPointF(cx - 6, cy + 8), QPointF(cx + 6, cy + 8))
         else:
-            # 柱状图/资产增长图标
             painter.drawLine(QPointF(cx - 6, cy + 7), QPointF(cx - 6, cy + 1))
             painter.drawLine(QPointF(cx - 1, cy + 7), QPointF(cx - 1, cy - 3))
             painter.drawLine(QPointF(cx + 4, cy + 7), QPointF(cx + 4, cy - 7))
@@ -249,12 +246,13 @@ class AssetKpiCard(QFrame):
 
 
 class AssetFilterCard(QFrame):
-    """独立白色圆角筛选卡片，支持人员、渠道、代码、日期及 Chips 标签交互"""
+    """独立白色圆角筛选卡片，支持渠道、代码、日期及 Chips 标签与全局筛选双向联动"""
 
     filter_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
+        self.main_window = main_window
         self.setObjectName("AssetFilterCard")
         self.setStyleSheet(
             """
@@ -301,28 +299,20 @@ class AssetFilterCard(QFrame):
         main_layout.setContentsMargins(14, 10, 14, 10)
         main_layout.setSpacing(8)
 
-        # 第一行：筛选器控件
+        # 第一行：筛选器控件（已移除高级筛选和重复的人员下拉框）
         row1 = QHBoxLayout()
         row1.setContentsMargins(0, 0, 0, 0)
         row1.setSpacing(10)
 
-        row1.addWidget(QLabel("人员"))
-        self.combo_person = QComboBox()
-        self.combo_person.setMinimumWidth(100)
-        self.combo_person.addItem("个人", "个人")
-        self.combo_person.addItem("家庭", "家庭")
-        self.combo_person.addItem("全部人员", None)
-        row1.addWidget(self.combo_person)
-
         row1.addWidget(QLabel("渠道"))
         self.combo_channel = QComboBox()
-        self.combo_channel.setMinimumWidth(110)
+        self.combo_channel.setMinimumWidth(120)
         self.combo_channel.addItem("全部渠道", None)
         row1.addWidget(self.combo_channel)
 
         self.input_ticker = QLineEdit()
         self.input_ticker.setPlaceholderText("🔍 输入 Ticker")
-        self.input_ticker.setMaximumWidth(120)
+        self.input_ticker.setMaximumWidth(130)
         row1.addWidget(self.input_ticker)
 
         self.btn_date_range = QPushButton("2025-01-01 — 2026-11-09 ∨")
@@ -330,11 +320,8 @@ class AssetFilterCard(QFrame):
 
         self.input_search = QLineEdit()
         self.input_search.setPlaceholderText("🔍 搜索代码、订单")
-        self.input_search.setMaximumWidth(150)
+        self.input_search.setMaximumWidth(160)
         row1.addWidget(self.input_search)
-
-        self.btn_advanced = QPushButton("▽ 高级筛选")
-        row1.addWidget(self.btn_advanced)
 
         self.btn_reset = QPushButton("↺ 重置")
         self.btn_reset.setStyleSheet(
@@ -352,10 +339,13 @@ class AssetFilterCard(QFrame):
         self.chips_row.setSpacing(8)
 
         self.chip_person = self.create_chip("个人 ×")
+        self.chip_channel = self.create_chip("全部渠道 ×")
+        self.chip_channel.hide()
         self.chip_currency = self.create_chip("USD ×")
         self.chip_scope = self.create_chip("股票市值口径 ×")
 
         self.chips_row.addWidget(self.chip_person)
+        self.chips_row.addWidget(self.chip_channel)
         self.chips_row.addWidget(self.chip_currency)
         self.chips_row.addWidget(self.chip_scope)
         self.chips_row.addStretch()
@@ -363,9 +353,13 @@ class AssetFilterCard(QFrame):
         main_layout.addLayout(self.chips_row)
 
         self.btn_reset.clicked.connect(self.reset_filters)
-        self.combo_person.currentIndexChanged.connect(self.on_filter_changed)
-        self.combo_channel.currentIndexChanged.connect(self.on_filter_changed)
-        self.input_ticker.returnPressed.connect(self.on_filter_changed)
+        self.combo_channel.currentIndexChanged.connect(self.on_channel_changed)
+        self.input_ticker.returnPressed.connect(self.on_ticker_filter)
+
+        # 点击人员 Chip 上的 ×，恢复为全部人员
+        self.chip_person.clicked.connect(self.clear_person_filter)
+        # 点击渠道 Chip 上的 ×，恢复为全部渠道
+        self.chip_channel.clicked.connect(self.clear_channel_filter)
 
     def create_chip(self, text):
         btn = QPushButton(text)
@@ -386,28 +380,98 @@ class AssetFilterCard(QFrame):
             }
         """
         )
-        btn.clicked.connect(lambda: btn.hide())
         return btn
 
+    def set_available_channels(self, channels):
+        current = self.combo_channel.currentText()
+        self.combo_channel.blockSignals(True)
+        self.combo_channel.clear()
+        self.combo_channel.addItem("全部渠道", None)
+        for ch in channels:
+            if ch:
+                self.combo_channel.addItem(str(ch), ch)
+        idx = self.combo_channel.findText(current)
+        if idx >= 0:
+            self.combo_channel.setCurrentIndex(idx)
+        self.combo_channel.blockSignals(False)
+
+    def sync_broker(self, broker_name):
+        self.combo_channel.blockSignals(True)
+        if not broker_name:
+            self.combo_channel.setCurrentIndex(0)
+            self.chip_channel.hide()
+        else:
+            idx = self.combo_channel.findText(str(broker_name))
+            if idx >= 0:
+                self.combo_channel.setCurrentIndex(idx)
+            self.chip_channel.setText(f"{broker_name} ×")
+            self.chip_channel.show()
+        self.combo_channel.blockSignals(False)
+
+    def sync_person(self, person_text):
+        if not person_text or "全部" in person_text:
+            self.chip_person.setText("全部人员 ×")
+        else:
+            self.chip_person.setText(f"{person_text} ×")
+        self.chip_person.show()
+
+    def on_channel_changed(self):
+        ch = self.combo_channel.currentText()
+        if ch == "全部渠道":
+            self.chip_channel.hide()
+            if self.main_window and hasattr(self.main_window, "accounts"):
+                self.main_window.accounts.reset()
+        else:
+            self.chip_channel.setText(f"{ch} ×")
+            self.chip_channel.show()
+            if self.main_window and hasattr(self.main_window, "accounts"):
+                self.main_window.accounts.set_broker_name(ch)
+        self.filter_changed.emit()
+
+    def on_ticker_filter(self):
+        ticker = self.input_ticker.text().strip().upper()
+        if self.main_window and hasattr(self.main_window, "stock"):
+            if not ticker:
+                self.main_window.stock.setCurrentIndex(0)
+            else:
+                for idx in range(self.main_window.stock.count()):
+                    if ticker in self.main_window.stock.itemText(idx).upper():
+                        self.main_window.stock.setCurrentIndex(idx)
+                        break
+        self.filter_changed.emit()
+
+    def clear_person_filter(self):
+        if self.main_window and hasattr(self.main_window, "person"):
+            self.main_window.person.setCurrentIndex(0)
+        self.chip_person.setText("全部人员 ×")
+        self.filter_changed.emit()
+
+    def clear_channel_filter(self):
+        self.combo_channel.setCurrentIndex(0)
+        self.chip_channel.hide()
+        if self.main_window and hasattr(self.main_window, "accounts"):
+            self.main_window.accounts.reset()
+        self.filter_changed.emit()
+
     def reset_filters(self):
-        self.combo_person.setCurrentIndex(0)
         self.combo_channel.setCurrentIndex(0)
         self.input_ticker.clear()
         self.input_search.clear()
-        self.chip_person.show()
-        self.chip_currency.show()
-        self.chip_scope.show()
-        self.filter_changed.emit()
-
-    def on_filter_changed(self):
-        person_txt = self.combo_person.currentText()
-        self.chip_person.setText(f"{person_txt} ×")
-        self.chip_person.show()
+        self.chip_channel.hide()
+        if self.main_window:
+            if hasattr(self.main_window, "reset_filters"):
+                self.main_window.reset_filters()
+            elif hasattr(self.main_window, "person"):
+                self.main_window.person.setCurrentIndex(0)
+                if hasattr(self.main_window, "accounts"):
+                    self.main_window.accounts.reset()
         self.filter_changed.emit()
 
 
 class ChartCanvas(QWidget):
     selected = Signal(str, str)
+    drill_month = Signal(str)
+    back_to_monthly = Signal()
 
     def __init__(self, parent=None, *, card_mode=False):
         super().__init__(parent)
@@ -417,6 +481,7 @@ class ChartCanvas(QWidget):
         self.setMouseTracking(True)
         self.hover_index = None
         self.categories_x = []
+        self.back_button_rect = None
 
     def set_loading(self, message="", completed=None, total=None):
         self.loading_message = message
@@ -448,7 +513,6 @@ class ChartCanvas(QWidget):
                     if dist < min_dist:
                         min_dist = dist
                         best_idx = idx
-                # 只有在图表水平有效跨度内吸附
                 if min_dist < 40:
                     if self.hover_index != best_idx:
                         self.hover_index = best_idx
@@ -491,6 +555,7 @@ class ChartCanvas(QWidget):
         else:
             painter.fillRect(self.rect(), QColor(t.panel))
         self.hits = []
+        self.back_button_rect = None
         chart = self.chart
         if getattr(self, "loading_message", ""):
             center = self.rect().center()
@@ -881,7 +946,7 @@ class ChartCanvas(QWidget):
         painter.restore()
 
     def paint_capital_assets(self, painter, chart, theme):
-        """专业柱状图与股票市值折线组合图（累计净买入基柱 + 市值高于/低于净买入 + 股票市值折线 + Tooltip交互）"""
+        """专业柱状图与股票市值折线组合图（累计净买入基柱 + 市值高于/低于净买入 + 股票市值折线 + Tooltip交互 + 每日走势下钻支持）"""
         palette = ("#B8CBD7", "#70AD47", "#C00000", "#4472C4")
         series = chart.series
         categories = list(dict.fromkeys(key for item in series for key, _ in item.points))
@@ -891,6 +956,8 @@ class ChartCanvas(QWidget):
         monthly_inv = extra.get("monthly_investments", {})
         latest_profit_day = extra.get("latest_profit_day", "")
         currency = extra.get("reporting_currency", "USD")
+        is_daily_drill = extra.get("is_daily_drill", False)
+        drill_month = extra.get("drill_month", "")
 
         bounds = [Decimal(0)]
         for key in categories:
@@ -915,35 +982,53 @@ class ChartCanvas(QWidget):
 
         left, top = 86, 75
         width, height = self.width() - left - 30, self.height() - top - 95
-        span = high - low
+        span = high - low or Decimal(1)
         step = width / max(len(categories), 1)
 
         def ys(value):
             return top + height - float((value - low) / span) * height
 
         # 1. 顶部 Header 与图例
-        # 左侧标题与胶囊
         painter.setFont(chart_font(15, bold=True))
         painter.setPen(QColor(theme.heading))
-        chart_title_text = "累计净买入与股票市值变化"
+        chart_title_text = (
+            f"{drill_month} · 每日走势明细"
+            if is_daily_drill
+            else "累计净买入与股票市值变化"
+        )
         painter.drawText(
-            QRectF(left, 16, 220, 24),
+            QRectF(left, 16, 260, 24),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
             chart_title_text,
         )
 
         title_w = painter.fontMetrics().horizontalAdvance(chart_title_text)
-        badge_rect = QRectF(left + title_w + 14, 18, 175, 20)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#EFF6FF"))
-        painter.drawRoundedRect(badge_rect, 4, 4)
-        painter.setPen(QColor("#2563EB"))
-        painter.setFont(chart_font(11, bold=True))
-        painter.drawText(
-            badge_rect,
-            Qt.AlignmentFlag.AlignCenter,
-            "保留柱状图，更利于月度对比",
-        )
+
+        # 若在每日下钻模式，展示「✕ 返回月度总览」胶囊按钮
+        if is_daily_drill:
+            back_btn_rect = QRectF(left + title_w + 14, 16, 120, 24)
+            self.back_button_rect = back_btn_rect
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#2563EB"))
+            painter.drawRoundedRect(back_btn_rect, 12, 12)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.setFont(chart_font(11, bold=True))
+            painter.drawText(
+                back_btn_rect, Qt.AlignmentFlag.AlignCenter, "✕ 返回月度总览"
+            )
+            self.hits.append((back_btn_rect, "__back__", None, "__back__"))
+        else:
+            badge_rect = QRectF(left + title_w + 14, 18, 175, 20)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#EFF6FF"))
+            painter.drawRoundedRect(badge_rect, 4, 4)
+            painter.setPen(QColor("#2563EB"))
+            painter.setFont(chart_font(11, bold=True))
+            painter.drawText(
+                badge_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "保留柱状图，更利于月度对比",
+            )
 
         # 居中图例
         legend_labels = (
@@ -955,13 +1040,14 @@ class ChartCanvas(QWidget):
         legend_widths = [
             painter.fontMetrics().horizontalAdvance(lbl) + 36 for lbl in legend_labels
         ]
-        legend_x = max(left + title_w + 205, (self.width() - sum(legend_widths)) / 2)
+        legend_x = max(
+            left + title_w + (150 if is_daily_drill else 205),
+            (self.width() - sum(legend_widths)) / 2,
+        )
         for index, lbl in enumerate(legend_labels):
             painter.setPen(QPen(QColor(palette[index]), 2.5))
             if index == 3:
-                painter.drawLine(
-                    QPointF(legend_x, 28), QPointF(legend_x + 22, 28)
-                )
+                painter.drawLine(QPointF(legend_x, 28), QPointF(legend_x + 22, 28))
                 painter.setBrush(QColor(palette[3]))
                 painter.drawEllipse(QPointF(legend_x + 11, 28), 3.0, 3.0)
             else:
@@ -976,7 +1062,7 @@ class ChartCanvas(QWidget):
             legend_x += legend_widths[index]
 
         # 右侧未完成月份胶囊提示
-        if latest_profit_day:
+        if latest_profit_day and not is_daily_drill:
             day_str = latest_profit_day[-5:]
             right_badge = f"当前月份 · 截至 {day_str}"
             rb_w = painter.fontMetrics().horizontalAdvance(right_badge) + 18
@@ -1050,19 +1136,22 @@ class ChartCanvas(QWidget):
                 if last is not None:
                     painter.drawLine(last, pt)
                 last = pt
-                # 绘制折线数据点
                 painter.setBrush(QColor(palette[3]))
                 painter.drawEllipse(pt, 3.5, 3.5)
                 self.hits.append(
                     (QRectF(x - 9, pt.y() - 9, 18, 18), key, asset, series[3].name)
                 )
 
-            # X 轴月份标签：当前未完成月份加星号
+            # X 轴标签
             painter.setPen(QColor(theme.muted))
-            label = key[2:] if len(key) == 7 else key
-            if index == len(categories) - 1 and latest_profit_day:
-                if not latest_profit_day.endswith(("-30", "-31", "-28", "-29")):
-                    label += "*"
+            if is_daily_drill:
+                # 每日模式下显示 MM-DD
+                label = key[-5:] if len(key) >= 10 else key
+            else:
+                label = key[2:] if len(key) == 7 else key
+                if index == len(categories) - 1 and latest_profit_day:
+                    if not latest_profit_day.endswith(("-30", "-31", "-28", "-29")):
+                        label += "*"
             painter.drawText(
                 QRectF(x - 25, top + height + 8, 50, 20),
                 Qt.AlignmentFlag.AlignCenter,
@@ -1084,7 +1173,6 @@ class ChartCanvas(QWidget):
             hx = self.categories_x[self.hover_index]
             h_key = categories[self.hover_index]
 
-            # 垂直辅助虚线
             v_pen = QPen(QColor(156, 163, 175, 180), 1, Qt.PenStyle.DashLine)
             painter.setPen(v_pen)
             painter.drawLine(QPointF(hx, top), QPointF(hx, top + height))
@@ -1092,7 +1180,6 @@ class ChartCanvas(QWidget):
             h_asset = points[3].get(h_key)
             if h_asset is not None:
                 hy = ys(h_asset)
-                # 高亮数据点双层同心圆
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(68, 114, 196, 60))
                 painter.drawEllipse(QPointF(hx, hy), 7.5, 7.5)
@@ -1100,9 +1187,7 @@ class ChartCanvas(QWidget):
                 painter.setBrush(QColor(palette[3]))
                 painter.drawEllipse(QPointF(hx, hy), 4.0, 4.0)
 
-            # 提取 4 项指标数值
             v0 = points[0].get(h_key) or ZERO
-            v1 = points[1].get(h_key) or ZERO
             v2 = points[2].get(h_key) or ZERO
             m_val = points[3].get(h_key) or ZERO
             c_val = v0 + v2 if v2 > 0 else v0
@@ -1111,7 +1196,6 @@ class ChartCanvas(QWidget):
             if inv_val is None:
                 inv_val = c_val
 
-            # 浮动 Tooltip 弹窗卡片
             tip_w, tip_h = 200, 126
             tip_x = hx + 14
             if tip_x + tip_w > self.width() - 10:
@@ -1125,16 +1209,16 @@ class ChartCanvas(QWidget):
             )
 
             tip_rect = QRectF(tip_x, tip_y, tip_w, tip_h)
-
-            # 半透明白色阴影背景
             painter.setPen(QPen(QColor("#E2E8F0"), 1))
             painter.setBrush(QColor(255, 255, 255, 245))
             painter.drawRoundedRect(tip_rect, 8, 8)
 
-            # 标题：2026年05月 或 2026年11月 · 截至 11-09
-            y_title = h_key.replace("-", "年") + "月"
-            if self.hover_index == len(categories) - 1 and latest_profit_day:
-                y_title += f" · 截至 {latest_profit_day[-5:]}"
+            if is_daily_drill:
+                y_title = f"{h_key[:4]}年{h_key[5:7]}月{h_key[8:10]}日"
+            else:
+                y_title = h_key.replace("-", "年") + "月"
+                if self.hover_index == len(categories) - 1 and latest_profit_day:
+                    y_title += f" · 截至 {latest_profit_day[-5:]}"
 
             painter.setPen(QColor("#1E293B"))
             painter.setFont(chart_font(12, bold=True))
@@ -1149,20 +1233,21 @@ class ChartCanvas(QWidget):
                 QPointF(tip_x + 12, tip_y + 32), QPointF(tip_x + tip_w - 12, tip_y + 32)
             )
 
-            # 4 项指标逐行绘制
             painter.setFont(chart_font(11))
+            diff_sign = "+" if diff >= 0 else "-"
+            inv_sign = "+" if inv_val >= 0 else "-"
             rows_data = [
                 ("股票市值", f"${m_val:,.2f}", palette[3], "#1E293B"),
                 ("累计净买入", f"${c_val:,.2f}", palette[0], "#475569"),
                 (
                     "市值差额",
-                    f"{'+' if diff >= 0 else '-'}${abs(diff):,.2f}",
+                    f"{diff_sign}${abs(diff):,.2f}",
                     None,
                     "#16A34A" if diff >= 0 else "#DC2626",
                 ),
                 (
-                    "当月净买入",
-                    f"{'+' if inv_val >= 0 else '-'}${abs(inv_val):,.2f}",
+                    "当日净买入" if is_daily_drill else "当月净买入",
+                    f"{inv_sign}${abs(inv_val):,.2f}",
                     None,
                     "#16A34A" if inv_val >= 0 else "#DC2626",
                 ),
@@ -1170,7 +1255,6 @@ class ChartCanvas(QWidget):
 
             cur_y = tip_y + 38
             for label_name, val_str, dot_col, text_col in rows_data:
-                # 绘制圆点或缩进
                 if dot_col:
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.setBrush(QColor(dot_col))
@@ -1215,9 +1299,25 @@ class ChartCanvas(QWidget):
         )
 
     def mousePressEvent(self, event):
+        pos = event.position()
         if self.chart:
-            for rect, key, _, _ in reversed(self.hits):
-                if rect.contains(event.position()):
+            # 优先检测「返回月度总览」按钮
+            if self.back_button_rect and self.back_button_rect.contains(pos):
+                self.back_to_monthly.emit()
+                return
+
+            for rect, key, _, name in reversed(self.hits):
+                if rect.contains(pos):
+                    if key == "__back__":
+                        self.back_to_monthly.emit()
+                        return
+                    # 若当前在资产走势图且未在日度下钻中，点击月度柱状展示当月每日走势
+                    if self.chart.kind == "capital_assets" and not getattr(
+                        self.chart, "extra", {}
+                    ).get("is_daily_drill", False):
+                        if len(key) == 7 and key.startswith("20"):
+                            self.drill_month.emit(key)
+                            return
                     self.selected.emit(self.chart.link, key)
                     return
 
@@ -1234,16 +1334,18 @@ class ChartsPage(QWidget):
     drill = Signal(str, str)
     error = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
+        self.main_window = main_window
         self.analytics = None
         self.charts = ()
+        self.monthly_chart_18 = None  # 缓存全月度 Chart 18
 
         self.page_layout = QVBoxLayout(self)
         self.page_layout.setContentsMargins(16, 12, 16, 12)
         self.page_layout.setSpacing(10)
 
-        # 1. 现代化资产走势图专属 Header
+        # 1. 资产走势图专属 Header（已彻底移除多余的数据源哈希标签）
         self.asset_header = QWidget()
         h_layout = QHBoxLayout(self.asset_header)
         h_layout.setContentsMargins(0, 0, 0, 0)
@@ -1259,22 +1361,10 @@ class ChartsPage(QWidget):
         )
         title_col.addWidget(self.page_title)
 
-        sub_row = QHBoxLayout()
-        sub_row.setContentsMargins(0, 0, 0, 0)
-        sub_row.setSpacing(10)
-
         self.page_subtitle = QLabel("查看投资组合累计净买入、股票市值及投资表现")
         self.page_subtitle.setStyleSheet("font-size: 12px; color: #64748B;")
-        sub_row.addWidget(self.page_subtitle)
+        title_col.addWidget(self.page_subtitle)
 
-        self.db_label = QLabel("🗄️ 数据源只读：money.sqlite3")
-        self.db_label.setStyleSheet(
-            "font-size: 11px; color: #94A3B8; background: #F1F5F9; border-radius: 4px; padding: 1px 6px;"
-        )
-        sub_row.addWidget(self.db_label)
-        sub_row.addStretch()
-
-        title_col.addLayout(sub_row)
         h_layout.addLayout(title_col)
         h_layout.addStretch()
 
@@ -1301,6 +1391,7 @@ class ChartsPage(QWidget):
             "QPushButton { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; padding: 0 10px; font-size: 12px; color: #475569; }"
             "QPushButton:hover { background: #F8FAFC; color: #1E293B; }"
         )
+        self.btn_refresh.clicked.connect(self.on_refresh_clicked)
         h_layout.addWidget(self.btn_refresh)
 
         self.btn_export_png = QPushButton("📥 导出 PNG")
@@ -1312,7 +1403,7 @@ class ChartsPage(QWidget):
         self.btn_export_png.clicked.connect(self.export)
         h_layout.addWidget(self.btn_export_png)
 
-        # 小型图表切换下拉框，供需要查看其他26个图表时使用
+        # 小型图表切换下拉框
         self.selector = QComboBox()
         self.selector.setMinimumWidth(180)
         self.selector.setStyleSheet(
@@ -1338,8 +1429,8 @@ class ChartsPage(QWidget):
 
         self.page_layout.addWidget(self.kpi_container)
 
-        # 3. 独立白色筛选卡片
-        self.filter_card = AssetFilterCard(self)
+        # 3. 独立白色筛选卡片（与全局筛选双向联动）
+        self.filter_card = AssetFilterCard(main_window=self.main_window, parent=self)
         self.page_layout.addWidget(self.filter_card)
 
         # 传统控制行（在查看其他非资产走势图图表时显示）
@@ -1375,12 +1466,33 @@ class ChartsPage(QWidget):
         # 4. 图表画布容器
         self.canvas = ChartCanvas(card_mode=True)
         self.canvas.selected.connect(self.drill)
+        self.canvas.drill_month.connect(self.drill_down_month)
+        self.canvas.back_to_monthly.connect(self.restore_monthly_chart)
         self.page_layout.addWidget(self.canvas, 1)
 
         self.selector.currentIndexChanged.connect(self.show_chart)
         self.month.currentTextChanged.connect(self.update_month)
         self.offset.currentIndexChanged.connect(self.show_chart)
         self.rank_order.currentIndexChanged.connect(self.change_rank_order)
+
+    def on_refresh_clicked(self):
+        if self.main_window and hasattr(self.main_window, "refresh"):
+            self.main_window.refresh()
+        else:
+            self.update_month()
+
+    def sync_person_from_main(self, person_id):
+        """主窗口全局人员变动时同步更新 Chips 标签"""
+        person_name = "全部人员"
+        if self.main_window and hasattr(self.main_window, "person"):
+            person_name = self.main_window.person.currentText()
+        elif person_id:
+            person_name = str(person_id)
+        self.filter_card.sync_person(person_name)
+
+    def sync_broker_from_main(self, broker_name):
+        """主窗口全局渠道变动时同步更新内部渠道筛选器"""
+        self.filter_card.sync_broker(broker_name)
 
     def change_rank_order(self):
         self.offset.blockSignals(True)
@@ -1391,6 +1503,7 @@ class ChartsPage(QWidget):
     def clear(self):
         self.analytics = None
         self.charts = ()
+        self.monthly_chart_18 = None
         self.offset.hide()
         self.rank_order.hide()
         self.month_label.hide()
@@ -1403,12 +1516,12 @@ class ChartsPage(QWidget):
 
     def set_analytics(self, analytics):
         self.analytics, self.charts = analytics, analytics.charts
+        self.monthly_chart_18 = None
         selected = self.selector.currentIndex()
         selected_month = self.month.currentData()
         self.selector.blockSignals(True)
         self.selector.clear()
         self.selector.addItems([f"{c.id:02}  {c.title}" for c in self.charts])
-        # 如果未选择，默认展示 Chart 18（累计本金与总资产变化，即索引 17）
         target_idx = 17 if len(self.charts) > 17 and selected <= 0 else max(0, selected)
         self.selector.setCurrentIndex(target_idx)
         self.selector.blockSignals(False)
@@ -1424,10 +1537,15 @@ class ChartsPage(QWidget):
         self.month.setCurrentIndex(max(0, self.month.findData(selected_month)))
         self.month.blockSignals(False)
 
-        # 更新数据源名称
-        if hasattr(analytics, "source_identity") and analytics.source_identity:
-            src_name = Path(str(analytics.source_identity)).name
-            self.db_label.setText(f"🗄️ 数据源只读：{src_name}")
+        # 动态同步可用渠道列表到内部筛选卡片
+        channels = sorted({r.values[1] for r in analytics.reports["每月持仓收益"].rows if r.values[1]})
+        self.filter_card.set_available_channels(channels)
+
+        # 同步当前人员与渠道名称
+        if self.main_window and hasattr(self.main_window, "person"):
+            self.sync_person_from_main(self.main_window.person.currentData())
+        if self.main_window and hasattr(self.main_window, "accounts"):
+            self.sync_broker_from_main(self.main_window.accounts.current_broker_name())
 
         self.update_month()
 
@@ -1436,6 +1554,7 @@ class ChartsPage(QWidget):
             self.charts = build_charts(
                 self.analytics, selected_month=self.month.currentData()
             )
+            self.monthly_chart_18 = None
             self.show_chart()
 
     def show_chart(self, *_):
@@ -1448,11 +1567,11 @@ class ChartsPage(QWidget):
         chart = self.charts[self.selector.currentIndex()]
         is_capital = chart.id == 18
 
-        # 模式切换：当展示资产走势图时，展现现代化卡片布局
         self.kpi_container.setVisible(is_capital)
         self.filter_card.setVisible(is_capital)
 
         if is_capital:
+            self.monthly_chart_18 = chart
             self.update_kpi_cards(chart)
 
         monthly = chart.id in (1, 2, 3, 4, 5, 6, 21)
@@ -1495,8 +1614,118 @@ class ChartsPage(QWidget):
         self.canvas.chart = chart
         self.canvas.update()
 
+    def drill_down_month(self, month_key):
+        """点击月度柱状时，展示当月每天的走势（每日基柱 + 每日溢价/缺额 + 每日股票市值折线）"""
+        if not self.analytics or "每日持仓收益" not in self.analytics.reports:
+            return
+        daily_rows = self.analytics.reports["每日持仓收益"].rows
+        subset = [r for r in daily_rows if r.values and r.values[0].startswith(month_key)]
+        if not subset:
+            return
+
+        days = sorted(set(r.values[0] for r in subset))
+        if not days:
+            return
+
+        # 计算每天的股票市值与累计净投入
+        m_by_day = {
+            d: strict_sum(r.values[11] for r in subset if r.values[0] == d)
+            for d in days
+        }
+        c_by_day = {
+            d: strict_sum(r.values[22] for r in subset if r.values[0] == d)
+            for d in days
+        }
+        # 当日买卖差额（当日净买入）
+        b_by_day = {
+            d: strict_sum(r.values[16] for r in subset if r.values[0] == d)
+            for d in days
+        }
+        s_by_day = {
+            d: strict_sum(r.values[17] for r in subset if r.values[0] == d)
+            for d in days
+        }
+        inv_by_day = {
+            d: (b_by_day.get(d) or ZERO) - (s_by_day.get(d) or ZERO)
+            for d in days
+        }
+
+        # 缓存当前的月度图表
+        if not self.monthly_chart_18 and self.canvas.chart:
+            self.monthly_chart_18 = self.canvas.chart
+
+        # 构造每日走势 Chart
+        base_series = Series(
+            "累计本金基柱",
+            tuple(
+                (
+                    d,
+                    min(c_by_day[d], m_by_day[d])
+                    if c_by_day[d] is not None and m_by_day[d] is not None
+                    else None,
+                )
+                for d in days
+            ),
+        )
+        gain_series = Series(
+            "资产高于本金",
+            tuple(
+                (
+                    d,
+                    max(m_by_day[d] - c_by_day[d], ZERO)
+                    if c_by_day[d] is not None and m_by_day[d] is not None
+                    else None,
+                )
+                for d in days
+            ),
+        )
+        loss_series = Series(
+            "资产低于本金",
+            tuple(
+                (
+                    d,
+                    max(c_by_day[d] - m_by_day[d], ZERO)
+                    if c_by_day[d] is not None and m_by_day[d] is not None
+                    else None,
+                )
+                for d in days
+            ),
+        )
+        asset_series = Series(
+            "总资产", tuple((d, m_by_day[d]) for d in days)
+        )
+
+        currency = self.analytics.scope.reporting_currency
+        as_of_str = str(self.analytics.latest_profit_day or self.analytics.scope.as_of)
+        note = f"Excel兼容口径 · 币种 {currency} · 统计月份 {month_key} · 每日明细走势"
+
+        daily_chart = Chart(
+            18,
+            f"{month_key} 每日走势明细",
+            "capital_assets",
+            (base_series, gain_series, loss_series, asset_series),
+            note,
+            extra={
+                "is_daily_drill": True,
+                "drill_month": month_key,
+                "monthly_investments": inv_by_day,
+                "reporting_currency": currency,
+            },
+        )
+
+        self.canvas.chart = daily_chart
+        self.update_kpi_cards(daily_chart)
+        self.canvas.update()
+
+    def restore_monthly_chart(self):
+        """从每日走势平滑切回完整的月度全景走势图"""
+        if self.monthly_chart_18:
+            self.canvas.chart = self.monthly_chart_18
+            self.update_kpi_cards(self.monthly_chart_18)
+            self.canvas.update()
+
     def update_kpi_cards(self, chart):
-        """根据当前图表 18 的真实财务数据刷新顶部三个核心指标卡片"""
+        """根据当前图表（月度或日度）的真实财务数据刷新顶部三个核心指标卡片"""
         if not chart or len(chart.series) < 4:
             return
         points = [dict(s.points) for s in chart.series]

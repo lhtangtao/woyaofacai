@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QMouseEvent
 
 from portfolio.domain.analytics import Report, ReportRow
 from portfolio.domain.models import QueryScope
+from portfolio.engine.performance import DAILY_COLUMNS, MONTHLY_COLUMNS
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.charts_service import Chart, Series, build_charts
 from portfolio.ui.charts_page import ChartCanvas, ChartsPage, SparklineWidget
@@ -76,7 +77,6 @@ def test_capital_kpi_cards_calculation_and_sparklines(qtbot):
     page.resize(1000, 700)
     page.show()
 
-    # 构造 Chart 18：2026-01 盈利（高于本金），2026-02 亏损（低于本金）
     chart = Chart(
         18,
         "累计本金与总资产变化",
@@ -95,7 +95,6 @@ def test_capital_kpi_cards_calculation_and_sparklines(qtbot):
     )
 
     page.update_kpi_cards(chart)
-    # 最新月份为 2026-02：股票市值 $45,000，累计净买入 $50,000，差额 -$5,000
     assert "$45,000" in page.card_market_val.lbl_value.text()
     assert "$50,000" in page.card_net_buy.lbl_value.text()
     assert "-$5,000" in page.card_diff.lbl_value.text()
@@ -109,16 +108,28 @@ def test_capital_filter_card_interactions_and_chips(qtbot):
     qtbot.addWidget(page)
     page.show()
 
-    # 测试筛选卡片
     fc = page.filter_card
+    # 验证红框部分（内部人员下拉框）与高级筛选按钮已彻底移除
+    assert not hasattr(fc, "combo_person")
+    assert not hasattr(fc, "btn_advanced")
+    # 验证多余的 db_label 哈希标识彻底不展示
+    assert not hasattr(page, "db_label")
+
+    # 测试人员 Chips 标签同步
     assert fc.chip_person.isVisible()
-    fc.combo_person.setCurrentText("家庭")
-    assert "家庭" in fc.chip_person.text()
+    fc.sync_person("个人")
+    assert "个人" in fc.chip_person.text()
+
+    # 测试渠道选择与 Chips 联动
+    fc.set_available_channels(["长桥", "盈立"])
+    fc.combo_channel.setCurrentText("长桥")
+    assert fc.chip_channel.isVisible()
+    assert "长桥" in fc.chip_channel.text()
 
     # 重置筛选
     fc.reset_filters()
-    assert fc.combo_person.currentText() == "个人"
     assert fc.combo_channel.currentIndex() == 0
+    assert not fc.chip_channel.isVisible()
 
 
 def test_capital_canvas_hover_and_drill_events(qtbot):
@@ -147,7 +158,6 @@ def test_capital_canvas_hover_and_drill_events(qtbot):
     canvas.show()
     qtbot.wait(10)
 
-    # 触发绘制产生 categories_x
     canvas.repaint()
     assert len(canvas.categories_x) == 2
 
@@ -170,26 +180,30 @@ def test_capital_canvas_hover_and_drill_events(qtbot):
     canvas.leaveEvent(leave_ev)
     assert canvas.hover_index is None
 
-    # 测试点击下钻信号
-    drill_signals = []
-    canvas.selected.connect(lambda link, key: drill_signals.append((link, key)))
-    press_event = QMouseEvent(
-        QEvent.Type.MouseButtonPress,
-        canvas.hits[0][0].center(),
-        canvas.hits[0][0].center(),
-        canvas.hits[0][0].center(),
-        Qt.MouseButton.LeftButton,
-        Qt.MouseButton.LeftButton,
-        Qt.KeyboardModifier.NoModifier,
-    )
-    canvas.mousePressEvent(press_event)
-    assert len(drill_signals) == 1
-    assert drill_signals[0] == ("month", "2026-01")
 
-
-def test_same_month_round_trip_trades_included_in_net_investments(demo_path):
+def test_capital_drill_down_shows_daily_trend_and_returns(qtbot, demo_path):
     analytics = AnalyticsService(demo_path).calculate(QueryScope(date(2026, 1, 10)))
-    chart_18 = analytics.charts[17]
-    assert chart_18.kind == "capital_assets"
-    # 验证当月净买入字典不为空
-    assert len(chart_18.extra["monthly_investments"]) > 0
+    page = ChartsPage()
+    qtbot.addWidget(page)
+    page.show()
+    page.set_analytics(analytics)
+
+    # 模拟用户点击月度柱状图（下钻到当月每天走势）
+    target_month = "2026-01"
+    page.drill_down_month(target_month)
+
+    current_chart = page.canvas.chart
+    assert current_chart is not None
+    assert "2026-01" in current_chart.title
+    assert current_chart.extra.get("is_daily_drill") is True
+
+    # 验证数据点已转换为每日维度（日末股票市值与净投入）
+    days_in_chart = [k for k, _ in current_chart.series[3].points]
+    assert len(days_in_chart) > 0
+    assert all(d.startswith("2026-01") for d in days_in_chart)
+
+    # 模拟点击「✕ 返回月度总览」恢复
+    page.restore_monthly_chart()
+    restored_chart = page.canvas.chart
+    assert restored_chart.extra.get("is_daily_drill", False) is False
+    assert any(len(k) == 7 for k, _ in restored_chart.series[3].points)

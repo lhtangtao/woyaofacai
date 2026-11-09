@@ -278,6 +278,10 @@ class InteractionMixin:
             title = (self.asset_page if page == 3 else self.performance_page).selector.currentText()
         if page == 5 and isinstance(target, int):
             self.charts_page.selector.setCurrentIndex(target)
+            if hasattr(self.charts_page, "sync_person_from_main"):
+                self.charts_page.sync_person_from_main(self.person.currentData())
+            if hasattr(self.charts_page, "sync_broker_from_main"):
+                self.charts_page.sync_broker_from_main(self.accounts.current_broker_name())
         if page == 17:
             if isinstance(target, str):
                 self.top_days_page.set_view_mode(target)
