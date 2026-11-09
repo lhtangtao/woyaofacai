@@ -80,6 +80,9 @@ class AggregatedItem:
     category: str = ""
     channel: str = ""
     shares: Decimal = ZERO
+    prev_shares: Decimal = ZERO
+    shares_change: Decimal = ZERO
+    market_value_change: Decimal = ZERO
     items_count: int = 1
 
 
@@ -268,17 +271,21 @@ def calculate_distribution(
         ticker_curr[it.ticker]["count"] += 1
 
     # 对比期
-    ticker_prev: Dict[str, Decimal] = {}
+    ticker_prev_mv: Dict[str, Decimal] = {}
+    ticker_prev_shares: Dict[str, Decimal] = {}
     for it in filtered_prev:
-        ticker_prev[it.ticker] = ticker_prev.get(it.ticker, ZERO) + it.market_value
+        ticker_prev_mv[it.ticker] = ticker_prev_mv.get(it.ticker, ZERO) + it.market_value
+        ticker_prev_shares[it.ticker] = ticker_prev_shares.get(it.ticker, ZERO) + it.shares
 
     all_stocks: List[AggregatedItem] = []
     for t, data in ticker_curr.items():
         mv = data["market_value"]
         w = (mv / curr_total_mv * Decimal("100")) if curr_total_mv > ZERO else ZERO
-        pmv = ticker_prev.get(t, ZERO)
+        pmv = ticker_prev_mv.get(t, ZERO)
         pw = (pmv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         diff = w - pw
+        sh = data["shares"]
+        psh = ticker_prev_shares.get(t, ZERO)
         all_stocks.append(
             AggregatedItem(
                 name=t,
@@ -290,7 +297,10 @@ def calculate_distribution(
                 diff_pp=diff,
                 category=data["category"],
                 channel=data["channel"] if data["count"] == 1 else "多渠道",
-                shares=data["shares"],
+                shares=sh,
+                prev_shares=psh,
+                shares_change=sh - psh,
+                market_value_change=mv - pmv,
                 items_count=data["count"],
             )
         )
@@ -306,7 +316,7 @@ def calculate_distribution(
     stocks_top = list(all_stocks[:5])
     if len(all_stocks) > 5:
         other_curr_mv = sum((it.market_value for it in all_stocks[5:]), ZERO)
-        other_prev_mv = sum((ticker_prev.get(t, ZERO) for t in ticker_prev if t not in {it.name for it in stocks_top}), ZERO)
+        other_prev_mv = sum((ticker_prev_mv.get(t, ZERO) for t in ticker_prev_mv if t not in {it.name for it in stocks_top}), ZERO)
         other_w = (other_curr_mv / curr_total_mv * Decimal("100")) if curr_total_mv > ZERO else ZERO
         other_pw = (other_prev_mv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         stocks_top.append(
@@ -318,6 +328,7 @@ def calculate_distribution(
                 prev_market_value=other_prev_mv,
                 prev_weight=other_pw,
                 diff_pp=other_w - other_pw,
+                market_value_change=other_curr_mv - other_prev_mv,
                 category="混合",
                 channel="混合",
                 items_count=len(all_stocks) - 5,
@@ -354,6 +365,7 @@ def calculate_distribution(
                 prev_market_value=pmv,
                 prev_weight=pw,
                 diff_pp=w - pw,
+                market_value_change=mv - pmv,
                 items_count=t_count,
             )
         )
@@ -388,6 +400,7 @@ def calculate_distribution(
                 prev_market_value=pmv,
                 prev_weight=pw,
                 diff_pp=w - pw,
+                market_value_change=mv - pmv,
                 items_count=t_count,
             )
         )
@@ -395,7 +408,7 @@ def calculate_distribution(
 
     # 对 raw_holdings 补充 prev_weight 与 diff_pp
     for it in filtered_curr:
-        pmv = ticker_prev.get(it.ticker, ZERO)
+        pmv = ticker_prev_mv.get(it.ticker, ZERO)
         it.prev_weight = (pmv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         it.diff_pp = it.weight - it.prev_weight
 
@@ -410,7 +423,7 @@ def calculate_distribution(
     )
 
     # 9. 对比期前五大持仓集中度及变化
-    sorted_prev_tickers = sorted(ticker_prev.values(), reverse=True)
+    sorted_prev_tickers = sorted(ticker_prev_mv.values(), reverse=True)
     prev_top5_mv = sum(sorted_prev_tickers[:5], ZERO)
     prev_top5_concentration = (prev_top5_mv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
     top5_concentration_diff_pp = top5_concentration - prev_top5_concentration
