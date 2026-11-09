@@ -128,3 +128,24 @@ def test_ath_drawdown_rule_description_and_trigger(tmp_path):
     assert len(events) == 1
     assert "自历史最高位" in events[0].trigger_reason
     assert "15" in events[0].trigger_reason
+
+
+def test_rule_drawer_and_table_removes_redundant_rule_name(qtbot, tmp_path):
+    """验证创建/编辑规则弹窗无需填规则名称，表格列头移除与条件描述重复的规则名称列"""
+    from portfolio.ui.rule_drawer import RuleDrawerDialog
+    from portfolio.ui.monitor_page import MonitoringPage
+
+    # 1. 验证弹窗中移除了 name_input 输入框
+    dlg = RuleDrawerDialog(default_symbol="QQQM.US")
+    qtbot.addWidget(dlg)
+    assert not hasattr(dlg, "name_input")
+
+    # 2. 验证规则管理表格精简为 8 列，且首列为监控标的，去掉了冗余的规则名称列
+    store = MonitorStore(tmp_path / "monitoring.sqlite3")
+    page = MonitoringPage(None, store=store)
+    qtbot.addWidget(page)
+    headers = [page.rules_table.horizontalHeaderItem(i).text() for i in range(page.rules_table.columnCount())]
+    assert page.rules_table.columnCount() == 8
+    assert "规则名称" not in headers
+    assert headers[0] == "监控标的"
+    assert headers[2] == "条件描述"

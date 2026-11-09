@@ -654,7 +654,7 @@ class MonitoringPage(QWidget):
         r_toolbar.addWidget(self.rule_state_filter)
 
         self.rule_search = QLineEdit()
-        self.rule_search.setPlaceholderText("搜索规则名称 / 备注")
+        self.rule_search.setPlaceholderText("搜索标的 / 规则条件 / 备注")
         self.rule_search.textChanged.connect(self._load_rules_table)
         r_toolbar.addWidget(self.rule_search, 1)
 
@@ -672,10 +672,9 @@ class MonitoringPage(QWidget):
 
         layout.addLayout(r_toolbar)
 
-        # Rules Table
-        self.rules_table = QTableWidget(0, 9)
+        # Rules Table (精简掉与条件描述 100% 重复的「规则名称」列)
+        self.rules_table = QTableWidget(0, 8)
         self.rules_table.setHorizontalHeaderLabels([
-            "规则名称",
             "监控标的",
             "类别",
             "条件描述",
@@ -690,8 +689,7 @@ class MonitoringPage(QWidget):
         self.rules_table.verticalHeader().hide()
         self.rules_table.setAlternatingRowColors(True)
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.rules_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.rules_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.rules_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.rules_table.doubleClicked.connect(self._on_rule_double_clicked)
         layout.addWidget(self.rules_table)
 
@@ -1277,7 +1275,13 @@ class MonitoringPage(QWidget):
                 continue
             if state_filter == 2 and r.enabled:
                 continue
-            if search_txt and (search_txt not in r.name.upper() and search_txt not in r.note.upper()):
+            desc_text = describe_rule(r)
+            if search_txt and (
+                search_txt not in r.name.upper()
+                and search_txt not in r.note.upper()
+                and search_txt not in r.analysis_symbol.upper()
+                and search_txt not in desc_text.upper()
+            ):
                 continue
             filtered.append(r)
 
@@ -1286,18 +1290,15 @@ class MonitoringPage(QWidget):
         self.rules_table.setRowCount(len(filtered))
 
         for row, rule in enumerate(filtered):
-            # 0: Name
-            item0 = QTableWidgetItem(rule.name)
-            item0.setData(Qt.ItemDataRole.UserRole, rule.rule_id)
-            self.rules_table.setItem(row, 0, item0)
-
-            # 1: Symbol
+            # 0: Symbol (绑定 rule_id，供批量操作与双击索引)
             sym_desc = rule.analysis_symbol.removesuffix(".US")
             if rule.monitored_symbol and rule.monitored_symbol != rule.analysis_symbol:
                 sym_desc += f"\n(监控: {rule.monitored_symbol.removesuffix('.US')})"
-            self.rules_table.setItem(row, 1, QTableWidgetItem(sym_desc))
+            item0 = QTableWidgetItem(sym_desc)
+            item0.setData(Qt.ItemDataRole.UserRole, rule.rule_id)
+            self.rules_table.setItem(row, 0, item0)
 
-            # 2: Type
+            # 1: Type
             type_labels = {
                 "PRICE": "价格突破",
                 "PRICE_MA_CROSS": "股价/均线",
@@ -1309,26 +1310,28 @@ class MonitoringPage(QWidget):
                 "ATH_DRAWDOWN": "历史高点回撤",
                 "COMPOSITE": "多条件组合",
             }
-            self.rules_table.setItem(row, 2, QTableWidgetItem(type_labels.get(rule.rule_type, rule.rule_type)))
+            self.rules_table.setItem(row, 1, QTableWidgetItem(type_labels.get(rule.rule_type, rule.rule_type)))
 
-            # 3: Condition description
+            # 2: Condition description (若有备注，在下方附加呈现)
             desc = describe_rule(rule)
-            self.rules_table.setItem(row, 3, QTableWidgetItem(desc))
+            if rule.note:
+                desc += f"\n备注: {rule.note}"
+            self.rules_table.setItem(row, 2, QTableWidgetItem(desc))
 
-            # 4: Timing & Session
+            # 3: Timing & Session
             timing = "盘中实时" if rule.check_mode == "INTRADAY" else "日K收盘确认"
             session = "正常时段" if rule.session_scope == "REGULAR" else "含盘前盘后"
-            self.rules_table.setItem(row, 4, QTableWidgetItem(f"{timing}\n{session}"))
+            self.rules_table.setItem(row, 3, QTableWidgetItem(f"{timing}\n{session}"))
 
-            # 5: Repeat mode
+            # 4: Repeat mode
             repeat_labels = {
                 "REARM_CROSSING": "重新穿越触发",
                 "ONCE": "仅触发单次",
                 "COOLDOWN": f"冷却间隔({rule.cooldown_seconds}s)",
             }
-            self.rules_table.setItem(row, 5, QTableWidgetItem(repeat_labels.get(rule.repeat_mode, rule.repeat_mode)))
+            self.rules_table.setItem(row, 4, QTableWidgetItem(repeat_labels.get(rule.repeat_mode, rule.repeat_mode)))
 
-            # 6: Trigger stats
+            # 5: Trigger stats
             trigger_str = f"触发 {rule.trigger_count} 次"
             if rule.last_trigger_at:
                 try:
@@ -1340,9 +1343,9 @@ class MonitoringPage(QWidget):
                     trigger_str += f"\n最近: {last_t}"
                 except Exception:
                     pass
-            self.rules_table.setItem(row, 6, QTableWidgetItem(trigger_str))
+            self.rules_table.setItem(row, 5, QTableWidgetItem(trigger_str))
 
-            # 7: Enable Status (Widget with toggle button)
+            # 6: Enable Status (Widget with toggle button)
             toggle_btn = QPushButton("已启用" if rule.enabled else "已暂停")
             toggle_btn.setCheckable(True)
             toggle_btn.setChecked(rule.enabled)
@@ -1351,9 +1354,9 @@ class MonitoringPage(QWidget):
             else:
                 toggle_btn.setStyleSheet("background-color: #F1F5F9; color: #64748B;")
             toggle_btn.clicked.connect(lambda _, r_id=rule.rule_id, cur_en=rule.enabled: self._toggle_rule_state(r_id, not cur_en))
-            self.rules_table.setCellWidget(row, 7, toggle_btn)
+            self.rules_table.setCellWidget(row, 6, toggle_btn)
 
-            # 8: Operations (Edit, Copy, Delete)
+            # 7: Operations (Edit, Copy, Delete)
             op_widget = QWidget()
             op_layout = QHBoxLayout(op_widget)
             op_layout.setContentsMargins(2, 2, 2, 2)
@@ -1372,7 +1375,8 @@ class MonitoringPage(QWidget):
             btn_del.clicked.connect(lambda _, r_id=rule.rule_id: self._delete_rule(r_id))
             op_layout.addWidget(btn_del)
 
-            self.rules_table.setCellWidget(row, 8, op_widget)
+            self.rules_table.setCellWidget(row, 7, op_widget)
+            self.rules_table.setRowHeight(row, 50)
             self.rules_table.setRowHeight(row, 50)
 
         self.rules_table.blockSignals(False)

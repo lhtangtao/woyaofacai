@@ -232,17 +232,13 @@ class RuleDrawerDialog(QDialog):
 
         layout.addWidget(notify_group)
 
-        # 5. Rule Name and Note
-        name_group = QGroupBox("5. 规则备注")
+        # 5. Rule Note (选填)
+        name_group = QGroupBox("5. 规则备注 (选填)")
         name_layout = QFormLayout(name_group)
         name_layout.setSpacing(10)
 
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("留空将根据条件自动生成清晰名称")
-        name_layout.addRow("规则名称:", self.name_input)
-
         self.note_input = QLineEdit()
-        self.note_input.setPlaceholderText("选填：例如设定的技术依据、止损位置等")
+        self.note_input.setPlaceholderText("选填：例如设定的技术依据、止损位置等（规则名称将根据条件自动生成）")
         name_layout.addRow("备注说明:", self.note_input)
 
         layout.addWidget(name_group)
@@ -542,8 +538,7 @@ class RuleDrawerDialog(QDialog):
         self.ch_sound.setChecked("sound" in channels)
         self.sound_combo.setCurrentText(rule.sound_name or "Glass")
 
-        # 5. Name & Note
-        self.name_input.setText(rule.name)
+        # 5. Note
         self.note_input.setText(rule.note)
 
     def _collect_expression(self, rule_type: str) -> Dict[str, Any]:
@@ -668,7 +663,6 @@ class RuleDrawerDialog(QDialog):
         repeat_mode = self.repeat_combo.currentData()
         cooldown_sec = self.cooldown_spin.value()
         sound_name = self.sound_combo.currentText()
-        user_name = self.name_input.text().strip()
         note = self.note_input.text().strip()
 
         if self.existing_rule:
@@ -684,7 +678,7 @@ class RuleDrawerDialog(QDialog):
             self.result_rule.notification_channels = ",".join(chs)
             self.result_rule.sound_name = sound_name
             self.result_rule.enabled = enabled
-            self.result_rule.name = user_name or describe_rule(self.result_rule)
+            self.result_rule.name = describe_rule(self.result_rule)
             self.result_rule.note = note
         else:
             self.result_rule = MonitorRule(
@@ -701,10 +695,9 @@ class RuleDrawerDialog(QDialog):
                 notification_channels=",".join(chs),
                 sound_name=sound_name,
                 enabled=enabled,  # Defaults to False unless user clicked 'Save and Enable'
-                name=user_name,
+                name="",
                 note=note,
             )
-            if not self.result_rule.name:
-                self.result_rule.name = describe_rule(self.result_rule)
+            self.result_rule.name = describe_rule(self.result_rule)
 
         self.accept()
