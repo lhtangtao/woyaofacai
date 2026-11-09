@@ -1,5 +1,17 @@
 [
   {
+    "title": "彻底修复微操详情交易回放死循环刷日志与弹窗未展示问题",
+    "time": "2026-11-10 00:44",
+    "author": "Antigravity",
+    "tag": "死循环消除，回放弹窗正常激活，单元测试通过，已推送到远端仓库，待用户验收",
+    "details": [
+      "修改者：Antigravity（彻底消除递归循环与任务并发取消问题）",
+      "【1. 后台疯狂刷日志原因彻底查明】open_stock_replay 内部曾发射 drill.emit 信号，而 workspace 连接到 main_window.drill_chart，drill_chart 内部又再次调用了 open_stock_replay；这形成了相互触发的死循环。同时 main_window._submit 在收到同名通道新任务时会自动 cancel 正在运行的旧 worker，导致旧 worker 完成时命中 cancel check 被直接 return 丢弃，永远无法执行 show_detail 展现弹窗，而后台线程池则在死循环中不停计算并打印数据就绪日志。",
+      "【2. 消除循环与弹窗激活保障】彻底移除 open_stock_replay 中的二次 emit；main_window.drill_chart 针对 drill_trades 改为纯粹的交易明细中心跳转兜底；在 MonthlyScalpingPage 内部为弹窗持有实例引用 self._replay_dialog，并调用 show() + raise_() + activateWindow()，确保弹窗稳定展现在最前层。",
+      "【3. 测试验证与远端推送】tests/test_monthly_scalping.py 16 项测试全部通过，代码已提交并推送到远端仓库。"
+    ]
+  },
+  {
     "title": "观察列表填满面板并提供行内自选移除",
     "time": "2026-11-10 00:40",
     "author": "Codex",

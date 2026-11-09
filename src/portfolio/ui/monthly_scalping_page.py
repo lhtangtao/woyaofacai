@@ -1883,7 +1883,10 @@ class MonthlyScalpingPage(QWidget):
             layout.addWidget(drawer, 1)
 
             dialog.resize(980, 720)
+            self._replay_dialog = dialog
             dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
 
         if host and hasattr(host, "_submit"):
             host._submit(
@@ -1900,8 +1903,6 @@ class MonthlyScalpingPage(QWidget):
                 broker=broker_name,
             )
             show_detail(data)
-
-        self.drill.emit("drill_trades", sym, {"month": month, "symbol": sym})
 
     def close_drawer(self):
         self.drawer_overlay.hide()

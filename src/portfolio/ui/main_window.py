@@ -786,9 +786,11 @@ class MainWindow(InteractionMixin, QMainWindow):
         if kind in ("drill_trades", "replay"):
             extra = args[0] if args and isinstance(args[0], dict) else {}
             symbol = key or extra.get("symbol", "")
-            month = extra.get("month", "")
-            if hasattr(self, "monthly_scalping_page"):
-                self.monthly_scalping_page.open_stock_replay(symbol, month=month)
+            if hasattr(self, "trade_center"):
+                if symbol:
+                    self.trade_center.fields["symbol"].setText(symbol)
+                self.trade_center.query()
+            self.navigation.setCurrentRow(0)
             return
         if kind == "live_day":
             self.holding_date.setDate(QDate.currentDate())
