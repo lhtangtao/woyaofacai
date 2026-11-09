@@ -1853,15 +1853,27 @@ class ChartsPage(QWidget):
             c_history.append(c)
             diff_history.append(m - c)
 
-        latest_m = m_history[-1] if m_history else ZERO
-        latest_c = c_history[-1] if c_history else ZERO
+        valid_indices = [i for i, k in enumerate(categories) if points[3].get(k) is not None]
+        if valid_indices:
+            last_idx = valid_indices[-1]
+            latest_m = points[3].get(categories[last_idx]) or ZERO
+            latest_c = c_history[last_idx]
+            m_spark = [points[3].get(categories[i]) for i in valid_indices]
+            c_spark = [c_history[i] for i in valid_indices]
+            diff_spark = [diff_history[i] for i in valid_indices]
+        else:
+            latest_m = ZERO
+            latest_c = ZERO
+            m_spark = []
+            c_spark = []
+            diff_spark = []
         latest_diff = latest_m - latest_c
 
         # 卡片 1：股票市值
-        self.card_market_val.set_value(f"${latest_m:,.0f}", history=m_history)
+        self.card_market_val.set_value(f"${latest_m:,.0f}", history=m_spark)
 
         # 卡片 2：累计净买入
-        self.card_net_buy.set_value(f"${latest_c:,.0f}", history=c_history)
+        self.card_net_buy.set_value(f"${latest_c:,.0f}", history=c_spark)
 
         # 卡片 3：市值差额
         is_gain = latest_diff >= ZERO
@@ -1879,7 +1891,7 @@ class ChartsPage(QWidget):
             diff_text,
             is_gain=is_gain,
             badge_text=badge_text,
-            history=diff_history,
+            history=diff_spark,
         )
 
     def export(self):

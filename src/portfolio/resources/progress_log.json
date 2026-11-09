@@ -1,5 +1,18 @@
 [
   {
+    "title": "资产总览走势图 修复当前进行中月份末无快照导致KPI卡片计算TypeError异常",
+    "time": "2026-11-09 23:04",
+    "author": "Antigravity",
+    "tag": "问题排查与修复完成，实机数据库验证通过，单元测试全绿，已推送到远端仓库，待用户验收",
+    "details": [
+      "修改者：Antigravity（代码修复与测试补全）",
+      "【1. 根因排查定位】当进入新月份（例如当前 2026-11），因该月尚未结束，月度月末市值快照尚不存在，Chart 18（资本/资产全景走势）的 series 中该月份对应值为 None。在 charts_page.py 的 update_kpi_cards 中，直接通过 m_history[-1] 提取最新月份市值，导致 latest_m 取得 None，随后执行 latest_m - latest_c 时抛出「TypeError: unsupported operand type(s) for -: 'NoneType' and 'Decimal'」，触发全局异常捕获，使页面展示红色报错横幅「结果展示失败，请刷新重试：原始数据未改动。」且指标卡片持续停留为「计算中...」。",
+      "【2. 代码健壮性修复】修改 charts_page.py 中的 update_kpi_cards 逻辑：通过检索最近一个有效（非 None）市值的月份，安全对齐获取对应的 latest_m 与 latest_c，确保差额计算与比率计算绝不产生 NoneType 异常；同时 sparkline 走势图序列过滤掉末尾未结算月份，避免折线图在当前月产生突兀归零。",
+      "【3. 自动化测试】在 tests/test_capital_chart.py 中补充 test_update_kpi_cards_handles_none_values_gracefully 单元测试，模拟当前月数据为 None 的边界场景，7 个测试用例全部通过验证。",
+      "【4. 实机加载验证】基于本地真实数据库 money.sqlite3 初始化 ChartsPage 并调用 set_analytics，成功渲染 27 张图表，核心指标卡片（市值 $72,395、净买入 $75,878、差额 -$3,483、比例 -4.6%）完全恢复正常计算与展示。"
+    ]
+  },
+  {
     "title": "行情监控 修复Decimal序列化异常导致价格突破无法触发报警及状态卡死的问题",
     "time": "2026-11-09 22:46",
     "author": "Antigravity",

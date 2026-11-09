@@ -214,3 +214,26 @@ def test_capital_drill_down_shows_daily_trend_and_returns(qtbot, demo_path):
     restored_chart = page.canvas.chart
     assert restored_chart.extra.get("is_daily_drill", False) is False
     assert any(len(k) == 7 for k, _ in restored_chart.series[3].points)
+
+
+def test_update_kpi_cards_handles_none_values_gracefully(qtbot):
+    chart = Chart(
+        18,
+        "累计本金与总资产变化",
+        "capital_assets",
+        (
+            Series("累计本金基柱", (("2026-09", D(62000)), ("2026-10", D(72000)), ("2026-11", None))),
+            Series("资产高于本金", (("2026-09", D(15000)), ("2026-10", D(0)), ("2026-11", None))),
+            Series("资产低于本金", (("2026-09", D(0)), ("2026-10", D(3000)), ("2026-11", None))),
+            Series("总资产", (("2026-09", D(77000)), ("2026-10", D(69000)), ("2026-11", None))),
+        ),
+        "EXCEL_COMPAT · USD",
+    )
+    page = ChartsPage()
+    qtbot.addWidget(page)
+    # 之前此处会因 NoneType 减法抛出 TypeError，测试确保能够优雅处理
+    page.update_kpi_cards(chart)
+    assert page.card_market_val.lbl_value.text() == "$69,000"
+    assert page.card_net_buy.lbl_value.text() == "$75,000"
+    assert page.card_diff.lbl_value.text() == "-$6,000"
+    assert "↘" in page.card_diff.badge.text()
