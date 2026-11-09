@@ -243,8 +243,8 @@ class RuleEvaluator:
 
         # --- F. VOLUME ---
         elif t == "VOLUME":
-            ma_p = expr.get("ma_period", 20)
-            ratio = Decimal(str(expr.get("ratio", 2.0)))
+            ma_p = int(expr.get("base_period") or expr.get("ma_period", 20))
+            ratio = Decimal(str(expr.get("multiplier") or expr.get("ratio", 2.0)))
             vma = indicators.get(f"VMA{ma_p}")
             if vma is not None and vma > 0 and bars:
                 curr_vol = bars[-1].volume
@@ -279,15 +279,15 @@ class RuleEvaluator:
         elif t == "ATH_DRAWDOWN":
             ath = indicators.get("AVAILABLE_HIGH")
             if ath is not None and ath > 0:
-                if op == "ATH_BREAKOUT":
+                if op in ("ATH_BREAKOUT", "NEW_HIGH"):
                     threshold_val_str = f"ATH ${ath:,.2f}"
                     if curr_price < ath:
                         is_rearmed_state = True
                     if is_rearmed_state and prev_price < ath and curr_price >= ath:
                         triggered = True
                         trigger_reason = f"突破历史最高价 ${ath:,.2f} 创出新高！"
-                elif op == "DRAWDOWN_CROSS":
-                    th_raw = expr.get("threshold", 10.0)
+                elif op in ("DRAWDOWN_CROSS", "DRAWDOWN_REACH"):
+                    th_raw = expr.get("drawdown_pct") or expr.get("threshold", 10.0)
                     threshold_val_str = f"回撤 {th_raw}%"
                     try:
                         th_pct = Decimal(str(th_raw))

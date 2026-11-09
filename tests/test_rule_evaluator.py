@@ -79,3 +79,52 @@ def test_rule_evaluator_cross_above_trigger(tmp_path):
         assert len(alerts) == 1
         r_db = db.execute("SELECT trigger_count FROM monitor_rules WHERE rule_id='rule_cross_test'").fetchone()
         assert r_db["trigger_count"] == 1
+
+
+def test_ath_drawdown_rule_description_and_trigger(tmp_path):
+    """验证历史高点回撤规则的描述能够正确读取 drawdown_pct，且 DRAWDOWN_REACH 能够正常触发"""
+    from portfolio.domain.monitor_rules import describe_rule
+
+    rule = MonitorRule(
+        rule_id="rule_ath_test",
+        scope_key="test_scope",
+        analysis_symbol="QQQM.US",
+        monitored_symbol="QQQM.US",
+        market="US",
+        rule_type="ATH_DRAWDOWN",
+        expression={"operator": "DRAWDOWN_REACH", "drawdown_pct": "15.0"},
+        check_mode="INTRADAY",
+        session_scope="EXTENDED",
+        repeat_mode="REARM_CROSSING",
+        enabled=True,
+        name="QQQM.US 历史高点回撤达到 15.0%",
+    )
+    # 1. 验证条件描述为 15.0%，而非旧代码硬编码默认的 10.0%
+    desc = describe_rule(rule)
+    assert desc == "QQQM.US 历史高点回撤达到 15.0%"
+
+    # 2. 验证触发评估
+    store = MonitorStore(tmp_path / "monitoring.sqlite3")
+    store.add_rule(rule)
+    service = MonitorService(store, None)
+
+    # 模拟历史高点 100，上一价 86 (回撤 14% < 15%)，已处于准备触发态
+    with store.connect() as db:
+        db.execute(
+            "UPDATE monitor_runtime_state SET rearmed=1, last_observed_value='86.00' WHERE rule_id='rule_ath_test'"
+        )
+
+    # 当前价跌至 84 (回撤 16% >= 15%)
+    market_data = {
+        "QQQM.US": {
+            "price": Decimal("84.00"),
+            "session": "Intraday",
+            "quote_session": "Intraday",
+            "quote_time": "2026-11-09T14:40:00+00:00",
+            "metrics": {"AVAILABLE_HIGH": Decimal("100.00")},
+        }
+    }
+    events = service.evaluate_rules("test_scope", market_data)
+    assert len(events) == 1
+    assert "自历史最高位" in events[0].trigger_reason
+    assert "15" in events[0].trigger_reason

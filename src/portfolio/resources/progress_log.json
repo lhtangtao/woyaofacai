@@ -1,5 +1,17 @@
 [
   {
+    "title": "行情监控 修复历史高点回撤规则条件描述阈值硬编码10.0%及触发操作符不一致缺陷",
+    "time": "2026-11-09 23:18",
+    "author": "Antigravity",
+    "tag": "根因定位并修复完成，双向兼容操作符与字段别名，单元测试全绿，已推送到远端仓库，待用户验收",
+    "details": [
+      "修改者：Antigravity（字段对齐与缺陷修复）",
+      "【1. 根因排查定位】用户反馈编辑规则中明明设置回撤幅度为 15.0%，但列表中「条件描述」列却显示「QQQM.US 历史高点回撤达到 10.0%」。排查发现：rule_drawer.py 保存规则时，回撤阈值保存为 drawdown_pct（例如 15.0），但 monitor_rules.py 生成条件描述时仅读取 expr.get('threshold', 10.0)，因 key 不匹配导致永远回退至默认值 10.0%；同时 rule_drawer.py 使用的操作符为 DRAWDOWN_REACH / NEW_HIGH，而 rule_evaluator.py 与 monitor_rules.py 原先仅判定 DRAWDOWN_CROSS / ATH_BREAKOUT，不仅描述失真，还会导致实际行情回撤达到 15% 时无法触发报警。",
+      "【2. 字段与操作符全链路统一兼容】在 monitor_rules.py 中：读取 expr.get('drawdown_pct') or expr.get('threshold', 10.0)，同时对 VOLUME 规则的 base_period/ma_period 与 multiplier/ratio 增加双向别名兜底；在 rule_evaluator.py 中：操作符同时支持 DRAWDOWN_REACH 与 DRAWDOWN_CROSS、NEW_HIGH 与 ATH_BREAKOUT，阈值同时支持 drawdown_pct 与 threshold；在 rule_drawer.py 中：保存时同时写入 drawdown_pct 与 threshold，双向兼容。",
+      "【3. 实机数据与单元测试验证】实机读取 ~/Library/Application Support/MoneyPortfolio/我要发财/monitoring.sqlite3 中的用户 QQQM.US 规则测试，describe_rule 返回值已从 10.0% 恢复为正确的「QQQM.US 历史高点回撤达到 15.0%」；在 tests/test_rule_evaluator.py 中新增 test_ath_drawdown_rule_description_and_trigger 单元测试，3/3 测试全部通过。"
+    ]
+  },
+  {
     "title": "今日盈亏 移除走势图下方底层K线断线技术警告框与调试日志文本",
     "time": "2026-11-09 23:10",
     "author": "Antigravity",

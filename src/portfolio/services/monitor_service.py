@@ -410,7 +410,7 @@ class MonitorService:
                 "stamp": item.get("quote_time"),
                 "prev_close": None,
             }
-            indicators = item.get("metrics") or {}
+            indicators = item.get("metrics") or item.get("indicators") or {}
             series_data = item.get("series") or {}
             bars = item.get("bars") or []
 

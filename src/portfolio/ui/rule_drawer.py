@@ -508,15 +508,16 @@ class RuleDrawerDialog(QDialog):
             self.p_rsi_dir.setCurrentIndex(0 if expr.get("operator") == "CROSS_ABOVE" else 1)
             self.p_rsi_val.setValue(float(expr.get("threshold", 30.0)))
         elif t == "VOLUME":
-            self.p_vol_mult.setValue(float(expr.get("multiplier", 2.0)))
-            idx = self.p_vol_base.findData(expr.get("base_period", 5))
+            self.p_vol_mult.setValue(float(expr.get("multiplier") or expr.get("ratio", 2.0)))
+            base_val = expr.get("base_period") or expr.get("ma_period", 5)
+            idx = self.p_vol_base.findData(int(base_val))
             if idx >= 0:
                 self.p_vol_base.setCurrentIndex(idx)
         elif t == "WEEK52":
             self.p_w52_type.setCurrentIndex(0 if expr.get("operator") == "NEW_HIGH" else 1)
         elif t == "ATH_DRAWDOWN":
-            self.p_ath_type.setCurrentIndex(0 if expr.get("operator") == "NEW_HIGH" else 1)
-            self.p_ath_dd.setValue(float(expr.get("drawdown_pct", 20.0)))
+            self.p_ath_type.setCurrentIndex(0 if expr.get("operator") in ("NEW_HIGH", "ATH_BREAKOUT") else 1)
+            self.p_ath_dd.setValue(float(expr.get("drawdown_pct") or expr.get("threshold", 20.0)))
 
         # 3. Strat
         idx = self.check_mode_combo.findData(rule.check_mode)
@@ -579,9 +580,13 @@ class RuleDrawerDialog(QDialog):
                 "threshold": str(Decimal(str(round(self.p_rsi_val.value(), 1)))),
             }
         elif rule_type == "VOLUME":
+            mult = str(Decimal(str(round(self.p_vol_mult.value(), 2))))
+            base = int(self.p_vol_base.currentData())
             expr = {
-                "multiplier": str(Decimal(str(round(self.p_vol_mult.value(), 2)))),
-                "base_period": int(self.p_vol_base.currentData()),
+                "multiplier": mult,
+                "ratio": mult,
+                "base_period": base,
+                "ma_period": base,
             }
         elif rule_type == "WEEK52":
             expr = {
@@ -589,9 +594,11 @@ class RuleDrawerDialog(QDialog):
             }
         elif rule_type == "ATH_DRAWDOWN":
             is_high = (self.p_ath_type.currentIndex() == 0)
+            dd_val = str(Decimal(str(round(self.p_ath_dd.value(), 1)))) if not is_high else "0"
             expr = {
                 "operator": "NEW_HIGH" if is_high else "DRAWDOWN_REACH",
-                "drawdown_pct": str(Decimal(str(round(self.p_ath_dd.value(), 1)))) if not is_high else "0",
+                "drawdown_pct": dd_val,
+                "threshold": dd_val,
             }
         elif rule_type == "COMPOSITE":
             preset = self.comp_preset.currentData()

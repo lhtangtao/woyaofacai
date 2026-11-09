@@ -303,8 +303,8 @@ def describe_rule(rule: MonitorRule) -> str:
         return f"{sym} RSI14 ({op} {th})"
 
     elif t == "VOLUME":
-        ma = expr.get("ma_period", 20)
-        ratio = expr.get("ratio", 2.0)
+        ma = expr.get("base_period") or expr.get("ma_period", 20)
+        ratio = expr.get("multiplier") or expr.get("ratio", 2.0)
         return f"{sym} 成交量突破 {ratio}倍 VMA{ma}"
 
     elif t == "WEEK52":
@@ -315,9 +315,9 @@ def describe_rule(rule: MonitorRule) -> str:
         return f"{sym} 52周高低点 ({op})"
 
     elif t == "ATH_DRAWDOWN":
-        if op == "ATH_BREAKOUT":
+        if op in ("ATH_BREAKOUT", "NEW_HIGH"):
             return f"{sym} 突破历史最高价 (ATH)"
-        th = expr.get("threshold", 10.0)
+        th = expr.get("drawdown_pct") or expr.get("threshold", 10.0)
         return f"{sym} 历史高点回撤达到 {th}%"
 
     elif t == "COMPOSITE":
