@@ -843,7 +843,14 @@ class ChartCanvas(QWidget):
             Decimal(0), max(v for _, _, v, _ in data)
         )
         if stacked_area:
-            low, high = ZERO, Decimal(1)
+            low = ZERO
+            if chart.ratio:
+                high = Decimal(1)
+            else:
+                totals = {}
+                for _, month, value, _ in data:
+                    totals[month] = totals.get(month, ZERO) + value
+                high = max(totals.values(), default=ZERO)
         span = high - low or Decimal(1)
         if getattr(chart, "highlight_extremes", False):
             y_pad = span * Decimal("0.15")

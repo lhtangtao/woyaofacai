@@ -1,0 +1,31 @@
+.portfolio-trend { display: grid; gap: 14px; min-width: 0; color: #1e293b; }
+.pt-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pt-toolbar > :last-child { margin-left: auto; }
+.pt-toolbar h3, .pt-toolbar h2 { margin: 0; }
+.pt-toolbar span, .portfolio-trend small { color: #64748b; font-size: 12px; }
+.pt-toolbar button, .pt-toolbar select { border: 1px solid #dbe5f0; background: #fff; color: #1e293b; border-radius: 7px; padding: 6px 10px; }
+.pt-toolbar button[aria-pressed="true"] { color: #2563eb; background: #eff6ff; }
+.pt-kpis, .pt-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pt-kpis { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.pt-card { min-width: 0; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; padding: 14px 16px; }
+.pt-card h3 { margin: 0 0 8px; font-size: 15px; }
+.pt-chart-heading { min-height: 30px; }
+.pt-chart-heading h3 { margin: 0; }
+.pt-chart-heading button { border: 0; color: #2563eb; background: #eff6ff; }
+.pt-kpis .pt-card { display: grid; gap: 6px; }
+.pt-kpis strong { font-size: 23px; font-variant-numeric: tabular-nums; }
+.portfolio-trend .pt-profit { color: #15803d; }
+.portfolio-trend .pt-loss { color: #dc2626; }
+.pt-table-scroll { overflow: auto; margin-top: 8px; }
+.pt-month-table { overflow-x: auto; overflow-y: hidden; }
+.portfolio-trend table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.portfolio-trend th, .portfolio-trend td { padding: 8px 10px; text-align: right; border-bottom: 1px solid #eef2f7; }
+.portfolio-trend th:first-child, .portfolio-trend td:first-child { text-align: left; }
+.portfolio-trend th { color: #475569; background: #f5f7fb; }
+.portfolio-trend th button, .portfolio-trend td button { padding: 0; border: 0; background: transparent; font: inherit; color: #2563eb; }
+.pt-selected { background: #eff6ff; }
+.pt-drawer-layer { position: fixed; z-index: 70; inset: 0; display: flex; justify-content: flex-end; }
+.pt-mask { position: absolute; inset: 0; background: rgb(15 23 42 / 34%); border: none; }
+.pt-drawer { position: relative; width: min(100vw, 560px); padding: 20px; overflow: auto; background: #fff; box-shadow: -8px 0 25px rgb(15 23 42 / 12%); }
+.pt-drawer > .pt-toolbar { margin: 12px 0; }
+@media (max-width: 900px) { .pt-grid { grid-template-columns: minmax(0, 1fr); } }

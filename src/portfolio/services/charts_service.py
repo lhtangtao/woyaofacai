@@ -156,7 +156,7 @@ def build_charts(analytics, *, selected_month=None):
         )
         count[mo] = None if unknown else Decimal(len(positions))
     add(13, {"前五大持仓占比": concentration}, "line", percentage=True, link="month")
-    add(14, {"月末持仓标的数": count}, link="month")
+    add(14, {"月末持仓标的数": count}, "line", link="month")
     add(15, {"已清仓盈亏($)": {f"{r.values[0]} · {r.values[2]}": r.values[7] for r in closed}}, "horizontal", link="symbol_suffix")
     add(16, {"浮动盈亏($)": {f"{r.values[0]} · {r.values[2]}": r.values[10] for r in holdings}}, "horizontal", link="symbol_suffix")
     contributions = aggregate(stocks, 2, 17)

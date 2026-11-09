@@ -124,7 +124,7 @@ class TrendChartsPage(QWidget):
         cards.addWidget(QLabel("关键指标月度趋势"))
         self.table = self.make_table(["月份", *[label for _, label, _ in METRICS]], [])
         self.table.sortItems(0, Qt.SortOrder.DescendingOrder)
-        self.table.setMinimumHeight(260)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.cellClicked.connect(lambda row, _: self.select_month(self.table.item(row, 0).text()))
         self.table.cellDoubleClicked.connect(lambda row, _: self.open_detail(18, self.table.item(row, 0).text(), ""))
         cards.addWidget(self.table)
@@ -207,6 +207,12 @@ class TrendChartsPage(QWidget):
             delta = change(latest.get(key), prior.get(key))
             sub.setText(f"较上月 {fmt(delta, 'pp' if kind == 'ratio' else kind)}" if delta is not None else currency if kind == "money" else "")
         self.fill_table(self.table, [[(row["month"], "text"), *[(row[key], kind) for key, _, kind in METRICS]] for row in reversed(rows)])
+        self.table.setFixedHeight(
+            self.table.horizontalHeader().height()
+            + self.table.verticalHeader().length()
+            + 2 * self.table.frameWidth()
+            + self.table.horizontalScrollBar().sizeHint().height()
+        )
         for canvas in self.canvases.values():
             canvas.chart = None
             canvas.detail_month = self.selected_month
