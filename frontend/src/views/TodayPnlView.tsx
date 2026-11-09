@@ -206,13 +206,7 @@ export const TodayPnlView: React.FC<{
       {curve?.fallback && <p className="today-warning">所选日期 {curve.target_day} 非美股交易日，已回溯至 {curve.day}</p>}
       {chartOptions && <ReactECharts option={chartOptions} notMerge style={{ height: 420 }} />}
       {!curve?.complete_points && <p className="today-warning">{curve?.pending ? "后台正在采集并计算五分钟数据…" : "当前筛选暂无有效曲线数据；未生成模拟点。"}</p>}
-      {curve && <p>{curve.complete_points} 个完整五分钟历史点
-        {curve.latest && ` · 最近有效盈亏 ${money(curve.latest.pnl)} USD · 截至 ${clock(curve.latest.time)} 北京时间`}</p>}
-      {curve?.high && curve.low && <p>最高 {money(curve.high.pnl)}（{clock(curve.high.time)}） · 最低 {money(curve.low.pnl)}（{clock(curve.low.time)}）</p>}
-      {curve?.scope_parts && <p>同一五分钟点：持仓部分 {money(curve.scope_parts.current_holdings)} USD · 当日全清仓部分 {money(curve.scope_parts.closed_today)} USD；上方卡片使用独立10秒报价。</p>}
-      {curve?.warning && <p role="alert" className="today-warning">{curve.warning}</p>}
-      {curve?.message && <p className="today-warning">{curve.message}</p>}
-      <p>北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。缺失断线，未到时段留白；含当日清仓，可能与仅当前持仓的上方卡片不同。</p>
+      <p>北京时间；完整交易日从夜盘至盘后，跨日后时钟归零。未到时段留白；含当日清仓，可能与仅当前持仓的上方卡片不同。</p>
     </section>}
     <section className="card-panel today-channels" aria-label="各渠道盈亏与资产汇总">
       <div><h3>各渠道当日盈亏（USD）</h3>

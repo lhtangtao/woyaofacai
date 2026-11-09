@@ -60,9 +60,10 @@ class IntradayPnlChart(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.canvas = ChartCanvas(card_mode=True)
         self.canvas.setFixedHeight(420)
-        self.status = QLabel('后台独立采集五分钟K线并计算，图表读取已保存明细。')
+        self.status = QLabel('')
         self.status.setWordWrap(True)
         self.status.setObjectName('secondary')
+        self.status.hide()
         self.alert = QLabel()
         self.alert.setWordWrap(True)
         self.alert.hide()
@@ -203,25 +204,21 @@ class IntradayPnlChart(QWidget):
                                   vertical_lines=tuple(vertical_lines),
                                   highlight_extremes=True)
         self.canvas.update()
-        regular_alert = '盘中行情缺失' in self.history_warning
-        self.alert.setVisible(regular_alert)
-        if regular_alert:
-            theme = tokens(self)
-            self.alert.setText('⚠ '+self.history_warning)
-            self.alert.setStyleSheet(f'color:{theme.warning};background:{theme.panel};border:1px solid {theme.warning};border-radius:8px;padding:10px;font-size:13px;')
+        # 底层行情采集诊断、五分钟K线断线补全与数据库落库等调试信息不打扰用户
+        self.alert.hide()
         fallback_tag = f'［所选日期 {self.target_day} 非美股交易日，已自动回溯至最近交易日 {self.day}］ ' if self.is_fallback else ''
         if self.error:
             self.status.setText(fallback_tag + self.error)
+            self.status.show()
         elif not complete:
-            self.status.setText(fallback_tag + (self.history_warning or '尚无完整有效五分钟点，请查看后台采集状态；不使用实时快照代替历史。'))
+            self.status.setText(fallback_tag + '暂无完整当日走势数据')
+            self.status.show()
         else:
-            latest_stamp, latest = next((stamp, value) for stamp, value in sorted(samples.items(), reverse=True) if value is not None)
-            components=parts.get(latest_stamp,{})
-            describe=lambda value:f'{value:+,.2f}' if value is not None else '—'
-            scope_note=f" 同一五分钟点：持仓部分 {describe(components.get('current_holdings'))}，当日全清仓部分 {describe(components.get('closed_today'))} USD。"
-            latest_stamp = latest_stamp.astimezone(zone).strftime('%H:%M')
-            interval_text = '五分钟历史' if history else '实时分钟'
-            self.status.setText(fallback_tag + f'{complete} 个完整{interval_text}点 · 最近有效盈亏 {latest:+,.2f} USD · 最后有效五分钟点 {latest_stamp} 北京时间（上方卡片为独立10秒报价）。'
-                                + ('长桥行情已落库，重启后优先读库；含当日清仓，可能与仅当前持仓的上方卡片不同。' if history else '正在补取开机前的历史行情。')
-                                + (' 提示：'+self.history_warning if self.history_warning and not regular_alert else ''))
-            self.status.setText(self.status.text()+scope_note)
+            self.status.hide()
+            # 将诊断详情挂载在画布 tooltip，方便需要时悬停查看，不占据界面主视觉
+            tip_parts = []
+            if self.is_fallback:
+                tip_parts.append(f'所选日期 {self.target_day} 非美股交易日，已自动回溯至最近交易日 {self.day}')
+            if self.history_warning:
+                tip_parts.append(self.history_warning)
+            self.canvas.setToolTip('\n'.join(tip_parts) if tip_parts else '')
