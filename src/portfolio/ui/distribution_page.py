@@ -713,34 +713,18 @@ class HoldingsDistributionPage(QWidget):
         self.cmp_combo.currentIndexChanged.connect(self.update_distribution)
         row.addWidget(self.cmp_combo)
 
-        # 人员
-        row.addWidget(QLabel("人员:"))
+        # 后台保留备用，不在界面展示人员、渠道、股票分类筛选项
         self.person_combo = QComboBox()
-        self.person_combo.setMinimumWidth(100)
         self.person_combo.addItem("全部人员", None)
-        self.person_combo.currentIndexChanged.connect(self.update_distribution)
-        row.addWidget(self.person_combo)
-
-        # 渠道
-        row.addWidget(QLabel("渠道:"))
         self.channel_combo = QComboBox()
-        self.channel_combo.setMinimumWidth(110)
         self.channel_combo.addItem("全部渠道", None)
-        self.channel_combo.currentIndexChanged.connect(self.update_distribution)
-        row.addWidget(self.channel_combo)
-
-        # 分类
-        row.addWidget(QLabel("股票分类:"))
         self.cat_combo = QComboBox()
-        self.cat_combo.setMinimumWidth(110)
         self.cat_combo.addItem("全部分类", None)
-        self.cat_combo.currentIndexChanged.connect(self.update_distribution)
-        row.addWidget(self.cat_combo)
 
         # 搜索框
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("🔍 搜索 Ticker 或名称...")
-        self.search_input.setFixedWidth(160)
+        self.search_input.setFixedWidth(180)
         self.search_input.textChanged.connect(self.update_distribution)
         row.addWidget(self.search_input)
 
