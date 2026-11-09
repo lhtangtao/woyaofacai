@@ -1,3 +1,4 @@
+import { PortfolioTrendView } from "./views/PortfolioTrendView";
 import { OwnershipAnalysisView } from "./views/OwnershipAnalysisView";
 import React, { useEffect, useState } from "react";
 import { Sidebar, NAV_GROUPS } from "./components/Sidebar";
@@ -219,6 +220,7 @@ export const App: React.FC = () => {
     if (currentRoute === "monitor") return { title: "行情监控中心", subtitle: "实时行情、多周期均线系统与 Bark 预警规则" };
     if (currentRoute === "ai_chat") return { title: "AI 投资问答", subtitle: "基于账本真实财务数据的智能分析顾问" };
     if (currentRoute === "ai_stock") return { title: "AI 股票分析", subtitle: "单标的深度技术面与基本面研报" };
+    if (currentRoute === "charts:trend") return { title: "走势图", subtitle: "从资产规模、持仓结构、渠道配置和集中度等维度，观察投资组合的长期变化趋势。" };
     if (currentRoute === "charts") return { title: "资产走势图", subtitle: "全时期资产净值增长曲线" };
     if (currentRoute === "charts:monthly") return { title: "月度走势详情", subtitle: "月度真实盈亏与现金流动" };
     if (currentRoute === "charts:distribution") return { title: "持仓分布", subtitle: "标的分类与资产占比" };
@@ -402,6 +404,7 @@ export const App: React.FC = () => {
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
 
+            {currentRoute === "charts:trend" && <PortfolioTrendView personId={selectedPersonId} broker={selectedBroker} refreshKey={refreshKey} />}
             {currentRoute === "charts" && <ChartsView mode="asset" personId={selectedPersonId} />}
             {currentRoute === "charts:monthly" && <HistoricalTrendView personId={selectedPersonId} />}
             {currentRoute === "charts:distribution" && <ChartsView mode="distribution" personId={selectedPersonId} />}

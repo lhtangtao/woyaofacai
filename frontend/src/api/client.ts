@@ -192,6 +192,12 @@ export const api = {
     filters.channels.forEach(channel => query.append("channel", channel));
     return requestApi(`/api/v1/charts/history?${query.toString()}`);
   },
+  portfolioTrend: (personId: number | null, broker: string, signal: AbortSignal) => {
+    const query = new URLSearchParams();
+    if (personId != null) query.set("person_id", String(personId));
+    if (broker) query.set("broker", broker);
+    return requestApi(`/api/v1/charts/portfolio_trend?${query.toString()}`, { signal });
+  },
   charts: (personId?: number | null) => {
     const query = new URLSearchParams();
     if (personId != null) query.set("person_id", String(personId));

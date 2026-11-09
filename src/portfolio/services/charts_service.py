@@ -70,11 +70,12 @@ def month_end_positions(rows):
     positions = defaultdict(list)
     unknown = False
     for row in rows:
-        ticker, quantity = row.values[3], row.values[8]
+        ticker = (row.values[3] or "").strip().upper()
+        quantity = row.values[8]
         if quantity is None or (quantity > ZERO and not ticker):
             unknown = True
         elif quantity > ZERO:
-            positions[ticker.strip().upper()].append(row)
+            positions[ticker].append(row)
     return positions, unknown
 
 
@@ -93,8 +94,7 @@ def build_charts(analytics, *, selected_month=None):
     month_end = {mo: [r for r in monthly if r.values[0] == mo] for mo in months}
     values = {mo: strict_sum(r.values[11] for r in rows) for mo, rows in month_end.items()}
     investments = aggregate(net, 0, 8)
-    monthly_net_buys = aggregate(net, 0, 7)
-    principal = cumulative({mo: monthly_net_buys.get(mo, ZERO) for mo in sorted(set(months) | monthly_net_buys.keys())})
+    principal = cumulative({mo: investments.get(mo, ZERO) for mo in months})
     daily_gain = aggregate(daily, 0, 19)
     result = []
 
@@ -162,7 +162,7 @@ def build_charts(analytics, *, selected_month=None):
     contributions = aggregate(stocks, 2, 17)
     add(17, {"盈利": {s: max(v, ZERO) if v is not None else None for s, v in contributions.items()}, "亏损": {s: min(v, ZERO) if v is not None else None for s, v in contributions.items()}}, "horizontal", link="symbol")
     extra_18 = {
-        "monthly_investments": {mo: monthly_net_buys.get(mo, ZERO) for mo in months},
+        "monthly_investments": {mo: investments.get(mo, ZERO) for mo in months},
         "principal": principal,
         "market_values": values,
         "latest_profit_day": analytics.latest_profit_day,

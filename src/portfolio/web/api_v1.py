@@ -1152,6 +1152,35 @@ def api_charts_all():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@api_v1.route("/charts/portfolio_trend", methods=["GET"])
+@require_capability(CAP_VIEW_ASSETS)
+def api_portfolio_trend():
+    from portfolio.db.connection import readonly_connection
+    from portfolio.services.portfolio_trend import build_portfolio_trend
+
+    try:
+        service = get_analytics_service()
+        scope = get_user_query_scope()
+        broker = request.args.get("broker", "").strip()
+        if broker:
+            with readonly_connection(service.path) as connection:
+                accounts = connection.execute(
+                    "SELECT id FROM broker_accounts WHERE broker_code = ? OR display_name = ?",
+                    (broker, broker),
+                ).fetchall()
+            scope = replace(scope, account_ids=tuple(row[0] for row in accounts) or (-99999,))
+        data = build_portfolio_trend(service.calculate(scope))
+        data["charts"] = [
+            {key: getattr(chart, key) for key in ("id", "title", "kind", "note", "ratio")}
+            | {"series": [{"name": series.name, "points": series.points} for series in chart.series]}
+            for chart in data["charts"]
+        ]
+        return jsonify(status="ok", **data)
+    except Exception:
+        logger.exception("Portfolio trend query failed")
+        return jsonify(status="error", message="走势图查询失败，请刷新后重试。"), 500
+
+
 @api_v1.route("/charts/top_days", methods=["GET"])
 @require_capability(CAP_VIEW_ASSETS)
 def api_charts_top_days():

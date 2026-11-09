@@ -516,8 +516,13 @@ class ChartCanvas(QWidget):
             hit = self.detail_hit(event.position())
             if hit:
                 _, month, value, name = hit
-                amount = f"{value:.2%}" if self.chart.ratio else f"{value:,.2f}"
-                self.setToolTip(f"{month} · {name} · {amount}")
+                if self.chart.id == 11:
+                    shares = ((series.name, dict(series.points).get(month)) for series in self.chart.series)
+                    self.setToolTip("\n".join([month, *(f"{label}  {share:.2%}" if share is not None else f"{label}  —"
+                                                         for label, share in shares)]))
+                else:
+                    amount = f"{value:.2%}" if self.chart.ratio else f"{value:,.0f} 只" if self.chart.id == 14 else f"{value:,.2f}"
+                    self.setToolTip(f"{month} · {name} · {amount}")
             else:
                 self.setToolTip("")
         if self.chart and self.chart.kind == "capital_assets":
@@ -902,7 +907,7 @@ class ChartCanvas(QWidget):
                 hit = QRectF(x - step / 2, top, step, height)
                 if self.detail_mode and chart.kind == "line":
                     hit = QRectF(x - 9, y - 9, 18, 18)
-                if self.detail_mode and (key == self.detail_month or chart.id in (13, 14) and key == categories[-1]):
+                if self.detail_mode and (chart.id == 14 or key == self.detail_month or chart.id == 13 and key == categories[-1]):
                     painter.setPen(QColor(t.brand))
                     painter.setFont(chart_font(11, bold=True))
                     label = f"{value:.2%}" if chart.ratio else f"{value:,.0f}"
@@ -937,7 +942,7 @@ class ChartCanvas(QWidget):
         legend_x = float(left)
         legend_y = float(self.height() - 83)
         for s_idx, s in enumerate(chart.series):
-            s_color = QColor(colors[s_idx % len(colors)])
+            s_color = QColor(self.series_colors.get(s.name, colors[s_idx % len(colors)]))
             painter.setPen(QPen(s_color, 2.5))
             painter.drawLine(
                 QPointF(legend_x, legend_y + 12.5), QPointF(legend_x + 16, legend_y + 12.5)
@@ -989,12 +994,15 @@ class ChartCanvas(QWidget):
         for key in categories:
             segments = [data.get(key) for data in points[:3]]
             if all(value is not None for value in segments):
-                bounds.extend(
-                    (
-                        sum((v for v in segments if v >= 0), Decimal(0)),
-                        sum((v for v in segments if v < 0), Decimal(0)),
+                if self.detail_mode:
+                    bounds.extend(sum(segments[:end], ZERO) for end in range(1, 4))
+                else:
+                    bounds.extend(
+                        (
+                            sum((v for v in segments if v >= 0), Decimal(0)),
+                            sum((v for v in segments if v < 0), Decimal(0)),
+                        )
                     )
-                )
             if points[3].get(key) is not None:
                 bounds.append(points[3][key])
         low, high = min(bounds), max(bounds)
@@ -1135,7 +1143,7 @@ class ChartCanvas(QWidget):
             positive = negative = Decimal(0)
             if all(val is not None for val in segments):
                 for segment_index, val in enumerate(segments):
-                    start = positive if val >= 0 else negative
+                    start = sum(segments[:segment_index], ZERO) if self.detail_mode else positive if val >= 0 else negative
                     end = start + val
                     if val >= 0:
                         positive = end
@@ -1163,7 +1171,8 @@ class ChartCanvas(QWidget):
                     painter.drawLine(last, pt)
                 last = pt
                 painter.setBrush(QColor(palette[3]))
-                painter.drawEllipse(pt, 3.5, 3.5)
+                radius = 6 if self.detail_mode and key == self.detail_month else 3.5
+                painter.drawEllipse(pt, radius, radius)
                 self.hits.append(
                     (QRectF(x - 9, pt.y() - 9, 18, 18), key, asset, series[3].name)
                 )
@@ -1278,6 +1287,17 @@ class ChartCanvas(QWidget):
                     "#16A34A" if inv_val >= 0 else "#DC2626",
                 ),
             ]
+            if self.detail_mode:
+                net_buy = extra.get("principal", {}).get(h_key)
+                difference = h_asset - net_buy if h_asset is not None and net_buy is not None else None
+                rows_data = [
+                    (label, "—" if value is None else f"{value:,.2f} {currency}", dot, "#1E293B")
+                    for label, value, dot in (
+                        ("股票市值", h_asset, palette[3]),
+                        ("累计净买入", net_buy, palette[0]),
+                        ("市值差额", difference, None),
+                    )
+                ]
 
             cur_y = tip_y + 38
             for label_name, val_str, dot_col, text_col in rows_data:

@@ -2,7 +2,7 @@ from dataclasses import replace
 import csv
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from portfolio.domain.analytics import ratio
 from portfolio.services.charts_service import Chart, Series
 from portfolio.services.portfolio_trend import (
-    METRICS, TREND_CHART_IDS, build_portfolio_trend, change, prior_month,
+    METRICS, TREND_CHART_IDS, build_portfolio_trend, calendar_months, change, prior_month,
 )
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.distribution_page import DistributionDetailDrawer
@@ -114,6 +114,7 @@ class TrendChartsPage(QWidget):
         cards.addLayout(grid)
         cards.addWidget(QLabel("关键指标月度趋势"))
         self.table = self.make_table(["月份", *[label for _, label, _ in METRICS]], [])
+        self.table.sortItems(0, Qt.SortOrder.DescendingOrder)
         self.table.setMinimumHeight(260)
         self.table.cellClicked.connect(lambda row, _: self.select_month(self.table.item(row, 0).text()))
         self.table.cellDoubleClicked.connect(lambda row, _: self.open_detail(18, self.table.item(row, 0).text(), ""))
@@ -123,6 +124,7 @@ class TrendChartsPage(QWidget):
 
         self.drawer = DistributionDetailDrawer(self)
         self.drawer.panel.setFixedWidth(560)
+        self.drawer.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.escape = QShortcut(QKeySequence("Escape"), self.drawer)
         self.escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.escape.activated.connect(self.drawer.close_drawer)
@@ -195,8 +197,7 @@ class TrendChartsPage(QWidget):
             delta = change(latest.get(key), prior.get(key))
             sub.setText(f"较上月 {fmt(delta, 'pp' if kind == 'ratio' else kind)}" if delta is not None else currency if kind == "money" else "")
         self.fill_table(self.table, [[(row["month"], "text"), *[(row[key], kind) for key, _, kind in METRICS]] for row in reversed(rows)])
-        self.table.sortItems(0, Qt.SortOrder.DescendingOrder)
-        for chart_id, canvas in self.canvases.items():
+        for canvas in self.canvases.values():
             canvas.chart = None
             canvas.detail_month = self.selected_month
             canvas.hover_index = None
@@ -205,7 +206,7 @@ class TrendChartsPage(QWidget):
             canvas = self.canvases[chart.id]
             canvas.series_colors = {s.name: PALETTE[i % len(PALETTE)] for i, s in enumerate(chart.series)}
             canvas.chart = replace(chart, series=tuple(
-                Series(s.name, tuple(point for point in s.points if point[0] in dates))
+                Series(s.name, tuple(point for point in s.points if rows and rows[0]["month"] <= point[0] <= rows[-1]["month"]))
                 for s in chart.series if (chart.id, s.name) not in self.hidden_series
             ))
             canvas.update()
@@ -223,7 +224,7 @@ class TrendChartsPage(QWidget):
             self.hidden_series.discard(key)
         else:
             self.hidden_series.add(key)
-        self.update_charts()
+        QTimer.singleShot(0, self.update_charts)
 
     def open_detail(self, chart_id, month, name):
         rows = self.visible_months()
@@ -281,7 +282,8 @@ class TrendChartsPage(QWidget):
         def plot():
             shares = (mode.currentIndex() == 0) == share_first
             title = "占比走势" if shares else "市值走势"
-            points = tuple((item["month"], share(item) if shares else item[group].get(name)) for item in rows)
+            values = {item["month"]: share(item) if shares else item[group].get(name) for item in rows}
+            points = tuple((month, values.get(month)) for month in calendar_months(list(values)))
             canvas.chart = Chart(chart_id, f"{name} · {title}", "line", (Series(name, points),), "", ratio=shares)
             canvas.update()
 
@@ -293,10 +295,8 @@ class TrendChartsPage(QWidget):
              (change(share(item), share(lookup.get(prior_month(item["month"]), {}))), "pp")]
             for item in reversed(rows)
         ]))
-        stocks = [dict(stock, parts=[part for part in stock["parts"] if part["broker"] == name])
-                  for stock in row["stocks"]] if not share_first else [
-                      stock for stock in row["stocks"] if name in stock["category"].split(" / ")
-                  ]
+        part_key = "category" if share_first else "broker"
+        stocks = [dict(stock, parts=[part for part in stock["parts"] if part[part_key] == name]) for stock in row["stocks"]]
         self.add_stock_detail(row, [stock for stock in stocks if stock["parts"]], channel_only=not share_first)
 
     def add_stock_detail(self, month, stocks, *, ranked=False, channel_only=False):

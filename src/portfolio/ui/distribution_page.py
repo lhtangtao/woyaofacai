@@ -280,7 +280,7 @@ class DistributionDetailDrawer(QWidget):
                 border-bottom-left-radius: 14px;
             }
         """)
-        self.panel.setFixedWidth(640)
+        self.panel.setFixedWidth(780)
 
         panel_layout = QVBoxLayout(self.panel)
         panel_layout.setContentsMargins(24, 20, 24, 24)
@@ -422,11 +422,38 @@ class DistributionDetailDrawer(QWidget):
         headers = ["归属人员", "股票名称", "渠道", "持仓数量", "当前市值", "当前占比", "收益率", "累计盈亏"]
         source_table = QTableWidget(len(sources), len(headers))
         source_table.setHorizontalHeaderLabels(headers)
-        source_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         source_table.verticalHeader().setVisible(False)
         source_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         source_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        source_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
+        source_table.setStyleSheet("""
+            QTableWidget {
+                font-size: 12px;
+                border: none;
+                gridline-color: #F1F5F9;
+            }
+            QTableWidget::item {
+                padding: 4px 4px;
+            }
+            QHeaderView::section {
+                padding: 4px 4px;
+                font-weight: 600;
+                font-size: 12px;
+                background-color: #F8FAFC;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+            }
+        """)
+
+        # 科学分配列宽，彻底杜绝省略号
+        source_table.horizontalHeader().setMinimumSectionSize(60)
+        source_table.setColumnWidth(0, 68)   # 归属人员
+        source_table.setColumnWidth(1, 86)   # 股票名称
+        source_table.setColumnWidth(2, 86)   # 渠道
+        source_table.setColumnWidth(3, 90)   # 持仓数量
+        source_table.setColumnWidth(4, 105)  # 当前市值
+        source_table.setColumnWidth(5, 80)   # 当前占比
+        source_table.setColumnWidth(6, 95)   # 收益率
+        source_table.setColumnWidth(7, 105)  # 累计盈亏
 
         def make_cell_item(text: str, color: Optional[str] = None, bold: bool = False) -> QTableWidgetItem:
             it = QTableWidgetItem(text)
@@ -515,9 +542,34 @@ class DistributionDetailDrawer(QWidget):
             cmp_headers = ["股票代码", "分类", "当期股数", "当前市值", "上期市值", "市值变化", "当前占比", "占比变化"]
             cmp_table = QTableWidget(len(other_stocks), len(cmp_headers))
             cmp_table.setHorizontalHeaderLabels(cmp_headers)
-            cmp_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             cmp_table.verticalHeader().setVisible(False)
-            cmp_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
+            cmp_table.setStyleSheet("""
+                QTableWidget {
+                    font-size: 12px;
+                    border: none;
+                    gridline-color: #F1F5F9;
+                }
+                QTableWidget::item {
+                    padding: 4px 4px;
+                }
+                QHeaderView::section {
+                    padding: 4px 4px;
+                    font-weight: 600;
+                    font-size: 12px;
+                    background-color: #F8FAFC;
+                    border: none;
+                    border-bottom: 1px solid #E2E8F0;
+                }
+            """)
+            cmp_table.horizontalHeader().setMinimumSectionSize(60)
+            cmp_table.setColumnWidth(0, 85)  # 股票代码
+            cmp_table.setColumnWidth(1, 75)  # 分类
+            cmp_table.setColumnWidth(2, 90)  # 当期股数
+            cmp_table.setColumnWidth(3, 100) # 当前市值
+            cmp_table.setColumnWidth(4, 100) # 上期市值
+            cmp_table.setColumnWidth(5, 95)  # 市值变化
+            cmp_table.setColumnWidth(6, 85)  # 当前占比
+            cmp_table.setColumnWidth(7, 85)  # 占比变化
 
             for idx, s in enumerate(other_stocks):
                 mv_diff = s.market_value_change
@@ -862,21 +914,30 @@ class HoldingsDistributionPage(QWidget):
         self.mod_stock = self._create_card_container("股票持仓结构 Top 5 + 其他")
         self.stock_bars_layout = QVBoxLayout()
         self.stock_bars_layout.setSpacing(6)
+        self.stock_bars_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.stock_bars_layout.setContentsMargins(0, 0, 0, 0)
         self.mod_stock.layout().addLayout(self.stock_bars_layout)
+        self.mod_stock.layout().addStretch(1)
         grid.addWidget(self.mod_stock, 0, 0)
 
         # 模块 2：券商渠道结构
         self.mod_broker = self._create_card_container("券商渠道结构")
         self.broker_bars_layout = QVBoxLayout()
         self.broker_bars_layout.setSpacing(6)
+        self.broker_bars_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.broker_bars_layout.setContentsMargins(0, 0, 0, 0)
         self.mod_broker.layout().addLayout(self.broker_bars_layout)
+        self.mod_broker.layout().addStretch(1)
         grid.addWidget(self.mod_broker, 0, 1)
 
         # 模块 3：股票分类结构
         self.mod_cat = self._create_card_container("股票分类结构")
         self.cat_bars_layout = QVBoxLayout()
         self.cat_bars_layout.setSpacing(6)
+        self.cat_bars_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.cat_bars_layout.setContentsMargins(0, 0, 0, 0)
         self.mod_cat.layout().addLayout(self.cat_bars_layout)
+        self.mod_cat.layout().addStretch(1)
         grid.addWidget(self.mod_cat, 0, 2)
 
         self.page_layout.addLayout(grid)
@@ -888,15 +949,16 @@ class HoldingsDistributionPage(QWidget):
                 background: #FFFFFF;
                 border: 1px solid #E5EAF1;
                 border-radius: 12px;
-                padding: 16px;
             }
         """)
         vbox = QVBoxLayout(card)
-        vbox.setContentsMargins(16, 16, 16, 16)
+        vbox.setContentsMargins(18, 16, 18, 16)
         vbox.setSpacing(12)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title_lbl = QLabel(title)
         title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #17253D;")
+        title_lbl.setFixedHeight(22)
         vbox.addWidget(title_lbl)
 
         return card

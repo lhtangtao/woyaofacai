@@ -66,6 +66,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "charts", label: "资产走势图", icon: <BarChart3 size={16} /> },
       { id: "charts:monthly", label: "月度走势详情", icon: <BarChart3 size={16} /> },
       { id: "charts:distribution", label: "持仓分布", icon: <LayoutGrid size={16} /> },
+      { id: "charts:trend", label: "走势图", icon: <BarChart3 size={16} /> },
       { id: "charts:gallery", label: "走势图 (27图)", icon: <BarChart3 size={16} /> },
       { id: "top_days", label: "Top日汇总", icon: <BarChart3 size={16} /> },
       { id: "top_months", label: "Top月汇总", icon: <BarChart3 size={16} /> },
