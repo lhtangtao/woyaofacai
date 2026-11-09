@@ -95,12 +95,21 @@ class TrendChartsPage(QWidget):
         for index, chart_id in enumerate(TREND_CHART_IDS):
             canvas = ChartCanvas(card_mode=True)
             canvas.detail_mode = True
-            canvas.setMinimumHeight(335 if chart_id == 18 else 300)
+            canvas.setMinimumHeight(300)
             canvas.selected_detail.connect(self.open_detail)
             self.canvases[chart_id] = canvas
-            if chart_id == 18:
-                grid.addWidget(canvas, 0, 0, 1, 2)
-                continue
+            if chart_id == 11:
+                self.structure_detail = QPushButton("查看详情 ›", canvas)
+                self.structure_detail.setEnabled(False)
+                self.structure_detail.setStyleSheet(
+                    "QPushButton { background: #EFF6FF; color: #2563EB; border: 0;"
+                    " border-radius: 6px; padding: 5px 9px; }"
+                )
+                self.structure_detail.clicked.connect(lambda: self.open_detail(11, self.selected_month, "大盘"))
+                overlay = QVBoxLayout(canvas)
+                overlay.setContentsMargins(16, 15, 16, 0)
+                overlay.addWidget(self.structure_detail, alignment=Qt.AlignmentFlag.AlignRight)
+                overlay.addStretch()
             cell = QVBoxLayout()
             cell.addWidget(canvas)
             if chart_id in (11, 12):
@@ -110,7 +119,7 @@ class TrendChartsPage(QWidget):
                 legend.setMenu(QMenu(legend))
                 self.legends[chart_id] = legend
                 cell.addWidget(legend, alignment=Qt.AlignmentFlag.AlignRight)
-            grid.addLayout(cell, 1 + (index - 1) // 2, (index - 1) % 2)
+            grid.addLayout(cell, index // 2, index % 2)
         cards.addLayout(grid)
         cards.addWidget(QLabel("关键指标月度趋势"))
         self.table = self.make_table(["月份", *[label for _, label, _ in METRICS]], [])
@@ -188,6 +197,7 @@ class TrendChartsPage(QWidget):
         latest = rows[-1] if rows else {}
         if self.selected_month not in dates:
             self.selected_month = latest.get("month", "")
+        self.structure_detail.setEnabled(bool(self.selected_month))
         prior = next((row for row in rows if row["month"] == prior_month(latest["month"])), {}) if latest else {}
         currency = self.data["currency"] if self.data else ""
         self.as_of.setText(f"数据截至 {latest.get('valuation_date') or '—'} · {currency}")

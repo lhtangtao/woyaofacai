@@ -415,33 +415,36 @@ class MonitorService:
             bars = item.get("bars") or []
 
             runtime_state = self.store.get_runtime_state(rule.rule_id)
-            event, updated_state = RuleEvaluator.evaluate(
-                rule=rule,
-                state=runtime_state,
-                quote_data=quote_data,
-                indicators=indicators,
-                series_data=series_data,
-                bars=bars,
-                now_utc=now,
-            )
-
-            # Persist updated state
-            self.store.save_runtime_state(updated_state)
-
-            if event:
-                # Save alert event to database
-                self.store.save_alert_event(event)
-
-                # Deliver notification (desktop and/or sound)
-                notification_service.notify_event(
-                    event,
-                    channels=rule.notification_channels,
-                    sound_name=rule.sound_name,
+            try:
+                event, updated_state = RuleEvaluator.evaluate(
+                    rule=rule,
+                    state=runtime_state,
+                    quote_data=quote_data,
+                    indicators=indicators,
+                    series_data=series_data,
+                    bars=bars,
+                    now_utc=now,
                 )
 
-                # Persist rule update (trigger count, last_trigger_at, completion status)
-                self.store.update_rule(rule)
-                triggered_events.append(event)
+                # Persist updated state
+                self.store.save_runtime_state(updated_state)
+
+                if event:
+                    # Save alert event to database
+                    self.store.save_alert_event(event)
+
+                    # Deliver notification (desktop and/or sound)
+                    notification_service.notify_event(
+                        event,
+                        channels=rule.notification_channels,
+                        sound_name=rule.sound_name,
+                    )
+
+                    # Persist rule update (trigger count, last_trigger_at, completion status)
+                    self.store.update_rule(rule)
+                    triggered_events.append(event)
+            except Exception as e:
+                logger.exception("评估或发送监控规则提醒失败: rule_id=%s, name=%s, err=%s", rule.rule_id, rule.name, e)
 
         return triggered_events
 

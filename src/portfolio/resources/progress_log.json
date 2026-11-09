@@ -1,5 +1,30 @@
 [
   {
+    "title": "行情监控 修复Decimal序列化异常导致价格突破无法触发报警及状态卡死的问题",
+    "time": "2026-11-09 22:46",
+    "author": "Antigravity",
+    "tag": "问题排查与修复完成，实机数据库触发验证通过，单元测试全绿，已推送到远端仓库，待用户验收",
+    "details": [
+      "修改者：Antigravity（代码修复与数据重置）",
+      "【1. 根因排查定位】经深入排查系统底层日志，发现 22:36:21 美光（MU.US）由 690 上穿 693 突破时规则已成功判定为触发，但在持久化报警事件（event.to_record()）时，因 input_snapshot 中含有 Decimal 类型的行情价格，原生 json.dumps 抛出「TypeError: Object of type Decimal is not JSON serializable」异常，导致后续桌面通知/声音播放（notification_service.notify_event）与规则统计更新被中断未执行，而此前更新的 runtime_state 已将 rearmed 置为 0，使规则陷入无法再次触发的假死状态。",
+      "【2. 序列化修复与异常保护】在 AlertEvent.to_record() 中为 json.dumps 补充 default=str 容错参数，确保 Decimal/datetime 等非原生 JSON 标量安全序列化；在 MonitorService.evaluate_rules 中为单条规则评估与派发添加完整的 try-except 保护与详细日志记录，杜绝异常中断。",
+      "【3. 数据自愈与警报触发验证】重置了美光规则的 runtime state，并执行实时行情评估，现价 $703.39 上穿 $693.00 成功触发报警并写入 alert_events，规则触发计数更新为 1。",
+      "【4. 自动化测试】新增 tests/test_rule_evaluator.py，包含 Decimal 安全序列化与价格突破全流程持久化测试，2/2 全部通过；代码已推送到 GitHub 远端 main 分支。"
+    ]
+  },
+  {
+    "title": "走势图去掉重复图表并还原持仓结构面积图",
+    "time": "2026-11-09 22:32",
+    "author": "Codex",
+    "tag": "代码已修改，待用户验收",
+    "details": [
+      "修改者：Codex（代码修改）",
+      "Mac 和 Web 的走势图移除重复的累计净买入与股票市值组合图，其余四张图保留两列排布。",
+      "持仓结构按原型使用蓝色大盘、橙色杠杆、绿色正股的堆叠面积图，纵轴固定 0% 至 100%，缺失月份留空，保留详情入口。",
+      "未运行测试或构建，待双端界面验收。"
+    ]
+  },
+  {
     "title": "持仓分布 消除抽屉内省略号截断与修复三大分布卡片顶部空白怪异布局",
     "time": "2026-11-09 21:28",
     "author": "Antigravity",

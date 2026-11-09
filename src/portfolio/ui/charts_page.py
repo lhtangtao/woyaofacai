@@ -835,10 +835,15 @@ class ChartCanvas(QWidget):
             )
             return
 
+        stacked_area = chart.kind == "stacked_area"
         left, top, width, height = 75, 76, self.width() - 105, self.height() - 198
+        if stacked_area:
+            top, height = 52, self.height() - 161
         low, high = min(Decimal(0), min(v for _, _, v, _ in data)), max(
             Decimal(0), max(v for _, _, v, _ in data)
         )
+        if stacked_area:
+            low, high = ZERO, Decimal(1)
         span = high - low or Decimal(1)
         if getattr(chart, "highlight_extremes", False):
             y_pad = span * Decimal("0.15")
@@ -853,10 +858,11 @@ class ChartCanvas(QWidget):
             dict.fromkeys(key for series in chart.series for key, _ in series.points)
         )
         category_positions = {key: index for index, key in enumerate(categories)}
-        fixed_axis = bool(chart.x_ticks)
+        fixed_axis = bool(chart.x_ticks) or (stacked_area and len(categories) > 1)
         step = width / max(len(categories) - (1 if fixed_axis else 0), 1)
-        for mark in range(5):
-            value = low + span * Decimal(mark) / 4
+        intervals = 5 if stacked_area else 4
+        for mark in range(intervals + 1):
+            value = low + span * Decimal(mark) / intervals
             y = ys(value)
             if abs(y - ys(Decimal(0))) < 20:
                 continue
@@ -871,7 +877,9 @@ class ChartCanvas(QWidget):
 
         show_points = getattr(chart, "show_points", True)
         break_keys = set(getattr(chart, "break_keys", ()))
-        for index, series in enumerate(chart.series):
+        if stacked_area:
+            self.paint_stacked_areas(painter, chart, categories, left, step, fixed_axis, ys)
+        for index, series in enumerate(() if stacked_area else chart.series):
             color = QColor(self.series_colors.get(series.name, colors[index % len(colors)]))
             last = None
             for key, value in series.points:
@@ -928,8 +936,13 @@ class ChartCanvas(QWidget):
             visible = index % max(1, math.ceil(len(categories) / 12)) == 0
             if visible:
                 painter.setPen(QColor(t.muted))
+                label_x = left + index * step - 20
+                label_width = step + 40
+                if stacked_area:
+                    center = left + (index + (0 if fixed_axis else 0.5)) * step
+                    label_x, label_width = center - 37, 74
                 painter.drawText(
-                    QRectF(left + index * step - 20, top + height + 8, step + 40, 22),
+                    QRectF(label_x, top + height + 8, label_width, 22),
                     Qt.AlignmentFlag.AlignCenter,
                     chart.x_labels.get(key, key),
                 )
@@ -940,7 +953,7 @@ class ChartCanvas(QWidget):
         painter.save()
         painter.setFont(chart_font(12, bold=len(chart.series) > 1))
         legend_x = float(left)
-        legend_y = float(self.height() - 83)
+        legend_y = float(self.height() - (75 if stacked_area else 83))
         for s_idx, s in enumerate(chart.series):
             s_color = QColor(self.series_colors.get(s.name, colors[s_idx % len(colors)]))
             painter.setPen(QPen(s_color, 2.5))
@@ -960,6 +973,44 @@ class ChartCanvas(QWidget):
             )
             legend_x += tw_lbl + 18
         painter.restore()
+
+    def paint_stacked_areas(self, painter, chart, months, left, step, fixed_axis, y_at):
+        values = [dict(series.points) for series in chart.series]
+        # Flush the polygons at each missing month. The axis stays at 0–100%
+        # when a category is hidden, so remaining bands keep their real shares.
+        runs = [[] for _ in chart.series]
+        for index, month in enumerate([*months, None]):
+            shares = [series.get(month) for series in values]
+            if month is None or any(value is None for value in shares):
+                for series, band in zip(chart.series, runs):
+                    if not band:
+                        continue
+                    color = QColor(self.series_colors[series.name])
+                    color.setAlpha(145)
+                    if len(band) == 1:
+                        x, upper, lower = band[0]
+                        painter.fillRect(QRectF(x - 2, upper, 4, lower - upper), color)
+                    else:
+                        path = QPainterPath(QPointF(band[0][0], band[0][1]))
+                        for x, upper, _ in band[1:]:
+                            path.lineTo(x, upper)
+                        for x, _, lower in reversed(band):
+                            path.lineTo(x, lower)
+                        path.closeSubpath()
+                        painter.fillPath(path, color)
+                    band.clear()
+                continue
+            x = left + (index + (0 if fixed_axis else 0.5)) * step
+            total = ZERO
+            for series, band, share in zip(chart.series, runs, shares):
+                lower = y_at(total)
+                total += share
+                upper = y_at(total)
+                band.append((x, upper, lower))
+                if upper < lower:
+                    hit_width = step
+                    self.hits.append((QRectF(x - hit_width / 2, upper, hit_width, lower - upper),
+                                      month, share, series.name))
 
     def draw_zero(self, painter, start, end, label_rect, theme, *, ratio=False):
         painter.save()
