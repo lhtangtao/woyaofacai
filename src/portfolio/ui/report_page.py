@@ -453,12 +453,12 @@ class ReportPage(QWidget):
                           ('累计盈亏（含已清仓）', f'{cumulative:+,.2f}' if cumulative is not None else '— 数据不完整', cumulative))
             t = tokens(self)
             from portfolio.services.today_rank import today_rank
-            rank=today_rank(self.reports,pnl,report_day or snap_str,channel=selected,ticker=self.local_search.text())
+            rank=today_rank(self.reports,pnl,report_day or snap_str,channel=selected,ticker=self.local_search.text(),rate=rate)
             self.today_rank_card.setVisible(trend_mode==0)
             self.today_rank_card.setText(rank['title']+'\n'+rank['text'])
             self.today_rank_card.setToolTip(rank['note'])
             rank_color=t.profit if pnl is not None and pnl>0 else t.loss if pnl is not None and pnl<0 else t.heading
-            self.today_rank_card.setStyleSheet(f'QPushButton {{text-align:left;padding:12px;border:1px solid {t.border};border-radius:12px;background:{t.panel};color:{rank_color};font-size:15px;}}')
+            self.today_rank_card.setStyleSheet(f'QPushButton {{text-align:left;padding:12px;border:1px solid {t.border};border-radius:12px;background:{t.panel};color:{rank_color};font-size:14px;}}')
             for card, (title, text, number) in zip(self.today_cards, values):
                 card.setText(title + '\n' + text)
                 color = t.profit if number is not None and number > 0 else t.loss if number is not None and number < 0 else t.heading

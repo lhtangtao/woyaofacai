@@ -311,3 +311,32 @@ def test_holdings_recovery_order_and_hidden_columns(qtbot):
         idx = live_cols.index(col_name)
         assert page.table.isColumnHidden(idx)
 
+
+def test_today_rank_includes_rate_ranking():
+    """验证今日盈亏历史排名能同时准确计算盈亏金额排名与收益率排名"""
+    from portfolio.services.today_rank import today_rank
+
+    meta = {}
+    # 模拟 3 天历史数据：
+    # 2026-10-16: pnl=1000, init=10000 -> rate=+10.0%
+    # 2026-10-17: pnl=2000, init=25000 -> rate=+8.0%
+    # 2026-10-18: pnl=500,  init=2000  -> rate=+25.0%
+    r1 = [D(0)] * 23
+    r1[0], r1[1], r1[3], r1[15], r1[19] = '2026-10-16', 'LONGBRIDGE', 'AAA', D(10000), D(1000)
+    r2 = [D(0)] * 23
+    r2[0], r2[1], r2[3], r2[15], r2[19] = '2026-10-17', 'LONGBRIDGE', 'AAA', D(25000), D(2000)
+    r3 = [D(0)] * 23
+    r3[0], r3[1], r3[3], r3[15], r3[19] = '2026-10-18', 'LONGBRIDGE', 'AAA', D(2000), D(500)
+
+    reports = {'每日持仓收益': Report('每日持仓收益', (), (
+        ReportRow(tuple(r1), meta),
+        ReportRow(tuple(r2), meta),
+        ReportRow(tuple(r3), meta),
+    ))}
+
+    # 今天 (2026-10-19): pnl=1500 (在 2000 之后，排第2名), rate=9% (在 25% 和 10% 之后，排第3名)
+    res = today_rank(reports, D(1500), '2026-10-19', rate=D('0.09'))
+    assert res['rank'] == 2
+    assert res['rate_rank'] == 3
+    assert res['text'] == '盈利第 2 名 · 收益率第 3 名'
+

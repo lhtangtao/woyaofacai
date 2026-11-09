@@ -280,7 +280,13 @@ class WebTodayService:
                                   person_ids=scope.person_ids), curve=curve)
         from portfolio.services.today_rank import today_rank
         profit_day=next((r.metadata.get('trading_day') for r in rows if r.metadata.get('trading_day')),scope.as_of.isoformat())
-        result['summary']['history_rank']=today_rank(analytics.reports,pnl,profit_day,channel=channel,ticker=ticker)
+        today_rate = result.get('summary', {}).get('rate')
+        if today_rate is not None:
+            try:
+                today_rate = Decimal(str(today_rate))
+            except Exception:
+                today_rate = None
+        result['summary']['history_rank']=today_rank(analytics.reports,pnl,profit_day,channel=channel,ticker=ticker,rate=today_rate)
         if source_version(self.path) != version:
             raise SourceError('源库在生成快照期间发生变化，请刷新重试。')
         return exact_json(result)
