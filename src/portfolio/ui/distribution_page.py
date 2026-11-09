@@ -878,26 +878,27 @@ class HoldingsDistributionPage(QWidget):
 
     def _build_detail_tabs(self):
         tab_card = QFrame()
+        tab_card.setObjectName("detailCard")
         tab_card.setStyleSheet("""
-            QFrame {
+            QFrame#detailCard {
                 background: #FFFFFF;
                 border: 1px solid #E5EAF1;
                 border-radius: 12px;
-                padding: 16px;
             }
-        """)
-        card_vbox = QVBoxLayout(tab_card)
-        card_vbox.setContentsMargins(16, 16, 16, 16)
-        card_vbox.setSpacing(12)
-
-        self.detail_tabs = QTabWidget()
-        self.detail_tabs.setStyleSheet("""
-            QTabWidget::pane { border: none; }
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+            }
+            QTabBar {
+                background: transparent;
+                border: none;
+            }
             QTabBar::tab {
-                padding: 8px 20px;
+                padding: 8px 22px;
                 font-size: 13px;
                 font-weight: 600;
                 color: #64748B;
+                background: #F1F5F9;
                 border-radius: 6px;
                 margin-right: 8px;
             }
@@ -906,6 +907,11 @@ class HoldingsDistributionPage(QWidget):
                 color: #FFFFFF;
             }
         """)
+        card_vbox = QVBoxLayout(tab_card)
+        card_vbox.setContentsMargins(16, 16, 16, 16)
+        card_vbox.setSpacing(12)
+
+        self.detail_tabs = QTabWidget()
 
         # Tab 1: 股票持仓明细（无编号、无重复名称、包含股数变化与市值变化）
         tab1 = QWidget()
@@ -947,35 +953,49 @@ class HoldingsDistributionPage(QWidget):
     def _create_modern_table(self, headers: List[str]) -> QTableWidget:
         table = QTableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header.setFixedHeight(44)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         table.verticalHeader().setVisible(False)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
+        table.setFrameShape(QFrame.Shape.NoFrame)
         table.setStyleSheet("""
             QTableWidget {
-                border: 1px solid #E2E8F0;
-                border-radius: 8px;
+                border: none;
                 gridline-color: #F1F5F9;
                 font-size: 13px;
                 background-color: #FFFFFF;
                 alternate-background-color: #F8FAFC;
             }
+            QHeaderView {
+                background-color: #F8FAFC;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+            }
             QHeaderView::section {
                 background-color: #F8FAFC;
                 color: #475569;
                 font-weight: 600;
-                font-size: 12px;
-                padding: 8px;
+                font-size: 13px;
+                height: 42px;
+                min-height: 42px;
+                padding: 0px 4px;
                 border: none;
                 border-bottom: 1px solid #E2E8F0;
+                text-align: center;
+            }
+            QTableWidget::item {
+                padding: 4px;
             }
             QTableWidget::item:selected {
                 background-color: #EFF6FF;
                 color: #1E40AF;
             }
         """)
-        table.setMinimumHeight(320)
+        table.setMinimumHeight(380)
         return table
 
     # ------------------------------------------------------------------
@@ -1271,126 +1291,109 @@ class HoldingsDistributionPage(QWidget):
             self.cat_bars_layout.addWidget(bar)
 
     def _render_tables(self, summary: DistributionSummary):
-        # 1. 股票持仓明细（无编号、无重复名称、包含股数变化与市值变化、百分比统一用 %）
+        def make_center_item(text: str, color: Optional[str] = None, bold: bool = False) -> QTableWidgetItem:
+            item = QTableWidgetItem(text)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if color:
+                item.setForeground(QColor(color))
+            if bold:
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            return item
+
+        # 1. 股票持仓明细（无编号、无重复名称、包含股数变化与市值变化、百分比统一用 %、全量居中）
         stocks = summary.all_stocks
         self.table_stocks.setRowCount(len(stocks))
         for r, s in enumerate(stocks):
             # 0: Ticker
-            self.table_stocks.setItem(r, 0, QTableWidgetItem(s.name))
+            self.table_stocks.setItem(r, 0, make_center_item(s.name, bold=True))
             # 1: 分类
-            self.table_stocks.setItem(r, 1, QTableWidgetItem(s.category))
+            self.table_stocks.setItem(r, 1, make_center_item(s.category))
             # 2: 渠道
-            self.table_stocks.setItem(r, 2, QTableWidgetItem(s.channel))
+            self.table_stocks.setItem(r, 2, make_center_item(s.channel))
             # 3: 持仓股数
-            self.table_stocks.setItem(r, 3, QTableWidgetItem(f"{s.shares:,.2f}"))
+            self.table_stocks.setItem(r, 3, make_center_item(f"{s.shares:,.2f}"))
 
-            # 4: 股数变化
+            # 4: 股数变化 (正绿负红居中)
             sh_chg = s.shares_change
             sh_sign = "+" if sh_chg > Decimal("0.001") else ""
-            sh_item = QTableWidgetItem(f"{sh_sign}{sh_chg:,.2f}")
-            if sh_chg > Decimal("0.001"):
-                sh_item.setForeground(QColor("#16A34A"))
-            elif sh_chg < Decimal("-0.001"):
-                sh_item.setForeground(QColor("#DC2626"))
-            self.table_stocks.setItem(r, 4, sh_item)
+            sh_col = "#16A34A" if sh_chg > Decimal("0.001") else ("#DC2626" if sh_chg < Decimal("-0.001") else None)
+            self.table_stocks.setItem(r, 4, make_center_item(f"{sh_sign}{sh_chg:,.2f}", sh_col))
 
             # 5: 当前市值
-            self.table_stocks.setItem(r, 5, QTableWidgetItem(f"${s.market_value:,.2f}"))
+            self.table_stocks.setItem(r, 5, make_center_item(f"${s.market_value:,.2f}"))
 
-            # 6: 市值变化
+            # 6: 市值变化 (正绿负红居中)
             mv_chg = s.market_value_change
             mv_sign = "+" if mv_chg > Decimal("0.001") else ""
-            mv_item = QTableWidgetItem(f"{mv_sign}${mv_chg:,.2f}")
-            if mv_chg > Decimal("0.001"):
-                mv_item.setForeground(QColor("#16A34A"))
-            elif mv_chg < Decimal("-0.001"):
-                mv_item.setForeground(QColor("#DC2626"))
-            self.table_stocks.setItem(r, 6, mv_item)
+            mv_col = "#16A34A" if mv_chg > Decimal("0.001") else ("#DC2626" if mv_chg < Decimal("-0.001") else None)
+            self.table_stocks.setItem(r, 6, make_center_item(f"{mv_sign}${mv_chg:,.2f}", mv_col))
 
             # 7: 当前占比
-            self.table_stocks.setItem(r, 7, QTableWidgetItem(f"{s.weight:.2f}%"))
+            self.table_stocks.setItem(r, 7, make_center_item(f"{s.weight:.2f}%"))
             # 8: 上期占比
-            self.table_stocks.setItem(r, 8, QTableWidgetItem(f"{s.prev_weight:.2f}%"))
+            self.table_stocks.setItem(r, 8, make_center_item(f"{s.prev_weight:.2f}%"))
 
-            # 9: 占比变化 (%)
-            diff_item = QTableWidgetItem(f"{s.diff_pp:+.2f}%")
-            if s.diff_pp > Decimal("0.001"):
-                diff_item.setForeground(QColor("#16A34A"))
-            elif s.diff_pp < Decimal("-0.001"):
-                diff_item.setForeground(QColor("#DC2626"))
-            self.table_stocks.setItem(r, 9, diff_item)
+            # 9: 占比变化 (%) (正绿负红居中)
+            diff_col = "#16A34A" if s.diff_pp > Decimal("0.001") else ("#DC2626" if s.diff_pp < Decimal("-0.001") else None)
+            self.table_stocks.setItem(r, 9, make_center_item(f"{s.diff_pp:+.2f}%", diff_col))
 
-        # 2. 渠道汇总（无编号、包含市值变化、百分比统一用 %）
+        # 2. 渠道汇总（无编号、包含市值变化、百分比统一用 %、全量居中）
         chs = summary.channels
         self.table_channels.setRowCount(len(chs))
         for r, ch in enumerate(chs):
             # 0: 渠道
-            self.table_channels.setItem(r, 0, QTableWidgetItem(ch.name))
+            self.table_channels.setItem(r, 0, make_center_item(ch.name, bold=True))
             # 1: 持仓标的数
-            self.table_channels.setItem(r, 1, QTableWidgetItem(f"{ch.items_count} 只"))
+            self.table_channels.setItem(r, 1, make_center_item(f"{ch.items_count} 只"))
             # 2: 当前市值
-            self.table_channels.setItem(r, 2, QTableWidgetItem(f"${ch.market_value:,.2f}"))
+            self.table_channels.setItem(r, 2, make_center_item(f"${ch.market_value:,.2f}"))
 
-            # 3: 市值变化
+            # 3: 市值变化 (正绿负红居中)
             ch_mv_chg = ch.market_value_change
             ch_mv_sign = "+" if ch_mv_chg > Decimal("0.001") else ""
-            ch_mv_item = QTableWidgetItem(f"{ch_mv_sign}${ch_mv_chg:,.2f}")
-            if ch_mv_chg > Decimal("0.001"):
-                ch_mv_item.setForeground(QColor("#16A34A"))
-            elif ch_mv_chg < Decimal("-0.001"):
-                ch_mv_item.setForeground(QColor("#DC2626"))
-            self.table_channels.setItem(r, 3, ch_mv_item)
+            ch_mv_col = "#16A34A" if ch_mv_chg > Decimal("0.001") else ("#DC2626" if ch_mv_chg < Decimal("-0.001") else None)
+            self.table_channels.setItem(r, 3, make_center_item(f"{ch_mv_sign}${ch_mv_chg:,.2f}", ch_mv_col))
 
             # 4: 当前占比
-            self.table_channels.setItem(r, 4, QTableWidgetItem(f"{ch.weight:.2f}%"))
+            self.table_channels.setItem(r, 4, make_center_item(f"{ch.weight:.2f}%"))
             # 5: 上期市值
-            self.table_channels.setItem(r, 5, QTableWidgetItem(f"${ch.prev_market_value:,.2f}"))
+            self.table_channels.setItem(r, 5, make_center_item(f"${ch.prev_market_value:,.2f}"))
             # 6: 上期占比
-            self.table_channels.setItem(r, 6, QTableWidgetItem(f"{ch.prev_weight:.2f}%"))
+            self.table_channels.setItem(r, 6, make_center_item(f"{ch.prev_weight:.2f}%"))
 
-            # 7: 占比变化 (%)
-            diff_item = QTableWidgetItem(f"{ch.diff_pp:+.2f}%")
-            if ch.diff_pp > Decimal("0.001"):
-                diff_item.setForeground(QColor("#16A34A"))
-            elif ch.diff_pp < Decimal("-0.001"):
-                diff_item.setForeground(QColor("#DC2626"))
-            self.table_channels.setItem(r, 7, diff_item)
+            # 7: 占比变化 (%) (正绿负红居中)
+            ch_diff_col = "#16A34A" if ch.diff_pp > Decimal("0.001") else ("#DC2626" if ch.diff_pp < Decimal("-0.001") else None)
+            self.table_channels.setItem(r, 7, make_center_item(f"{ch.diff_pp:+.2f}%", ch_diff_col))
 
-        # 3. 分类汇总（无编号、包含市值变化、百分比统一用 %）
+        # 3. 分类汇总（无编号、包含市值变化、百分比统一用 %、全量居中）
         cats = summary.categories
         self.table_categories.setRowCount(len(cats))
         for r, ct in enumerate(cats):
             # 0: 分类
-            self.table_categories.setItem(r, 0, QTableWidgetItem(ct.name))
+            self.table_categories.setItem(r, 0, make_center_item(ct.name, bold=True))
             # 1: 持仓标的数
-            self.table_categories.setItem(r, 1, QTableWidgetItem(f"{ct.items_count} 只"))
+            self.table_categories.setItem(r, 1, make_center_item(f"{ct.items_count} 只"))
             # 2: 当前市值
-            self.table_categories.setItem(r, 2, QTableWidgetItem(f"${ct.market_value:,.2f}"))
+            self.table_categories.setItem(r, 2, make_center_item(f"${ct.market_value:,.2f}"))
 
-            # 3: 市值变化
+            # 3: 市值变化 (正绿负红居中)
             ct_mv_chg = ct.market_value_change
             ct_mv_sign = "+" if ct_mv_chg > Decimal("0.001") else ""
-            ct_mv_item = QTableWidgetItem(f"{ct_mv_sign}${ct_mv_chg:,.2f}")
-            if ct_mv_chg > Decimal("0.001"):
-                ct_mv_item.setForeground(QColor("#16A34A"))
-            elif ct_mv_chg < Decimal("-0.001"):
-                ct_mv_item.setForeground(QColor("#DC2626"))
-            self.table_categories.setItem(r, 3, ct_mv_item)
+            ct_mv_col = "#16A34A" if ct_mv_chg > Decimal("0.001") else ("#DC2626" if ct_mv_chg < Decimal("-0.001") else None)
+            self.table_categories.setItem(r, 3, make_center_item(f"{ct_mv_sign}${ct_mv_chg:,.2f}", ct_mv_col))
 
             # 4: 当前占比
-            self.table_categories.setItem(r, 4, QTableWidgetItem(f"{ct.weight:.2f}%"))
+            self.table_categories.setItem(r, 4, make_center_item(f"{ct.weight:.2f}%"))
             # 5: 上期市值
-            self.table_categories.setItem(r, 5, QTableWidgetItem(f"${ct.prev_market_value:,.2f}"))
+            self.table_categories.setItem(r, 5, make_center_item(f"${ct.prev_market_value:,.2f}"))
             # 6: 上期占比
-            self.table_categories.setItem(r, 6, QTableWidgetItem(f"{ct.prev_weight:.2f}%"))
+            self.table_categories.setItem(r, 6, make_center_item(f"{ct.prev_weight:.2f}%"))
 
-            # 7: 占比变化 (%)
-            diff_item = QTableWidgetItem(f"{ct.diff_pp:+.2f}%")
-            if ct.diff_pp > Decimal("0.001"):
-                diff_item.setForeground(QColor("#16A34A"))
-            elif ct.diff_pp < Decimal("-0.001"):
-                diff_item.setForeground(QColor("#DC2626"))
-            self.table_categories.setItem(r, 7, diff_item)
+            # 7: 占比变化 (%) (正绿负红居中)
+            ct_diff_col = "#16A34A" if ct.diff_pp > Decimal("0.001") else ("#DC2626" if ct.diff_pp < Decimal("-0.001") else None)
+            self.table_categories.setItem(r, 7, make_center_item(f"{ct.diff_pp:+.2f}%", ct_diff_col))
 
     # ------------------------------------------------------------------
     # 抽屉唤起事件
