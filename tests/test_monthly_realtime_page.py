@@ -110,11 +110,31 @@ def test_monthly_realtime_page_ui_layout_and_cards(qtbot):
     # 旧大段说明不可见
     assert not page.notes_label.isVisible()
 
-    # 模拟数据填充
+    # 模拟包含上月历史收益的 analytics
+    class MockRow:
+        def __init__(self, values):
+            self.values = values
+
+    class MockReport:
+        def __init__(self, rows):
+            self.rows = rows
+
+    mock_analytics = type("Analytics", (), {
+        "reports": {
+            "每月持仓收益": MockReport([
+                MockRow(["2026-10", "LONGBRIDGE", "美股", "AAPL", "已清仓", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, Decimal("-2346.18")]),
+            ])
+        }
+    })()
+    page.analytics = mock_analytics
+    page.month_combo.addItem("2026-11")
+    page.month_combo.setCurrentText("2026-11")
+
+    # 模拟数据填充（相对当月初的变动量）
     points = [
-        ("2026-11-01T02:00:00Z", Decimal("-2346.18")),
-        ("2026-11-05T06:20:00Z", Decimal("-16981.56")),
-        ("2026-11-09T08:50:00Z", Decimal("-13551.56")),
+        ("2026-11-01T02:00:00Z", Decimal("0.00")),
+        ("2026-11-05T06:20:00Z", Decimal("-14635.38")),
+        ("2026-11-09T08:50:00Z", Decimal("-11205.38")),
     ]
     chart = Chart(
         id=1,

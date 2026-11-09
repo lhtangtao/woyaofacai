@@ -908,6 +908,9 @@ class ChartCanvas(QWidget):
                     chart.x_labels.get(key, key),
                 )
 
+        if getattr(chart, "hide_legend", False) or getattr(self, "hide_legend", False):
+            return
+
         painter.save()
         painter.setFont(chart_font(12, bold=len(chart.series) > 1))
         legend_x = float(left)

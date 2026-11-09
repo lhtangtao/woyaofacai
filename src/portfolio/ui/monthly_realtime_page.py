@@ -51,15 +51,50 @@ def to_bj_datetime(iso_str: str) -> datetime | None:
         return None
 
 
-def calculate_realtime_metrics(series_points, *, is_year=False, period_str="", state=None):
+def get_period_opening_pnl(analytics, period, is_year=False, channels=None, ticker=None) -> Decimal:
     """
-    计算月度/年度走势详情的核心指标（无任何写死假数据）：
-    1. 月初/年初累计盈亏 (start_val, start_time_str)
-    2. 当前最新累计盈亏 (latest_val, latest_time_str)
-    3. 本月/本年变化 (delta_val = latest_val - start_val)
-    4. 月内/年内波动区间 (range_val = max_val - min_val)
-    5. 最高点与最低点及发生时间 (max_val, max_time_str, min_val, min_time_str)
-    6. 最大回撤 (按时间顺序: max_dd = trough - peak)
+    计算所选周期起点之前的历史累计总盈亏：
+    月度时：从系统最开始到上个月底的累计盈亏
+    年度时：从系统最开始到上年底的累计盈亏
+    支持渠道与股票过滤。
+    """
+    if not analytics or "每月持仓收益" not in analytics.reports:
+        return Decimal(0)
+
+    report = analytics.reports["每月持仓收益"]
+    cutoff = f"{period}-01" if is_year else period
+
+    total = Decimal(0)
+    for r in report.rows:
+        v = r.values
+        m_str = str(v[0])
+        if m_str < cutoff:
+            if channels and v[1] not in channels:
+                continue
+            if ticker and ticker.upper() not in str(v[3]).upper():
+                continue
+            pnl = v[20]  # 本月收益($)
+            if pnl is not None:
+                total += Decimal(str(pnl))
+    return total
+
+
+def calculate_realtime_metrics(
+    series_points,
+    *,
+    is_year=False,
+    period_str="",
+    state=None,
+    base_pnl: Decimal | None = None,
+):
+    """
+    计算月度/年度走势详情的核心指标：
+    1. 月初/年初累计盈亏: 从最开始到上个月底时的累计盈亏 (若传入 base_pnl 则使用 base_pnl)
+    2. 当前最新累计盈亏: 从一开始到当前最新的累计盈亏数据 (基于 base_pnl 叠加当期变动)
+    3. 本月/本年变化: 最新累计盈亏 - 月初累计盈亏 (delta_val)
+    4. 月内/年内波动区间: range_val = max_val - min_val
+    5. 最高点与最低点及发生时间
+    6. 最大回撤 (时序算法: max_dd = trough - prior_peak)
     7. 数据覆盖状态
     """
     valid = []
@@ -86,8 +121,8 @@ def calculate_realtime_metrics(series_points, *, is_year=False, period_str="", s
         return {
             "valid_count": 0,
             "period_range_text": period_range_text,
-            "start_val": None,
-            "start_time_text": "无有效历史数据",
+            "start_val": base_pnl,
+            "start_time_text": f"上{'年' if is_year else '月'}底累计 · {period_str}起点" if base_pnl is not None else "无有效历史数据",
             "latest_val": None,
             "latest_time_text": "无有效历史数据",
             "delta_val": None,
@@ -104,24 +139,31 @@ def calculate_realtime_metrics(series_points, *, is_year=False, period_str="", s
             "status_level": "neutral",
         }
 
-    # 1. 起点
-    first_dt_bj, start_val, _ = valid[0]
-    start_time_text = f"{'年初' if is_year else '本月'}起点 · {first_dt_bj.strftime('%Y-%m-%d')}"
+    # 1. 月初/年初累计盈亏
+    first_dt_bj, first_val, _ = valid[0]
+    if base_pnl is not None:
+        start_val = base_pnl
+        valid_totals = [(dt_bj, base_pnl + v, s) for dt_bj, v, s in valid]
+        start_time_text = f"上{'年' if is_year else '月'}底累计 · {period_str}起点"
+    else:
+        start_val = first_val
+        valid_totals = valid
+        start_time_text = f"{'年初' if is_year else '本月'}起点 · {first_dt_bj.strftime('%Y-%m-%d')}"
 
-    # 2. 终点 / 最新
-    latest_dt_bj, latest_val, _ = valid[-1]
+    # 2. 当前最新累计盈亏
+    latest_dt_bj, latest_val, _ = valid_totals[-1]
     latest_time_text = f"最近有效点 · {latest_dt_bj.strftime('%m-%d %H:%M')} 北京时间"
 
-    # 3. 本月/本年变化
+    # 3. 本月/本年变化 = 当前最新 - 月初
     delta_val = latest_val - start_val
     delta_sub_text = f"较{'年初' if is_year else '月初'}变化（最新－{'年初' if is_year else '月初'}）"
 
-    # 4. 极值与波动区间
-    max_tuple = max(valid, key=lambda x: x[1])
+    # 4. 极值与波动区间（基于全周期累计点位）
+    max_tuple = max(valid_totals, key=lambda x: x[1])
     max_val = max_tuple[1]
     max_time_text = max_tuple[0].strftime("%m-%d %H:%M")
 
-    min_tuple = min(valid, key=lambda x: x[1])
+    min_tuple = min(valid_totals, key=lambda x: x[1])
     min_val = min_tuple[1]
     min_time_text = min_tuple[0].strftime("%m-%d %H:%M")
 
@@ -130,11 +172,11 @@ def calculate_realtime_metrics(series_points, *, is_year=False, period_str="", s
 
     # 5. 最大回撤（严格按时间顺序计算：trough - prior_peak）
     max_dd = Decimal(0)
-    best_peak = valid[0][1]
-    best_trough = valid[0][1]
-    running_peak = valid[0][1]
+    best_peak = valid_totals[0][1]
+    best_trough = valid_totals[0][1]
+    running_peak = valid_totals[0][1]
 
-    for dt_bj, v, _ in valid:
+    for dt_bj, v, _ in valid_totals:
         if v > running_peak:
             running_peak = v
         else:
@@ -589,6 +631,7 @@ class RealtimeChartCanvas(ChartCanvas):
 
     def __init__(self, parent=None, card_mode=False):
         super().__init__(parent, card_mode=card_mode)
+        self.hide_legend = True
         self.hover_point = None  # (x, y, dt_str, val_str, delta_str, status_str)
         self.setMouseTracking(True)
 
@@ -867,45 +910,13 @@ class MonthlyRealtimePnlPage(QWidget):
 
         layout.addWidget(self.top_bar_widget)
 
-        # 3. 已选条件 Chips 栏
+        # 3. 已选条件 Chips 栏（根据需求彻底隐藏，不展示）
         self.chips_bar = QWidget(self)
-        chips_layout = QHBoxLayout(self.chips_bar)
-        chips_layout.setContentsMargins(0, 0, 0, 2)
-        chips_layout.setSpacing(6)
-
-        lbl_chips_prefix = QLabel("已选条件：")
-        lbl_chips_prefix.setStyleSheet("font-size: 12px; color: #64748B;")
-        chips_layout.addWidget(lbl_chips_prefix)
-
+        self.chips_bar.setVisible(False)
         self.chip_period = QPushButton("月份: 2026-11")
         self.chip_person = QPushButton("人员: 全部启用人员")
         self.chip_channel = QPushButton("渠道: 全部渠道")
         self.chip_stock = QPushButton("股票: 全部股票")
-
-        for chip in (self.chip_period, self.chip_person, self.chip_channel, self.chip_stock):
-            chip.setStyleSheet("""
-                QPushButton {
-                    background: #F1F5F9;
-                    color: #334155;
-                    border: 1px solid #CBD5E1;
-                    border-radius: 12px;
-                    padding: 2px 10px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background: #E2E8F0;
-                }
-            """)
-        self.chip_person.clicked.connect(lambda: self.person_combo.setCurrentIndex(0))
-        self.chip_channel.clicked.connect(self.channel_filter.reset)
-        self.chip_stock.clicked.connect(lambda: self.stock_combo.setCurrentIndex(0))
-
-        chips_layout.addWidget(self.chip_period)
-        chips_layout.addWidget(self.chip_person)
-        chips_layout.addWidget(self.chip_channel)
-        chips_layout.addWidget(self.chip_stock)
-        chips_layout.addStretch()
-        layout.addWidget(self.chips_bar)
 
         # 4. 核心指标卡片区域（4 张卡片水平等宽并排）
         self.kpi_container = QWidget(self)
@@ -944,30 +955,18 @@ class MonthlyRealtimePnlPage(QWidget):
         chart_card_layout.setContentsMargins(14, 12, 14, 12)
         chart_card_layout.setSpacing(6)
 
-        # 图表卡片顶部工具栏
-        chart_toolbar = QHBoxLayout()
-        chart_toolbar.setContentsMargins(0, 0, 0, 4)
-        chart_toolbar.setSpacing(8)
-
+        # 图表卡片顶部工具栏（根据需求移除右上角缩放/重置/说明按钮）
         self.chart_title_lbl = QLabel("2026-11 累计盈亏走势")
-        self.chart_title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #0F172A;")
-        chart_toolbar.addWidget(self.chart_title_lbl)
-        chart_toolbar.addStretch()
+        self.chart_title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #0F172A; padding: 2px 0 6px 0;")
+        chart_card_layout.addWidget(self.chart_title_lbl)
 
+        # 保留隐藏控件保持向后兼容
         self.zoom_combo = QComboBox()
-        self.zoom_combo.addItems(["🔍 缩放", "近 5 日", "近 10 日", "近 15 日", "全量周期"])
-        self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
-        chart_toolbar.addWidget(self.zoom_combo)
-
+        self.zoom_combo.setVisible(False)
         self.reset_view_btn = QPushButton("🔄 重置视图")
-        self.reset_view_btn.clicked.connect(self._on_reset_view)
-        chart_toolbar.addWidget(self.reset_view_btn)
-
+        self.reset_view_btn.setVisible(False)
         self.explain_btn = QPushButton("ℹ 查看说明")
-        self.explain_btn.clicked.connect(self._show_explanation_dialog)
-        chart_toolbar.addWidget(self.explain_btn)
-
-        chart_card_layout.addLayout(chart_toolbar)
+        self.explain_btn.setVisible(False)
 
         # 图表画布
         self.canvas = RealtimeChartCanvas(card_mode=False)
@@ -1689,7 +1688,18 @@ class MonthlyRealtimePnlPage(QWidget):
                 self.canvas.update()
 
     def _display_shared_chart(self, chart, state, year):
-        # 规整化 X 轴标签：避免显示未解析的原始 ISO 字符串，统一为优雅日期
+        # 1. 周期与模式
+        period = (self.year_combo.currentText() if year else self.month_combo.currentText()) or (str(date.today().year) if year else date.today().strftime("%Y-%m"))
+        mode_text = "每日日内盈亏走势" if (self.mode_combo.currentData() == "intraday") else "累计盈亏走势"
+        mode = self.mode_combo.currentData() or "cumulative"
+        self.chart_title_lbl.setText(f"{period} {mode_text}")
+
+        # 2. 计算所选周期起点之前的历史累计总盈亏基准（从最开始到上个月底时的累计盈亏）
+        channels = self.channel_filter.selected_channels()
+        ticker = self.stock_combo.selected_ticker()
+        base_pnl = get_period_opening_pnl(self.analytics, period, is_year=year, channels=channels, ticker=ticker)
+
+        # 3. 规整化 X 轴标签：避免显示未解析的原始 ISO 字符串，统一为优雅日期
         clean_labels = dict(chart.x_labels) if chart.x_labels else {}
         for series in chart.series:
             for k, _ in series.points:
@@ -1697,25 +1707,32 @@ class MonthlyRealtimePnlPage(QWidget):
                     dt_bj = to_bj_datetime(k)
                     clean_labels[k] = dt_bj.strftime("%m-%d") if dt_bj else ""
 
-        # 清除画布内部重复标题与被裁切的底层 note，由外层卡片与说明弹窗呈现
-        chart_cleaned = replace(chart, title="", note="", x_labels=clean_labels)
+        # 4. 图表曲线点位处理：若为累计走势，叠加基准盈亏展示真实累计走势；清除 series 名称彻底隐藏“累计盈亏”图例
+        chart_series_shifted = []
+        for s in chart.series:
+            shifted_points = tuple(
+                (k, (Decimal(str(v)) + base_pnl) if (v is not None and mode == "cumulative") else v)
+                for k, v in s.points
+            )
+            # 用户明确要求：去掉“累计盈亏”字样，设置 name="" 结合 hide_legend 彻底移除
+            chart_series_shifted.append(replace(s, name="", points=shifted_points))
+
+        # 清除画布内部重复标题与被裁切的底层 note，由外层卡片与弹窗呈现
+        chart_cleaned = replace(
+            chart,
+            title="",
+            note="",
+            series=tuple(chart_series_shifted),
+            x_labels=clean_labels,
+        )
         self.canvas.chart = chart_cleaned
         self.canvas.update()
         self.summary_badge.setText(state.get("message", ""))
         self.notes_label.setText(chart.note)
 
-        # 1. 标题更新
-        period = self.year_combo.currentText() if year else self.month_combo.currentText()
-        mode_text = "每日日内盈亏走势" if (self.mode_combo.currentData() == "intraday") else "累计盈亏走势"
-        self.chart_title_lbl.setText(f"{period} {mode_text}")
-
-        # 2. 同步 Chips 标签
-        self._sync_chips()
-
-        # 3. 统计计算与指标更新
+        # 5. 统计计算与指标更新
         all_pts = []
         if chart.series:
-            # 如果多 series，优先合并各时间戳的点（如果单 series 则直接取）
             if len(chart.series) == 1:
                 all_pts = chart.series[0].points
             else:
@@ -1728,7 +1745,7 @@ class MonthlyRealtimePnlPage(QWidget):
                             has_val[k] = True
                 all_pts = [(k, pts_map[k] if has_val[k] else None) for k, _ in chart.series[0].points]
 
-        m = calculate_realtime_metrics(all_pts, is_year=year, period_str=period, state=state)
+        m = calculate_realtime_metrics(all_pts, is_year=year, period_str=period, state=state, base_pnl=base_pnl)
 
         # 更新 4 个核心 KPI 卡片
         self.kpi_start.update_data(m["start_val"], m["start_time_text"])
@@ -1739,7 +1756,7 @@ class MonthlyRealtimePnlPage(QWidget):
         # 更新右侧分析面板
         self.right_panel.update_metrics(m)
 
-        # 4. 精简底部状态栏
+        # 6. 精简底部状态栏
         if m["valid_count"] > 0:
             latest_val_str = f"{m['latest_val']:+,.2f} USD" if m["latest_val"] is not None else "—"
             latest_time = m["latest_time_text"].replace("最近有效点 · ", "").replace(" 北京时间", "")
