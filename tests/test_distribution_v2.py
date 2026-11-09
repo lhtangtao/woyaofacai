@@ -78,6 +78,25 @@ def test_distribution_page_ui(qtbot, analytics):
     assert page.kpi_mv.value_lbl.text() != "--"
     assert page.kpi_count.value_lbl.text() != "--"
 
+    # 验证明细表格列结构
+    assert page.table_stocks.columnCount() == 12
+    stock_headers = [page.table_stocks.horizontalHeaderItem(i).text() for i in range(12)]
+    assert stock_headers == [
+        "Ticker", "分类", "渠道", "当期股数", "上期股数", "股数变化", "当前市值 (USD)", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
+    ]
+
+    assert page.table_channels.columnCount() == 9
+    channel_headers = [page.table_channels.horizontalHeaderItem(i).text() for i in range(9)]
+    assert channel_headers == [
+        "渠道", "当期标的数", "上期标的数", "当前市值", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
+    ]
+
+    assert page.table_categories.columnCount() == 9
+    category_headers = [page.table_categories.horizontalHeaderItem(i).text() for i in range(9)]
+    assert category_headers == [
+        "分类", "当期标的数", "上期标的数", "当前市值", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
+    ]
+
     # 测试打开股票抽屉
     page._open_top_stock_drawer()
     assert page.drawer.isVisible()

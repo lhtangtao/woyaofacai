@@ -897,35 +897,35 @@ class HoldingsDistributionPage(QWidget):
 
         self.detail_tabs = QTabWidget()
 
-        # Tab 1: 股票持仓明细（无编号、无重复名称、包含股数变化与市值变化）
+        # Tab 1: 股票持仓明细（当期股数、上期股数、股数变化、当前市值、上期市值、市值变化）
         tab1 = QWidget()
         tab1_vbox = QVBoxLayout(tab1)
         tab1_vbox.setContentsMargins(0, 10, 0, 0)
         self.table_stocks = self._create_modern_table([
-            "Ticker", "分类", "渠道", "持仓股数", "股数变化", "当前市值 (USD)", "市值变化", "当前占比", "上期占比", "占比变化"
+            "Ticker", "分类", "渠道", "当期股数", "上期股数", "股数变化", "当前市值 (USD)", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
         ])
         self.table_stocks.cellClicked.connect(self._on_stock_table_clicked)
         self.table_stocks.cellDoubleClicked.connect(self._on_stock_table_double_clicked)
         tab1_vbox.addWidget(self.table_stocks)
         self.detail_tabs.addTab(tab1, "股票持仓明细")
 
-        # Tab 2: 按渠道汇总（无编号，包含市值变化）
+        # Tab 2: 按渠道汇总（当期标的数、上期标的数、当前市值、上期市值、市值变化）
         tab2 = QWidget()
         tab2_vbox = QVBoxLayout(tab2)
         tab2_vbox.setContentsMargins(0, 10, 0, 0)
         self.table_channels = self._create_modern_table([
-            "渠道", "持仓标的数", "当前市值", "市值变化", "当前占比", "上期市值", "上期占比", "占比变化"
+            "渠道", "当期标的数", "上期标的数", "当前市值", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
         ])
         self.table_channels.cellClicked.connect(self._on_channel_table_clicked)
         tab2_vbox.addWidget(self.table_channels)
         self.detail_tabs.addTab(tab2, "按渠道汇总")
 
-        # Tab 3: 按分类汇总（无编号，包含市值变化）
+        # Tab 3: 按分类汇总（当期标的数、上期标的数、当前市值、上期市值、市值变化）
         tab3 = QWidget()
         tab3_vbox = QVBoxLayout(tab3)
         tab3_vbox.setContentsMargins(0, 10, 0, 0)
         self.table_categories = self._create_modern_table([
-            "分类", "持仓标的数", "当前市值", "市值变化", "当前占比", "上期市值", "上期占比", "占比变化"
+            "分类", "当期标的数", "上期标的数", "当前市值", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
         ])
         self.table_categories.cellClicked.connect(self._on_category_table_clicked)
         tab3_vbox.addWidget(self.table_categories)
@@ -1286,7 +1286,7 @@ class HoldingsDistributionPage(QWidget):
                 item.setFont(f)
             return item
 
-        # 1. 股票持仓明细（无编号、无重复名称、包含股数变化与市值变化、百分比统一用 %、全量居中）
+        # 1. 股票持仓明细（当期股数、上期股数、股数变化、当前市值、上期市值、市值变化、当前占比、上期占比、占比变化）
         stocks = summary.all_stocks
         self.table_stocks.setRowCount(len(stocks))
         for r, s in enumerate(stocks):
@@ -1296,88 +1296,96 @@ class HoldingsDistributionPage(QWidget):
             self.table_stocks.setItem(r, 1, make_center_item(s.category))
             # 2: 渠道
             self.table_stocks.setItem(r, 2, make_center_item(s.channel))
-            # 3: 持仓股数
+            # 3: 当期股数
             self.table_stocks.setItem(r, 3, make_center_item(f"{s.shares:,.2f}"))
+            # 4: 上期股数
+            self.table_stocks.setItem(r, 4, make_center_item(f"{s.prev_shares:,.2f}"))
 
-            # 4: 股数变化 (正绿负红居中)
+            # 5: 股数变化 (正绿负红居中)
             sh_chg = s.shares_change
             sh_sign = "+" if sh_chg > Decimal("0.001") else ""
             sh_col = "#16A34A" if sh_chg > Decimal("0.001") else ("#DC2626" if sh_chg < Decimal("-0.001") else None)
-            self.table_stocks.setItem(r, 4, make_center_item(f"{sh_sign}{sh_chg:,.2f}", sh_col))
+            self.table_stocks.setItem(r, 5, make_center_item(f"{sh_sign}{sh_chg:,.2f}", sh_col))
 
-            # 5: 当前市值
-            self.table_stocks.setItem(r, 5, make_center_item(f"${s.market_value:,.2f}"))
+            # 6: 当前市值
+            self.table_stocks.setItem(r, 6, make_center_item(f"${s.market_value:,.2f}"))
+            # 7: 上期市值
+            self.table_stocks.setItem(r, 7, make_center_item(f"${s.prev_market_value:,.2f}"))
 
-            # 6: 市值变化 (正绿负红居中)
+            # 8: 市值变化 (正绿负红居中)
             mv_chg = s.market_value_change
             mv_sign = "+" if mv_chg > Decimal("0.001") else ""
             mv_col = "#16A34A" if mv_chg > Decimal("0.001") else ("#DC2626" if mv_chg < Decimal("-0.001") else None)
-            self.table_stocks.setItem(r, 6, make_center_item(f"{mv_sign}${mv_chg:,.2f}", mv_col))
+            self.table_stocks.setItem(r, 8, make_center_item(f"{mv_sign}${mv_chg:,.2f}", mv_col))
 
-            # 7: 当前占比
-            self.table_stocks.setItem(r, 7, make_center_item(f"{s.weight:.2f}%"))
-            # 8: 上期占比
-            self.table_stocks.setItem(r, 8, make_center_item(f"{s.prev_weight:.2f}%"))
+            # 9: 当前占比
+            self.table_stocks.setItem(r, 9, make_center_item(f"{s.weight:.2f}%"))
+            # 10: 上期占比
+            self.table_stocks.setItem(r, 10, make_center_item(f"{s.prev_weight:.2f}%"))
 
-            # 9: 占比变化 (%) (正绿负红居中)
+            # 11: 占比变化 (%) (正绿负红居中)
             diff_col = "#16A34A" if s.diff_pp > Decimal("0.001") else ("#DC2626" if s.diff_pp < Decimal("-0.001") else None)
-            self.table_stocks.setItem(r, 9, make_center_item(f"{s.diff_pp:+.2f}%", diff_col))
+            self.table_stocks.setItem(r, 11, make_center_item(f"{s.diff_pp:+.2f}%", diff_col))
 
-        # 2. 渠道汇总（无编号、包含市值变化、百分比统一用 %、全量居中）
+        # 2. 渠道汇总（当期标的数、上期标的数、当前市值、上期市值、市值变化、当前占比、上期占比、占比变化）
         chs = summary.channels
         self.table_channels.setRowCount(len(chs))
         for r, ch in enumerate(chs):
             # 0: 渠道
             self.table_channels.setItem(r, 0, make_center_item(ch.name, bold=True))
-            # 1: 持仓标的数
+            # 1: 当期标的数
             self.table_channels.setItem(r, 1, make_center_item(f"{ch.items_count} 只"))
-            # 2: 当前市值
-            self.table_channels.setItem(r, 2, make_center_item(f"${ch.market_value:,.2f}"))
+            # 2: 上期标的数
+            self.table_channels.setItem(r, 2, make_center_item(f"{ch.prev_items_count} 只"))
+            # 3: 当前市值
+            self.table_channels.setItem(r, 3, make_center_item(f"${ch.market_value:,.2f}"))
+            # 4: 上期市值
+            self.table_channels.setItem(r, 4, make_center_item(f"${ch.prev_market_value:,.2f}"))
 
-            # 3: 市值变化 (正绿负红居中)
+            # 5: 市值变化 (正绿负红居中)
             ch_mv_chg = ch.market_value_change
             ch_mv_sign = "+" if ch_mv_chg > Decimal("0.001") else ""
             ch_mv_col = "#16A34A" if ch_mv_chg > Decimal("0.001") else ("#DC2626" if ch_mv_chg < Decimal("-0.001") else None)
-            self.table_channels.setItem(r, 3, make_center_item(f"{ch_mv_sign}${ch_mv_chg:,.2f}", ch_mv_col))
+            self.table_channels.setItem(r, 5, make_center_item(f"{ch_mv_sign}${ch_mv_chg:,.2f}", ch_mv_col))
 
-            # 4: 当前占比
-            self.table_channels.setItem(r, 4, make_center_item(f"{ch.weight:.2f}%"))
-            # 5: 上期市值
-            self.table_channels.setItem(r, 5, make_center_item(f"${ch.prev_market_value:,.2f}"))
-            # 6: 上期占比
-            self.table_channels.setItem(r, 6, make_center_item(f"{ch.prev_weight:.2f}%"))
+            # 6: 当前占比
+            self.table_channels.setItem(r, 6, make_center_item(f"{ch.weight:.2f}%"))
+            # 7: 上期占比
+            self.table_channels.setItem(r, 7, make_center_item(f"{ch.prev_weight:.2f}%"))
 
-            # 7: 占比变化 (%) (正绿负红居中)
+            # 8: 占比变化 (%) (正绿负红居中)
             ch_diff_col = "#16A34A" if ch.diff_pp > Decimal("0.001") else ("#DC2626" if ch.diff_pp < Decimal("-0.001") else None)
-            self.table_channels.setItem(r, 7, make_center_item(f"{ch.diff_pp:+.2f}%", ch_diff_col))
+            self.table_channels.setItem(r, 8, make_center_item(f"{ch.diff_pp:+.2f}%", ch_diff_col))
 
-        # 3. 分类汇总（无编号、包含市值变化、百分比统一用 %、全量居中）
+        # 3. 分类汇总（当期标的数、上期标的数、当前市值、上期市值、市值变化、当前占比、上期占比、占比变化）
         cats = summary.categories
         self.table_categories.setRowCount(len(cats))
         for r, ct in enumerate(cats):
             # 0: 分类
             self.table_categories.setItem(r, 0, make_center_item(ct.name, bold=True))
-            # 1: 持仓标的数
+            # 1: 当期标的数
             self.table_categories.setItem(r, 1, make_center_item(f"{ct.items_count} 只"))
-            # 2: 当前市值
-            self.table_categories.setItem(r, 2, make_center_item(f"${ct.market_value:,.2f}"))
+            # 2: 上期标的数
+            self.table_categories.setItem(r, 2, make_center_item(f"{ct.prev_items_count} 只"))
+            # 3: 当前市值
+            self.table_categories.setItem(r, 3, make_center_item(f"${ct.market_value:,.2f}"))
+            # 4: 上期市值
+            self.table_categories.setItem(r, 4, make_center_item(f"${ct.prev_market_value:,.2f}"))
 
-            # 3: 市值变化 (正绿负红居中)
+            # 5: 市值变化 (正绿负红居中)
             ct_mv_chg = ct.market_value_change
             ct_mv_sign = "+" if ct_mv_chg > Decimal("0.001") else ""
             ct_mv_col = "#16A34A" if ct_mv_chg > Decimal("0.001") else ("#DC2626" if ct_mv_chg < Decimal("-0.001") else None)
-            self.table_categories.setItem(r, 3, make_center_item(f"{ct_mv_sign}${ct_mv_chg:,.2f}", ct_mv_col))
+            self.table_categories.setItem(r, 5, make_center_item(f"{ct_mv_sign}${ct_mv_chg:,.2f}", ct_mv_col))
 
-            # 4: 当前占比
-            self.table_categories.setItem(r, 4, make_center_item(f"{ct.weight:.2f}%"))
-            # 5: 上期市值
-            self.table_categories.setItem(r, 5, make_center_item(f"${ct.prev_market_value:,.2f}"))
-            # 6: 上期占比
-            self.table_categories.setItem(r, 6, make_center_item(f"{ct.prev_weight:.2f}%"))
+            # 6: 当前占比
+            self.table_categories.setItem(r, 6, make_center_item(f"{ct.weight:.2f}%"))
+            # 7: 上期占比
+            self.table_categories.setItem(r, 7, make_center_item(f"{ct.prev_weight:.2f}%"))
 
-            # 7: 占比变化 (%) (正绿负红居中)
+            # 8: 占比变化 (%) (正绿负红居中)
             ct_diff_col = "#16A34A" if ct.diff_pp > Decimal("0.001") else ("#DC2626" if ct.diff_pp < Decimal("-0.001") else None)
-            self.table_categories.setItem(r, 7, make_center_item(f"{ct.diff_pp:+.2f}%", ct_diff_col))
+            self.table_categories.setItem(r, 8, make_center_item(f"{ct.diff_pp:+.2f}%", ct_diff_col))
 
     # ------------------------------------------------------------------
     # 抽屉唤起事件

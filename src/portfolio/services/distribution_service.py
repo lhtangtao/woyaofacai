@@ -84,6 +84,7 @@ class AggregatedItem:
     shares_change: Decimal = ZERO
     market_value_change: Decimal = ZERO
     items_count: int = 1
+    prev_items_count: int = 0
 
 
 @dataclass
@@ -343,9 +344,12 @@ def calculate_distribution(
         ch_curr[it.channel]["market_value"] += it.market_value
         ch_curr[it.channel]["tickers"].add(it.ticker)
 
-    ch_prev: Dict[str, Decimal] = {}
+    ch_prev: Dict[str, Dict[str, Any]] = {}
     for it in filtered_prev:
-        ch_prev[it.channel] = ch_prev.get(it.channel, ZERO) + it.market_value
+        if it.channel not in ch_prev:
+            ch_prev[it.channel] = {"market_value": ZERO, "tickers": set()}
+        ch_prev[it.channel]["market_value"] += it.market_value
+        ch_prev[it.channel]["tickers"].add(it.ticker)
 
     channels: List[AggregatedItem] = []
     # 结合当前与上期所有出现过的渠道
@@ -354,7 +358,8 @@ def calculate_distribution(
         mv = ch_curr.get(ch, {}).get("market_value", ZERO)
         t_count = len(ch_curr.get(ch, {}).get("tickers", set()))
         w = (mv / curr_total_mv * Decimal("100")) if curr_total_mv > ZERO else ZERO
-        pmv = ch_prev.get(ch, ZERO)
+        pmv = ch_prev.get(ch, {}).get("market_value", ZERO)
+        prev_t_count = len(ch_prev.get(ch, {}).get("tickers", set()))
         pw = (pmv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         channels.append(
             AggregatedItem(
@@ -367,6 +372,7 @@ def calculate_distribution(
                 diff_pp=w - pw,
                 market_value_change=mv - pmv,
                 items_count=t_count,
+                prev_items_count=prev_t_count,
             )
         )
     channels.sort(key=lambda x: x.market_value, reverse=True)
@@ -379,9 +385,12 @@ def calculate_distribution(
         cat_curr[it.category]["market_value"] += it.market_value
         cat_curr[it.category]["tickers"].add(it.ticker)
 
-    cat_prev: Dict[str, Decimal] = {}
+    cat_prev: Dict[str, Dict[str, Any]] = {}
     for it in filtered_prev:
-        cat_prev[it.category] = cat_prev.get(it.category, ZERO) + it.market_value
+        if it.category not in cat_prev:
+            cat_prev[it.category] = {"market_value": ZERO, "tickers": set()}
+        cat_prev[it.category]["market_value"] += it.market_value
+        cat_prev[it.category]["tickers"].add(it.ticker)
 
     categories: List[AggregatedItem] = []
     all_cat_names = sorted(set(cat_curr.keys()) | set(cat_prev.keys()))
@@ -389,7 +398,8 @@ def calculate_distribution(
         mv = cat_curr.get(ct, {}).get("market_value", ZERO)
         t_count = len(cat_curr.get(ct, {}).get("tickers", set()))
         w = (mv / curr_total_mv * Decimal("100")) if curr_total_mv > ZERO else ZERO
-        pmv = cat_prev.get(ct, ZERO)
+        pmv = cat_prev.get(ct, {}).get("market_value", ZERO)
+        prev_t_count = len(cat_prev.get(ct, {}).get("tickers", set()))
         pw = (pmv / prev_total_mv * Decimal("100")) if prev_total_mv > ZERO else ZERO
         categories.append(
             AggregatedItem(
@@ -402,6 +412,7 @@ def calculate_distribution(
                 diff_pp=w - pw,
                 market_value_change=mv - pmv,
                 items_count=t_count,
+                prev_items_count=prev_t_count,
             )
         )
     categories.sort(key=lambda x: x.market_value, reverse=True)
