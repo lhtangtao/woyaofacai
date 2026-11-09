@@ -2,7 +2,7 @@
 
 Parity with Daily Performance:
 1. 7 Metric KPI Cards with click-to-filter, drill-down and selection states.
-2. Compact Filter Card: Person, broker, ticker, month range, category, search/reset & active chips.
+2. Compact Filter Card: Person, broker, ticker, month, category, search/reset & active chips.
 3. Monthly Profit Trend (Bar/Line toggle) & Broker Channel Cumulative Overview with colored bars.
 4. Full-width Monthly Attribution Module:
    - Selected Month PnL structure (Ring Chart + Profit/Loss stock count & amount, prev/next month nav)
@@ -27,7 +27,6 @@ from PySide6.QtCore import QAbstractTableModel, QDate, QModelIndex, QRectF, QSiz
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QComboBox,
-    QDateEdit,
     QFileDialog,
     QDialog,
     QFrame,
@@ -131,22 +130,23 @@ class KpiMetricCard(QFrame):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
         self.title_lbl = QLabel(title)
-        self.title_lbl.setStyleSheet("font-size: 11.5px; color: #64748B; font-weight: 500;")
+        self.title_lbl.setStyleSheet("font-size: 11.5px; color: #64748B; font-weight: 500; background: transparent; border: none;")
         header_layout.addWidget(self.title_lbl)
         header_layout.addStretch()
 
         self.arrow_lbl = QLabel("›")
-        self.arrow_lbl.setStyleSheet("font-size: 13px; color: #94A3B8; font-weight: bold;")
+        self.arrow_lbl.setStyleSheet("font-size: 13px; color: #94A3B8; font-weight: bold; background: transparent; border: none;")
         header_layout.addWidget(self.arrow_lbl)
         layout.addLayout(header_layout)
 
         self.value_label = QLabel("—")
         self.value_label.setFont(numeric_font(15, bold=True))
-        self.value_label.setStyleSheet("color: #0F172A;")
+        self.value_label.setStyleSheet("color: #0F172A; background: transparent; border: none;")
         layout.addWidget(self.value_label)
 
-        self.sub_label = QLabel("—")
-        self.sub_label.setStyleSheet("font-size: 11px; color: #94A3B8;")
+        self.sub_label = QLabel()
+        self.sub_label.hide()
+        self.sub_label.setStyleSheet("font-size: 11px; color: #94A3B8; background: transparent; border: none;")
         layout.addWidget(self.sub_label)
 
         self.update_style()
@@ -154,12 +154,9 @@ class KpiMetricCard(QFrame):
     def set_data(self, val: str, sub: str, status: Optional[str] = None):
         self.value_label.setText(val)
         self.sub_label.setText(sub)
-        if status == "profit":
-            self.value_label.setStyleSheet("color: #10B981;")
-        elif status == "loss":
-            self.value_label.setStyleSheet("color: #EF4444;")
-        else:
-            self.value_label.setStyleSheet("color: #0F172A;")
+        self.sub_label.setVisible(bool(sub.strip()))
+        color = {"profit": "#10B981", "loss": "#EF4444"}.get(status, "#0F172A")
+        self.value_label.setStyleSheet(f"color: {color}; background: transparent; border: none;")
 
     def set_selected(self, sel: bool):
         self.is_selected = sel
@@ -194,27 +191,28 @@ class MonthlyTrendCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.mode = "monthly"  # "monthly" or "cum"
-        self.data_points: List[Tuple[str, float, float]] = []  # (month, monthly_pnl, cum_pnl)
+        self.mode = "monthly"
+        self.profit_points: List[Tuple[str, float, float]] = []  # (month, monthly_pnl, cum_pnl)
         self.selected_month = ""
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.hovered_index = -1
-        self.net_by_month = {}
+        self.net_points: List[Tuple[str, Optional[Decimal], Optional[Decimal]]] = []
 
     def set_data(self, points: List[Tuple[str, float, float]], selected_month: str = ""):
-        self.data_points = points
+        self.profit_points = points
+        self.hovered_index = -1
         self.selected_month = selected_month
         self.update()
 
+    @property
+    def data_points(self):
+        return self.net_points if self.mode in ("net", "net_cum") else self.profit_points
+
     def set_mode(self, mode: str):
         self.mode = mode
+        self.hovered_index = -1
         self.update()
-
-    def right_margin(self):
-        return 90 if self.mode == "monthly" and any(
-            self.net_by_month.get(point[0]) is not None for point in self.data_points
-        ) else 20
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -225,14 +223,21 @@ class MonthlyTrendCanvas(QWidget):
 
         painter.fillRect(0, 0, w, h, QColor("#FFFFFF"))
 
-        if not self.data_points:
+        is_line = self.mode in ("cum", "net_cum")
+        value_column = 2 if is_line else 1
+        vals = [float(point[value_column]) for point in self.data_points if point[value_column] is not None]
+        if not vals:
             painter.setPen(QColor("#94A3B8"))
             painter.setFont(QFont(".AppleSystemUIFont", 12))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无月度收益走势数据")
+            empty_message = {
+                "net": "暂无每月净投入数据",
+                "net_cum": "暂无累计净投入数据",
+            }.get(self.mode, "暂无月度收益走势数据")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, empty_message)
             return
 
         margin_left = 55
-        margin_right = self.right_margin()
+        margin_right = 20
         margin_top = 25
         margin_bottom = 35
 
@@ -243,7 +248,6 @@ class MonthlyTrendCanvas(QWidget):
             return
 
         # Y scale calculation
-        vals = [p[1] if self.mode == "monthly" else p[2] for p in self.data_points]
         raw_min = min(vals)
         raw_max = max(vals)
 
@@ -258,6 +262,9 @@ class MonthlyTrendCanvas(QWidget):
             else:
                 max_val = 1000.0
                 min_val = -1000.0
+        elif self.mode == "net":
+            limit = max(abs(raw_min), abs(raw_max), 1.0) * 1.1
+            min_val, max_val = -limit, limit
         else:
             spread = max(abs(raw_max - raw_min), 100.0)
             max_val = raw_max + spread * 0.1
@@ -282,26 +289,30 @@ class MonthlyTrendCanvas(QWidget):
         painter.drawLine(margin_left, int(margin_top + plot_h), w - margin_right, int(margin_top + plot_h))
 
         # Draw Zero Line
-        zero_pen = QPen(QColor("#CBD5E1"), 1.2)
-        painter.setPen(zero_pen)
-        painter.drawLine(margin_left, int(zero_y), w - margin_right, int(zero_y))
+        show_zero = self.mode != "net_cum" or min_val <= 0 <= max_val
+        if show_zero:
+            painter.setPen(QPen(QColor("#CBD5E1"), 1.2))
+            painter.drawLine(margin_left, int(zero_y), w - margin_right, int(zero_y))
 
         # Y Axis labels
         painter.setPen(QColor("#94A3B8"))
         painter.setFont(numeric_font(9))
         painter.drawText(5, int(margin_top + 10), fmt_signed_money(max_val, 0))
-        painter.drawText(5, int(zero_y + 4), "0")
+        if show_zero:
+            painter.drawText(5, int(zero_y + 4), "0")
         painter.drawText(5, int(margin_top + plot_h), fmt_signed_money(min_val, 0))
 
         n = len(self.data_points)
         bar_step = plot_w / n
 
         # Draw series
-        if self.mode == "monthly":
+        if not is_line:
             bar_w = max(2.5, min(24.0, bar_step * 0.65))
             for i, (m, monthly_pnl, cum_pnl) in enumerate(self.data_points):
+                if monthly_pnl is None or (self.mode == "net" and monthly_pnl == 0):
+                    continue
                 cx = margin_left + i * bar_step + bar_step * 0.5
-                y = y_coord(monthly_pnl)
+                y = y_coord(float(monthly_pnl))
 
                 # Clamp y for visual stability
                 y_clamped = max(margin_top, min(margin_top + plot_h, y))
@@ -324,6 +335,25 @@ class MonthlyTrendCanvas(QWidget):
                 by = min(zero_y, y_clamped)
                 bh = max(2.0, abs(zero_y - y_clamped))
                 painter.drawRoundedRect(QRectF(bx, by, bar_w, bh), 2, 2)
+        elif self.mode == "net_cum":
+            path = QPainterPath()
+            connected = False
+            for i, (month, _, value) in enumerate(self.data_points):
+                if value is None:
+                    connected = False
+                    continue
+                x = margin_left + (i + 0.5) * bar_step
+                y = y_coord(float(value))
+                if connected:
+                    path.lineTo(x, y)
+                else:
+                    path.moveTo(x, y)
+                radius = 4 if month == self.selected_month or i == self.hovered_index else 2
+                painter.setPen(QPen(QColor("#2563EB"), 1.5))
+                painter.setBrush(QColor("#FFFFFF"))
+                painter.drawEllipse(QRectF(x - radius, y - radius, radius * 2, radius * 2))
+                connected = True
+            painter.strokePath(path, QPen(QColor("#2563EB"), 1.5))
         else:
             # Cumulative curve
             line_path = QPainterPath()
@@ -359,35 +389,6 @@ class MonthlyTrendCanvas(QWidget):
                     painter.setBrush(QColor("#2563EB"))
                     painter.drawEllipse(QRectF(cx - 5, cy - 5, 10, 10))
 
-        if self.mode == "monthly" and margin_right > 20:
-            net = [self.net_by_month.get(month) for month, *_ in self.data_points]
-            balances = [float(value) for value in net if value is not None]
-            low, high = min(balances), max(balances)
-            if low == high:
-                low -= 1
-                high += 1
-            path = QPainterPath()
-            painter.setPen(QPen(QColor("#2563EB"), 1.5))
-            painter.setBrush(QColor("#FFFFFF"))
-            connected = False
-            for i, value in enumerate(net):
-                if value is None:
-                    connected = False
-                    continue
-                x = margin_left + (i + 0.5) * bar_step
-                y = margin_top + plot_h * (high - float(value)) / (high - low)
-                if connected:
-                    path.lineTo(x, y)
-                else:
-                    path.moveTo(x, y)
-                painter.drawEllipse(QRectF(x - 2, y - 2, 4, 4))
-                connected = True
-            painter.strokePath(path, QPen(QColor("#2563EB"), 1.5))
-            painter.setFont(numeric_font(9))
-            painter.drawText(w - margin_right + 5, 13, "累计净投入")
-            painter.drawText(w - margin_right + 5, margin_top + 4, fmt_money(high, 0))
-            painter.drawText(w - margin_right + 5, int(margin_top + plot_h), fmt_money(low, 0))
-
         # X Axis labels (Show 3-5 representative months)
         painter.setPen(QColor("#94A3B8"))
         painter.setFont(numeric_font(9))
@@ -400,10 +401,13 @@ class MonthlyTrendCanvas(QWidget):
         # Draw Tooltip on Hover
         if 0 <= self.hovered_index < len(self.data_points):
             hm, h_monthly, h_cum = self.data_points[self.hovered_index]
-            tip_text = f"{hm}\n当月: {fmt_signed_money(h_monthly)}\n累计: {fmt_signed_money(h_cum)}"
+            if self.mode == "net":
+                tip_text = f"{hm}\n每月净投入: {fmt_signed_money(h_monthly)}"
+            elif self.mode == "net_cum":
+                tip_text = f"{hm}\n累计净投入: {fmt_signed_money(h_cum)}"
+            else:
+                tip_text = f"{hm}\n当月: {fmt_signed_money(h_monthly)}\n累计: {fmt_signed_money(h_cum)}"
             cx = margin_left + self.hovered_index * bar_step + bar_step * 0.5
-            if self.mode == "monthly" and margin_right > 20:
-                tip_text += f"\n月末净投入: {fmt_money(self.net_by_month.get(hm))}"
             tx = min(w - 166, max(margin_left, cx - 70))
             ty = margin_top + 15
             painter.setBrush(QColor(15, 23, 42, 220))
@@ -416,7 +420,7 @@ class MonthlyTrendCanvas(QWidget):
     def mouseMoveEvent(self, event):
         w = self.width()
         margin_left = 55
-        margin_right = self.right_margin()
+        margin_right = 20
         plot_w = w - margin_left - margin_right
         n = len(self.data_points)
 
@@ -687,7 +691,6 @@ class MonthlyPerformancePage(QWidget):
         self.analytics = None
         self.raw_rows: List[Tuple] = []
         self.cash_rows = []
-        self._loaded_month_range = False
         self.cash_table_records = {}
         self.current_filtered_rows: List[Tuple] = []
         self.selected_month = ""
@@ -701,7 +704,7 @@ class MonthlyPerformancePage(QWidget):
         self.selected_broker = ""
         self.search_ticker = ""
         self.start_month = "2025-01"
-        self.end_month = QDate.currentDate().toString("yyyy-MM")
+        self.end_month = ""
         self.selected_category = ""
 
         self.setup_ui()
@@ -731,7 +734,7 @@ class MonthlyPerformancePage(QWidget):
                 border: 1px solid #E2E8F0;
                 border-radius: 8px;
             }
-            QComboBox, QLineEdit, QDateEdit {
+            QComboBox, QLineEdit {
                 height: 28px;
                 border: 1px solid #CBD5E1;
                 border-radius: 5px;
@@ -740,7 +743,7 @@ class MonthlyPerformancePage(QWidget):
                 color: #1E293B;
                 background: #FFFFFF;
             }
-            QComboBox:focus, QLineEdit:focus, QDateEdit:focus {
+            QComboBox:focus, QLineEdit:focus:focus {
                 border-color: #2563EB;
             }
         """)
@@ -767,28 +770,11 @@ class MonthlyPerformancePage(QWidget):
         self.ticker_input.setStyleSheet("padding: 4px 8px; border: 1px solid #E2E8F0; border-radius: 4px; font-size: 12px;")
         filter_layout.addWidget(self.ticker_input)
 
-        # Month range (Start & End)
-        date_box = QHBoxLayout()
-        date_box.setSpacing(4)
-        self.start_month_edit = QDateEdit()
-        self.start_month_edit.setDisplayFormat("yyyy-MM")
-        self.start_month_edit.setCalendarPopup(True)
-        self.start_month_edit.setDate(QDate(2025, 1, 1))
-        self.start_month_edit.setStyleSheet("border: 1px solid #E2E8F0; border-radius: 4px; padding: 4px 6px; font-size: 12px;")
-
-        dash_lbl = QLabel("—")
-        dash_lbl.setStyleSheet("color: #94A3B8;")
-
-        self.end_month_edit = QDateEdit()
-        self.end_month_edit.setDisplayFormat("yyyy-MM")
-        self.end_month_edit.setCalendarPopup(True)
-        self.end_month_edit.setDate(QDate.currentDate())
-        self.end_month_edit.setStyleSheet("border: 1px solid #E2E8F0; border-radius: 4px; padding: 4px 6px; font-size: 12px;")
-
-        date_box.addWidget(self.start_month_edit)
-        date_box.addWidget(dash_lbl)
-        date_box.addWidget(self.end_month_edit)
-        filter_layout.addLayout(date_box)
+        self.month_combo = QComboBox()
+        self.month_combo.setMinimumWidth(115)
+        self.month_combo.setAccessibleName("月份")
+        self.populate_months()
+        filter_layout.addWidget(self.month_combo)
 
         # Category
         self.category_combo = QComboBox()
@@ -884,14 +870,7 @@ class MonthlyPerformancePage(QWidget):
         ))
         self.period_cards[0].setToolTip("现有报表没有提供期间收益率")
         content_layout.addLayout(period_cards)
-        extra_metrics = QWidget()
-        extra_metrics.setLayout(kpi_grid)
-        extra_metrics.hide()
-        toggle_metrics = QPushButton("更多收益统计")
-        toggle_metrics.setCheckable(True)
-        toggle_metrics.toggled.connect(extra_metrics.setVisible)
-        content_layout.addWidget(toggle_metrics, alignment=Qt.AlignmentFlag.AlignLeft)
-        content_layout.addWidget(extra_metrics)
+        content_layout.addLayout(kpi_grid)
 
         # 4. Middle Section: Monthly Trend Chart (Left) + Broker Overview (Right)
         self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -908,7 +887,9 @@ class MonthlyPerformancePage(QWidget):
         trend_top = QHBoxLayout()
         self.trend_tab_monthly = QPushButton("月度收益走势")
         self.trend_tab_cum = QPushButton("累计收益走势")
-        for btn in (self.trend_tab_monthly, self.trend_tab_cum):
+        self.trend_tab_net = QPushButton("每月净投入")
+        self.trend_tab_net_cum = QPushButton("累计净投入")
+        for btn in (self.trend_tab_monthly, self.trend_tab_cum, self.trend_tab_net, self.trend_tab_net_cum):
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet("""
@@ -931,7 +912,11 @@ class MonthlyPerformancePage(QWidget):
         self.trend_tab_cum.clicked.connect(lambda: self.switch_trend_mode("cum"))
 
         trend_top.addWidget(self.trend_tab_monthly)
+        self.trend_tab_net.clicked.connect(lambda: self.switch_trend_mode("net"))
         trend_top.addWidget(self.trend_tab_cum)
+        trend_top.addWidget(self.trend_tab_net)
+        self.trend_tab_net_cum.clicked.connect(lambda: self.switch_trend_mode("net_cum"))
+        trend_top.addWidget(self.trend_tab_net_cum)
         trend_top.addStretch()
         trend_vbox.addLayout(trend_top)
 
@@ -1599,15 +1584,7 @@ class MonthlyPerformancePage(QWidget):
             self.as_of_badge.setText(f"数据截至：{self.max_as_of_month}（月末）")
             if not self.selected_month:
                 self.selected_month = self.max_as_of_month
-            # Parse yyyy-MM
-            try:
-                parts = self.max_as_of_month.split("-")
-                if not self._loaded_month_range:
-                    self.end_month_edit.setDate(QDate(int(parts[0]), int(parts[1]), 1))
-                    self.end_month = self.max_as_of_month
-                    self._loaded_month_range = True
-            except Exception:
-                pass
+        self.populate_months()
 
         self.recalculate_and_refresh()
 
@@ -1713,8 +1690,11 @@ class MonthlyPerformancePage(QWidget):
         cash_by_month = {}
         for row in cash_values:
             cash_by_month.setdefault(row[0], []).append(row)
-        self.trend_canvas.net_by_month = {month: sum_column(rows, 12) for month, rows in cash_by_month.items()}
-        end_balance = self.trend_canvas.net_by_month.get(end_m_str)
+        self.trend_canvas.net_points = [
+            (month, sum_column(rows, 11), sum_column(rows, 12)) for month, rows in sorted(cash_by_month.items())
+        ]
+        balance_month = end_m_str or max(cash_by_month, default="")
+        end_balance = sum_column(cash_by_month.get(balance_month, []), 12)
         flow_totals = [sum_column(cash_values, i) for i in (9, 10, 11)] + [end_balance]
         for i, (card, value) in enumerate(zip(self.flow_cards, flow_totals)):
             sign = ("profit" if value >= 0 else "loss") if i == 2 and value is not None else None
@@ -1845,8 +1825,8 @@ class MonthlyPerformancePage(QWidget):
         )
 
         # Update Trend Canvas
-        if not self.selected_month and months_asc:
-            self.selected_month = months_asc[-1]
+        if self.selected_month not in months_asc and self.selected_month not in cash_by_month:
+            self.selected_month = end_m_str or (months_asc[-1] if months_asc else "")
         self.trend_canvas.set_data(trend_pts, self.selected_month)
 
         # Update Broker Channel Overview
@@ -2516,7 +2496,7 @@ class MonthlyPerformancePage(QWidget):
 
     def select_month(self, target_month: str):
         self.selected_month = target_month
-        self.update_month_distribution(self.current_filtered_rows or self.raw_rows)
+        self.update_month_distribution(self.current_filtered_rows)
         self.trend_canvas.selected_month = target_month
         self.trend_canvas.update()
         self.update_month_nav_buttons()
@@ -2860,6 +2840,8 @@ class MonthlyPerformancePage(QWidget):
     def switch_trend_mode(self, mode: str):
         self.trend_tab_monthly.setChecked(mode == "monthly")
         self.trend_tab_cum.setChecked(mode == "cum")
+        self.trend_tab_net.setChecked(mode == "net")
+        self.trend_tab_net_cum.setChecked(mode == "net_cum")
         self.trend_canvas.set_mode(mode)
 
     def export_csv(self):
@@ -2895,15 +2877,24 @@ class MonthlyPerformancePage(QWidget):
                     r[9], r[10], r[11], r[20], r[13]
                 ])
 
+    def populate_months(self):
+        selected = self.month_combo.currentData()
+        latest = max(
+            QDate.currentDate().toString("yyyy-MM"), self.max_as_of_month,
+            max((values[0] for values, _ in self.cash_rows), default=""),
+        )
+        month = QDate.fromString(latest + "-01", "yyyy-MM-dd")
+        self.month_combo.clear()
+        self.month_combo.addItem("全部月份", "")
+        while month.isValid() and month >= QDate(2025, 1, 1):
+            value = month.toString("yyyy-MM")
+            self.month_combo.addItem(value, value)
+            month = month.addMonths(-1)
+        self.month_combo.setCurrentIndex(max(0, self.month_combo.findData(selected)))
+
     def on_search_clicked(self):
-        start = self.start_month_edit.date().toString("yyyy-MM")
-        end = self.end_month_edit.date().toString("yyyy-MM")
-        if start > end:
-            self.start_month_edit.setToolTip("开始月份不能晚于结束月份")
-            self.start_month_edit.setFocus()
-            return
-        self.start_month_edit.setToolTip("")
-        self.start_month, self.end_month = start, end
+        month = self.month_combo.currentData() or ""
+        self.start_month, self.end_month = month or "2025-01", month
         p_id = self.person_combo.currentData()
         person_changed = (p_id != self.selected_person_id)
         self.selected_person_id = p_id
@@ -2924,11 +2915,8 @@ class MonthlyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def on_reset_clicked(self):
-        self.start_month_edit.setDate(QDate(2025, 1, 1))
-        self.end_month_edit.setDate(QDate.fromString(self.max_as_of_month + "-01", "yyyy-MM-dd")
-                                    if self.max_as_of_month else QDate.currentDate())
-        self.start_month = self.start_month_edit.date().toString("yyyy-MM")
-        self.end_month = self.end_month_edit.date().toString("yyyy-MM")
+        self.month_combo.setCurrentIndex(0)
+        self.start_month, self.end_month = "2025-01", ""
         person_changed = (self.selected_person_id is not None)
         self.ticker_input.clear()
         self.search_ticker = ""

@@ -132,7 +132,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   // Loading & Data State
   const [loading, setLoading] = useState<boolean>(true);
   const request = useRef<AbortController | null>(null);
-  const initialRangeLoaded = useRef(false);
   const [error, setError] = useState("");
   const [entries, setEntries] = useState<ReportEntry[]>([]);
   const [netEntries, setNetEntries] = useState<ReportEntry[]>([]);
@@ -145,8 +144,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   const [filterBroker, setFilterBroker] = useState<string>(broker || "");
   const [filterTicker, setFilterTicker] = useState<string>("");
   const [filterCategory, setFilterCategory] = useState<string>("");
-  const [filterStartMonth, setFilterStartMonth] = useState<string>("2025-01");
-  const [filterEndMonth, setFilterEndMonth] = useState<string>(currentMonth());
+  const [filterMonth, setFilterMonth] = useState("");
 
   // Applied Filters State
   const [appliedFilters, setAppliedFilters] = useState({
@@ -155,12 +153,12 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     ticker: "",
     category: "",
     startMonth: "2025-01",
-    endMonth: currentMonth(),
+    endMonth: "",
   });
 
   // Selected Month & Trend Mode
   const [selectedMonth, setSelectedMonth] = useState<string>("");
-  const [trendMode, setTrendMode] = useState<"monthly" | "cum">("monthly");
+  const [trendMode, setTrendMode] = useState<"monthly" | "cum" | "net" | "net_cum">("monthly");
   const [kpiFilter, setKpiFilter] = useState<"up" | "down" | null>(null);
 
   // Table Tabs & Pagination
@@ -243,19 +241,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
 
         setRawData(rows);
 
-        // Calculate max month
-        let maxM = "";
-        rows.forEach((r) => {
-          if (r.month > maxM) maxM = r.month;
-        });
-        if (maxM) {
-          setSelectedMonth((prev) => prev || maxM);
-          if (!initialRangeLoaded.current) {
-            initialRangeLoaded.current = true;
-            setFilterEndMonth(maxM);
-            setAppliedFilters(prev => ({ ...prev, endMonth: maxM }));
-          }
-        }
       }
     } catch (err) {
       if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "月度报表读取失败");
@@ -326,7 +311,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       String(a.values[1]).localeCompare(String(b.values[1])) || String(a.values[3]).localeCompare(String(b.values[3]));
   }), [netEntries, entries, appliedFilters, flowSort]);
   const scopedMonthly = useMemo(() => entries.filter(matchesEntry), [entries, appliedFilters]);
-  const netByMonth = useMemo(() => {
+  const { netByMonth, monthlyNet } = useMemo(() => {
     const groups = new Map<string, ReportEntry[]>();
     for (const row of flowRows) {
       const month = String(row.values[0]);
@@ -334,10 +319,32 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       group.push(row);
       groups.set(month, group);
     }
-    return new Map([...groups].map(([month, rows]) => [month, sumReportColumn(rows, 12)]));
+    const months = [...groups.keys()].sort();
+    return {
+      netByMonth: new Map(months.map(month => [month, sumReportColumn(groups.get(month)!, 12)])),
+      monthlyNet: months.map(month => ({ month, value: sumReportColumn(groups.get(month)!, 11) })),
+    };
   }, [flowRows]);
   const endBalance = netByMonth.get(appliedFilters.endMonth || [...netByMonth.keys()].sort().pop() || "") ?? null;
   const flowTotals = [sumReportColumn(flowRows, 9), sumReportColumn(flowRows, 10), sumReportColumn(flowRows, 11), endBalance];
+
+  const latestReportMonth = useMemo(
+    () => rawData.reduce((latest, row) => row.month > latest ? row.month : latest, ""),
+    [rawData],
+  );
+  const latestMonth = useMemo(
+    () => netEntries.reduce((latest, row) => row.values[0] > latest ? String(row.values[0]) : latest,
+      latestReportMonth > currentMonth() ? latestReportMonth : currentMonth()),
+    [latestReportMonth, netEntries],
+  );
+  const monthOptions = useMemo(() => {
+    const [year, month] = latestMonth.split("-").map(Number);
+    const options = [];
+    for (let i = year * 12 + month - 1; i >= 2025 * 12; i--) {
+      options.push(`${Math.floor(i / 12)}-${String(i % 12 + 1).padStart(2, "0")}`);
+    }
+    return options;
+  }, [latestMonth]);
 
   // Months ascending list
   const availableMonths = useMemo(() => {
@@ -477,7 +484,9 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   }, [rawData, filteredRows]);
 
   // Monthly Attribution Data
-  const targetMonth = selectedMonth || (availableMonths.length > 0 ? availableMonths[availableMonths.length - 1] : "");
+  const targetMonth = (availableMonths.includes(selectedMonth) || monthlyNet.some(item => item.month === selectedMonth))
+    ? selectedMonth
+    : appliedFilters.endMonth || availableMonths[availableMonths.length - 1] || "";
   const selectedMonthRows = useMemo(() => {
     return filteredRows.filter((r) => r.month === targetMonth);
   }, [filteredRows, targetMonth]);
@@ -541,11 +550,45 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     const months = monthSummaries.map((d) => d.month);
     const data = monthSummaries.map((d) => (trendMode === "monthly" ? d.monthlyProfit : d.cumProfit));
 
-    if (trendMode === "monthly") {
-      const net = months.map(month => netByMonth.get(month) ?? null);
-      const showNet = net.some(value => value != null);
+    if (trendMode === "net" || trendMode === "net_cum") {
+      const cumulative = trendMode === "net_cum";
       return {
-        legend: showNet ? { data: ["月度收益", "月末累计净投入"], right: 8 } : undefined,
+        tooltip: {
+          trigger: "axis",
+          valueFormatter: (value: number | null) => fmtSignedMoney(value),
+        },
+        grid: { left: "6%", right: "4%", top: "12%", bottom: "12%", containLabel: true },
+        xAxis: { type: "category", data: monthlyNet.map(item => item.month) },
+        yAxis: {
+          type: "value",
+          axisLabel: { formatter: (value: number) => fmtSignedMoney(value, 0) },
+          splitLine: { lineStyle: { color: "#F1F5F9" } },
+        },
+        series: cumulative ? [{
+          name: "累计净投入",
+          type: "line",
+          data: monthlyNet.map(({ month }) => netByMonth.get(month) ?? null),
+          connectNulls: false,
+          symbolSize: 5,
+          itemStyle: { color: "#2563EB" },
+        }] : [{
+          name: "每月净投入",
+          type: "bar",
+          barMaxWidth: 24,
+          data: monthlyNet.map(({ month, value }) => value == null ? null : ({
+            value,
+            itemStyle: {
+              color: value < 0 ? "#EF4444" : "#10B981",
+              borderWidth: month === targetMonth ? 1 : 0,
+              borderColor: "#1E293B",
+            },
+          })),
+        }],
+      };
+    }
+
+    if (trendMode === "monthly") {
+      return {
         tooltip: {
           trigger: "axis",
           backgroundColor: "rgba(15, 23, 42, 0.9)",
@@ -558,7 +601,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               <div style="font-weight:600;margin-bottom:4px;">${p.name}</div>
               <div>本月收益: <b>${fmtSignedMoney(item?.monthlyProfit)}</b></div>
               <div>累计收益: <b>${fmtSignedMoney(item?.cumProfit)}</b></div>
-              <div>月末累计净投入: <b>${fmtMoney(net[p.dataIndex])}</b></div>
             `;
           },
         },
@@ -576,10 +618,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           axisLabel: { color: "#64748B", fontSize: 11 },
           axisTick: { show: false },
         },
-        yAxis: [
-          { type: "value", axisLabel: { color: "#64748B" }, splitLine: { lineStyle: { color: "#F1F5F9" } } },
-          ...(showNet ? [{ type: "value", position: "right", axisLabel: { color: "#64748B" }, splitLine: { show: false } }] : []),
-        ],
+        yAxis: { type: "value", axisLabel: { color: "#64748B" }, splitLine: { lineStyle: { color: "#F1F5F9" } } },
         series: [
           {
             name: "月度收益",
@@ -600,8 +639,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               },
             })),
           },
-          ...(showNet ? [{ name: "月末累计净投入", type: "line", yAxisIndex: 1, data: net,
-            connectNulls: false, symbolSize: 4, itemStyle: { color: "#2563EB" } }] : []),
         ],
       };
     } else {
@@ -669,7 +706,10 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
         ],
       };
     }
-  }, [monthSummaries, trendMode, targetMonth, netByMonth]);
+  }, [monthSummaries, trendMode, targetMonth, netByMonth, monthlyNet]);
+  const emptyNetTrend = (trendMode === "net" || trendMode === "net_cum") &&
+    !monthlyNet.some(({ month, value }) => (trendMode === "net_cum" ? netByMonth.get(month) : value) != null);
+  const netTrendTitle = trendMode === "net_cum" ? "累计净投入" : "每月净投入";
 
   // Donut Option for Selected Month Structure
   const donutOption = useMemo(() => {
@@ -872,10 +912,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
   };
 
   const handleApplyFilter = () => {
-    if (filterStartMonth && filterEndMonth && filterStartMonth > filterEndMonth) {
-      setError("开始月份不能晚于结束月份");
-      return;
-    }
     setError("");
     onPersonChange?.(filterPersonId);
     onBrokerChange?.(filterBroker);
@@ -884,8 +920,8 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
       broker: filterBroker,
       ticker: filterTicker,
       category: filterCategory,
-      startMonth: filterStartMonth,
-      endMonth: filterEndMonth,
+      startMonth: filterMonth || "2025-01",
+      endMonth: filterMonth,
     });
     setCurrentPage(1);
   };
@@ -898,16 +934,14 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
     setFilterBroker("");
     setFilterTicker("");
     setFilterCategory("");
-    setFilterStartMonth("2025-01");
-    const endMonth = rawData.map(row => row.month).sort().pop() || currentMonth();
-    setFilterEndMonth(endMonth);
+    setFilterMonth("");
     setAppliedFilters({
       personId: null,
       broker: "",
       ticker: "",
       category: "",
       startMonth: "2025-01",
-      endMonth,
+      endMonth: "",
     });
     setKpiFilter(null);
     setStockFilterMonth("");
@@ -1025,21 +1059,11 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             onChange={(e) => setFilterTicker(e.target.value)}
           />
 
-          <div className="date-range-box">
-            <input
-              type="text"
-              className="filter-input month-input"
-              value={filterStartMonth}
-              onChange={(e) => setFilterStartMonth(e.target.value)}
-            />
-            <span className="date-separator">—</span>
-            <input
-              type="text"
-              className="filter-input month-input"
-              value={filterEndMonth}
-              onChange={(e) => setFilterEndMonth(e.target.value)}
-            />
-          </div>
+          <select className="filter-select" aria-label="月份" value={filterMonth}
+            onChange={(e) => setFilterMonth(e.target.value)}>
+            <option value="">全部月份</option>
+            {monthOptions.map(month => <option key={month} value={month}>{month}</option>)}
+          </select>
 
           <select
             className="filter-select"
@@ -1062,7 +1086,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           </button>
 
           <div className="as-of-tag">
-            数据截至：{availableMonths.length > 0 ? availableMonths[availableMonths.length - 1] : "—"} (月末)
+            数据截至：{latestReportMonth || "—"} (月末)
           </div>
         </div>
       </div>
@@ -1083,9 +1107,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             <div className="kpi-title">{label}</div><div className="kpi-value">{value}</div>
           </div>)}
       </div>
-      <details className="monthly-more">
-        <summary>更多收益统计</summary>
-        <div className="kpi-grid monthly-period">
+      <div className="kpi-grid monthly-period">
         <div className="kpi-card">
           <div className="kpi-head">
             <span className="kpi-title">交易月数</span>
@@ -1156,7 +1178,6 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
           <div className="kpi-sub">亏损月均值 ({kpiMetrics.downMonths}月)</div>
         </div>
       </div>
-      </details>
 
       {/* 4. Middle Section: Trend Chart (Left) + Broker Overview (Right) */}
       <div className="charts-split-section">
@@ -1176,6 +1197,18 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
               >
                 累计收益
               </button>
+              <button
+                className={`trend-tab ${trendMode === "net" ? "active" : ""}`}
+                onClick={() => setTrendMode("net")}
+              >
+                每月净投入
+              </button>
+              <button
+                className={`trend-tab ${trendMode === "net_cum" ? "active" : ""}`}
+                onClick={() => setTrendMode("net_cum")}
+              >
+                累计净投入
+              </button>
             </div>
             <button
               className="link-detail"
@@ -1185,8 +1218,11 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
             </button>
           </div>
           <div className="chart-container">
-            <ReactECharts
+            {emptyNetTrend ? (
+              <div className="monthly-trend-empty">{loading ? `正在读取${netTrendTitle}…` : `暂无${netTrendTitle}数据`}</div>
+            ) : <ReactECharts
               option={trendOption}
+              notMerge
               style={{ height: 260, width: "100%" }}
               onEvents={{
                 click: (params: any) => {
@@ -1195,7 +1231,7 @@ export const MonthlyPerformanceView: React.FC<MonthlyPerformanceViewProps> = ({
                   }
                 },
               }}
-            />
+            />}
           </div>
         </div>
 

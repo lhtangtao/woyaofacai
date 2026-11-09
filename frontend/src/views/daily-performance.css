@@ -1081,6 +1081,11 @@
 /* Monthly workspace additions. Daily performance keeps its own layout. */
 .monthly-workspace .monthly-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .monthly-workspace .monthly-period { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+.monthly-workspace .monthly-period .kpi-card { justify-content: flex-start; gap: 4px; }
+.monthly-workspace .monthly-period .kpi-value { margin-bottom: 0; }
+.monthly-workspace .monthly-trend-empty {
+  display: grid; place-items: center; height: 260px; color: #64748b; font-size: 13px;
+}
 .monthly-workspace .monthly-flow-content { padding: 12px 14px 0; }
 .monthly-workspace .monthly-flow-cards {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(154px, 1fr)); gap: 12px; margin-bottom: 12px;
@@ -1096,8 +1101,5 @@
 .monthly-workspace .monthly-flow-table tfoot { background: #f5f8fd; font-weight: 600; }
 .monthly-workspace .monthly-flow-table .flow-selected { background: #eff6ff; }
 .monthly-workspace .monthly-message { margin: 4px 0; color: #64748b; font-size: 12px; overflow-wrap: anywhere; }
-.monthly-workspace .monthly-more { border: 1px solid #e8edf5; border-radius: 8px; padding: 8px 12px; background: white; }
-.monthly-workspace .monthly-more summary { cursor: pointer; color: #475569; font-size: 13px; }
-.monthly-workspace .monthly-more .kpi-grid, .monthly-workspace .monthly-more .attr-card { margin-top: 10px; }
 .monthly-workspace .monthly-sort-head th { cursor: pointer; }
 .monthly-workspace .monthly-local-tools { justify-content: flex-end; }

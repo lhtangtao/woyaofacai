@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Monthly Scalping Performance Page (每月微操收益页面)
+Monthly Scalping Performance Page V2.0 (每月微操收益页面 V2.0)
 深度打造的主动交易微操操作绩效分析页面：
-包含核心指标卡片、月度收益趋势柱状图、券商渠道收益排行、盈利/亏损股票 TOP 5、微操明细表格与抽屉联动。
+1. 核心指标卡片（含加权平均每股价差 = Σ(价差×微操数量)/Σ(微操数量)）；
+2. 月度收益趋势柱状图（点击月份下钻不缩短全局日期轴，浅蓝遮罩高亮，再次点击取消）；
+3. 券商渠道收益排行（删除占比列，按最大绝对收益归一化条形图，点击反选联动）；
+4. 股票微操收益 TOP 5（列头更新为 # | Ticker | 微操收益 | 微操次数 | 微操数量）；
+5. 全局筛选分离（待查询与已生效分离，点击查询生效，带当前状态信息条与取消 Pill）；
+6. 14 列微操明细表格（默认三级稳定排序：月份降序->收益降序->Ticker升序，支持全列点击排序）；
+7. 右侧详情抽屉（点击遮罩关闭）与双击历史交易回放。
 """
 
 import csv
@@ -10,7 +16,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -32,6 +38,15 @@ from PySide6.QtWidgets import (
 )
 
 
+def numeric_font(size: int = 12, bold: bool = False) -> QFont:
+    """金融数字等宽字体"""
+    font = QFont(".AppleSystemUIFont", size)
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    if bold:
+        font.setWeight(QFont.Weight.Bold)
+    return font
+
+
 def fmt_money(val: Any, digits: int = 2) -> str:
     if val is None or val == "":
         return "—"
@@ -48,9 +63,9 @@ def fmt_signed_money(val: Any, digits: int = 2) -> str:
     try:
         f = float(val)
         if abs(f) < 1e-9:
-            return f"0.{'0' * digits}"
-        sign = "+" if f > 0 else ""
-        return f"{sign}{f:,.{digits}f}"
+            return f"$0.{'0' * digits}"
+        sign = "+" if f > 0 else "-"
+        return f"{sign}${abs(f):,.{digits}f}"
     except (ValueError, TypeError):
         return str(val)
 
@@ -77,61 +92,125 @@ def fmt_broker_cn(name: Any) -> str:
     return s
 
 
-def numeric_font(size: int = 12, bold: bool = False) -> QFont:
-    font = QFont(".AppleSystemUIFont", size)
-    font.setFamilies([
-        "SF Pro Display",
-        "SF Pro Text",
-        "-apple-system",
-        "Helvetica Neue",
-        "PingFang SC",
-        "Microsoft YaHei",
-        "sans-serif",
-    ])
-    font.setStyleHint(QFont.StyleHint.SansSerif)
-    if bold:
-        font.setWeight(QFont.Weight.Bold)
-    return font
+def calc_weighted_spread(rows: List[Tuple]) -> Tuple[Optional[float], str]:
+    """
+    加权平均每股价差 = Σ(每股价差 × 微操数量) / Σ(微操数量)
+    仅对有效且微操数量 > 0 的记录进行加权
+    """
+    total_spread_qty_product = 0.0
+    total_qty = 0.0
+    for r in rows:
+        try:
+            qty = float(r[5] or 0)
+            spread = float(r[8] or 0)
+            if qty > 0:
+                total_spread_qty_product += spread * qty
+                total_qty += qty
+        except (ValueError, TypeError):
+            continue
+
+    if total_qty > 0:
+        val = total_spread_qty_product / total_qty
+        sign = "+" if val > 0 else "-"
+        return val, f"{sign}${abs(val):,.2f}"
+    return None, "—"
 
 
 # -------------------------------------------------------------------------
-# 1. 核心指标卡片 (Metric Card)
+# 1. 现代线性矢量图标控件
 # -------------------------------------------------------------------------
+class ScalpingLinearIcon(QWidget):
+    """纯代码绘制现代金融线性图标，无 Emoji，精致统一"""
+    def __init__(self, icon_type: str, color: str = "#2563EB", parent=None):
+        super().__init__(parent)
+        self.icon_type = icon_type
+        self.color = color
+        self.setFixedSize(36, 36)
+
+    def set_color(self, color: str):
+        self.color = color
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # 背景浅色圆角方块
+        painter.setPen(Qt.PenStyle.NoPen)
+        bg_col = QColor(self.color)
+        bg_col.setAlpha(26)  # ~10% 透明度
+        painter.setBrush(QBrush(bg_col))
+        painter.drawRoundedRect(QRectF(0, 0, w, h), 8, 8)
+
+        # 线性前景绘制
+        pen = QPen(QColor(self.color), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if self.icon_type == "pnl":
+            # 趋势柱状线
+            painter.drawLine(10, 26, 10, 18)
+            painter.drawLine(16, 26, 16, 12)
+            painter.drawLine(22, 26, 22, 15)
+            painter.drawLine(26, 26, 26, 9)
+        elif self.icon_type == "trades":
+            # 双向交换箭头 ⇄
+            painter.drawLine(9, 14, 25, 14)
+            painter.drawLine(21, 10, 25, 14)
+            painter.drawLine(21, 18, 25, 14)
+            painter.drawLine(25, 22, 9, 22)
+            painter.drawLine(13, 18, 9, 22)
+            painter.drawLine(13, 26, 9, 22)
+        elif self.icon_type == "buy":
+            # 向上折线箭头 ↗
+            painter.drawLine(10, 24, 24, 10)
+            painter.drawLine(15, 10, 24, 10)
+            painter.drawLine(24, 10, 24, 19)
+        elif self.icon_type == "sell":
+            # 向下折线箭头 ↘
+            painter.drawLine(10, 10, 24, 24)
+            painter.drawLine(15, 24, 24, 24)
+            painter.drawLine(24, 15, 24, 24)
+        elif self.icon_type == "spread":
+            # 天平 / 加权图标
+            painter.drawLine(18, 9, 18, 25)
+            painter.drawLine(10, 13, 26, 13)
+            painter.drawLine(13, 25, 23, 25)
+            painter.drawLine(10, 13, 7, 20)
+            painter.drawLine(10, 13, 13, 20)
+            painter.drawLine(7, 20, 13, 20)
+            painter.drawLine(26, 13, 23, 20)
+            painter.drawLine(26, 13, 29, 20)
+            painter.drawLine(23, 20, 29, 20)
+
+
 class ScalpingMetricCard(QFrame):
     clicked = Signal(str)
 
-    def __init__(self, key: str, icon_str: str, title: str, parent=None):
+    def __init__(self, key: str, icon_type: str, title: str, parent=None):
         super().__init__(parent)
         self.key = key
         self.setObjectName("kpiCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(88)
+        self.setFixedHeight(82)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(10)
 
-        # Icon Circle
-        self.icon_badge = QLabel(icon_str)
-        self.icon_badge.setFixedSize(38, 38)
-        self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.icon_badge.setStyleSheet("""
-            background-color: #F1F5F9;
-            color: #2563EB;
-            font-size: 16px;
-            border-radius: 19px;
-            font-weight: 700;
-        """)
-        layout.addWidget(self.icon_badge)
+        # 线性图标
+        self.icon_widget = ScalpingLinearIcon(icon_type, "#2563EB", self)
+        layout.addWidget(self.icon_widget)
 
-        # Right Text Column
+        # 文本信息列
         text_vbox = QVBoxLayout()
         text_vbox.setContentsMargins(0, 0, 0, 0)
-        text_vbox.setSpacing(2)
+        text_vbox.setSpacing(1)
 
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet("color: #64748B; font-size: 11.5px; font-weight: 500;")
+        self.title_label.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;")
         text_vbox.addWidget(self.title_label)
 
         self.value_label = QLabel("—")
@@ -149,7 +228,7 @@ class ScalpingMetricCard(QFrame):
             QFrame#kpiCard {
                 background-color: #FFFFFF;
                 border: 1px solid #E2E8F0;
-                border-radius: 8px;
+                border-radius: 6px;
             }
             QFrame#kpiCard:hover {
                 border-color: #93C5FD;
@@ -162,12 +241,13 @@ class ScalpingMetricCard(QFrame):
         self.sub_label.setText(sub)
         if status == "profit":
             self.value_label.setStyleSheet("color: #10B981;")
-            self.icon_badge.setStyleSheet("background-color: #ECFDF5; color: #10B981; font-size: 16px; border-radius: 19px; font-weight: 700;")
+            self.icon_widget.set_color("#10B981")
         elif status == "loss":
             self.value_label.setStyleSheet("color: #EF4444;")
-            self.icon_badge.setStyleSheet("background-color: #FEF2F2; color: #EF4444; font-size: 16px; border-radius: 19px; font-weight: 700;")
+            self.icon_widget.set_color("#EF4444")
         else:
             self.value_label.setStyleSheet("color: #0F172A;")
+            self.icon_widget.set_color("#2563EB")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -176,7 +256,7 @@ class ScalpingMetricCard(QFrame):
 
 
 # -------------------------------------------------------------------------
-# 2. 月度微操收益趋势图画布 (MonthlyScalpingTrendCanvas)
+# 2. 月度微操收益趋势图画布 (MonthlyScalpingTrendCanvas V2.0)
 # -------------------------------------------------------------------------
 class MonthlyScalpingTrendCanvas(QWidget):
     month_selected = Signal(str)
@@ -214,8 +294,8 @@ class MonthlyScalpingTrendCanvas(QWidget):
 
         margin_left = 55
         margin_right = 20
-        margin_top = 25
-        margin_bottom = 35
+        margin_top = 28
+        margin_bottom = 28
 
         plot_w = w - margin_left - margin_right
         plot_h = h - margin_top - margin_bottom
@@ -227,7 +307,6 @@ class MonthlyScalpingTrendCanvas(QWidget):
         raw_min = min(vals)
         raw_max = max(vals)
 
-        # 计算对称或自适应坐标轴区间
         max_abs = max(abs(raw_max), abs(raw_min), 50.0) * 1.15
         if self.mode == "monthly":
             max_val = max_abs
@@ -247,7 +326,7 @@ class MonthlyScalpingTrendCanvas(QWidget):
 
         # 1. 绘制网格线与 Y 轴刻度
         painter.setPen(QPen(QColor("#F1F5F9"), 1, Qt.PenStyle.DashLine))
-        y_ticks = 5
+        y_ticks = 4
         for i in range(y_ticks + 1):
             cur_v = min_val + (val_range / y_ticks) * i
             cur_y = to_y(cur_v)
@@ -264,10 +343,10 @@ class MonthlyScalpingTrendCanvas(QWidget):
         painter.setPen(QPen(QColor("#CBD5E1"), 1.2, Qt.PenStyle.SolidLine))
         painter.drawLine(margin_left, int(zero_y), margin_left + plot_w, int(zero_y))
 
-        # 3. 绘制柱体
+        # 3. 绘制柱体与选中背景遮罩
         n = len(self.data_points)
         slot_w = plot_w / n
-        bar_w = max(4.0, min(24.0, slot_w * 0.60))
+        bar_w = max(4.0, min(22.0, slot_w * 0.58))
 
         for i, (m, m_pnl, cum_pnl) in enumerate(self.data_points):
             val = m_pnl if self.mode == "monthly" else cum_pnl
@@ -282,7 +361,14 @@ class MonthlyScalpingTrendCanvas(QWidget):
             is_sel = (m == self.selected_month)
             is_hover = (i == self.hovered_index)
 
-            # 颜色设定：正绿负红
+            # 选中状态：在整列背景绘制半透明浅蓝色柱状遮罩
+            if is_sel:
+                painter.fillRect(QRectF(cx - slot_w * 0.46, margin_top, slot_w * 0.92, plot_h),
+                                 QColor(239, 246, 255, 200))
+                painter.setPen(QPen(QColor("#BFDBFE"), 1.0, Qt.PenStyle.DashLine))
+                painter.drawRect(QRectF(cx - slot_w * 0.46, margin_top, slot_w * 0.92, plot_h))
+
+            # 柱体颜色：正绿负红
             if val >= 0:
                 fill_color = QColor("#10B981") if not is_hover else QColor("#059669")
             else:
@@ -292,16 +378,16 @@ class MonthlyScalpingTrendCanvas(QWidget):
 
             # 选中高亮边框
             if is_sel:
-                painter.setPen(QPen(QColor("#1E293B"), 2.0))
+                painter.setPen(QPen(QColor("#2563EB"), 2.0))
                 painter.drawRect(QRectF(rx - 1, top_y - 1, bar_w + 2, bar_h + 2))
 
-            # X 轴月份标签（适当抽样以防重叠）
-            step = max(1, n // 12)
-            if i % step == 0 or i == n - 1:
-                painter.setPen(QColor("#64748B" if not is_sel else "#2563EB"))
+            # X 轴月份标签
+            step = max(1, n // 14)
+            if i % step == 0 or i == n - 1 or is_sel:
+                painter.setPen(QColor("#2563EB" if is_sel else "#64748B"))
                 painter.setFont(numeric_font(9, bold=is_sel))
-                lbl_m = m[2:] if len(m) == 7 else m  # "25-01" 缩写更整洁
-                painter.drawText(QRectF(cx - slot_w / 2.0, margin_top + plot_h + 4, slot_w, 20),
+                lbl_m = m[2:] if len(m) == 7 else m
+                painter.drawText(QRectF(cx - slot_w / 2.0, margin_top + plot_h + 3, slot_w, 20),
                                  Qt.AlignmentFlag.AlignCenter, lbl_m)
 
     def mouseMoveEvent(self, event):
@@ -320,7 +406,7 @@ class MonthlyScalpingTrendCanvas(QWidget):
                 self.update()
 
             m, m_pnl, cum_pnl = self.data_points[idx]
-            tip = f"月份: {m}\n当月微操收益: {fmt_signed_money(m_pnl)}\n累计微操收益: {fmt_signed_money(cum_pnl)}"
+            tip = f"月份: {m}\n月度微操收益: {fmt_signed_money(m_pnl)}\n累计微操收益: {fmt_signed_money(cum_pnl)}\n(点击柱体筛选该月份明细)"
             QToolTip.showText(event.globalPosition().toPoint(), tip, self)
         else:
             if self.hovered_index != -1:
@@ -348,16 +434,17 @@ class MonthlyScalpingTrendCanvas(QWidget):
                 idx = max(0, min(n - 1, idx))
                 clicked_m = self.data_points[idx][0]
                 if self.selected_month == clicked_m:
-                    self.selected_month = ""  # 再次点击反选
+                    self.selected_month = ""  # 再次点击取消反选
+                    self.month_selected.emit("")
                 else:
                     self.selected_month = clicked_m
-                self.month_selected.emit(self.selected_month)
+                    self.month_selected.emit(clicked_m)
                 self.update()
         super().mousePressEvent(event)
 
 
 # -------------------------------------------------------------------------
-# 3. 现代微操收益明细表格数据模型 (ModernScalpingTableModel)
+# 3. 微操收益明细表格数据模型 (ModernScalpingTableModel V2.0)
 # -------------------------------------------------------------------------
 class ModernScalpingTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
@@ -433,7 +520,7 @@ class ModernScalpingTableModel(QAbstractTableModel):
                     return QColor("#10B981")
                 if val_str.startswith("-") or val_str.startswith("−"):
                     return QColor("#EF4444")
-            if val_str in ("0.00", "0", "—"):
+            if val_str in ("$0.00", "0.00", "0", "—"):
                 return QColor("#64748B")
             return QColor("#1E293B")
 
@@ -454,6 +541,7 @@ class ModernScalpingTableModel(QAbstractTableModel):
         if val is None:
             return -float("inf")
         s = str(val).strip()
+        # 清洗数字
         clean = s.replace("$", "").replace(",", "").replace("%", "").replace("+", "").replace("−", "-")
         try:
             return float(clean)
@@ -462,26 +550,12 @@ class ModernScalpingTableModel(QAbstractTableModel):
 
     def apply_sort_and_page(self):
         self.beginResetModel()
-        if self.sort_column >= 0:
-            rev = (self.sort_order == Qt.SortOrder.DescendingOrder)
-            # 如果没有主动排序，默认按第一级月份降序、第二级微操收益降序、第三级 Ticker 升序
-            self.all_rows.sort(key=lambda r: self._parse_sort_key(r, self.sort_column), reverse=rev)
-
-        start = (self.page - 1) * self.page_size
-        end = start + self.page_size
-        self.rows = self.all_rows[start:end]
-        self.endResetModel()
-
-    def set_columns_and_rows(self, cols: Tuple[str, ...], rows: List[List[Any]]):
-        self.beginResetModel()
-        self.columns = cols
-        self.all_rows = list(rows)
-        # 默认排序规则：第一级：月份降序，最新月份在前；第二级：微操收益降序；第三级：Ticker 升序
+        # 默认排序或用户指定列排序
         if self.sort_column == 0 and self.sort_order == Qt.SortOrder.DescendingOrder:
-            self.all_rows.sort(key=lambda r: (
-                str(r[0]) if len(r) > 0 else "",
-                float(str(r[11]).replace("$", "").replace(",", "").replace("+", "") or 0) if len(r) > 11 else 0
-            ), reverse=True)
+            # 严格按照 PRD 三级稳定排序：第一级月份降序、第二级收益降序、第三级 Ticker 升序
+            self.all_rows.sort(key=lambda r: str(r[3] or ""))
+            self.all_rows.sort(key=lambda r: self._parse_sort_key(r, 11), reverse=True)
+            self.all_rows.sort(key=lambda r: str(r[0] or ""), reverse=True)
         elif self.sort_column >= 0:
             rev = (self.sort_order == Qt.SortOrder.DescendingOrder)
             self.all_rows.sort(key=lambda r: self._parse_sort_key(r, self.sort_column), reverse=rev)
@@ -491,6 +565,11 @@ class ModernScalpingTableModel(QAbstractTableModel):
         self.rows = self.all_rows[start:end]
         self.endResetModel()
 
+    def set_columns_and_rows(self, cols: Tuple[str, ...], rows: List[List[Any]]):
+        self.columns = cols
+        self.all_rows = list(rows)
+        self.apply_sort_and_page()
+
     def toggle_sort(self, column: int):
         if column < 0 or column >= len(self.columns):
             return
@@ -498,7 +577,9 @@ class ModernScalpingTableModel(QAbstractTableModel):
             self.sort_order = Qt.SortOrder.DescendingOrder if self.sort_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
         else:
             self.sort_column = column
-            self.sort_order = Qt.SortOrder.DescendingOrder if column in (0, 4, 5, 9, 10, 11) else Qt.SortOrder.AscendingOrder
+            # 数值及月份默认降序，其他默认升序
+            self.sort_order = Qt.SortOrder.DescendingOrder if column in (0, 4, 5, 6, 7, 8, 9, 10, 11) else Qt.SortOrder.AscendingOrder
+        self.page = 1
         self.apply_sort_and_page()
 
     def set_page(self, page: int):
@@ -510,7 +591,7 @@ class ModernScalpingTableModel(QAbstractTableModel):
 
 
 # -------------------------------------------------------------------------
-# 主页面：MonthlyScalpingPage
+# 4. 主页面 MonthlyScalpingPage (V2.0 优化)
 # -------------------------------------------------------------------------
 class MonthlyScalpingPage(QWidget):
     drill = Signal(str, str, object)  # 信号：下钻或历史回放
@@ -519,16 +600,19 @@ class MonthlyScalpingPage(QWidget):
         super().__init__(parent)
         self.analytics = None
         self.raw_rows: List[Tuple] = []
-        self.current_filtered_rows: List[Tuple] = []
 
-        # 筛选状态
-        self.selected_person_id: Any = None
-        self.selected_broker: str = ""
-        self.selected_category: str = ""
-        self.filter_ticker: str = ""
-        self.start_month: str = ""
-        self.end_month: str = ""
+        # 待查询与已生效筛选分离
+        self.applied_person: Any = None
+        self.applied_broker: str = ""
+        self.applied_category: str = ""
+        self.applied_ticker: str = ""
+        self.applied_start_month: str = ""
+        self.applied_end_month: str = ""
+
+        # 下钻状态（不缩短全局日期轴）
         self.active_chart_month: str = ""
+        self.active_ranking_broker: str = ""
+        self.active_ranking_ticker: str = ""
 
         # UI 构建
         self._build_ui()
@@ -546,8 +630,8 @@ class MonthlyScalpingPage(QWidget):
         content_widget = QWidget()
         content_widget.setStyleSheet("background: #F8FAFC;")
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(20, 16, 20, 24)
-        content_layout.setSpacing(14)
+        content_layout.setContentsMargins(18, 14, 18, 20)
+        content_layout.setSpacing(12)
 
         # 1. 顶部 Header
         header_row = QHBoxLayout()
@@ -562,10 +646,6 @@ class MonthlyScalpingPage(QWidget):
         sub_desc = QLabel("分析主动交易的操作效果，比较不同月份、券商和股票的微操收益表现。")
         sub_desc.setStyleSheet("color: #64748B; font-size: 12px;")
         header_text_vbox.addWidget(sub_desc)
-
-        self.db_source_lbl = QLabel("🗄️ 数据来源：money.sqlite3")
-        self.db_source_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
-        header_text_vbox.addWidget(self.db_source_lbl)
 
         header_row.addLayout(header_text_vbox)
         header_row.addStretch()
@@ -582,7 +662,7 @@ class MonthlyScalpingPage(QWidget):
         self.refresh_btn.clicked.connect(self.recalculate_and_refresh)
         header_row.addWidget(self.refresh_btn)
 
-        self.export_btn = QPushButton("导出 ∨")
+        self.export_btn = QPushButton("导出 CSV")
         self.export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.export_btn.setStyleSheet("""
             QPushButton {
@@ -597,10 +677,10 @@ class MonthlyScalpingPage(QWidget):
 
         # 2. 全局筛选卡片 (Filter Bar)
         filter_card = QFrame()
-        filter_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        filter_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         filter_layout = QHBoxLayout(filter_card)
-        filter_layout.setContentsMargins(14, 10, 14, 10)
-        filter_layout.setSpacing(10)
+        filter_layout.setContentsMargins(12, 8, 12, 8)
+        filter_layout.setSpacing(8)
 
         # 归属人员
         self.person_combo = QComboBox()
@@ -622,77 +702,118 @@ class MonthlyScalpingPage(QWidget):
 
         # 输入 Ticker
         self.ticker_edit = QLineEdit()
-        self.ticker_edit.setPlaceholderText("输入 Ticker")
+        self.ticker_edit.setPlaceholderText("输入股票代码")
         self.ticker_edit.setFixedHeight(32)
-        self.ticker_edit.setFixedWidth(130)
+        self.ticker_edit.setFixedWidth(120)
         self.ticker_edit.setStyleSheet("QLineEdit { border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 8px; font-size: 12px; }")
-        self.ticker_edit.returnPressed.connect(self.apply_filters)
+        self.ticker_edit.returnPressed.connect(self.on_query_clicked)
         filter_layout.addWidget(self.ticker_edit)
 
-        # 月份范围 (2025-01 ~ 2026-11)
-        self.start_month_edit = QLineEdit()
-        self.start_month_edit.setPlaceholderText("起始月份 如 2025-01")
-        self.start_month_edit.setFixedHeight(32)
-        self.start_month_edit.setFixedWidth(120)
-        self.start_month_edit.setStyleSheet("QLineEdit { border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 8px; font-size: 12px; }")
-        filter_layout.addWidget(self.start_month_edit)
+        # 开始月份
+        self.start_month_combo = QComboBox()
+        self.start_month_combo.setFixedHeight(32)
+        self.start_month_combo.setMinimumWidth(105)
+        filter_layout.addWidget(self.start_month_combo)
 
-        tilde_lbl = QLabel("~")
-        tilde_lbl.setStyleSheet("color: #64748B; font-weight: bold;")
+        tilde_lbl = QLabel("至")
+        tilde_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
         filter_layout.addWidget(tilde_lbl)
 
-        self.end_month_edit = QLineEdit()
-        self.end_month_edit.setPlaceholderText("结束月份 如 2026-11")
-        self.end_month_edit.setFixedHeight(32)
-        self.end_month_edit.setFixedWidth(120)
-        self.end_month_edit.setStyleSheet("QLineEdit { border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 8px; font-size: 12px; }")
-        filter_layout.addWidget(self.end_month_edit)
+        # 结束月份
+        self.end_month_combo = QComboBox()
+        self.end_month_combo.setFixedHeight(32)
+        self.end_month_combo.setMinimumWidth(105)
+        filter_layout.addWidget(self.end_month_combo)
 
         filter_layout.addStretch()
 
-        # 查询与重置按钮
-        self.search_btn = QPushButton("查询")
-        self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.search_btn.setFixedHeight(32)
-        self.search_btn.setStyleSheet("""
-            QPushButton {
-                background: #2563EB; color: #FFFFFF; font-weight: 600; font-size: 12px;
-                border: none; border-radius: 6px; padding: 0 16px;
-            }
-            QPushButton:hover { background: #1D4ED8; }
-        """)
-        self.search_btn.clicked.connect(self.apply_filters)
-        filter_layout.addWidget(self.search_btn)
-
+        # 重置与查询按钮
         self.reset_btn = QPushButton("重置")
         self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_btn.setFixedHeight(32)
         self.reset_btn.setStyleSheet("""
             QPushButton {
                 background: #F1F5F9; color: #475569; font-weight: 600; font-size: 12px;
-                border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 16px;
+                border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 14px;
             }
             QPushButton:hover { background: #E2E8F0; color: #0F172A; }
         """)
-        self.reset_btn.clicked.connect(self.reset_filters)
+        self.reset_btn.clicked.connect(self.on_reset_clicked)
         filter_layout.addWidget(self.reset_btn)
+
+        self.search_btn = QPushButton("查询")
+        self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_btn.setFixedHeight(32)
+        self.search_btn.setStyleSheet("""
+            QPushButton {
+                background: #2563EB; color: #FFFFFF; font-weight: 600; font-size: 12px;
+                border: none; border-radius: 6px; padding: 0 18px;
+            }
+            QPushButton:hover { background: #1D4ED8; }
+        """)
+        self.search_btn.clicked.connect(self.on_query_clicked)
+        filter_layout.addWidget(self.search_btn)
 
         content_layout.addWidget(filter_card)
 
+        # 2.5 筛选状态信息条 (Breadcrumb Status Bar V2.0)
+        self.status_bar = QFrame()
+        self.status_bar.setFixedHeight(34)
+        self.status_bar.setStyleSheet("background: transparent;")
+        status_lay = QHBoxLayout(self.status_bar)
+        status_lay.setContentsMargins(4, 0, 4, 0)
+        status_lay.setSpacing(10)
+
+        self.status_desc_lbl = QLabel("")
+        self.status_desc_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
+        status_lay.addWidget(self.status_desc_lbl)
+
+        # 月份筛选药丸徽章
+        self.month_pill = QFrame()
+        self.month_pill.setStyleSheet("""
+            QFrame {
+                background-color: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 12px; padding: 2px 8px;
+            }
+        """)
+        m_pill_lay = QHBoxLayout(self.month_pill)
+        m_pill_lay.setContentsMargins(6, 2, 6, 2)
+        m_pill_lay.setSpacing(6)
+        self.month_pill_lbl = QLabel("")
+        self.month_pill_lbl.setStyleSheet("color: #1D4ED8; font-size: 11.5px; font-weight: 600;")
+        m_pill_lay.addWidget(self.month_pill_lbl)
+        self.month_pill_close = QPushButton("✕")
+        self.month_pill_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.month_pill_close.setStyleSheet("border: none; background: transparent; color: #2563EB; font-weight: bold; font-size: 11px;")
+        self.month_pill_close.clicked.connect(lambda: self.on_trend_month_clicked(""))
+        m_pill_lay.addWidget(self.month_pill_close)
+        status_lay.addWidget(self.month_pill)
+        self.month_pill.hide()
+
+        # 取消月份筛选按钮
+        self.clear_month_btn = QPushButton("取消月份筛选")
+        self.clear_month_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clear_month_btn.setStyleSheet("border: none; background: transparent; color: #64748B; font-size: 11.5px; text-decoration: underline;")
+        self.clear_month_btn.clicked.connect(lambda: self.on_trend_month_clicked(""))
+        status_lay.addWidget(self.clear_month_btn)
+        self.clear_month_btn.hide()
+
+        status_lay.addStretch()
+        content_layout.addWidget(self.status_bar)
+
         # 3. 核心指标卡片区域 (5张横向并排)
         kpi_grid = QHBoxLayout()
-        kpi_grid.setSpacing(12)
+        kpi_grid.setSpacing(10)
 
         self.kpi_cards: Dict[str, ScalpingMetricCard] = {}
         configs = [
-            ("pnl", "🪙", "微操收益合计"),
-            ("trades", "⇄", "微操次数"),
-            ("buy", "↗", "买入金额合计"),
-            ("sell", "↘", "卖出金额合计"),
-            ("spread", "%", "平均每股价差"),
+            ("pnl", "pnl", "微操收益合计"),
+            ("trades", "trades", "微操次数"),
+            ("buy", "buy", "买入金额合计"),
+            ("sell", "sell", "卖出金额合计"),
+            ("spread", "spread", "加权平均每股价差"),
         ]
-        for key, icon_s, title_s in configs:
-            card = ScalpingMetricCard(key, icon_s, title_s, self)
+        for key, icon_t, title_s in configs:
+            card = ScalpingMetricCard(key, icon_t, title_s, self)
             self.kpi_cards[key] = card
             kpi_grid.addWidget(card)
         content_layout.addLayout(kpi_grid)
@@ -703,17 +824,43 @@ class MonthlyScalpingPage(QWidget):
 
         # 左侧：月度微操收益趋势卡片
         trend_card = QFrame()
-        trend_card.setFixedHeight(260)
-        trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        trend_card.setFixedHeight(230)
+        trend_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         trend_vbox = QVBoxLayout(trend_card)
-        trend_vbox.setContentsMargins(14, 10, 14, 10)
-        trend_vbox.setSpacing(4)
+        trend_vbox.setContentsMargins(12, 8, 12, 8)
+        trend_vbox.setSpacing(2)
 
         trend_top = QHBoxLayout()
         trend_title = QLabel("月度微操收益趋势")
         trend_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
         trend_title.setStyleSheet("color: #0F172A;")
         trend_top.addWidget(trend_title)
+
+        # 图例与说明
+        legend_widget = QWidget()
+        leg_lay = QHBoxLayout(legend_widget)
+        leg_lay.setContentsMargins(10, 0, 0, 0)
+        leg_lay.setSpacing(6)
+
+        p_box = QLabel("■")
+        p_box.setStyleSheet("color: #10B981; font-size: 10px;")
+        leg_lay.addWidget(p_box)
+        p_txt = QLabel("盈利")
+        p_txt.setStyleSheet("color: #64748B; font-size: 11px;")
+        leg_lay.addWidget(p_txt)
+
+        l_box = QLabel("■")
+        l_box.setStyleSheet("color: #EF4444; font-size: 10px; margin-left: 6px;")
+        leg_lay.addWidget(l_box)
+        l_txt = QLabel("亏损")
+        l_txt.setStyleSheet("color: #64748B; font-size: 11px;")
+        leg_lay.addWidget(l_txt)
+
+        tip_lbl = QLabel("点击月份柱体筛选明细（不会缩短日期范围）")
+        tip_lbl.setStyleSheet("color: #94A3B8; font-size: 10.5px; margin-left: 8px;")
+        leg_lay.addWidget(tip_lbl)
+        trend_top.addWidget(legend_widget)
+
         trend_top.addStretch()
 
         self.trend_tab_monthly = QPushButton("月度收益")
@@ -723,17 +870,23 @@ class MonthlyScalpingPage(QWidget):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet("""
                 QPushButton {
-                    background: transparent; color: #64748B; font-size: 11.5px;
-                    font-weight: 600; border: none; padding: 3px 8px; border-radius: 4px;
+                    border: none; background: #F1F5F9; color: #64748B; font-size: 11px;
+                    font-weight: 600; padding: 4px 10px; border-radius: 4px;
                 }
-                QPushButton:checked { background: #EFF6FF; color: #2563EB; }
+                QPushButton:checked { background: #2563EB; color: #FFFFFF; }
             """)
         self.trend_tab_monthly.setChecked(True)
         self.trend_tab_monthly.clicked.connect(lambda: self.switch_trend_mode("monthly"))
         self.trend_tab_cum.clicked.connect(lambda: self.switch_trend_mode("cum"))
 
-        trend_top.addWidget(self.trend_tab_monthly)
-        trend_top.addWidget(self.trend_tab_cum)
+        tab_group = QWidget()
+        tab_group_lay = QHBoxLayout(tab_group)
+        tab_group_lay.setContentsMargins(0, 0, 0, 0)
+        tab_group_lay.setSpacing(2)
+        tab_group_lay.addWidget(self.trend_tab_monthly)
+        tab_group_lay.addWidget(self.trend_tab_cum)
+        trend_top.addWidget(tab_group)
+
         trend_vbox.addLayout(trend_top)
 
         self.trend_canvas = MonthlyScalpingTrendCanvas(self)
@@ -743,114 +896,136 @@ class MonthlyScalpingPage(QWidget):
 
         # 右侧：券商渠道微操收益排行卡片
         broker_card = QFrame()
-        broker_card.setFixedHeight(260)
-        broker_card.setMinimumWidth(360)
-        broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        broker_card.setFixedHeight(230)
+        broker_card.setMinimumWidth(340)
+        broker_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         broker_vbox = QVBoxLayout(broker_card)
-        broker_vbox.setContentsMargins(14, 10, 14, 10)
-        broker_vbox.setSpacing(6)
+        broker_vbox.setContentsMargins(12, 8, 12, 8)
+        broker_vbox.setSpacing(4)
 
         b_header = QHBoxLayout()
         b_title = QLabel("券商渠道微操收益排行")
         b_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
         b_title.setStyleSheet("color: #0F172A;")
         b_header.addWidget(b_title)
+
+        b_sub = QLabel("按收益从高到低；条形长度相对最大单渠道绝对收益。")
+        b_sub.setStyleSheet("color: #94A3B8; font-size: 10.5px;")
+        b_header.addWidget(b_sub)
         b_header.addStretch()
         broker_vbox.addLayout(b_header)
 
-        # 表头
+        # 渠道列表头（无占比列）
         b_th = QHBoxLayout()
         b_th.setContentsMargins(6, 2, 6, 2)
-        th_b_name = QLabel("券商渠道")
-        th_b_name.setFixedWidth(75)
-        th_b_name.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
-        th_b_pnl = QLabel("微操收益")
-        th_b_pnl.setFixedWidth(80)
-        th_b_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        th_b_pnl.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
-        th_b_bar = QLabel("微操收益")
-        th_b_bar.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600; padding-left: 8px;")
-        th_b_share = QLabel("占比")
-        th_b_share.setFixedWidth(50)
-        th_b_share.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        th_b_share.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
-        b_th.addWidget(th_b_name)
-        b_th.addWidget(th_b_pnl)
-        b_th.addWidget(th_b_bar)
-        b_th.addWidget(th_b_share)
+        b_th.setSpacing(8)
+        lbl_th_b = QLabel("券商渠道")
+        lbl_th_b.setFixedWidth(75)
+        lbl_th_b.setStyleSheet("font-size: 11px; font-weight: 600; color: #94A3B8;")
+        b_th.addWidget(lbl_th_b)
+
+        lbl_th_pnl = QLabel("微操收益")
+        lbl_th_pnl.setFixedWidth(80)
+        lbl_th_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_th_pnl.setStyleSheet("font-size: 11px; font-weight: 600; color: #94A3B8;")
+        b_th.addWidget(lbl_th_pnl)
+
+        lbl_th_bar = QLabel("微操收益")
+        lbl_th_bar.setStyleSheet("font-size: 11px; font-weight: 600; color: #94A3B8; margin-left: 8px;")
+        b_th.addWidget(lbl_th_bar, 1)
+
         broker_vbox.addLayout(b_th)
 
+        # 渠道列表滚动区
         self.broker_scroll = QScrollArea()
         self.broker_scroll.setWidgetResizable(True)
-        self.broker_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.broker_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.broker_scroll.setStyleSheet("background: transparent; border: none;")
+
         self.broker_list_widget = QWidget()
+        self.broker_list_widget.setStyleSheet("background: transparent;")
         self.broker_list_layout = QVBoxLayout(self.broker_list_widget)
         self.broker_list_layout.setContentsMargins(0, 0, 0, 0)
         self.broker_list_layout.setSpacing(4)
+        self.broker_list_layout.addStretch()
+
         self.broker_scroll.setWidget(self.broker_list_widget)
         broker_vbox.addWidget(self.broker_scroll)
 
         self.mid_splitter.addWidget(broker_card)
-        self.mid_splitter.setStretchFactor(0, 3)
-        self.mid_splitter.setStretchFactor(1, 2)
+        self.mid_splitter.setSizes([750, 550])
         content_layout.addWidget(self.mid_splitter)
 
-        # 5. 股票微操收益排行榜 (左右并排 1:1)
+        # 5. 股票微操收益排行榜 (盈利 TOP 5 + 亏损 TOP 5)
         rank_row = QHBoxLayout()
-        rank_row.setSpacing(12)
+        rank_row.setSpacing(10)
 
         # 左侧：盈利股票 TOP 5
         profit_card = QFrame()
-        profit_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        profit_card.setFixedHeight(195)
+        profit_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         profit_vbox = QVBoxLayout(profit_card)
-        profit_vbox.setContentsMargins(14, 12, 14, 12)
-        profit_vbox.setSpacing(8)
+        profit_vbox.setContentsMargins(12, 8, 12, 8)
+        profit_vbox.setSpacing(4)
 
-        p_hdr = QLabel("🏆 盈利股票 TOP 5")
-        p_hdr.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
-        p_hdr.setStyleSheet("color: #10B981;")
-        profit_vbox.addWidget(p_hdr)
+        p_hdr = QHBoxLayout()
+        p_title = QLabel("盈利股票 TOP 5")
+        p_title.setFont(QFont(".AppleSystemUIFont", 12.5, QFont.Weight.Bold))
+        p_title.setStyleSheet("color: #10B981;")
+        p_hdr.addWidget(p_title)
+
+        p_tag = QLabel("收益最高")
+        p_tag.setStyleSheet("background: #ECFDF5; color: #10B981; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px;")
+        p_hdr.addWidget(p_tag)
+        p_hdr.addStretch()
+        profit_vbox.addLayout(p_hdr)
 
         p_th = QHBoxLayout()
         p_th.setContentsMargins(4, 2, 4, 2)
         p_th.addWidget(self._make_th_label("#", 24))
-        p_th.addWidget(self._make_th_label("Ticker", 65))
-        p_th.addWidget(self._make_th_label("微操收益", 75, align_right=True))
-        p_th.addWidget(self._make_th_label("微操次数", 60, align_right=True))
-        p_th.addWidget(self._make_th_label("买入金额", 75, align_right=True))
-        p_th.addWidget(self._make_th_label("卖出金额", 75, align_right=True))
+        p_th.addWidget(self._make_th_label("Ticker", 75))
+        p_th.addWidget(self._make_th_label("微操收益", 85, align_right=True))
+        p_th.addWidget(self._make_th_label("微操次数", 70, align_right=True))
+        p_th.addWidget(self._make_th_label("微操数量", 85, align_right=True))
         profit_vbox.addLayout(p_th)
 
         self.profit_top_vbox = QVBoxLayout()
-        self.profit_top_vbox.setSpacing(4)
+        self.profit_top_vbox.setSpacing(3)
         profit_vbox.addLayout(self.profit_top_vbox)
         profit_vbox.addStretch()
         rank_row.addWidget(profit_card, 1)
 
         # 右侧：亏损股票 TOP 5
         loss_card = QFrame()
-        loss_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        loss_card.setFixedHeight(195)
+        loss_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         loss_vbox = QVBoxLayout(loss_card)
-        loss_vbox.setContentsMargins(14, 12, 14, 12)
-        loss_vbox.setSpacing(8)
+        loss_vbox.setContentsMargins(12, 8, 12, 8)
+        loss_vbox.setSpacing(4)
 
-        l_hdr = QLabel("🥊 亏损股票 TOP 5")
-        l_hdr.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
-        l_hdr.setStyleSheet("color: #EF4444;")
-        loss_vbox.addWidget(l_hdr)
+        l_hdr = QHBoxLayout()
+        l_title = QLabel("亏损股票 TOP 5")
+        l_title.setFont(QFont(".AppleSystemUIFont", 12.5, QFont.Weight.Bold))
+        l_title.setStyleSheet("color: #EF4444;")
+        l_hdr.addWidget(l_title)
+
+        l_tag = QLabel("亏损最高")
+        l_tag.setStyleSheet("background: #FEF2F2; color: #EF4444; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px;")
+        l_hdr.addWidget(l_tag)
+        l_hdr.addStretch()
+        loss_vbox.addLayout(l_hdr)
 
         l_th = QHBoxLayout()
         l_th.setContentsMargins(4, 2, 4, 2)
         l_th.addWidget(self._make_th_label("#", 24))
-        l_th.addWidget(self._make_th_label("Ticker", 65))
-        l_th.addWidget(self._make_th_label("微操收益", 75, align_right=True))
-        l_th.addWidget(self._make_th_label("微操次数", 60, align_right=True))
-        l_th.addWidget(self._make_th_label("买入金额", 75, align_right=True))
-        l_th.addWidget(self._make_th_label("卖出金额", 75, align_right=True))
+        l_th.addWidget(self._make_th_label("Ticker", 75))
+        l_th.addWidget(self._make_th_label("微操收益", 85, align_right=True))
+        l_th.addWidget(self._make_th_label("微操次数", 70, align_right=True))
+        l_th.addWidget(self._make_th_label("微操数量", 85, align_right=True))
         loss_vbox.addLayout(l_th)
 
         self.loss_top_vbox = QVBoxLayout()
-        self.loss_top_vbox.setSpacing(4)
+        self.loss_top_vbox.setSpacing(3)
         loss_vbox.addLayout(self.loss_top_vbox)
         loss_vbox.addStretch()
         rank_row.addWidget(loss_card, 1)
@@ -859,21 +1034,50 @@ class MonthlyScalpingPage(QWidget):
 
         # 6. 微操收益明细表格卡片 (底部全宽)
         table_card = QFrame()
-        table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px;")
+        table_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
         table_vbox = QVBoxLayout(table_card)
-        table_vbox.setContentsMargins(16, 12, 16, 12)
-        table_vbox.setSpacing(10)
+        table_vbox.setContentsMargins(14, 10, 14, 10)
+        table_vbox.setSpacing(8)
 
         table_top_h = QHBoxLayout()
         tbl_title = QLabel("微操收益明细")
         tbl_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
         tbl_title.setStyleSheet("color: #0F172A;")
         table_top_h.addWidget(tbl_title)
+
+        self.table_sub_lbl = QLabel("共 0 条记录 · 点击行查看详情，双击行进入交易回放")
+        self.table_sub_lbl.setStyleSheet("font-size: 11px; color: #64748B; margin-left: 8px;")
+        table_top_h.addWidget(self.table_sub_lbl)
         table_top_h.addStretch()
 
-        self.table_count_lbl = QLabel("共 0 条记录")
-        self.table_count_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
-        table_top_h.addWidget(self.table_count_lbl)
+        self.page_size_lbl = QLabel("每页 50 条")
+        self.page_size_lbl.setStyleSheet("font-size: 11px; color: #64748B; margin-right: 8px;")
+        table_top_h.addWidget(self.page_size_lbl)
+
+        # 分页控制器
+        self.prev_page_btn = QPushButton("‹")
+        self.next_page_btn = QPushButton("›")
+        for btn in (self.prev_page_btn, self.next_page_btn):
+            btn.setFixedSize(26, 26)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
+                    font-size: 13px; font-weight: bold; color: #334155;
+                }
+                QPushButton:hover:!disabled { background: #EFF6FF; border-color: #3B82F6; color: #2563EB; }
+                QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; background: #F8FAFC; }
+            """)
+        self.prev_page_btn.clicked.connect(lambda: self.change_page(-1))
+        self.next_page_btn.clicked.connect(lambda: self.change_page(1))
+
+        self.page_num_lbl = QLabel("1 / 1")
+        self.page_num_lbl.setStyleSheet("font-size: 11px; color: #1E293B; font-weight: 600; margin: 0 4px;")
+
+        table_top_h.addWidget(self.prev_page_btn)
+        table_top_h.addWidget(self.page_num_lbl)
+        table_top_h.addWidget(self.next_page_btn)
+
         table_vbox.addLayout(table_top_h)
 
         self.table_model = ModernScalpingTableModel(self)
@@ -885,18 +1089,18 @@ class MonthlyScalpingPage(QWidget):
         self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table_view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self.table_view.verticalHeader().hide()
-        self.table_view.verticalHeader().setDefaultSectionSize(36)
-        self.table_view.horizontalHeader().setFixedHeight(36)
+        self.table_view.verticalHeader().setDefaultSectionSize(34)
+        self.table_view.horizontalHeader().setFixedHeight(34)
         self.table_view.horizontalHeader().setHighlightSections(False)
         self.table_view.horizontalHeader().setSectionsClickable(True)
         self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
-        self.table_view.setMinimumHeight(540)
+        self.table_view.setMinimumHeight(360)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
                 alternate-background-color: #F8FAFC;
                 border: 1px solid #E2E8F0;
-                border-radius: 6px;
+                border-radius: 4px;
                 gridline-color: transparent;
                 selection-background-color: #EFF6FF;
                 selection-color: #1E293B;
@@ -915,39 +1119,12 @@ class MonthlyScalpingPage(QWidget):
         self.table_view.doubleClicked.connect(self.on_table_row_double_clicked)
         table_vbox.addWidget(self.table_view)
 
-        # 分页控制器
-        page_h = QHBoxLayout()
-        page_h.addStretch()
-
-        self.prev_page_btn = QPushButton("‹ 上一页")
-        self.next_page_btn = QPushButton("下一页 ›")
-        for btn in (self.prev_page_btn, self.next_page_btn):
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;
-                    padding: 3px 10px; font-size: 11px; font-weight: 500; color: #334155;
-                }
-                QPushButton:hover:!disabled { background: #EFF6FF; border-color: #3B82F6; color: #2563EB; }
-                QPushButton:disabled { color: #CBD5E1; border-color: #E2E8F0; background: #F8FAFC; }
-            """)
-        self.prev_page_btn.clicked.connect(lambda: self.change_page(-1))
-        self.next_page_btn.clicked.connect(lambda: self.change_page(1))
-
-        self.page_num_lbl = QLabel("第 1 / 1 页")
-        self.page_num_lbl.setStyleSheet("font-size: 11.5px; color: #64748B; margin: 0 8px;")
-
-        page_h.addWidget(self.prev_page_btn)
-        page_h.addWidget(self.page_num_lbl)
-        page_h.addWidget(self.next_page_btn)
-        table_vbox.addLayout(page_h)
-
         content_layout.addWidget(table_card)
 
         scroll.setWidget(content_widget)
         root_layout.addWidget(scroll)
 
-        # 7. 右侧详情抽屉 (Floating Drawer Overlay)
+        # 7. 右侧详情抽屉 (Drawer)
         self.drawer_overlay = QWidget(self)
         self.drawer_overlay.setStyleSheet("background-color: rgba(15, 23, 42, 0.20);")
         self.drawer_overlay.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -964,61 +1141,55 @@ class MonthlyScalpingPage(QWidget):
         self.drawer_frame.hide()
 
         drawer_vbox = QVBoxLayout(self.drawer_frame)
-        drawer_vbox.setContentsMargins(16, 16, 16, 16)
-        drawer_vbox.setSpacing(12)
+        drawer_vbox.setContentsMargins(18, 16, 18, 16)
+        drawer_vbox.setSpacing(14)
 
-        drawer_top = QHBoxLayout()
-        self.drawer_title = QLabel("微操收益详情")
-        self.drawer_title.setFont(QFont(".AppleSystemUIFont", 14, QFont.Weight.Bold))
+        d_top = QHBoxLayout()
+        self.drawer_title = QLabel("微操详情")
+        self.drawer_title.setFont(QFont(".AppleSystemUIFont", 15, QFont.Weight.Bold))
         self.drawer_title.setStyleSheet("color: #0F172A;")
-        drawer_top.addWidget(self.drawer_title)
-        drawer_top.addStretch()
+        d_top.addWidget(self.drawer_title)
+        d_top.addStretch()
 
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(24, 24)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton { border: none; background: transparent; font-size: 14px; color: #64748B; border-radius: 12px; }
-            QPushButton:hover { background-color: #F1F5F9; color: #0F172A; }
+        d_close = QPushButton("✕")
+        d_close.setFixedSize(26, 26)
+        d_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        d_close.setStyleSheet("""
+            QPushButton {
+                border: none; background: #F1F5F9; border-radius: 13px;
+                color: #64748B; font-weight: bold; font-size: 12px;
+            }
+            QPushButton:hover { background: #E2E8F0; color: #0F172A; }
         """)
-        close_btn.clicked.connect(self.close_drawer)
-        drawer_top.addWidget(close_btn)
-        drawer_vbox.addLayout(drawer_top)
+        d_close.clicked.connect(self.close_drawer)
+        d_top.addWidget(d_close)
+        drawer_vbox.addLayout(d_top)
 
-        self.drawer_scroll = QScrollArea()
-        self.drawer_scroll.setWidgetResizable(True)
-        self.drawer_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.drawer_list_widget = QWidget()
-        self.drawer_list_layout = QVBoxLayout(self.drawer_list_widget)
-        self.drawer_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.drawer_subtitle = QLabel("2026-11 · 长桥 · 杠杆")
+        self.drawer_subtitle.setStyleSheet("color: #64748B; font-size: 12px;")
+        drawer_vbox.addWidget(self.drawer_subtitle)
+
+        # 抽屉内容列表
+        self.drawer_list_layout = QVBoxLayout()
         self.drawer_list_layout.setSpacing(10)
-        self.drawer_scroll.setWidget(self.drawer_list_widget)
-        drawer_vbox.addWidget(self.drawer_scroll)
+        drawer_vbox.addLayout(self.drawer_list_layout)
 
-    def _make_th_label(self, text: str, width: int = 60, align_right: bool = False) -> QLabel:
+    def _make_th_label(self, text: str, width: int, align_right: bool = False) -> QLabel:
         lbl = QLabel(text)
-        if width > 0:
-            lbl.setFixedWidth(width)
+        lbl.setFixedWidth(width)
+        lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #94A3B8;")
         if align_right:
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600;")
         return lbl
 
-    # -------------------------------------------------------------------------
-    # 尺寸与自适应布局
-    # -------------------------------------------------------------------------
     def apply_proportional_column_widths(self):
-        """按 14 列基准宽度平摊视口剩余空间，杜绝留白或最后一列拉长"""
+        """按 14 列基准宽度平摊视口剩余空间"""
         if not hasattr(self, "table_view") or not self.table_view:
             return
         header = self.table_view.horizontalHeader()
         header.setStretchLastSection(False)
 
-        # 14 列基准宽度：
-        # 月份(85), 券商渠道(90), 分类(75), Ticker(80), 微操次数(70), 微操数量(85),
-        # 微操均买价(95), 微操均卖价(95), 每股价差(90), 买入金额(105), 卖出金额(105), 微操收益(110),
-        # 首笔微操时间(135), 最近微操时间(135)
-        base_widths = [85, 90, 75, 80, 70, 85, 95, 95, 90, 105, 105, 110, 135, 135]
+        base_widths = [85, 85, 75, 80, 70, 85, 95, 95, 90, 105, 105, 110, 135, 135]
         n = len(base_widths)
         if self.table_model.columnCount() != n:
             return
@@ -1039,14 +1210,6 @@ class MonthlyScalpingPage(QWidget):
             extra_px = per_col + (1 if i < rem else 0)
             self.table_view.setColumnWidth(i, w + extra_px)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        if hasattr(self, "mid_splitter") and self.mid_splitter:
-            w = self.mid_splitter.width()
-            if w > 100:
-                self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
-        QTimer.singleShot(50, self.apply_proportional_column_widths)
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "mid_splitter") and self.mid_splitter:
@@ -1054,7 +1217,7 @@ class MonthlyScalpingPage(QWidget):
             if w > 100:
                 self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         if self.drawer_frame.isVisible():
-            w = 440
+            w = 420
             self.drawer_overlay.setGeometry(self.rect())
             self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
             self.drawer_overlay.raise_()
@@ -1076,14 +1239,14 @@ class MonthlyScalpingPage(QWidget):
             return
         self._syncing_person = True
         try:
-            self.selected_person_id = person_id
+            self.applied_person = person_id
             if self.person_combo.count() <= 1:
                 self._populate_persons()
             self.person_combo.blockSignals(True)
             idx = self.person_combo.findData(person_id)
             self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.person_combo.blockSignals(False)
-            self.apply_filters()
+            self.recalculate_and_refresh()
         finally:
             self._syncing_person = False
 
@@ -1093,7 +1256,7 @@ class MonthlyScalpingPage(QWidget):
         self._syncing_broker = True
         try:
             clean = (broker_name or "").strip()
-            self.selected_broker = clean
+            self.applied_broker = clean
             self.broker_combo.blockSignals(True)
             idx = 0
             if clean:
@@ -1103,7 +1266,7 @@ class MonthlyScalpingPage(QWidget):
                         break
             self.broker_combo.setCurrentIndex(idx)
             self.broker_combo.blockSignals(False)
-            self.apply_filters()
+            self.recalculate_and_refresh()
         finally:
             self._syncing_broker = False
 
@@ -1127,8 +1290,8 @@ class MonthlyScalpingPage(QWidget):
             p_name = p[1] if isinstance(p, (list, tuple)) else getattr(p, "name", str(p))
             if p_id is not None:
                 self.person_combo.addItem(p_name, p_id)
-        if self.selected_person_id is not None:
-            idx = self.person_combo.findData(self.selected_person_id)
+        if self.applied_person is not None:
+            idx = self.person_combo.findData(self.applied_person)
             if idx >= 0:
                 self.person_combo.setCurrentIndex(idx)
         self.person_combo.blockSignals(False)
@@ -1145,42 +1308,51 @@ class MonthlyScalpingPage(QWidget):
         # 提取原始数据元组
         self.raw_rows = [tuple(r.values) for r in report.rows]
 
-        # 提取全部可用渠道与分类用于填充筛选框
+        # 填充券商渠道下拉框
         brokers = sorted({fmt_broker_cn(r[1]) for r in self.raw_rows if len(r) > 1 and r[1]})
-        current_b = self.broker_combo.currentText()
         self.broker_combo.blockSignals(True)
         self.broker_combo.clear()
         self.broker_combo.addItem("全部渠道", "")
         for b in brokers:
             self.broker_combo.addItem(b, b)
-        b_idx = self.broker_combo.findText(current_b)
-        self.broker_combo.setCurrentIndex(max(0, b_idx))
         self.broker_combo.blockSignals(False)
 
+        # 填充分类下拉框
         categories = sorted({str(r[2]) for r in self.raw_rows if len(r) > 2 and r[2]})
-        current_cat = self.category_combo.currentText()
         self.category_combo.blockSignals(True)
         self.category_combo.clear()
         self.category_combo.addItem("全部分类", "")
         for c in categories:
             self.category_combo.addItem(c, c)
-        c_idx = self.category_combo.findText(current_cat)
-        self.category_combo.setCurrentIndex(max(0, c_idx))
         self.category_combo.blockSignals(False)
 
-        # 起止月份默认值
+        # 填充月份下拉框
         months = sorted({str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]})
-        if months and not self.start_month_edit.text():
-            self.start_month_edit.setText(months[0])
-        if months and not self.end_month_edit.text():
-            self.end_month_edit.setText(months[-1])
+        self.start_month_combo.blockSignals(True)
+        self.end_month_combo.blockSignals(True)
+        self.start_month_combo.clear()
+        self.end_month_combo.clear()
+        for m in months:
+            self.start_month_combo.addItem(m, m)
+            self.end_month_combo.addItem(m, m)
+        if months:
+            self.start_month_combo.setCurrentIndex(0)
+            self.end_month_combo.setCurrentIndex(len(months) - 1)
+            self.applied_start_month = months[0]
+            self.applied_end_month = months[-1]
+        self.start_month_combo.blockSignals(False)
+        self.end_month_combo.blockSignals(False)
 
+        self._populate_persons()
         self.recalculate_and_refresh()
 
-    def apply_filters(self):
+    def on_query_clicked(self):
+        """点击查询按钮，正式应用筛选条件"""
         p_id = self.person_combo.currentData()
-        person_changed = (p_id != self.selected_person_id)
-        self.selected_person_id = p_id
+        person_changed = (p_id != self.applied_person)
+        self.applied_person = p_id
+
+        # 同步给主窗口人员筛选
         main_win = getattr(self, "main_window", None) or self.parent() or self.window()
         if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
             self._syncing_person = True
@@ -1188,32 +1360,64 @@ class MonthlyScalpingPage(QWidget):
                 main_win.sync_person_from_holdings(p_id)
             finally:
                 self._syncing_person = False
+
+        self.applied_broker = self.broker_combo.currentData() or ""
+        self.applied_category = self.category_combo.currentData() or ""
+        self.applied_ticker = self.ticker_edit.text().strip().upper()
+
+        s_m = self.start_month_combo.currentData() or ""
+        e_m = self.end_month_combo.currentData() or ""
+        if s_m and e_m and s_m > e_m:
+            # 自动校正
+            s_m, e_m = e_m, s_m
+            self.start_month_combo.setCurrentText(s_m)
+            self.end_month_combo.setCurrentText(e_m)
+
+        self.applied_start_month = s_m
+        self.applied_end_month = e_m
+
+        # 清除不再适用的下钻反选
+        self.active_chart_month = ""
+        self.active_ranking_broker = ""
+        self.active_ranking_ticker = ""
+
         self.table_model.page = 1
         self.recalculate_and_refresh()
 
-    def reset_filters(self):
+    def on_reset_clicked(self):
+        """点击重置按钮，恢复全部默认条件"""
         self.person_combo.setCurrentIndex(0)
-        p_id = self.person_combo.currentData()
-        person_changed = (self.selected_person_id is not None)
-        self.selected_person_id = None
+        self.broker_combo.setCurrentIndex(0)
+        self.category_combo.setCurrentIndex(0)
+        self.ticker_edit.clear()
+
+        months = sorted({str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]})
+        if months:
+            self.start_month_combo.setCurrentIndex(0)
+            self.end_month_combo.setCurrentIndex(len(months) - 1)
+            self.applied_start_month = months[0]
+            self.applied_end_month = months[-1]
+        else:
+            self.applied_start_month = ""
+            self.applied_end_month = ""
+
+        self.applied_person = None
+        self.applied_broker = ""
+        self.applied_category = ""
+        self.applied_ticker = ""
+
+        self.active_chart_month = ""
+        self.active_ranking_broker = ""
+        self.active_ranking_ticker = ""
+
         main_win = getattr(self, "main_window", None) or self.parent() or self.window()
-        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+        if hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
             self._syncing_person = True
             try:
                 main_win.sync_person_from_holdings(None)
             finally:
                 self._syncing_person = False
-        self.broker_combo.setCurrentIndex(0)
-        self.category_combo.setCurrentIndex(0)
-        self.ticker_edit.clear()
-        self.active_chart_month = ""
-        months = sorted({str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]})
-        if months:
-            self.start_month_edit.setText(months[0])
-            self.end_month_edit.setText(months[-1])
-        else:
-            self.start_month_edit.clear()
-            self.end_month_edit.clear()
+
         self.table_model.page = 1
         self.recalculate_and_refresh()
 
@@ -1221,90 +1425,119 @@ class MonthlyScalpingPage(QWidget):
         if not self.raw_rows:
             return
 
-        b_filter = self.broker_combo.currentData() or ""
-        cat_filter = self.category_combo.currentData() or ""
-        ticker_kw = self.ticker_edit.text().strip().upper()
-        s_m = self.start_month_edit.text().strip()
-        e_m = self.end_month_edit.text().strip()
-
-        filtered: List[Tuple] = []
+        # 1. 计算全局生效筛选条件下的记录集 (global_scope_rows)
+        # 趋势图完全基于 global_scope_rows 绘制，绝不因点击月份而截断日期轴！
+        global_scope_rows: List[Tuple] = []
         for r in self.raw_rows:
             m = str(r[0]) if len(r) > 0 else ""
             b_cn = fmt_broker_cn(r[1]) if len(r) > 1 else ""
             cat = str(r[2]) if len(r) > 2 else ""
             sym = str(r[3]).upper() if len(r) > 3 else ""
 
-            if b_filter and b_cn != b_filter:
+            # 全局条件过滤
+            if self.applied_broker and b_cn != self.applied_broker:
                 continue
-            if cat_filter and cat != cat_filter:
+            if self.applied_category and cat != self.applied_category:
                 continue
-            if ticker_kw and ticker_kw not in sym:
+            if self.applied_ticker and self.applied_ticker not in sym:
                 continue
-            if s_m and m < s_m:
+            if self.applied_start_month and m < self.applied_start_month:
                 continue
-            if e_m and m > e_m:
+            if self.applied_end_month and m > self.applied_end_month:
                 continue
 
-            filtered.append(r)
+            global_scope_rows.append(r)
 
-        self.current_filtered_rows = filtered
-
-        # 1. 计算 5 项核心指标
-        tot_pnl = sum(float(r[11] or 0) for r in filtered)
-        tot_trades_cnt = sum(int(r[4] or 0) for r in filtered)
-        tot_buy_amt = sum(float(r[9] or 0) for r in filtered)
-        tot_sell_amt = sum(float(r[10] or 0) for r in filtered)
-        unique_tickers = len({r[3] for r in filtered if len(r) > 3 and r[3]})
-        avg_spread = (sum(float(r[8] or 0) for r in filtered) / len(filtered)) if filtered else 0.0
-
-        pnl_status = "profit" if tot_pnl > 0 else ("loss" if tot_pnl < 0 else None)
-        self.kpi_cards["pnl"].set_data(f"{'+' if tot_pnl > 0 else ''}${tot_pnl:,.2f}", "当前筛选期间", pnl_status)
-        self.kpi_cards["trades"].set_data(str(tot_trades_cnt), f"涉及 {unique_tickers} 只股票")
-        self.kpi_cards["buy"].set_data(f"${tot_buy_amt:,.2f}", "")
-        self.kpi_cards["sell"].set_data(f"${tot_sell_amt:,.2f}", "")
-        spread_status = "profit" if avg_spread > 0 else ("loss" if avg_spread < 0 else None)
-        self.kpi_cards["spread"].set_data(f"{'+' if avg_spread > 0 else ''}${avg_spread:,.2f}", "已完成的微操交易", spread_status)
-
-        # 2. 统计月度趋势柱状图数据 (month -> pnl)
+        # 2. 统计月度趋势柱状图数据 (完整保留全局月份区间)
         month_map: Dict[str, float] = {}
-        for r in filtered:
+        for r in global_scope_rows:
             m = str(r[0])
             month_map[m] = month_map.get(m, 0.0) + float(r[11] or 0)
 
+        # 补充全局日期范围内的全部月份（即零收益月份也保留，不缺失）
         trend_pts: List[Tuple[str, float, float]] = []
         cum_pnl = 0.0
-        for m in sorted(month_map.keys()):
+        all_months_in_scope = sorted(month_map.keys())
+        for m in all_months_in_scope:
             pnl = month_map[m]
             cum_pnl += pnl
             trend_pts.append((m, pnl, cum_pnl))
 
         self.trend_canvas.set_data(trend_pts, self.active_chart_month)
 
-        # 3. 统计券商渠道收益排行
+        # 3. 计算用于展示在 KPI、排行榜与明细表格的记录集 (display_rows)
+        # 受到 active_chart_month、active_ranking_broker、active_ranking_ticker 的进一步筛选
+        display_rows: List[Tuple] = []
+        for r in global_scope_rows:
+            m = str(r[0]) if len(r) > 0 else ""
+            b_cn = fmt_broker_cn(r[1]) if len(r) > 1 else ""
+            sym = str(r[3]).upper() if len(r) > 3 else ""
+
+            if self.active_chart_month and m != self.active_chart_month:
+                continue
+            if self.active_ranking_broker and b_cn != self.active_ranking_broker:
+                continue
+            if self.active_ranking_ticker and sym != self.active_ranking_ticker:
+                continue
+
+            display_rows.append(r)
+
+        # 4. 更新全局筛选状态信息条
+        p_text = self.person_combo.currentText() or "全部人员"
+        b_text = self.applied_broker or "全部渠道"
+        d_range = f"{self.applied_start_month} 至 {self.applied_end_month}" if self.applied_start_month else "全周期"
+        self.status_desc_lbl.setText(f"当前人员: {p_text}   |   渠道: {b_text}   |   日期: {d_range}")
+
+        if self.active_chart_month:
+            self.month_pill_lbl.setText(f"月份: {self.active_chart_month}")
+            self.month_pill.show()
+            self.clear_month_btn.show()
+        else:
+            self.month_pill.hide()
+            self.clear_month_btn.hide()
+
+        # 5. 计算 5 项核心指标 (基于 display_rows)
+        tot_pnl = sum(float(r[11] or 0) for r in display_rows)
+        tot_trades_cnt = sum(int(r[4] or 0) for r in display_rows)
+        tot_buy_amt = sum(float(r[9] or 0) for r in display_rows)
+        tot_sell_amt = sum(float(r[10] or 0) for r in display_rows)
+        unique_tickers = len({r[3] for r in display_rows if len(r) > 3 and r[3]})
+
+        # 加权平均每股价差
+        weighted_spread_val, weighted_spread_str = calc_weighted_spread(display_rows)
+
+        pnl_status = "profit" if tot_pnl > 0 else ("loss" if tot_pnl < 0 else None)
+        self.kpi_cards["pnl"].set_data(fmt_signed_money(tot_pnl, 2), "当前筛选范围 · 已实现收益", pnl_status)
+        self.kpi_cards["trades"].set_data(str(tot_trades_cnt), f"涉及 {unique_tickers} 只股票")
+        self.kpi_cards["buy"].set_data(f"${fmt_money(tot_buy_amt, 2)}", "累计微操买入")
+        self.kpi_cards["sell"].set_data(f"${fmt_money(tot_sell_amt, 2)}", "累计微操卖出")
+
+        spread_status = None
+        if weighted_spread_val is not None:
+            spread_status = "profit" if weighted_spread_val > 0 else ("loss" if weighted_spread_val < 0 else None)
+        self.kpi_cards["spread"].set_data(weighted_spread_str, "按微操数量加权", spread_status)
+
+        # 6. 统计券商渠道收益排行 (基于当前生效的月份 display_rows)
         broker_map: Dict[str, float] = {}
-        for r in filtered:
+        for r in display_rows:
             b_cn = fmt_broker_cn(r[1])
             broker_map[b_cn] = broker_map.get(b_cn, 0.0) + float(r[11] or 0)
+        self.update_broker_rankings(broker_map)
 
-        self.update_broker_rankings(broker_map, tot_pnl)
-
-        # 4. 统计股票微操收益 TOP 5 (盈利 TOP 5 & 亏损 TOP 5)
+        # 7. 统计股票微操收益 TOP 5 (盈利 TOP 5 & 亏损 TOP 5)
         stock_map: Dict[str, Dict[str, Any]] = {}
-        for r in filtered:
+        for r in display_rows:
             sym = str(r[3])
             if sym not in stock_map:
-                stock_map[sym] = {"pnl": 0.0, "trades": 0, "buy": 0.0, "sell": 0.0}
+                stock_map[sym] = {"pnl": 0.0, "trades": 0, "qty": 0.0}
             stock_map[sym]["pnl"] += float(r[11] or 0)
             stock_map[sym]["trades"] += int(r[4] or 0)
-            stock_map[sym]["buy"] += float(r[9] or 0)
-            stock_map[sym]["sell"] += float(r[10] or 0)
-
+            stock_map[sym]["qty"] += float(r[5] or 0)
         self.update_stock_top5(stock_map)
 
-        # 5. 更新明细表格数据
+        # 8. 更新明细表格数据
         table_rows: List[List[Any]] = []
-        for r in filtered:
-            # 格式化各列
+        for r in display_rows:
             pnl_val = float(r[11] or 0)
             spread_val = float(r[8] or 0)
             table_rows.append([
@@ -1316,23 +1549,27 @@ class MonthlyScalpingPage(QWidget):
                 fmt_money(r[5], 2),                         # 微操数量
                 f"${fmt_money(r[6], 2)}",                   # 微操均买价($)
                 f"${fmt_money(r[7], 2)}",                   # 微操均卖价($)
-                f"{'+' if spread_val > 0 else ''}${fmt_money(spread_val, 2)}", # 每股价差($)
+                fmt_signed_money(spread_val, 2),            # 每股价差($)
                 f"${fmt_money(r[9], 2)}",                   # 买入金额($)
                 f"${fmt_money(r[10], 2)}",                  # 卖出金额($)
-                f"{'+' if pnl_val > 0 else ''}${fmt_money(pnl_val, 2)}",      # 微操收益($)
+                fmt_signed_money(pnl_val, 2),               # 微操收益($)
                 str(r[12]) if len(r) > 12 else "—",         # 首笔微操时间
                 str(r[13]) if len(r) > 13 else "—",         # 最近微操时间
             ])
 
         self.table_model.highlight_month = self.active_chart_month
+        self.table_model.highlight_ticker = self.active_ranking_ticker
         self.table_model.set_columns_and_rows(self.table_model.columns, table_rows)
+
+        self.table_sub_lbl.setText(f"共 {len(table_rows)} 条记录 · 点击行查看详情，双击行进入交易回放")
         self.update_pagination_ui()
         self.apply_proportional_column_widths()
 
     # -------------------------------------------------------------------------
     # 券商渠道与股票排行榜渲染
     # -------------------------------------------------------------------------
-    def update_broker_rankings(self, broker_map: Dict[str, float], total_pnl: float):
+    def update_broker_rankings(self, broker_map: Dict[str, float]):
+        """渲染券商渠道收益排行：取消占比列，按最大绝对收益归一化进度条"""
         while self.broker_list_layout.count():
             item = self.broker_list_layout.takeAt(0)
             if item.widget():
@@ -1347,40 +1584,43 @@ class MonthlyScalpingPage(QWidget):
 
         sorted_brokers = sorted(broker_map.items(), key=lambda x: x[1], reverse=True)
         max_abs_pnl = max(abs(val) for _, val in sorted_brokers) or 1.0
-        abs_tot = abs(total_pnl) if abs(total_pnl) > 0.001 else 1.0
 
         for b_name, b_pnl in sorted_brokers:
             row_frame = QFrame()
             row_frame.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_frame.setStyleSheet("""
-                QFrame {
-                    background: #FFFFFF; border: 1px solid #F1F5F9; border-radius: 4px; padding: 2px 4px;
-                }
-                QFrame:hover { background: #F8FAFC; border-color: #CBD5E1; }
+            is_active = (self.active_ranking_broker == b_name)
+            border_col = "#2563EB" if is_active else "#F1F5F9"
+            bg_col = "#EFF6FF" if is_active else "#FFFFFF"
+
+            row_frame.setStyleSheet(f"""
+                QFrame {{
+                    background: {bg_col}; border: 1px solid {border_col}; border-radius: 4px; padding: 2px 4px;
+                }}
+                QFrame:hover {{ background: #F8FAFC; border-color: #CBD5E1; }}
             """)
             r_lay = QHBoxLayout(row_frame)
-            r_lay.setContentsMargins(6, 4, 6, 4)
-            r_lay.setSpacing(6)
+            r_lay.setContentsMargins(6, 3, 6, 3)
+            r_lay.setSpacing(8)
 
             name_lbl = QLabel(b_name)
             name_lbl.setFixedWidth(75)
             name_lbl.setStyleSheet("font-size: 12px; font-weight: 600; color: #1E293B;")
             r_lay.addWidget(name_lbl)
 
-            pnl_lbl = QLabel(fmt_signed_money(b_pnl))
+            pnl_lbl = QLabel(fmt_signed_money(b_pnl, 2))
             pnl_lbl.setFixedWidth(80)
             pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             pnl_lbl.setFont(numeric_font(11, bold=True))
             pnl_lbl.setStyleSheet(f"color: {'#10B981' if b_pnl >= 0 else '#EF4444'}; font-size: 11.5px;")
             r_lay.addWidget(pnl_lbl)
 
-            # 可视化条形进度条
+            # 横向条形进度条（按最大绝对收益归一化）
             bar = QProgressBar()
             bar.setFixedHeight(8)
             bar.setTextVisible(False)
             bar.setRange(0, 1000)
-            ratio = (abs(b_pnl) / max_abs_pnl) * 1000
-            bar.setValue(int(max(10, min(1000, ratio))))
+            ratio = (abs(b_pnl) / max_abs_pnl) * 1000 if max_abs_pnl > 0 else 0
+            bar.setValue(int(max(8, min(1000, ratio))))
             color_hex = "#10B981" if b_pnl >= 0 else "#EF4444"
             bg_hex = "#DCFCE7" if b_pnl >= 0 else "#FEE2E2"
             bar.setStyleSheet(f"""
@@ -1389,104 +1629,90 @@ class MonthlyScalpingPage(QWidget):
             """)
             r_lay.addWidget(bar, 1)
 
-            share_pct = (abs(b_pnl) / abs_tot) * 100.0
-            share_lbl = QLabel(f"{share_pct:.1f}%")
-            share_lbl.setFixedWidth(50)
-            share_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            share_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
-            r_lay.addWidget(share_lbl)
-
-            def make_broker_click(b=b_name):
-                return lambda e: self.filter_by_broker(b)
+            def make_broker_click(name=b_name):
+                return lambda e: self.filter_by_broker(name)
             row_frame.mousePressEvent = make_broker_click(b_name)
             self.broker_list_layout.addWidget(row_frame)
 
-    def filter_by_broker(self, broker: str):
-        idx = self.broker_combo.findText(broker)
-        if idx >= 0:
-            if self.broker_combo.currentIndex() == idx:
-                self.broker_combo.setCurrentIndex(0)  # 反选
-            else:
-                self.broker_combo.setCurrentIndex(idx)
-            self.apply_filters()
+        self.broker_list_layout.addStretch()
 
     def update_stock_top5(self, stock_map: Dict[str, Dict[str, Any]]):
-        # 清空
-        while self.profit_top_vbox.count():
-            item = self.profit_top_vbox.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        while self.loss_top_vbox.count():
-            item = self.loss_top_vbox.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        """渲染盈利与亏损 TOP 5：列头更新为 # | Ticker | 微操收益 | 微操次数 | 微操数量"""
+        # 清空现有项
+        for lay in (self.profit_top_vbox, self.loss_top_vbox):
+            while lay.count():
+                it = lay.takeAt(0)
+                if it.widget():
+                    it.widget().deleteLater()
 
-        # 盈利 TOP 5：微操收益降序
-        profit_stocks = [(sym, d) for sym, d in stock_map.items() if d["pnl"] > 0]
-        profit_stocks.sort(key=lambda x: x[1]["pnl"], reverse=True)
+        all_stocks = [{"sym": k, **v} for k, v in stock_map.items()]
+
+        # 盈利 TOP 5 (收益降序，只展示 > 0)
+        profit_stocks = [s for s in all_stocks if s["pnl"] > 0]
+        profit_stocks.sort(key=lambda x: x["pnl"], reverse=True)
         top_profit = profit_stocks[:5]
 
-        # 亏损 TOP 5：微操收益升序（最负在最前）
-        loss_stocks = [(sym, d) for sym, d in stock_map.items() if d["pnl"] < 0]
-        loss_stocks.sort(key=lambda x: x[1]["pnl"])
+        # 亏损 TOP 5 (收益升序，最亏损排在第一位，只展示 < 0)
+        loss_stocks = [s for s in all_stocks if s["pnl"] < 0]
+        loss_stocks.sort(key=lambda x: x["pnl"])
         top_loss = loss_stocks[:5]
 
-        # 渲染盈利 TOP 5
+        for i, s in enumerate(top_profit):
+            item_frame = self._build_top5_row(i + 1, s, is_profit=True)
+            self.profit_top_vbox.addWidget(item_frame)
+
+        for i, s in enumerate(top_loss):
+            item_frame = self._build_top5_row(i + 1, s, is_profit=False)
+            self.loss_top_vbox.addWidget(item_frame)
+
         if not top_profit:
-            empty = QLabel("暂无盈利微操标的")
-            empty.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 20px 0;")
+            empty = QLabel("暂无盈利股票")
+            empty.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 12px 0;")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.profit_top_vbox.addWidget(empty)
-        else:
-            rank_colors_p = ["#10B981", "#34D399", "#6EE7B7", "#94A3B8", "#CBD5E1"]
-            for idx, (sym, d) in enumerate(top_profit):
-                row = self._create_stock_rank_row(idx + 1, sym, d, is_profit=True, bg_col=rank_colors_p[idx])
-                self.profit_top_vbox.addWidget(row)
 
-        # 渲染亏损 TOP 5
         if not top_loss:
-            empty = QLabel("暂无亏损微操标的")
-            empty.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 20px 0;")
+            empty = QLabel("暂无亏损股票")
+            empty.setStyleSheet("font-size: 11px; color: #94A3B8; padding: 12px 0;")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.loss_top_vbox.addWidget(empty)
-        else:
-            rank_colors_l = ["#EF4444", "#F97316", "#FB923C", "#94A3B8", "#CBD5E1"]
-            for idx, (sym, d) in enumerate(top_loss):
-                row = self._create_stock_rank_row(idx + 1, sym, d, is_profit=False, bg_col=rank_colors_l[idx])
-                self.loss_top_vbox.addWidget(row)
 
-    def _create_stock_rank_row(self, rank: int, sym: str, d: Dict[str, Any], is_profit: bool, bg_col: str) -> QFrame:
+    def _build_top5_row(self, rank: int, d: Dict[str, Any], is_profit: bool) -> QWidget:
         frame = QFrame()
         frame.setCursor(Qt.CursorShape.PointingHandCursor)
-        hover_bg = "#F0FDF4" if is_profit else "#FEF2F2"
-        border_h = "#BBF7D0" if is_profit else "#FECACA"
+        sym = d["sym"]
+        is_active = (self.active_ranking_ticker == sym)
+        border_col = "#2563EB" if is_active else "#F1F5F9"
+        bg_col = "#EFF6FF" if is_active else "#FFFFFF"
+
         frame.setStyleSheet(f"""
             QFrame {{
-                background: #FFFFFF; border: 1px solid #F1F5F9; border-radius: 4px; padding: 2px 4px;
+                background: {bg_col}; border: 1px solid {border_col}; border-radius: 4px; padding: 1px 4px;
             }}
-            QFrame:hover {{ background: {hover_bg}; border-color: {border_h}; }}
+            QFrame:hover {{ background: #F8FAFC; border-color: #CBD5E1; }}
         """)
         h = QHBoxLayout(frame)
         h.setContentsMargins(4, 2, 4, 2)
         h.setSpacing(6)
 
         # 排名徽章
-        r_lbl = QLabel(str(rank))
-        r_lbl.setFixedSize(18, 18)
-        r_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        txt_col = "#FFFFFF" if rank <= 3 else "#475569"
-        r_lbl.setStyleSheet(f"background: {bg_col}; color: {txt_col}; border-radius: 9px; font-size: 10px; font-weight: 700;")
-        h.addWidget(r_lbl)
+        rank_badge = QLabel(str(rank))
+        rank_badge.setFixedSize(18, 18)
+        rank_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge_bg = "#10B981" if is_profit and rank <= 3 else ("#EF4444" if not is_profit and rank <= 3 else "#E2E8F0")
+        badge_fg = "#FFFFFF" if rank <= 3 else "#64748B"
+        rank_badge.setStyleSheet(f"background-color: {badge_bg}; color: {badge_fg}; font-size: 10px; font-weight: bold; border-radius: 9px;")
+        h.addWidget(rank_badge)
 
         # Ticker
         sym_lbl = QLabel(sym)
-        sym_lbl.setFixedWidth(65)
+        sym_lbl.setFixedWidth(70)
         sym_lbl.setStyleSheet("font-size: 11.5px; font-weight: 700; color: #2563EB;")
         h.addWidget(sym_lbl)
 
         # 微操收益
-        pnl_lbl = QLabel(fmt_signed_money(d["pnl"]))
-        pnl_lbl.setFixedWidth(75)
+        pnl_lbl = QLabel(fmt_signed_money(d["pnl"], 2))
+        pnl_lbl.setFixedWidth(85)
         pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         pnl_lbl.setFont(numeric_font(11, bold=True))
         pnl_lbl.setStyleSheet(f"color: {'#10B981' if is_profit else '#EF4444'}; font-size: 11.5px;")
@@ -1494,54 +1720,48 @@ class MonthlyScalpingPage(QWidget):
 
         # 微操次数
         trades_lbl = QLabel(str(d["trades"]))
-        trades_lbl.setFixedWidth(60)
+        trades_lbl.setFixedWidth(70)
         trades_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         trades_lbl.setFont(numeric_font(11))
         trades_lbl.setStyleSheet("color: #64748B;")
         h.addWidget(trades_lbl)
 
-        # 买入金额
-        buy_lbl = QLabel(f"${fmt_money(d['buy'], 2)}")
-        buy_lbl.setFixedWidth(75)
-        buy_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        buy_lbl.setFont(numeric_font(11))
-        buy_lbl.setStyleSheet("color: #475569;")
-        h.addWidget(buy_lbl)
-
-        # 卖出金额
-        sell_lbl = QLabel(f"${fmt_money(d['sell'], 2)}")
-        sell_lbl.setFixedWidth(75)
-        sell_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        sell_lbl.setFont(numeric_font(11))
-        sell_lbl.setStyleSheet("color: #475569;")
-        h.addWidget(sell_lbl)
+        # 微操数量
+        qty_lbl = QLabel(fmt_money(d["qty"], 2))
+        qty_lbl.setFixedWidth(85)
+        qty_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        qty_lbl.setFont(numeric_font(11))
+        qty_lbl.setStyleSheet("color: #475569;")
+        h.addWidget(qty_lbl)
 
         def make_click(s=sym):
             return lambda e: self.filter_by_ticker(s)
         frame.mousePressEvent = make_click(sym)
         return frame
 
-    def filter_by_ticker(self, ticker: str):
-        if self.ticker_edit.text().strip().upper() == ticker.upper():
-            self.ticker_edit.clear()  # 再次点击反选恢复
+    def filter_by_broker(self, broker_name: str):
+        """点击券商渠道下钻反选"""
+        if self.active_ranking_broker == broker_name:
+            self.active_ranking_broker = ""
         else:
-            self.ticker_edit.setText(ticker)
-        self.apply_filters()
+            self.active_ranking_broker = broker_name
+        self.table_model.page = 1
+        self.recalculate_and_refresh()
 
-    # -------------------------------------------------------------------------
-    # 交互与抽屉联动
-    # -------------------------------------------------------------------------
-    def on_trend_month_clicked(self, month: str):
-        self.active_chart_month = month
-        if month:
-            self.start_month_edit.setText(month)
-            self.end_month_edit.setText(month)
+    def filter_by_ticker(self, ticker: str):
+        """点击股票代码下钻反选"""
+        if self.active_ranking_ticker == ticker:
+            self.active_ranking_ticker = ""
         else:
-            months = sorted({str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]})
-            if months:
-                self.start_month_edit.setText(months[0])
-                self.end_month_edit.setText(months[-1])
-        self.apply_filters()
+            self.active_ranking_ticker = ticker
+        self.table_model.page = 1
+        self.recalculate_and_refresh()
+
+    def on_trend_month_clicked(self, month: str):
+        """点击月度柱体下钻筛选，严格不改变全局起止月份范围！"""
+        self.active_chart_month = month
+        self.table_model.page = 1
+        self.recalculate_and_refresh()
 
     def switch_trend_mode(self, mode: str):
         self.trend_tab_monthly.setChecked(mode == "monthly")
@@ -1550,44 +1770,34 @@ class MonthlyScalpingPage(QWidget):
 
     def on_header_section_clicked(self, section: int):
         self.table_model.toggle_sort(section)
+        self.update_pagination_ui()
 
     def change_page(self, delta: int):
         self.table_model.set_page(self.table_model.page + delta)
         self.update_pagination_ui()
 
     def update_pagination_ui(self):
-        total_rows = len(self.table_model.all_rows)
-        page_sz = self.table_model.page_size
-        max_page = max(1, (total_rows + page_sz - 1) // page_sz)
-        cur_page = self.table_model.page
-        self.table_count_lbl.setText(f"共 {total_rows} 条记录")
-        self.page_num_lbl.setText(f"第 {cur_page} / {max_page} 页")
-        self.prev_page_btn.setEnabled(cur_page > 1)
-        self.next_page_btn.setEnabled(cur_page < max_page)
+        total_pages = max(1, (len(self.table_model.all_rows) + self.table_model.page_size - 1) // self.table_model.page_size)
+        cur_p = self.table_model.page
+        self.page_num_lbl.setText(f"{cur_p} / {total_pages}")
+        self.prev_page_btn.setEnabled(cur_p > 1)
+        self.next_page_btn.setEnabled(cur_p < total_pages)
 
     def on_table_row_clicked(self, index: QModelIndex):
-        """单击表格行：拉出右侧详情抽屉"""
-        if not index.isValid():
-            return
-        row = index.row()
-        if row < len(self.table_model.rows):
-            record = self.table_model.rows[row]
+        r = index.row()
+        if 0 <= r < len(self.table_model.rows):
+            record = self.table_model.rows[r]
             self.open_drawer(record)
 
     def on_table_row_double_clicked(self, index: QModelIndex):
-        """双击表格行：进入历史交易回放"""
-        if not index.isValid():
-            return
-        row = index.row()
-        if row < len(self.table_model.rows):
-            record = self.table_model.rows[row]
-            sym = record[3]
-            # 发射下钻回放信号 (向主窗口路由至交易回放)
+        r = index.row()
+        if 0 <= r < len(self.table_model.rows):
+            record = self.table_model.rows[r]
+            sym = str(record[3])
             self.drill.emit("replay", sym, record)
 
     def open_drawer(self, record: List[Any]):
         """在右侧展开抽屉，展示选中的微操明细卡片与原始交易回放入口"""
-        # 清空已有抽屉卡片
         while self.drawer_list_layout.count():
             item = self.drawer_list_layout.takeAt(0)
             if item.widget():
@@ -1595,53 +1805,63 @@ class MonthlyScalpingPage(QWidget):
 
         m, broker, cat, sym, cnt, qty, b_price, s_price, spread, b_amt, s_amt, pnl, t_first, t_last = record
 
-        self.drawer_title.setText(f"微操收益详情 · {sym}")
+        self.drawer_title.setText(f"微操详情 · {sym}")
+        self.drawer_subtitle.setText(f"{m} · {broker} · {cat}")
 
-        # 卡片 1：标的概况
+        # 核心结果卡片
         c1 = QFrame()
         c1.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
         c1_v = QVBoxLayout(c1)
-        c1_v.setSpacing(6)
+        c1_v.setContentsMargins(8, 8, 8, 8)
+        c1_v.setSpacing(4)
+        c1_v.addWidget(QLabel("微操收益"))
 
-        c1_v.addWidget(self._make_drawer_kv("股票代码 (Ticker)", str(sym), bold=True, color="#2563EB"))
-        c1_v.addWidget(self._make_drawer_kv("所属月份", str(m)))
-        c1_v.addWidget(self._make_drawer_kv("券商渠道", str(broker)))
-        c1_v.addWidget(self._make_drawer_kv("股票分类", str(cat)))
+        pnl_lbl = QLabel(f"{pnl} USD")
+        pnl_lbl.setFont(numeric_font(20, bold=True))
+        pnl_lbl.setStyleSheet(f"color: {'#10B981' if str(pnl).startswith('+') else '#EF4444'};")
+        c1_v.addWidget(pnl_lbl)
+
+        spread_h = QHBoxLayout()
+        spread_h.addWidget(QLabel("每股价差:"))
+        spread_val_lbl = QLabel(f"{spread} USD")
+        spread_val_lbl.setFont(numeric_font(12, bold=True))
+        spread_val_lbl.setStyleSheet(f"color: {'#10B981' if str(spread).startswith('+') else '#EF4444'};")
+        spread_h.addWidget(spread_val_lbl)
+        spread_h.addStretch()
+        c1_v.addLayout(spread_h)
         self.drawer_list_layout.addWidget(c1)
 
-        # 卡片 2：微操损益与价差
+        # 规模明细卡片
         c2 = QFrame()
-        c2.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
+        c2.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
         c2_v = QVBoxLayout(c2)
+        c2_v.setContentsMargins(8, 8, 8, 8)
         c2_v.setSpacing(6)
-
-        pnl_val_str = str(pnl)
-        pnl_col = "#10B981" if "+" in pnl_val_str else ("#EF4444" if "-" in pnl_val_str else "#0F172A")
-        c2_v.addWidget(self._make_drawer_kv("微操收益", pnl_val_str, bold=True, color=pnl_col))
+        c2_v.addWidget(QLabel("交易规模与均价"))
         c2_v.addWidget(self._make_drawer_kv("微操次数", f"{cnt} 次"))
-        c2_v.addWidget(self._make_drawer_kv("微操股数", f"{qty} 股"))
-        c2_v.addWidget(self._make_drawer_kv("每股价差", str(spread)))
-        c2_v.addWidget(self._make_drawer_kv("均买价", str(b_price)))
-        c2_v.addWidget(self._make_drawer_kv("均卖价", str(s_price)))
+        c2_v.addWidget(self._make_drawer_kv("微操数量", f"{qty} 股"))
+        c2_v.addWidget(self._make_drawer_kv("微操均买价", str(b_price)))
+        c2_v.addWidget(self._make_drawer_kv("微操均卖价", str(s_price)))
         c2_v.addWidget(self._make_drawer_kv("买入总金额", str(b_amt)))
         c2_v.addWidget(self._make_drawer_kv("卖出总金额", str(s_amt)))
         self.drawer_list_layout.addWidget(c2)
 
-        # 卡片 3：时间追溯与回放入口
+        # 时间记录卡片
         c3 = QFrame()
-        c3.setStyleSheet("background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
+        c3.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px; padding: 12px;")
         c3_v = QVBoxLayout(c3)
-        c3_v.setSpacing(8)
-
+        c3_v.setContentsMargins(8, 8, 8, 8)
+        c3_v.setSpacing(6)
+        c3_v.addWidget(QLabel("时间追溯"))
         c3_v.addWidget(self._make_drawer_kv("首笔微操时间", str(t_first)))
         c3_v.addWidget(self._make_drawer_kv("最近微操时间", str(t_last)))
 
-        replay_btn = QPushButton("查看该标的历史交易回放 →")
+        replay_btn = QPushButton(f"查看 {sym} 原始交易回放与明细")
         replay_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         replay_btn.setStyleSheet("""
             QPushButton {
-                background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 5px;
-                padding: 6px 12px; font-size: 11.5px; font-weight: 600; color: #2563EB;
+                background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px;
+                color: #2563EB; font-weight: 600; font-size: 12px; padding: 8px 12px; margin-top: 6px;
             }
             QPushButton:hover { background: #DBEAFE; }
         """)
@@ -1657,18 +1877,18 @@ class MonthlyScalpingPage(QWidget):
         w = QWidget()
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        k_lbl = QLabel(k)
-        k_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
-        v_lbl = QLabel(v)
-        v_lbl.setFont(numeric_font(12, bold=bold))
-        v_lbl.setStyleSheet(f"font-size: 12px; color: {color};")
-        lay.addWidget(k_lbl)
+        lbl_k = QLabel(k)
+        lbl_k.setStyleSheet("color: #64748B; font-size: 12px;")
+        lbl_v = QLabel(v)
+        lbl_v.setFont(numeric_font(12, bold=bold))
+        lbl_v.setStyleSheet(f"color: {color};")
+        lay.addWidget(lbl_k)
         lay.addStretch()
-        lay.addWidget(v_lbl)
+        lay.addWidget(lbl_v)
         return w
 
     def show_drawer(self):
-        w = 440
+        w = 420
         self.drawer_overlay.setGeometry(self.rect())
         self.drawer_overlay.show()
         self.drawer_overlay.raise_()
