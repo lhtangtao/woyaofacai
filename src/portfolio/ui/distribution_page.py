@@ -800,14 +800,12 @@ class HoldingsDistributionPage(QWidget):
         grid.setSpacing(16)
 
         self.kpi_mv = DistributionKpiCard("当前股票市值")
-        self.kpi_change = DistributionKpiCard("较上期市值变化")
         self.kpi_count = DistributionKpiCard("持仓标的数")
         self.kpi_conc = DistributionKpiCard("前五大持仓集中度")
 
         grid.addWidget(self.kpi_mv, 0, 0)
-        grid.addWidget(self.kpi_change, 0, 1)
-        grid.addWidget(self.kpi_count, 0, 2)
-        grid.addWidget(self.kpi_conc, 0, 3)
+        grid.addWidget(self.kpi_count, 0, 1)
+        grid.addWidget(self.kpi_conc, 0, 2)
 
         self.page_layout.addLayout(grid)
 
@@ -1132,7 +1130,6 @@ class HoldingsDistributionPage(QWidget):
     def _update_ui_with_summary(self, summary: Optional[DistributionSummary]):
         if not summary:
             self.kpi_mv.set_content("--", "--")
-            self.kpi_change.set_content("--", "--")
             self.kpi_count.set_content("--", "--")
             self.kpi_conc.set_content("--", "--")
             self._clear_distribution_bars()
@@ -1141,28 +1138,18 @@ class HoldingsDistributionPage(QWidget):
             self.table_categories.setRowCount(0)
             return
 
-        # 1. 刷新 4 张 KPI 卡片（直接展示变化金额与幅度，无冗余文案）
-        # 市值
+        # 1. 刷新 3 张核心 KPI 卡片（合并重复信息，每张卡片展示核心数值及较上期变动）
+        # 卡片 1：当前股票市值 -> 下方直接展示较上期变化金额与幅度
         chg_sign = "+" if summary.value_change >= 0 else ""
         chg_rate_str = f"({chg_sign}{summary.value_change_rate:.2f}%)" if summary.value_change_rate is not None else ""
         chg_color = "#16A34A" if summary.value_change >= 0 else "#DC2626"
-
-        # 卡片 1：当前股票市值 -> 下方直接展示变化金额与幅度
         self.kpi_mv.set_content(
             f"${summary.current_market_value:,.2f}",
             f"{chg_sign}${summary.value_change:,.2f} {chg_rate_str}".strip(),
             chg_color,
         )
 
-        # 卡片 2：较上期市值变化 -> 下方直接展示变化幅度
-        rate_val_str = f"{chg_sign}{summary.value_change_rate:.2f}%" if summary.value_change_rate is not None else "--"
-        self.kpi_change.set_content(
-            f"{chg_sign}${summary.value_change:,.2f}",
-            rate_val_str,
-            chg_color,
-        )
-
-        # 卡片 3：持仓标的数 -> 下方展示标的数变动及百分比变动
+        # 卡片 2：持仓标的数 -> 下方展示标的数变动及百分比变动
         cnt_diff = summary.holding_count_change
         cnt_sign = "+" if cnt_diff > 0 else ""
         cnt_color = "#16A34A" if cnt_diff > 0 else ("#DC2626" if cnt_diff < 0 else "#64748B")
@@ -1174,7 +1161,7 @@ class HoldingsDistributionPage(QWidget):
             cnt_color,
         )
 
-        # 卡片 4：前五大持仓集中度 -> 下方展示集中度百分点变动及百分比变动
+        # 卡片 3：前五大持仓集中度 -> 下方展示集中度百分点变动及百分比变动
         conc_diff = summary.top5_concentration_diff_pp
         conc_sign = "+" if conc_diff > Decimal("0.001") else ""
         conc_color = "#16A34A" if conc_diff > Decimal("0.001") else ("#DC2626" if conc_diff < Decimal("-0.001") else "#64748B")
