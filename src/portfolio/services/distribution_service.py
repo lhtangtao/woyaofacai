@@ -11,6 +11,32 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 ZERO = Decimal("0")
 
 
+CHANNEL_CN_MAP = {
+    "LONGBRIDGE": "长桥",
+    "LONG BRIDGE": "长桥",
+    "长桥证券": "长桥",
+    "SCHWAB": "嘉信",
+    "CHARLES SCHWAB": "嘉信",
+    "嘉信理财": "嘉信",
+    "FIRSTRADE": "第一证券",
+    "FIRST TRADE": "第一证券",
+    "BBAE": "BBAE",
+    "IBKR": "盈透证券",
+    "INTERACTIVE BROKERS": "盈透证券",
+    "FUTU": "富途证券",
+    "MOOMOO": "富途证券",
+    "TIGER": "老虎证券",
+}
+
+
+def to_chinese_channel(channel: Any) -> str:
+    """将英文渠道代码统一转换为规范中文名称"""
+    if not channel:
+        return ""
+    s = str(channel).strip()
+    return CHANNEL_CN_MAP.get(s.upper(), s)
+
+
 def to_dec(val: Any) -> Decimal:
     if val is None:
         return ZERO
@@ -119,7 +145,7 @@ def calculate_distribution(
         for r in obs_rows:
             curr_items.append(
                 HoldingItem(
-                    channel=str(r.values[1]),
+                    channel=to_chinese_channel(r.values[1]),
                     category=str(r.values[2]),
                     ticker=str(r.values[3]),
                     name=str(r.values[3]),
@@ -141,7 +167,7 @@ def calculate_distribution(
         for r in obs_rows:
             curr_items.append(
                 HoldingItem(
-                    channel=str(r.values[0]),
+                    channel=to_chinese_channel(r.values[0]),
                     category=str(r.values[1]),
                     ticker=str(r.values[2]),
                     name=str(r.values[2]),
@@ -177,7 +203,7 @@ def calculate_distribution(
         for r in cmp_rows:
             prev_items.append(
                 HoldingItem(
-                    channel=str(r.values[1]),
+                    channel=to_chinese_channel(r.values[1]),
                     category=str(r.values[2]),
                     ticker=str(r.values[3]),
                     name=str(r.values[3]),
@@ -194,8 +220,9 @@ def calculate_distribution(
 
     # 3. 过滤处理（渠道、分类、搜索关键词）
     def filter_item(it: HoldingItem) -> bool:
-        if channel_filter and channel_filter not in ("全部", "全部渠道") and it.channel != channel_filter:
-            return False
+        if channel_filter and channel_filter not in ("全部", "全部渠道"):
+            if to_chinese_channel(it.channel) != to_chinese_channel(channel_filter):
+                return False
         if category_filter and category_filter not in ("全部", "全部分类") and it.category != category_filter:
             return False
         if search_keyword:
@@ -429,7 +456,7 @@ def get_stock_holding_sources(analytics, ticker: str) -> List[Dict[str, Any]]:
                 # metadata 中可能包含 account_id, person_ids 等
                 meta = dict(r.metadata) if hasattr(r, "metadata") and r.metadata else {}
                 sources.append({
-                    "channel": str(r.values[0]),
+                    "channel": to_chinese_channel(r.values[0]),
                     "category": str(r.values[1]),
                     "ticker": str(r.values[2]),
                     "shares": to_dec(r.values[3]),

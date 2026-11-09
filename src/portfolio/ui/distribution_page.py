@@ -43,6 +43,7 @@ from portfolio.services.distribution_service import (
     calculate_distribution,
     get_available_months,
     get_stock_holding_sources,
+    to_chinese_channel,
 )
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.theme import tokens
@@ -1046,10 +1047,16 @@ class HoldingsDistributionPage(QWidget):
                     channels.add(str(r.values[1]))
                     categories.add(str(r.values[2]))
 
+        cn_channels = set()
+        for ch in channels:
+            cn = to_chinese_channel(ch)
+            if cn:
+                cn_channels.add(cn)
+
         self.channel_combo.blockSignals(True)
         self.channel_combo.clear()
         self.channel_combo.addItem("全部渠道", None)
-        for ch in sorted(channels):
+        for ch in sorted(cn_channels):
             self.channel_combo.addItem(ch, ch)
         self.channel_combo.setCurrentIndex(0)
         self.channel_combo.blockSignals(False)
