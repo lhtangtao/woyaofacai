@@ -110,6 +110,7 @@ export interface TradeProvenance {
 export interface WatchlistItem {
   symbol: string;
   full_symbol: string;
+  manual?: boolean;
   price: string;
   change: string;
   rsi: string;

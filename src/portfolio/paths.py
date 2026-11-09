@@ -25,3 +25,7 @@ def quote_cache_path():
     else:
         root = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
     return root / 'MoneyPortfolio' / 'Money Portfolio' / 'live_quotes.sqlite3'
+
+
+def monitor_cache_path():
+    return quote_cache_path().parents[1] / "我要发财" / "monitoring.sqlite3"

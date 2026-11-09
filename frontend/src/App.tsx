@@ -395,7 +395,7 @@ export const App: React.FC = () => {
               />
             )}
 
-            {currentRoute === "monitor" && <MonitorView />}
+            {currentRoute === "monitor" && <MonitorView canWrite={bootstrap?.user?.can_write === true} />}
 
             {currentRoute === "ownership" && (bootstrap?.user?.can_view_ownership ? <OwnershipAnalysisView refresh={ownershipRefresh} reset={ownershipReset} /> : <div role="alert">当前设备或账号无权访问股票归属与成本分析。</div>)}
 

@@ -395,7 +395,7 @@ class MonitoringPage(QWidget):
         filters.addWidget(self.search, 1)
 
         self.kind = QComboBox()
-        self.kind.addItems(["全部类型", "直接持有", "正股映射", "自选股票", "待确认", "已不再持有"])
+        self.kind.addItems(["全部类型", "直接持有", "正股映射", "指数代理", "自选股票", "待确认", "已不再持有"])
         filters.addWidget(self.kind)
         col.addLayout(filters)
 
@@ -418,14 +418,12 @@ class MonitoringPage(QWidget):
         self.table.setWordWrap(False)
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setMinimumSectionSize(30)
-        # 优化各列宽度：大幅缩小名字列与规则/操作列，释放充足空间确保全部均线价格 100% 完整显示无省略号
-        col_widths = (82, 76, 74, 74, 76, 76, 76, 70, 42, 36)
-        for col_idx, width in enumerate(col_widths):
+        header = self.table.horizontalHeader()
+        header.setMinimumSectionSize(56)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for col_idx, width in ((8, 56), (9, 104)):
+            header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(col_idx, width)
-        # 禁止末尾操作列自动拉伸，防止操作列变成巨大空白并压缩前列
-        self.table.horizontalHeader().setStretchLastSection(False)
         self.table.setMinimumWidth(680)
         self.table.setStyleSheet(
             "QTableWidget { font-size: 12px; }"
@@ -439,9 +437,6 @@ class MonitoringPage(QWidget):
         self.mapping_button.clicked.connect(self.edit_mapping)
         table_actions.addWidget(self.mapping_button)
 
-        self.remove_stock_btn = QPushButton("移除所选自选股票")
-        self.remove_stock_btn.clicked.connect(self._on_remove_stock)
-        table_actions.addWidget(self.remove_stock_btn)
         table_actions.addStretch()
         col.addLayout(table_actions)
 
@@ -805,7 +800,7 @@ class MonitoringPage(QWidget):
         own = tuple(p["id"] for p in info.persons if p["name"] == "个人" and p["enabled"])
         if self.owner.currentIndex() == 0 and not own:
             self.clear()
-            self.notice.setText("未找到启用的“个人”归属，无法确定本人持仓；请核对人员配置。")
+            self.notice.setText("未找到启用的“个人”归属。请选择全部人员或核对人员配置。")
             return
 
         scope = QueryScope(
@@ -890,7 +885,8 @@ class MonitoringPage(QWidget):
         service = self.service
         feed = self.host.live_panel.feed
         active = {
-            t["analysis_symbol"] for t in targets if t["archive_state"] == "HELD" and t["market"] == "US"
+            t["analysis_symbol"] for t in targets
+            if t["archive_state"] == "HELD" and t["market"] == "US" and t.get("source_type") != "HISTORY"
         }
         self.host.live_panel.observation_symbols = active
         if feed:
@@ -1037,8 +1033,6 @@ class MonitoringPage(QWidget):
 
             act_rules = rule_counts.get(symbol, 0)
             rules_badge = f"{act_rules}条" if act_rules > 0 else "无"
-            action_icon = "✏️" if act_rules > 0 else "➕"
-
             values = [
                 symbol,
                 f"{fmt(data.get('price'))}\n{fmt(data.get('change'), suffix='%')}",
@@ -1049,7 +1043,6 @@ class MonitoringPage(QWidget):
                     for k in ("SHORT", "MEDIUM", "LONG")
                 ),
                 rules_badge,
-                action_icon,
             ]
 
             for col, value in enumerate(values):
@@ -1058,7 +1051,7 @@ class MonitoringPage(QWidget):
                 item.setToolTip(value + "\n" + data.get("error", ""))
                 if col in range(1, 7):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (7, 8, 9):
+                elif col in (7, 8):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 clean_sym = symbol.removesuffix(".US")
@@ -1076,14 +1069,22 @@ class MonitoringPage(QWidget):
                     else:
                         item.setForeground(QColor("#94A3B8"))
                         item.setToolTip(f"【{clean_sym}】暂未启用监控规则，点击新建")
-                elif col == 9:
-                    item.setToolTip(f"点击为【{clean_sym}】{'管理/编辑' if act_rules > 0 else '新建'}监控预警规则")
-                    item.setForeground(QColor("#2563EB"))
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-
                 self.table.setItem(row, col, item)
+
+            actions = QWidget()
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(3, 0, 3, 0)
+            action_layout.setSpacing(3)
+            rule_button = QPushButton("规则" if act_rules else "＋规则")
+            rule_button.clicked.connect(lambda checked=False, sym=symbol: self._open_rule_dialog(default_symbol=sym))
+            action_layout.addWidget(rule_button)
+            if is_manual:
+                remove_button = QPushButton("移除")
+                remove_button.setToolTip(f"移除 {symbol.removesuffix('.US')} 的手动自选")
+                remove_button.clicked.connect(lambda checked=False, sym=symbol: self._on_remove_stock(sym))
+                action_layout.addWidget(remove_button)
+            actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
+            self.table.setCellWidget(row, 9, actions)
 
             # Column 0: clickable hyperlink widget for AI analysis navigation
             stock_cell = StockCellWidget(
@@ -1144,7 +1145,7 @@ class MonitoringPage(QWidget):
             self.host.pages.setCurrentIndex(20)
 
     def _on_cell_clicked(self, row: int, col: int):
-        if col in (8, 9):
+        if col == 8:
             item = self.table.item(row, 0)
             sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
             if sym:
@@ -1625,16 +1626,17 @@ class MonitoringPage(QWidget):
 
     def _on_add_stock(self):
         if not self.store or not self.scope_key:
+            QMessageBox.information(self, "观察列表尚未就绪", "请连接数据源并同步观察标的后再添加。")
             return
         dialog = AddStockDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.store.add_manual_targets(self.scope_key, dialog.symbols, dialog.market)
             self.activate(force=True)
 
-    def _on_remove_stock(self):
-        if not self.store or not self.scope_key or not self.selected:
+    def _on_remove_stock(self, symbol):
+        if not self.store or not self.scope_key:
             return
-        target = next((t for t in self.targets if t["analysis_symbol"] == self.selected), None)
+        target = next((t for t in self.targets if t["analysis_symbol"] == symbol), None)
         if not target:
             return
         if target.get("source_type") != "MANUAL":
@@ -1643,11 +1645,15 @@ class MonitoringPage(QWidget):
         reply = QMessageBox.question(
             self,
             "确认移除",
-            f"移除【{self.selected}】的手动自选？自动同步的标的会保留，完全移出观察列表的标的将停用关联规则。",
+            f"移除【{symbol.removesuffix('.US')}】的手动自选？自动同步的标的会保留，完全移出观察列表的标的将停用关联规则。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.store.remove_manual_target(self.scope_key, self.selected, target.get("market", "US"))
+            self.store.remove_manual_target(self.scope_key, symbol, target.get("market", "US"))
+            self.targets = self.store.targets(self.scope_key)
+            self.draw_table()
+            self._update_top_stats()
+            self._update_rule_symbol_filter()
             self.activate(force=True)
 
     def edit_mapping(self):

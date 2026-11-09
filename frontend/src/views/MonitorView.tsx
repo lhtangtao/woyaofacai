@@ -308,7 +308,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
       {tab === "watchlist" ? (
         <>
         {watchlistError && <p role="status">{watchlistError}</p>}
-        /* Main Watchlist Table (Matching desktop monitor_table with UN-TRUNCATED MAs) */
+        {/* Main Watchlist Table */}
         <div className="table-container">
           <table className="finance-table">
             <thead>
@@ -426,9 +426,10 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                             onClick={() => handleDeleteSymbol(row.full_symbol)}
                             className="btn btn-quiet"
                             style={{ padding: "3px 6px", color: "var(--loss-color)" }}
-                            title="从监控中移除"
+                            title="移除手动自选"
                           >
                             <Trash2 size={13} />
+                            <span>移除</span>
                           </button>}
                         </div>
                       </td>
@@ -439,6 +440,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
             </tbody>
           </table>
         </div>
+        </>
       ) : (
         /* Alert History Table */
         <div className="table-container">

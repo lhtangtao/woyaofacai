@@ -32,7 +32,7 @@ from flask import Flask, g, jsonify, render_template, request, session
 
 from portfolio.domain.models import Ledger, QueryScope
 from portfolio.domain.technical_indicators import DailyBar, series, technicals
-from portfolio.paths import API_CONFIG_PATH, DATABASE_PATH, PROJECT_DIR
+from portfolio.paths import API_CONFIG_PATH, DATABASE_PATH, PROJECT_DIR, monitor_cache_path
 from portfolio.services.ai_service import CodexAIService
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.charts_service import build_charts
@@ -376,6 +376,7 @@ def get_monitor_store(*, create=False) -> Optional[MonitorStore]:
         Path.home() / "Library/Application Support/MoneyPortfolio/Money Portfolio/monitoring.sqlite3",
         PROJECT_DIR / "monitoring.sqlite3",
         PROJECT_DIR / "数据库" / "monitoring.sqlite3",
+        monitor_cache_path(),
     ]
     for p in candidates:
         if p.is_file():
@@ -386,7 +387,7 @@ def get_monitor_store(*, create=False) -> Optional[MonitorStore]:
             except Exception as e:
                 logger.warning(f"Failed to open {p}: {e}")
     if create:
-        _monitor_store = MonitorStore(candidates[0])
+        _monitor_store = MonitorStore(monitor_cache_path())
         return _monitor_store
     return None
 

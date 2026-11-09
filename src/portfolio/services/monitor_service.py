@@ -258,12 +258,15 @@ class MonitorService:
                 attempt = state.get("quote_attempt")
                 if not attempt or now - datetime.fromisoformat(attempt) >= timedelta(seconds=60):
                     wanted.append(symbol)
-        if wanted and not cancel.is_set():
+        for offset in range(0, len(wanted), 30):
+            if cancel.is_set():
+                break
+            batch = wanted[offset:offset + 30]
             try:
-                pulled.update(self.provider.quotes(wanted))
-                pull_error.update(set(wanted) - pulled.keys())
+                pulled.update(self.provider.quotes(batch))
+                pull_error.update(set(batch) - pulled.keys())
             except Exception:
-                pull_error.update(wanted)
+                pull_error.update(batch)
         for symbol in symbols:
             if cancel.is_set():
                 break
