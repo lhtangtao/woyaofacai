@@ -472,6 +472,7 @@ class AssetFilterCard(QFrame):
 
 class ChartCanvas(QWidget):
     selected = Signal(str, str)
+    selected_detail = Signal(int, str, str)
     drill_month = Signal(str)
     back_to_monthly = Signal()
 
@@ -484,6 +485,12 @@ class ChartCanvas(QWidget):
         self.hover_index = None
         self.categories_x = []
         self.back_button_rect = None
+        self.detail_mode = False
+        self.detail_month = ""
+        self.series_colors = {}
+
+    def detail_hit(self, pos):
+        return next((hit for hit in reversed(self.hits) if hit[0].contains(pos)), None)
 
     def set_loading(self, message="", completed=None, total=None):
         self.loading_message = message
@@ -505,6 +512,14 @@ class ChartCanvas(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
+        if self.detail_mode and self.chart and self.chart.kind != "capital_assets":
+            hit = self.detail_hit(event.position())
+            if hit:
+                _, month, value, name = hit
+                amount = f"{value:.2%}" if self.chart.ratio else f"{value:,.2f}"
+                self.setToolTip(f"{month} · {name} · {amount}")
+            else:
+                self.setToolTip("")
         if self.chart and self.chart.kind == "capital_assets":
             pos = event.position()
             if self.categories_x:
@@ -852,7 +867,7 @@ class ChartCanvas(QWidget):
         show_points = getattr(chart, "show_points", True)
         break_keys = set(getattr(chart, "break_keys", ()))
         for index, series in enumerate(chart.series):
-            color = QColor(colors[index % len(colors)])
+            color = QColor(self.series_colors.get(series.name, colors[index % len(colors)]))
             last = None
             for key, value in series.points:
                 if key in break_keys:
@@ -884,9 +899,15 @@ class ChartCanvas(QWidget):
                         ),
                         color,
                     )
-                self.hits.append(
-                    (QRectF(x - step / 2, top, step, height), key, value, series.name)
-                )
+                hit = QRectF(x - step / 2, top, step, height)
+                if self.detail_mode and chart.kind == "line":
+                    hit = QRectF(x - 9, y - 9, 18, 18)
+                if self.detail_mode and (key == self.detail_month or chart.id in (13, 14) and key == categories[-1]):
+                    painter.setPen(QColor(t.brand))
+                    painter.setFont(chart_font(11, bold=True))
+                    label = f"{value:.2%}" if chart.ratio else f"{value:,.0f}"
+                    painter.drawText(QRectF(x - 50, y - 25, 100, 20), Qt.AlignmentFlag.AlignCenter, label)
+                self.hits.append((hit, key, value, series.name))
 
         zero_y = ys(Decimal(0))
         self.draw_zero(
@@ -1305,6 +1326,11 @@ class ChartCanvas(QWidget):
 
     def mousePressEvent(self, event):
         pos = event.position()
+        if self.detail_mode and self.chart:
+            hit = self.detail_hit(pos)
+            if hit:
+                self.selected_detail.emit(self.chart.id, hit[1], hit[3])
+            return
         if self.chart:
             # 优先检测「返回月度总览」按钮
             if self.back_button_rect and self.back_button_rect.contains(pos):

@@ -356,8 +356,13 @@ class DistributionDetailDrawer(QWidget):
         self.current_data = stock_item
         self.analytics = analytics
 
-        self.title_lbl.setText(f"{stock_item.name} 持仓详情")
-        self.sub_title_lbl.setText("查看单只股票的持仓构成、来源与盈亏情况。")
+        is_other = (stock_item.name == "其他")
+        if is_other:
+            self.title_lbl.setText("其他持仓标的 (非五大持仓) 详情")
+            self.sub_title_lbl.setText("查看所有非五大持仓股票的具体构成、来源与变动明细。")
+        else:
+            self.title_lbl.setText(f"{stock_item.name} 持仓详情")
+            self.sub_title_lbl.setText("查看单只股票的持仓构成、来源与盈亏情况。")
 
         # 填充 KPI
         self._clear_layout(self.kpi_layout)
@@ -380,7 +385,7 @@ class DistributionDetailDrawer(QWidget):
         # 填充主内容
         self._clear_layout(self.content_layout)
 
-        # Tab 选项卡：持仓来源 / 当前 vs 上月末
+        # Tab 选项卡：持仓来源 / 当前 vs 对比期
         tabs = QTabWidget()
         tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #E2E8F0; border-radius: 8px; background: #FFFFFF; }
@@ -388,24 +393,51 @@ class DistributionDetailDrawer(QWidget):
             QTabBar::tab:selected { color: #2563EB; border-bottom: 2px solid #2563EB; font-weight: 700; }
         """)
 
-        # Tab 1: 持仓来源（按人员/渠道拆分）
+        # Tab 1: 持仓来源（按人员/股票/渠道拆分）
         source_tab = QWidget()
         source_vbox = QVBoxLayout(source_tab)
         source_vbox.setContentsMargins(12, 12, 12, 12)
         source_vbox.setSpacing(8)
 
-        source_hint = QLabel("持仓明细（按归属人员 / 渠道）：")
+        source_hint = QLabel("非五大持仓明细（按人员 / 股票 / 渠道）：" if is_other else "持仓明细（按归属人员 / 渠道）：")
         source_hint.setStyleSheet("font-size: 13px; font-weight: 600; color: #17253D;")
         source_vbox.addWidget(source_hint)
 
-        sources = get_stock_holding_sources(analytics, stock_item.name)
-        source_table = QTableWidget(len(sources), 7)
-        source_table.setHorizontalHeaderLabels(["归属人员", "渠道", "持仓数量", "当前市值", "当前占比", "收益率", "累计盈亏"])
+        if is_other:
+            top5_names = {s.name for s in summary.stocks_top if s.name != "其他"}
+            other_stocks = [s for s in summary.all_stocks if s.name not in top5_names]
+            sources = []
+            for os in other_stocks:
+                sub_sources = get_stock_holding_sources(analytics, os.name)
+                for src in sub_sources:
+                    src["ticker"] = os.name
+                    sources.append(src)
+            sources.sort(key=lambda x: x["market_value"], reverse=True)
+        else:
+            other_stocks = []
+            sources = get_stock_holding_sources(analytics, stock_item.name)
+            for src in sources:
+                src["ticker"] = stock_item.name
+
+        headers = ["归属人员", "股票名称", "渠道", "持仓数量", "当前市值", "当前占比", "收益率", "累计盈亏"]
+        source_table = QTableWidget(len(sources), len(headers))
+        source_table.setHorizontalHeaderLabels(headers)
         source_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         source_table.verticalHeader().setVisible(False)
         source_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         source_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         source_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
+
+        def make_cell_item(text: str, color: Optional[str] = None, bold: bool = False) -> QTableWidgetItem:
+            it = QTableWidgetItem(text)
+            it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if color:
+                it.setForeground(QColor(color))
+            if bold:
+                f = it.font()
+                f.setBold(True)
+                it.setFont(f)
+            return it
 
         for row_idx, src in enumerate(sources):
             person_str = "个人"
@@ -415,25 +447,25 @@ class DistributionDetailDrawer(QWidget):
 
             sh = src["shares"]
             mv = src["market_value"]
-            pw = (mv / stock_item.market_value * Decimal("100")) if stock_item.market_value > 0 else Decimal("0")
+            denom = stock_item.market_value if stock_item.market_value > 0 else Decimal("1")
+            pw = (mv / denom * Decimal("100")) if denom > 0 else Decimal("0")
             pr = src.get("profit_rate")
             pf = src.get("profit")
 
-            source_table.setItem(row_idx, 0, QTableWidgetItem(person_str))
-            source_table.setItem(row_idx, 1, QTableWidgetItem(src["channel"]))
-            source_table.setItem(row_idx, 2, QTableWidgetItem(f"{sh:,.2f}"))
-            source_table.setItem(row_idx, 3, QTableWidgetItem(f"${mv:,.2f}"))
-            source_table.setItem(row_idx, 4, QTableWidgetItem(f"{pw:.2f}%"))
+            source_table.setItem(row_idx, 0, make_cell_item(person_str))
+            source_table.setItem(row_idx, 1, make_cell_item(src.get("ticker", stock_item.name), bold=True))
+            source_table.setItem(row_idx, 2, make_cell_item(src["channel"]))
+            source_table.setItem(row_idx, 3, make_cell_item(f"{sh:,.2f}"))
+            source_table.setItem(row_idx, 4, make_cell_item(f"${mv:,.2f}"))
+            source_table.setItem(row_idx, 5, make_cell_item(f"{pw:.2f}%"))
 
-            pr_item = QTableWidgetItem(f"{pr * 100:+.2f}%" if pr is not None else "--")
-            if pr is not None:
-                pr_item.setForeground(QColor("#16A34A" if pr >= 0 else "#DC2626"))
-            source_table.setItem(row_idx, 5, pr_item)
+            pr_str = f"{pr * 100:+.2f}%" if pr is not None else "--"
+            pr_col = "#16A34A" if pr is not None and pr >= 0 else ("#DC2626" if pr is not None else None)
+            source_table.setItem(row_idx, 6, make_cell_item(pr_str, color=pr_col))
 
-            pf_item = QTableWidgetItem(f"${pf:+,.2f}" if pf is not None else "--")
-            if pf is not None:
-                pf_item.setForeground(QColor("#16A34A" if pf >= 0 else "#DC2626"))
-            source_table.setItem(row_idx, 6, pf_item)
+            pf_str = f"${pf:+,.2f}" if pf is not None else "--"
+            pf_col = "#16A34A" if pf is not None and pf >= 0 else ("#DC2626" if pf is not None else None)
+            source_table.setItem(row_idx, 7, make_cell_item(pf_str, color=pf_col))
 
         # 双击下钻
         def on_source_double_click(r, _):
@@ -444,7 +476,7 @@ class DistributionDetailDrawer(QWidget):
         source_table.cellDoubleClicked.connect(on_source_double_click)
         source_vbox.addWidget(source_table)
 
-        tip_lbl = QLabel("ⓘ 双击记录或点击下方按钮可进一步穿透至交易明细。")
+        tip_lbl = QLabel("ⓘ 双击记录可进一步穿透至交易明细。")
         tip_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
         source_vbox.addWidget(tip_lbl)
 
@@ -462,37 +494,65 @@ class DistributionDetailDrawer(QWidget):
             QPushButton:hover { background: #1D4ED8; }
         """)
         drill_btn.clicked.connect(lambda: self.drill_record_signal.emit({
-            "symbol": stock_item.name,
+            "symbol": stock_item.name if not is_other else (sources[0].get("ticker") if sources else "其他"),
             "instrument_id": sources[0].get("instrument_id") if sources else None,
         }))
         source_vbox.addWidget(drill_btn)
 
         tabs.addTab(source_tab, "持仓来源")
 
-        # Tab 2: 当前 vs 上期对比
+        # Tab 2: 当前 vs 对比期
         cmp_tab = QWidget()
         cmp_vbox = QVBoxLayout(cmp_tab)
         cmp_vbox.setContentsMargins(12, 12, 12, 12)
         cmp_vbox.setSpacing(12)
 
-        cmp_table = QTableWidget(4, 3)
-        cmp_table.setHorizontalHeaderLabels(["指标", summary.as_of_label, summary.prev_as_of_label])
-        cmp_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        cmp_table.verticalHeader().setVisible(False)
-        cmp_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
+        if is_other:
+            cmp_hint = QLabel("非五大持仓各股票变化对比：")
+            cmp_hint.setStyleSheet("font-size: 13px; font-weight: 600; color: #17253D;")
+            cmp_vbox.addWidget(cmp_hint)
 
-        cmp_rows = [
-            ("持仓市值", f"${stock_item.market_value:,.2f}", f"${stock_item.prev_market_value:,.2f}"),
-            ("组合占比", f"{stock_item.weight:.2f}%", f"{stock_item.prev_weight:.2f}%"),
-            ("持仓股数", f"{stock_item.shares:,.2f}", "--"),
-            ("所属分类", stock_item.category, stock_item.category),
-        ]
-        for idx, (m, c1, c2) in enumerate(cmp_rows):
-            cmp_table.setItem(idx, 0, QTableWidgetItem(m))
-            cmp_table.setItem(idx, 1, QTableWidgetItem(c1))
-            cmp_table.setItem(idx, 2, QTableWidgetItem(c2))
+            cmp_headers = ["股票代码", "分类", "当期股数", "当前市值", "上期市值", "市值变化", "当前占比", "占比变化"]
+            cmp_table = QTableWidget(len(other_stocks), len(cmp_headers))
+            cmp_table.setHorizontalHeaderLabels(cmp_headers)
+            cmp_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            cmp_table.verticalHeader().setVisible(False)
+            cmp_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
 
-        cmp_vbox.addWidget(cmp_table)
+            for idx, s in enumerate(other_stocks):
+                mv_diff = s.market_value_change
+                mv_diff_col = "#16A34A" if mv_diff >= 0 else "#DC2626"
+                diff_col = "#16A34A" if s.diff_pp >= 0 else "#DC2626"
+
+                cmp_table.setItem(idx, 0, make_cell_item(s.name, bold=True))
+                cmp_table.setItem(idx, 1, make_cell_item(s.category))
+                cmp_table.setItem(idx, 2, make_cell_item(f"{s.shares:,.2f}"))
+                cmp_table.setItem(idx, 3, make_cell_item(f"${s.market_value:,.2f}"))
+                cmp_table.setItem(idx, 4, make_cell_item(f"${s.prev_market_value:,.2f}"))
+                cmp_table.setItem(idx, 5, make_cell_item(f"${mv_diff:+,.2f}", color=mv_diff_col))
+                cmp_table.setItem(idx, 6, make_cell_item(f"{s.weight:.2f}%"))
+                cmp_table.setItem(idx, 7, make_cell_item(f"{s.diff_pp:+.2f}%", color=diff_col))
+            cmp_vbox.addWidget(cmp_table)
+        else:
+            cmp_table = QTableWidget(4, 3)
+            cmp_table.setHorizontalHeaderLabels(["指标", summary.as_of_label, summary.prev_as_of_label])
+            cmp_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            cmp_table.verticalHeader().setVisible(False)
+            cmp_table.setStyleSheet("font-size: 12px; border: none; gridline-color: #F1F5F9;")
+
+            cmp_rows = [
+                ("持仓市值", f"${stock_item.market_value:,.2f}", f"${stock_item.prev_market_value:,.2f}"),
+                ("组合占比", f"{stock_item.weight:.2f}%", f"{stock_item.prev_weight:.2f}%"),
+                ("持仓股数", f"{stock_item.shares:,.2f}", "--"),
+                ("所属分类", stock_item.category, stock_item.category),
+            ]
+            for idx, (m, c1, c2) in enumerate(cmp_rows):
+                cmp_table.setItem(idx, 0, make_cell_item(m))
+                cmp_table.setItem(idx, 1, make_cell_item(c1))
+                cmp_table.setItem(idx, 2, make_cell_item(c2))
+
+            cmp_vbox.addWidget(cmp_table)
+
         tabs.addTab(cmp_tab, "当前 vs 对比期")
 
         self.content_layout.addWidget(tabs)
@@ -799,29 +859,29 @@ class HoldingsDistributionPage(QWidget):
         grid.setSpacing(16)
 
         # 模块 1：股票持仓结构 Top 5 + 其他
-        self.mod_stock = self._create_card_container("股票持仓结构 Top 5 + 其他", "点击股票查看持仓详情 >", self._open_top_stock_drawer)
+        self.mod_stock = self._create_card_container("股票持仓结构 Top 5 + 其他")
         self.stock_bars_layout = QVBoxLayout()
         self.stock_bars_layout.setSpacing(6)
-        self.mod_stock.layout().insertLayout(1, self.stock_bars_layout)
+        self.mod_stock.layout().addLayout(self.stock_bars_layout)
         grid.addWidget(self.mod_stock, 0, 0)
 
         # 模块 2：券商渠道结构
-        self.mod_broker = self._create_card_container("券商渠道结构", "点击渠道查看渠道详情 >", self._open_top_broker_drawer)
+        self.mod_broker = self._create_card_container("券商渠道结构")
         self.broker_bars_layout = QVBoxLayout()
         self.broker_bars_layout.setSpacing(6)
-        self.mod_broker.layout().insertLayout(1, self.broker_bars_layout)
+        self.mod_broker.layout().addLayout(self.broker_bars_layout)
         grid.addWidget(self.mod_broker, 0, 1)
 
         # 模块 3：股票分类结构
-        self.mod_cat = self._create_card_container("股票分类结构", "点击分类查看分类详情 >", self._open_top_category_drawer)
+        self.mod_cat = self._create_card_container("股票分类结构")
         self.cat_bars_layout = QVBoxLayout()
         self.cat_bars_layout.setSpacing(6)
-        self.mod_cat.layout().insertLayout(1, self.cat_bars_layout)
+        self.mod_cat.layout().addLayout(self.cat_bars_layout)
         grid.addWidget(self.mod_cat, 0, 2)
 
         self.page_layout.addLayout(grid)
 
-    def _create_card_container(self, title: str, link_text: str, link_callback):
+    def _create_card_container(self, title: str):
         card = QFrame()
         card.setStyleSheet("""
             QFrame {
@@ -832,31 +892,12 @@ class HoldingsDistributionPage(QWidget):
             }
         """)
         vbox = QVBoxLayout(card)
-        vbox.setContentsMargins(16, 16, 16, 14)
+        vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(12)
 
         title_lbl = QLabel(title)
         title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #17253D;")
         vbox.addWidget(title_lbl)
-
-        vbox.addStretch()
-
-        # 底部链接
-        link_btn = QPushButton(f"ⓘ {link_text}")
-        link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        link_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: none;
-                color: #2563EB;
-                font-size: 12px;
-                text-align: left;
-                padding: 0;
-            }
-            QPushButton:hover { text-decoration: underline; color: #1D4ED8; }
-        """)
-        link_btn.clicked.connect(link_callback)
-        vbox.addWidget(link_btn)
 
         return card
 
@@ -902,8 +943,12 @@ class HoldingsDistributionPage(QWidget):
         tab1_vbox = QVBoxLayout(tab1)
         tab1_vbox.setContentsMargins(0, 10, 0, 0)
         self.table_stocks = self._create_modern_table([
-            "Ticker", "分类", "渠道", "当期股数", "上期股数", "股数变化", "当前市值 (USD)", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
+            "Ticker", "分类", "渠道", "当期股数", "上期股数", "股数变化", "当前市值", "上期市值", "市值变化", "当前占比", "上期占比", "占比变化"
         ])
+        self.table_stocks.cellClicked.connect(self._on_stock_table_clicked)
+        self.table_stocks.cellDoubleClicked.connect(self._on_stock_table_double_clicked)
+        tab1_vbox.addWidget(self.table_stocks)
+        self.detail_tabs.addTab(tab1, "股票持仓明细")
         self.table_stocks.cellClicked.connect(self._on_stock_table_clicked)
         self.table_stocks.cellDoubleClicked.connect(self._on_stock_table_double_clicked)
         tab1_vbox.addWidget(self.table_stocks)
@@ -1405,6 +1450,11 @@ class HoldingsDistributionPage(QWidget):
 
     def _open_stock_drawer_by_name(self, ticker: str):
         if not self.summary:
+            return
+        if ticker == "其他":
+            other_item = next((s for s in self.summary.stocks_top if s.name == "其他"), None)
+            if other_item:
+                self.drawer.open_stock_detail(other_item, self.analytics, self.summary)
             return
         match = next((s for s in self.summary.all_stocks if s.name.upper() == ticker.upper()), None)
         if match:

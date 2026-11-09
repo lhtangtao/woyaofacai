@@ -347,7 +347,6 @@ def build_workspace(self):
     from portfolio.ui.trend_page import TrendChartsPage
     self.trend_page = TrendChartsPage(self)
     self.pages.addWidget(self.trend_page)
-    self.trend_page.drill.connect(self.drill_chart)
     self.trend_page.error.connect(self.banner.setText)
     from portfolio.ui.top_days_page import TopDaysPage
     self.top_days_page = TopDaysPage(self)

@@ -66,6 +66,18 @@ def cumulative(data):
     return result
 
 
+def month_end_positions(rows):
+    positions = defaultdict(list)
+    unknown = False
+    for row in rows:
+        ticker, quantity = row.values[3], row.values[8]
+        if quantity is None or (quantity > ZERO and not ticker):
+            unknown = True
+        elif quantity > ZERO:
+            positions[ticker.strip().upper()].append(row)
+    return positions, unknown
+
+
 def build_charts(analytics, *, selected_month=None):
     reports = analytics.reports
     holdings, closed, stocks = (reports[n].rows for n in ("当前持仓", "清仓收益", "股票汇总"))
@@ -81,7 +93,8 @@ def build_charts(analytics, *, selected_month=None):
     month_end = {mo: [r for r in monthly if r.values[0] == mo] for mo in months}
     values = {mo: strict_sum(r.values[11] for r in rows) for mo, rows in month_end.items()}
     investments = aggregate(net, 0, 8)
-    principal = cumulative({mo: investments.get(mo, ZERO) for mo in months})
+    monthly_net_buys = aggregate(net, 0, 7)
+    principal = cumulative({mo: monthly_net_buys.get(mo, ZERO) for mo in sorted(set(months) | monthly_net_buys.keys())})
     daily_gain = aggregate(daily, 0, 19)
     result = []
 
@@ -135,10 +148,13 @@ def build_charts(analytics, *, selected_month=None):
     add(12, {ch: {mo: strict_sum(r.values[11] for r in rows if r.values[1] == ch) for mo, rows in month_end.items()} for ch in channels}, "line", link="month")
     concentration, count = {}, {}
     for mo, rows in month_end.items():
-        positive = [r for r in rows if r.values[8] is not None and r.values[8] > ZERO]
-        market_values = [r.values[11] for r in positive]
-        concentration[mo] = ratio(sum(sorted(market_values, reverse=True)[:5], ZERO), values[mo]) if all(v is not None for v in market_values) else None
-        count[mo] = Decimal(len(positive)) if all(r.values[8] is not None for r in rows) else None
+        positions, unknown = month_end_positions(rows)
+        market_values = [strict_sum(r.values[11] for r in group) for group in positions.values()]
+        concentration[mo] = (
+            ratio(sum(sorted(market_values, reverse=True)[:5], ZERO), values[mo])
+            if not unknown and all(v is not None for v in market_values) else None
+        )
+        count[mo] = None if unknown else Decimal(len(positions))
     add(13, {"前五大持仓占比": concentration}, "line", percentage=True, link="month")
     add(14, {"月末持仓标的数": count}, link="month")
     add(15, {"已清仓盈亏($)": {f"{r.values[0]} · {r.values[2]}": r.values[7] for r in closed}}, "horizontal", link="symbol_suffix")
@@ -146,7 +162,7 @@ def build_charts(analytics, *, selected_month=None):
     contributions = aggregate(stocks, 2, 17)
     add(17, {"盈利": {s: max(v, ZERO) if v is not None else None for s, v in contributions.items()}, "亏损": {s: min(v, ZERO) if v is not None else None for s, v in contributions.items()}}, "horizontal", link="symbol")
     extra_18 = {
-        "monthly_investments": {mo: investments.get(mo, ZERO) for mo in months},
+        "monthly_investments": {mo: monthly_net_buys.get(mo, ZERO) for mo in months},
         "principal": principal,
         "market_values": values,
         "latest_profit_day": analytics.latest_profit_day,
