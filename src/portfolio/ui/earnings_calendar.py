@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -50,6 +52,7 @@ class EarningsCalendarPage(QWidget):
         self.signature = self.analytics = self.result = self.request = None
         self.fetching = False
         self.targets, self.overrides = {}, {}
+        self.followed = set(window.settings.value('earnings_followed_companies', [], type=list)) if window.settings else set()
         if window.settings:
             try:
                 self.overrides = json.loads(str(window.settings.value('earnings_company_links', '{}')))
@@ -67,9 +70,12 @@ class EarningsCalendarPage(QWidget):
         self.month = DatePicker(QDate.currentDate())
         self.month.set_month_mode(True)
         refresh, mapping = QPushButton('刷新财报'), QPushButton('关联公司…')
+        follow = QPushButton('管理关注公司…')
+        follow.clicked.connect(self.edit_followed_companies)
         for widget in (previous, self.month, following, today):
             controls.addWidget(widget)
         controls.addStretch()
+        controls.addWidget(follow)
         controls.addWidget(mapping)
         controls.addWidget(refresh)
         outer.addLayout(controls)
@@ -214,7 +220,7 @@ class EarningsCalendarPage(QWidget):
         if window.analytics is not None and getattr(window.analytics, 'scope', None) == scope:
             self.signature = signature
             self.analytics = window.analytics
-            self.targets = holding_targets(self.analytics, window.live_panel.instruments, self.overrides)
+            self.update_targets()
             self.fetch()
             return
         self.signature = signature
@@ -233,7 +239,7 @@ class EarningsCalendarPage(QWidget):
                 self.signature = None
                 self.status.setText(error)
                 return
-            self.targets = holding_targets(self.analytics, window.live_panel.instruments, self.overrides)
+            self.update_targets()
             self.fetch()
         window._submit('earnings_holdings', task, ready)
 
@@ -260,26 +266,20 @@ class EarningsCalendarPage(QWidget):
         path = self.window.live_panel.path
         if not path or not Path(path).is_file():
             from portfolio.paths import CREDENTIALS_PATH
-            if CREDENTIALS_PATH.is_file():
-                path = str(CREDENTIALS_PATH)
+            path = str(CREDENTIALS_PATH)
+        has_credentials = Path(path).is_file()
         month = self.month.date()
         from portfolio.services.earnings_service import MARKET_ZONES
         markets = sorted({v[0].rsplit('.', 1)[-1] for v in self.targets.values() if v[0] and '.' in v[0] and v[0].rsplit('.', 1)[-1] in MARKET_ZONES})
         if not markets and any(v[0] for v in self.targets.values()):
             markets = ['US']
         request = (self.signature, month.year(), month.month(), tuple(markets), path, tuple(sorted(self.targets.items())))
-        if self.fetching and self.request == request and not force:
+        if self.fetching and self.request == request:
             return
         self.request = request
         if not self.targets or not markets:
             self.result = None
             self.status.setText('当前筛选没有可查询的持仓公司或焦点标的。')
-            self.draw()
-            return
-        if not path or not Path(path).is_file():
-            self.result = None
-            self.request = None
-            self.status.setText('尚未配置长桥凭证。请在“当前持仓”的“行情配置”中选择，再回到此页刷新。')
             self.draw()
             return
         targets = {v[0] for v in self.targets.values() if v[0]}
@@ -317,15 +317,21 @@ class EarningsCalendarPage(QWidget):
             else:
                 self.status.setText('该月份尚无本地缓存，正在后台查询财报日程…')
                 self.coverage_status.setText(f'正在核查 {len(targets)} 家关联公司，覆盖所选月起3个月…')
-            if needs_refresh:
+            if not has_credentials:
+                self.fetching = False
+                self.status.setText(('已显示本机缓存或核实日程；' if cached else '')
+                                    + '尚未配置长桥凭证，请在“行情配置”中设置后刷新。')
+            elif needs_refresh:
                 self.window._submit('earnings_calendar', task, ready)
             else:
                 self.fetching = False
         def task(cancel):
             try:
                 return self.service.fetch_portfolio(path, month.year(), month.month(), markets, cancel=cancel, force=force, targets=targets), ''
+            except ValueError as error:
+                return None, str(error) if str(error).startswith(('财报查询超时', '财报查询失败：')) else '财报查询未完成，请查看本地运行日志。'
             except Exception:
-                return None, '财报查询失败，请检查网络及长桥接口权限后点击“刷新财报”重试。'
+                return None, '财报查询失败，请查看本地运行日志后重试。'
         def ready(value):
             if self.request != request:
                 return
@@ -333,7 +339,7 @@ class EarningsCalendarPage(QWidget):
             fresh, error = value
             if error:
                 self.request = None
-                self.status.setText(('本机缓存已保留；' if self.result is not None else '')+error)
+                self.status.setText(('继续显示本机缓存或核实日程；' if self.result is not None else '')+error)
             else:
                 self.result = fresh
                 events = self.visible_events()
@@ -358,8 +364,10 @@ class EarningsCalendarPage(QWidget):
                     names.append('宏观数据')
                 elif '[重点盯盘]' in desc:
                     names.append('重点盯盘')
-                else:
+                elif not k.startswith('关注：'):
                     names.append(k)
+        if symbol in self.followed:
+            names.append('手动关注')
         return '、'.join(names) or '关注标的'
 
     @staticmethod
@@ -597,6 +605,69 @@ class EarningsCalendarPage(QWidget):
             self.details_sort = (column, True)
         self.draw()
 
+    def update_targets(self):
+        self.targets = holding_targets(
+            self.analytics, self.window.live_panel.instruments, self.overrides, followed=self.followed,
+        )
+
+    def edit_followed_companies(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle('管理关注公司')
+        dialog.resize(420, 360)
+        layout = QVBoxLayout(dialog)
+        hint = QLabel('填写公司代码，例如 AAOI 或 00700.HK。不填市场后缀时按美股查询。移除手动关注后，持仓关联和焦点日程仍按原规则显示。')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        tools = QHBoxLayout()
+        symbol_input = QLineEdit()
+        symbol_input.setPlaceholderText('公司代码')
+        add_button, remove_button = QPushButton('新增'), QPushButton('移除所选')
+        for widget in (symbol_input, add_button, remove_button):
+            tools.addWidget(widget)
+        layout.addLayout(tools)
+        symbols = QListWidget()
+        symbols.addItems(sorted(self.followed))
+        symbols.setSortingEnabled(True)
+        layout.addWidget(symbols)
+
+        def add():
+            symbol = symbol_input.text().strip().upper()
+            if '.' not in symbol:
+                symbol += '.US'
+            if not re.fullmatch(r'[A-Z0-9_-]+(?:\.[A-Z0-9_-]+)*\.(US|HK|SH|SZ)', symbol):
+                QMessageBox.information(dialog, '代码格式', '请填写有效的公司代码，例如 AAOI.US 或 00700.HK。')
+                return
+            matches = symbols.findItems(symbol, Qt.MatchFlag.MatchExactly)
+            if matches:
+                symbols.setCurrentItem(matches[0])
+            else:
+                symbols.addItem(symbol)
+                symbols.setCurrentItem(symbols.findItems(symbol, Qt.MatchFlag.MatchExactly)[0])
+            symbol_input.clear()
+
+        add_button.clicked.connect(add)
+        add_button.setAutoDefault(False)
+        symbol_input.returnPressed.connect(add)
+        remove_button.setAutoDefault(False)
+        remove_button.setEnabled(False)
+        symbols.currentRowChanged.connect(lambda row: remove_button.setEnabled(row >= 0))
+        remove_button.clicked.connect(lambda: symbols.takeItem(symbols.currentRow()))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setAutoDefault(False)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        followed = {symbols.item(row).text() for row in range(symbols.count())}
+        if followed != self.followed:
+            self.followed = followed
+            if self.window.settings:
+                self.window.settings.setValue('earnings_followed_companies', sorted(followed))
+            self.update_targets()
+            self.draw()
+            self.fetch()
+
     def edit_links(self):
         dialog = QDialog(self)
         dialog.setWindowTitle('持仓与财报公司关联')
@@ -605,12 +676,13 @@ class EarningsCalendarPage(QWidget):
         help_text = QLabel('ETF可填写标的公司的代码，例如TSLL.US → TSLA.US。普通股票保留自身代码；留空表示不关联。设置仅保存在本机。')
         help_text.setWordWrap(True)
         layout.addWidget(help_text)
-        table = QTableWidget(len(self.targets), 4)
+        linked = holding_targets(self.analytics, self.window.live_panel.instruments, self.overrides)
+        table = QTableWidget(len(linked), 4)
         table.setHorizontalHeaderLabels(('持仓代码', '持仓名称', '财报公司代码', '关联方式'))
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        holdings = sorted(self.targets)
+        holdings = sorted(linked)
         for r, held in enumerate(holdings):
-            target, name = self.targets[held]
+            target, name = linked[held]
             status = link_description(held, target, self.overrides)
             for c, text in enumerate((held, name, target, status)):
                 item = QTableWidgetItem(text)
@@ -635,7 +707,7 @@ class EarningsCalendarPage(QWidget):
                     self.overrides[held] = value
             if self.window.settings:
                 self.window.settings.setValue('earnings_company_links', json.dumps(self.overrides))
-            self.targets = holding_targets(self.analytics, self.window.live_panel.instruments, self.overrides)
+            self.update_targets()
             dialog.accept()
             self.request = None
             self.fetch()

@@ -236,7 +236,7 @@ def parse_event(info, market):
                          str(getattr(info, 'content', '')), disclosed, 'longbridge:actual' if disclosed else '')
 
 
-def holding_targets(analytics, instruments, overrides, include_verified=True):
+def holding_targets(analytics, instruments, overrides, include_verified=True, *, followed=()):
     """Deduplicate current securities across channels; never infer ETF issuers."""
     result = {}
     if analytics and '当前持仓' in getattr(analytics, 'reports', {}):
@@ -264,6 +264,9 @@ def holding_targets(analytics, instruments, overrides, include_verified=True):
                         result[sym] = (sym, f"{label} [重点盯盘]")
         except Exception:
             pass
+    for symbol in followed:
+        if not any(target == symbol for target, _ in result.values()):
+            result[f'关注：{symbol}'] = (symbol, symbol)
     return result
 
 
@@ -354,36 +357,33 @@ def fetch_calendar_month_subprocess(path, year, month, markets, cancel=None, tim
     logger.info('[财报子进程] 开始查询 %04d-%02d 市场=%s', year, month, ','.join(markets))
     proc = subprocess.Popen([sys.executable, '-m', 'portfolio.services.earnings_worker'],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        proc.stdin.write(request.encode('utf-8'))
-        proc.stdin.close()
-    except OSError:
-        pass
     deadline = start + timeout
+    input_data = request.encode('utf-8')
     while True:
         try:
-            proc.wait(timeout=0.3)
+            stdout, _ = proc.communicate(input=input_data, timeout=0.3)
             break
         except subprocess.TimeoutExpired:
+            input_data = None  # communicate 已开始发送请求，继续读取两个管道。
             if cancel is not None and cancel.is_set():
                 proc.kill()
-                proc.wait()
+                proc.communicate()
                 logger.info('[财报子进程] %04d-%02d 查询已取消，耗时 %.1fs', year, month, time.monotonic() - start)
                 raise ValueError('财报查询已取消。')
             if time.monotonic() > deadline:
                 proc.kill()
-                proc.wait()
+                proc.communicate()
                 logger.warning('[财报子进程] %04d-%02d 查询超时（>%ss），已终止子进程，保留本机缓存', year, month, timeout)
                 raise ValueError(f'财报查询超时（超过{timeout}秒），已保留本机缓存。')
-    stdout = proc.stdout.read().decode('utf-8', 'replace')
-    stderr = proc.stderr.read().decode('utf-8', 'replace')
     elapsed = time.monotonic() - start
     try:
         payload = json.loads(stdout) if stdout.strip() else {}
     except ValueError:
         payload = {}
     if proc.returncode != 0 or 'error' in payload or 'events' not in payload:
-        detail = payload.get('error') or stderr.strip()[-500:] or f'退出码 {proc.returncode}'
+        worker_error = str(payload.get('error', '')).lower()
+        detail = ('无法连接长桥财报接口（Connect）' if 'client error (connect)' in worker_error
+                  else f'长桥财报接口未返回有效结果（子进程退出码 {proc.returncode}）')
         logger.warning('[财报子进程] %04d-%02d 查询失败，耗时 %.1fs：%s', year, month, elapsed, detail)
         raise ValueError('财报查询失败：' + detail)
     events = [event_from_dict(item) for item in payload['events']]
@@ -488,44 +488,31 @@ class EarningsService:
 
     def get_portfolio_cached(self, path, year, month, markets, targets):
         """Render persisted months immediately, even when network refresh is due."""
-        results = []
+        months, timestamps, warnings = [], [], set()
         for offset in range(3):
             index = year*12+month-1+offset
-            cached = self.get_cached(path, index//12, index%12+1, markets, max_age_seconds=None)
-            if offset == 0 and cached is None:
-                # If cached is None, check verified events for this month to render immediately
-                verified = reconciled_events([], year=year, month=month)
-                if verified:
-                    events = tuple(e for e in verified if e.symbol in targets)
-                    now = datetime.now(timezone.utc)
-                    return EarningsMonth(events, now, '已加载焦点日程，后台更新中…', coverage_events=events, coverage_warning='')
-                return None
-            if cached is not None:
-                results.append(cached)
-        events = tuple(e for result in results for e in result.events if e.symbol in targets)
-        missing = sorted(set(targets)-{e.symbol for e in events})
-        warning = '未缓存的公司日程正在后台补查：'+'、'.join(missing) if missing else ''
-        res = replace(results[0], events=tuple(e for e in results[0].events if e.symbol in targets),
-                      fetched_at=min(result.fetched_at for result in results),
-                      coverage_events=events, coverage_warning=warning)
-        # 对于已进入发布窗口或已结束的持仓标的，主动同步一次时段涨跌幅
-        if targets and any(session_refresh_due(e) for e in res.events):
-            try:
-                updated_events = self._with_session_changes(res.events, path, targets, year=year, month=month)
-                if updated_events != res.events:
-                    res = replace(res, events=updated_events)
-                    # 同步回写持久化缓存
-                    key = (str(path), year, month, tuple(sorted(markets)))
-                    full_cached = results[0]
-                    merged_full = []
-                    updated_dict = {(e.symbol, e.day): e for e in updated_events}
-                    for e in full_cached.events:
-                        merged_full.append(updated_dict.get((e.symbol, e.day), e))
-                    updated_month = EarningsMonth(tuple(merged_full), full_cached.fetched_at, full_cached.warning)
-                    self._update_cache(key, path, year, month, markets, updated_month)
-            except Exception as exc:
-                logger.debug('[财报行情补查] 本地缓存补查时段涨跌跳过: %s', exc)
-        return res
+            y, m = index//12, index%12+1
+            cached = self.get_cached(path, y, m, markets, max_age_seconds=None)
+            candidates = [cached] if cached else [
+                self.get_cached(path, y, m, (market,), max_age_seconds=None)
+                for market in markets if len(markets) > 1
+            ]
+            available = [item for item in candidates if item is not None]
+            timestamps.extend(item.fetched_at for item in available)
+            warnings.update(item.warning for item in available if item.warning)
+            events = reconciled_events(
+                (event for item in available for event in item.events if event.symbol in targets),
+                year=y, month=m,
+            )
+            months.append(tuple(event for event in events if event.symbol in targets))
+        events = tuple(event for month_events in months for event in month_events)
+        if not timestamps and not events:
+            return None
+        return EarningsMonth(
+            months[0], min(timestamps, default=datetime.now(timezone.utc)),
+            '；'.join(sorted(warnings)) or ('仅显示已核实日程' if not timestamps else ''),
+            coverage_events=events,
+        )
 
     def _get_quote_context(self, path):
         if self.quote_factory:
@@ -595,7 +582,10 @@ class EarningsService:
             except Exception:
                 if offset == 0 or (cancel and cancel.is_set()):
                     raise
-                warnings.append(f'{y}-{m:02d}查询失败，覆盖不完整')
+                cached = self.get_cached(path, y, m, markets, max_age_seconds=None)
+                if cached is not None:
+                    results.append(cached)
+                warnings.append(f'{y}-{m:02d}查询失败，' + ('保留本机缓存' if cached is not None else '覆盖不完整'))
         events = tuple(e for result in results for e in result.events if e.symbol in targets)
         missing = sorted(set(targets)-{e.symbol for e in events})
         if missing:

@@ -74,7 +74,7 @@ def test_holding_targets_deduplicate_exclude_closed_and_link_etf_explicitly():
     closed = ReportRow(('BBAE', '', 'MU', D(0)), {'instrument_id': 2})
     analytics = NS(reports={'当前持仓': Report('', (), (row, row, closed))})
     instruments = {1: {'symbol': 'TSLL', 'market': 'US', 'name': 'Fund'}, 2: {'symbol': 'MU', 'market': 'US'}}
-    assert holding_targets(analytics, instruments, {}) == {'TSLL.US': ('TSLA.US', 'Fund')}
+    assert holding_targets(analytics, instruments, {}, include_verified=False) == {'TSLL.US': ('TSLA.US', 'Fund')}
     assert holding_targets(analytics, instruments, {'TSLL.US': ''})['TSLL.US'][0] == ''
 
 
@@ -121,7 +121,7 @@ def test_calendar_loads_current_holdings_and_ignores_stale_filter_results(qtbot,
     assert submitted[-1][0] == 'earnings_holdings'
     _, task, ready = submitted[-1]
     ready(task(Event()))
-    assert page.targets == {'TSLL.US': ('TSLA.US', 'TSLL')}
+    assert page.targets['TSLL.US'] == ('TSLA.US', 'TSLL')
     _, old_task, old_ready = submitted[-1]
     assert submitted[-1][0] == 'earnings_calendar'
     page.month.setDate(QDate(2026, 11, 1))
@@ -149,7 +149,7 @@ def test_underlying_earnings_deduplicate_etf_and_common_stock_keep_holding_names
     page.month.setDate(QDate(2026, 10, 1))
     instruments = {1: {'symbol': 'SNXX', 'market': 'US', 'category': '杠杆'}, 2: {'symbol': 'SNDK', 'market': 'US', 'category': '正股'}}
     rows = tuple(ReportRow(('LONG', '', info['symbol'], D(10)), {'instrument_id': i}) for i, info in instruments.items())
-    page.targets = holding_targets(NS(reports={'当前持仓': Report('', (), rows)}), instruments, {})
+    page.targets = holding_targets(NS(reports={'当前持仓': Report('', (), rows)}), instruments, {}, include_verified=False)
     entry = EarningsEvent('SNDK.US', 'Sandisk', date(2026, 10, 29), '盘后', '—')
     page.result = EarningsMonth((entry,), datetime.now(timezone.utc))
     page.draw()
@@ -198,7 +198,7 @@ def test_earnings_calendar_reuses_existing_window_analytics(qtbot, tmp_path):
     page.activate()
     # It should not have submitted 'earnings_holdings' because window.analytics was reused
     assert 'earnings_holdings' not in submitted
-    assert page.targets == {'TSLA.US': ('TSLA.US', 'TSLA')}
+    assert page.targets['TSLA.US'] == ('TSLA.US', 'TSLA')
 
 
 def test_earnings_session_change_calculation_and_display(qtbot):
@@ -239,8 +239,9 @@ def test_earnings_session_change_calculation_and_display(qtbot):
     page.draw()
 
     # Verify details table column 7
-    assert page.details.columnCount() == 8
-    assert page.details.item(0, 7).text() == '盘后 -3.32%'
+    assert page.details.horizontalHeaderItem(7).text() == '时段涨跌幅'
+    assert '盘后' in page.details.item(0, 3).text()
+    assert '-3.32%' in page.details.item(0, 7).text()
 
     # Verify calendar tile has 盘后涨跌
     # 2026-10-21 is Wednesday of week 3 (row 2, column 2)
@@ -252,3 +253,41 @@ def test_earnings_session_change_calculation_and_display(qtbot):
                 found_text = True
                 break
     assert found_text
+
+
+def test_followed_company_uses_market_cache_without_becoming_a_holding():
+    day = date(2026, 11, 10)
+    item = EarningsEvent('EXAMPLE.US', 'Example', day, '盘后', '—')
+    cached = EarningsMonth((item,), datetime.now(timezone.utc))
+
+    class Store:
+        def load_earnings(self, key, max_age_seconds):
+            return cached if key.endswith('|2026-11|US') else None
+
+    service = EarningsService(store=Store())
+    followed = {'EXAMPLE.US', '00700.HK'}
+    targets = holding_targets(None, {}, {}, include_verified=False, followed=followed)
+    assert {symbol for symbol, _ in targets.values()} == followed
+    result = service.get_portfolio_cached('local', 2026, 11, ['HK', 'US'], followed)
+    assert result.events == (replace(item, beijing='11-11 北京时间'),)
+    assert holding_targets(None, {}, {}, include_verified=False) == {}
+
+
+def test_calendar_subprocess_reads_results_larger_than_the_pipe(monkeypatch):
+    import subprocess
+    import sys
+
+    from portfolio.services.earnings_service import fetch_calendar_month_subprocess
+
+    popen = subprocess.Popen
+    script = """
+import json, sys, time
+sys.stdin.read()
+time.sleep(0.4)
+sys.stderr.write('x' * 200_000)
+print(json.dumps({'events': [], 'warnings': ['x' * 200_000]}))
+"""
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **kwargs: popen([sys.executable, '-c', script], **kwargs))
+    events, warnings = fetch_calendar_month_subprocess('local', 2026, 11, ['US'], timeout=5)
+    assert events == []
+    assert warnings == {'x' * 200_000}
