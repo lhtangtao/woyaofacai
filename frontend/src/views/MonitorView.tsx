@@ -84,6 +84,11 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
         case "ma20": return r.ma20 ? Number(r.ma20) : null;
         case "ma50": return r.ma50 ? Number(r.ma50) : null;
         case "ma200": return r.ma200 ? Number(r.ma200) : null;
+        case "ma250": return r.ma250 ? Number(r.ma250) : null;
+        case "dev20": return r.dev20 != null ? Number(r.dev20) : null;
+        case "dev50": return r.dev50 != null ? Number(r.dev50) : null;
+        case "dev200": return r.dev200 != null ? Number(r.dev200) : null;
+        case "dev250": return r.dev250 != null ? Number(r.dev250) : null;
         default: return (r as any)[watchSortKey] || null;
       }
     };
@@ -399,13 +404,18 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                 {renderSortHeader("MA20", "ma20", "right", "90px")}
                 {renderSortHeader("MA50", "ma50", "right", "90px")}
                 {renderSortHeader("MA200", "ma200", "right", "90px")}
+                {renderSortHeader("MA250", "ma250", "right", "90px")}
+                {renderSortHeader("距MA20", "dev20", "right", "85px")}
+                {renderSortHeader("距MA50", "dev50", "right", "85px")}
+                {renderSortHeader("距MA200", "dev200", "right", "90px")}
+                {renderSortHeader("距MA250", "dev250", "right", "90px")}
                 <th style={{ minWidth: "110px", textAlign: "center" }}>操作</th>
               </tr>
             </thead>
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={17} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <td colSpan={22} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                     {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
@@ -509,6 +519,24 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                       <td className="font-mono" style={{ textAlign: "right" }}>
                         {row.ma200 ? Number(row.ma200).toFixed(3) : "—"}
                       </td>
+                      {/* MA250 */}
+                      <td className="font-mono" style={{ textAlign: "right" }}>
+                        {row.ma250 ? Number(row.ma250).toFixed(3) : "—"}
+                      </td>
+                      {/* 距MA20 / 50 / 200 / 250 */}
+                      {[row.dev20, row.dev50, row.dev200, row.dev250].map((dv, idx) => (
+                        <td
+                          key={idx}
+                          className="font-mono"
+                          style={{
+                            textAlign: "right",
+                            color: dv != null ? (Number(dv) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "inherit",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {dv != null ? `${Number(dv) >= 0 ? "+" : ""}${Number(dv).toFixed(2)}%` : "—"}
+                        </td>
+                      ))}
                       {/* 操作 */}
                       <td style={{ textAlign: "center" }}>
                         <div style={{ display: "inline-flex", gap: "4px" }}>

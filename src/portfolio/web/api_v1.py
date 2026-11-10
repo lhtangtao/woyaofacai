@@ -1394,6 +1394,19 @@ def api_monitoring_watchlist():
             eff_high_f = float(eff_high) if eff_high is not None else None
             drawdown_pct = float(dd_dec) if dd_dec is not None else None
 
+            def _web_dev(n: int):
+                ma_raw = m.get(f"MA{n}")
+                if price not in (None, "—") and ma_raw is not None:
+                    try:
+                        p_f = float(price)
+                        ma_f = float(ma_raw)
+                        if ma_f > 0:
+                            return ((p_f / ma_f) - 1.0) * 100.0
+                    except Exception:
+                        pass
+                raw_d = m.get(f"DEV{n}")
+                return float(raw_d) if raw_d is not None else None
+
             clean_sym = sym.removesuffix(".US")
             result.append({
                 "symbol": clean_sym,
@@ -1411,6 +1424,11 @@ def api_monitoring_watchlist():
                 "ma20": m.get("MA20"),
                 "ma50": m.get("MA50"),
                 "ma200": m.get("MA200"),
+                "ma250": m.get("MA250"),
+                "dev20": _web_dev(20),
+                "dev50": _web_dev(50),
+                "dev200": _web_dev(200),
+                "dev250": _web_dev(250),
                 "rsi": m.get("RSI14"),
                 "trend_short": m.get("SHORT", "—"),
                 "trend_medium": m.get("MEDIUM", "—"),

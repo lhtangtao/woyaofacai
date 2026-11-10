@@ -407,7 +407,10 @@ class MonitoringPage(QWidget):
             "MA50",
             "MA200",
             "MA250",
+            "距MA20",
+            "距MA50",
             "距MA200",
+            "距MA250",
             "短/中/长",
             "规则",
             "操作",
@@ -421,10 +424,10 @@ class MonitoringPage(QWidget):
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(52)
+        header.setMinimumSectionSize(48)
         header.setCursor(Qt.CursorShape.PointingHandCursor)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for col_idx, width in ((4, 108), (11, 56), (12, 108)):
+        for col_idx, width in ((4, 102), (14, 50), (15, 104)):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(col_idx, width)
         header.sectionClicked.connect(self._on_watch_header_clicked)
@@ -1089,6 +1092,17 @@ class MonitoringPage(QWidget):
                 except Exception:
                     return None
 
+            def _calc_dev(n: int):
+                ma_v = m.get(f"MA{n}")
+                if curr_p is not None and ma_v is not None and ma_v > 0:
+                    return (curr_p / ma_v - 1) * 100
+                return m.get(f"DEV{n}")
+
+            dev20 = _calc_dev(20)
+            dev50 = _calc_dev(50)
+            dev200 = _calc_dev(200)
+            dev250 = _calc_dev(250)
+
             sort_keys = {
                 0: symbol.removesuffix(".US"),
                 1: _to_float(curr_p),
@@ -1099,9 +1113,12 @@ class MonitoringPage(QWidget):
                 6: _to_float(m.get("MA50")),
                 7: _to_float(m.get("MA200")),
                 8: _to_float(m.get("MA250")),
-                9: _to_float(m.get("DEV200")),
-                10: trend_score,
-                11: act_rules,
+                9: _to_float(dev20),
+                10: _to_float(dev50),
+                11: _to_float(dev200),
+                12: _to_float(dev250),
+                13: trend_score,
+                14: act_rules,
             }
             prepared.append({
                 "target": target,
@@ -1118,12 +1135,16 @@ class MonitoringPage(QWidget):
                 "eff_date": eff_date,
                 "days_passed": days_passed,
                 "date_days_text": date_days_text,
+                "dev20": dev20,
+                "dev50": dev50,
+                "dev200": dev200,
+                "dev250": dev250,
                 "trend_text": trend_text,
                 "sort_keys": sort_keys,
             })
 
         # 三态排序：正序 -> 倒序 -> 清除排序（缺失值始终沉底）
-        if 0 <= self._watch_sort_col < 12 and self._watch_sort_dir in ("asc", "desc"):
+        if 0 <= self._watch_sort_col < 15 and self._watch_sort_dir in ("asc", "desc"):
             sc = self._watch_sort_col
             rev = (self._watch_sort_dir == "desc")
             valid_items = [p for p in prepared if p["sort_keys"].get(sc) is not None]
@@ -1160,6 +1181,10 @@ class MonitoringPage(QWidget):
             eff_date = entry["eff_date"]
             days_passed = entry["days_passed"]
             date_days_text = entry["date_days_text"]
+            dev20 = entry["dev20"]
+            dev50 = entry["dev50"]
+            dev200 = entry["dev200"]
+            dev250 = entry["dev250"]
             trend_text = entry["trend_text"]
 
             values = [
@@ -1169,10 +1194,22 @@ class MonitoringPage(QWidget):
                 fmt(drawdown_val, suffix="%"),
                 date_days_text,
                 *(fmt(m.get("MA" + str(n))) for n in (20, 50, 200, 250)),
-                fmt(m.get("DEV200"), suffix="%"),
+                fmt(dev20, suffix="%"),
+                fmt(dev50, suffix="%"),
+                fmt(dev200, suffix="%"),
+                fmt(dev250, suffix="%"),
                 trend_text,
                 rules_badge,
             ]
+
+            dev_col_map = {
+                1: data.get("change"),
+                3: drawdown_val,
+                9: dev20,
+                10: dev50,
+                11: dev200,
+                12: dev250,
+            }
 
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -1185,21 +1222,17 @@ class MonitoringPage(QWidget):
                     )
                 else:
                     item.setToolTip(value + "\n" + data.get("error", ""))
-                if col in (1, 2, 3, 5, 6, 7, 8, 9):
+                if col in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (4, 10, 11):
+                elif col in (4, 13, 14):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 clean_sym = symbol.removesuffix(".US")
-                if col in (1, 3, 9):
-                    number = (
-                        data.get("change")
-                        if col == 1
-                        else (drawdown_val if col == 3 else m.get("DEV200"))
-                    )
+                if col in dev_col_map:
+                    number = dev_col_map[col]
                     if number is not None:
                         item.setForeground(QColor(tokens(self).profit if number >= 0 else tokens(self).loss))
-                elif col == 11:
+                elif col == 14:
                     if act_rules > 0:
                         item.setForeground(QColor("#16A34A"))
                         font = item.font()
@@ -1224,7 +1257,7 @@ class MonitoringPage(QWidget):
                 remove_button.clicked.connect(lambda checked=False, sym=symbol: self._on_remove_stock(sym))
                 action_layout.addWidget(remove_button)
             actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
-            self.table.setCellWidget(row, 12, actions)
+            self.table.setCellWidget(row, 15, actions)
 
             # Column 0: clickable hyperlink widget for AI analysis navigation
             stock_cell = StockCellWidget(
@@ -1254,7 +1287,7 @@ class MonitoringPage(QWidget):
 
     def _on_watch_header_clicked(self, col: int):
         """观察列表表头三态排序：第1次正序 -> 第2次倒序 -> 第3次清除排序"""
-        if col >= 12:
+        if col >= 15:
             return
         if self._watch_sort_col != col:
             self._watch_sort_col = col
@@ -1354,9 +1387,9 @@ class MonitoringPage(QWidget):
         sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
         if not sym:
             return
-        if col == 11:
+        if col == 14:
             self._open_rule_dialog(default_symbol=sym)
-        elif 1 <= col <= 10:
+        elif 1 <= col <= 13:
             self._on_row_tapped(row, sym)
 
     def draw_detail(self):

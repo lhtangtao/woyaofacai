@@ -123,6 +123,11 @@ export interface WatchlistItem {
   ma20: string | null;
   ma50: string | null;
   ma200: string | null;
+  ma250?: string | null;
+  dev20?: number | null;
+  dev50?: number | null;
+  dev200?: number | null;
+  dev250?: number | null;
   day: string;
   ath_high?: number | string | null;
   drawdown_pct?: number | null;
