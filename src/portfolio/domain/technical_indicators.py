@@ -118,7 +118,9 @@ def technicals(bars, price=None):
         last[f"DEV{n}"] = deviation(price, last[f"MA{n}"])
     last["HIGH52"] = max((b.high for b in bars[-252:]), default=None) if len(bars) >= 252 else None
     last["LOW52"] = min((b.low for b in bars[-252:]), default=None) if len(bars) >= 252 else None
-    last["AVAILABLE_HIGH"] = max((b.high for b in bars), default=None)
+    best_bar = max(bars, key=lambda b: (b.high, b.day), default=None)
+    last["AVAILABLE_HIGH"] = best_bar.high if best_bar else None
+    last["AVAILABLE_HIGH_DATE"] = best_bar.day.isoformat() if best_bar else None
     last["DRAWDOWN"] = deviation(price, last["AVAILABLE_HIGH"])
     last["DEV_BOLL_UP"] = deviation(price, last.get("BOLL_UP"))
     last["DEV_BOLL_LOW"] = deviation(price, last.get("BOLL_LOW"))
@@ -139,3 +141,56 @@ def technicals(bars, price=None):
             else ("死叉" if a[-2] >= b[-2] and a[-1] < b[-1] else "无交叉")
         )
     return last, data
+
+
+def compute_ath_stats(bars=None, metrics=None, price=None, ref_date: date | None = None):
+    """计算历史最高价、回撤百分比、高点具体日期及距今已过天数（兼容无日期旧缓存回退）。"""
+    m = metrics or {}
+    ath = m.get("AVAILABLE_HIGH")
+    ath_date = m.get("AVAILABLE_HIGH_DATE")
+
+    if (ath is None or not ath_date) and bars:
+        best_high = None
+        best_day = None
+        for b in bars:
+            b_high = b["high"] if isinstance(b, dict) else b.high
+            b_day = b["day"] if isinstance(b, dict) else b.day
+            if b_high is None:
+                continue
+            b_high_d = Decimal(str(b_high))
+            b_day_str = b_day.isoformat() if isinstance(b_day, date) else str(b_day)[:10]
+            if best_high is None or (b_high_d, b_day_str) > (best_high, best_day or ""):
+                best_high = b_high_d
+                best_day = b_day_str
+        if ath is None:
+            ath = best_high
+        if not ath_date:
+            ath_date = best_day
+
+    today_d = ref_date or date.today()
+    eff_high = Decimal(str(ath)) if ath is not None else None
+    eff_date = str(ath_date)[:10] if ath_date else None
+    curr_p = Decimal(str(price)) if price is not None and price != "—" else None
+
+    drawdown = None
+    if eff_high is not None and eff_high > 0:
+        if curr_p is not None and curr_p >= eff_high:
+            eff_high = curr_p
+            eff_date = today_d.isoformat()
+            drawdown = Decimal("0")
+        elif curr_p is not None:
+            drawdown = (curr_p / eff_high - 1) * 100
+        elif m.get("DRAWDOWN") is not None:
+            drawdown = Decimal(str(m.get("DRAWDOWN")))
+    elif m.get("DRAWDOWN") is not None:
+        drawdown = Decimal(str(m.get("DRAWDOWN")))
+
+    days_passed = None
+    if eff_date:
+        try:
+            d_obj = date.fromisoformat(eff_date)
+            days_passed = max(0, (today_d - d_obj).days)
+        except Exception:
+            days_passed = None
+
+    return eff_high, drawdown, eff_date, days_passed

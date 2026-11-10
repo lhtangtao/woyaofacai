@@ -126,6 +126,8 @@ export interface WatchlistItem {
   day: string;
   ath_high?: number | string | null;
   drawdown_pct?: number | null;
+  ath_date?: string | null;
+  ath_days?: number | null;
 }
 
 export interface ReportDetailData {

@@ -37,6 +37,76 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rules, setRules] = useState<any[]>([]);
 
+  // Watchlist 3-state sorting: asc -> desc -> clear
+  const [watchSortKey, setWatchSortKey] = useState<string>("");
+  const [watchSortDir, setWatchSortDir] = useState<"" | "asc" | "desc">("");
+
+  const toggleWatchSort = (key: string) => {
+    if (watchSortKey !== key) {
+      setWatchSortKey(key);
+      setWatchSortDir("asc");
+    } else if (watchSortDir === "asc") {
+      setWatchSortDir("desc");
+    } else {
+      setWatchSortKey("");
+      setWatchSortDir("");
+    }
+  };
+
+  const renderSortHeader = (label: string, key: string, align: "left" | "right" | "center" = "left", minWidth = "85px") => {
+    const active = watchSortKey === key;
+    const arrow = active ? (watchSortDir === "asc" ? " ↑" : " ↓") : "";
+    return (
+      <th
+        onClick={() => toggleWatchSort(key)}
+        style={{ minWidth, textAlign: align, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+        title="点击切换：正序 → 倒序 → 清除排序"
+      >
+        {label}
+        {arrow && <span style={{ color: "var(--brand, #2563eb)", fontWeight: 700 }}>{arrow}</span>}
+      </th>
+    );
+  };
+
+  const sortedItems = React.useMemo(() => {
+    if (!watchSortKey || !watchSortDir) return items;
+    const getSortVal = (r: WatchlistItem): number | string | null => {
+      switch (watchSortKey) {
+        case "symbol": return r.symbol || "";
+        case "price": return r.price && r.price !== "—" ? Number(r.price) : null;
+        case "change": return r.change && r.change !== "—" ? Number(r.change.replace("%", "")) : null;
+        case "ath_high": return r.ath_high != null ? Number(r.ath_high) : null;
+        case "drawdown_pct": return r.drawdown_pct != null ? Number(r.drawdown_pct) : null;
+        case "ath_date": return r.ath_date || null;
+        case "rsi": return r.rsi ? Number(r.rsi) : null;
+        case "ma5": return r.ma5 ? Number(r.ma5) : null;
+        case "ma10": return r.ma10 ? Number(r.ma10) : null;
+        case "ma20": return r.ma20 ? Number(r.ma20) : null;
+        case "ma50": return r.ma50 ? Number(r.ma50) : null;
+        case "ma200": return r.ma200 ? Number(r.ma200) : null;
+        default: return (r as any)[watchSortKey] || null;
+      }
+    };
+    const valid: WatchlistItem[] = [];
+    const missing: WatchlistItem[] = [];
+    items.forEach((it) => {
+      const v = getSortVal(it);
+      if (v === null || v === undefined || (typeof v === "number" && Number.isNaN(v))) {
+        missing.push(it);
+      } else {
+        valid.push(it);
+      }
+    });
+    const dir = watchSortDir === "desc" ? -1 : 1;
+    valid.sort((a, b) => {
+      const va = getSortVal(a)!;
+      const vb = getSortVal(b)!;
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      return String(va).localeCompare(String(vb)) * dir;
+    });
+    return [...valid, ...missing];
+  }, [items, watchSortKey, watchSortDir]);
+
   const fetchWatchlist = () => {
     setLoading(true);
     setWatchlistError("");
@@ -313,33 +383,34 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
           <table className="finance-table">
             <thead>
               <tr>
-                <th style={{ minWidth: "90px" }}>标的</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>最新价</th>
-                <th style={{ minWidth: "85px", textAlign: "right" }}>涨跌幅</th>
-                <th style={{ minWidth: "70px" }}>短期</th>
-                <th style={{ minWidth: "70px" }}>中期</th>
-                <th style={{ minWidth: "70px" }}>长期</th>
-                <th style={{ minWidth: "75px" }}>形态交叉</th>
-                <th style={{ minWidth: "75px", textAlign: "right" }}>RSI14</th>
-                {/* UN-TRUNCATED MAs: 90px min-width each */}
-                <th style={{ minWidth: "90px", textAlign: "right" }}>MA5</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>MA10</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>最高回撤</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>MA20</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>MA50</th>
-                <th style={{ minWidth: "90px", textAlign: "right" }}>MA200</th>
+                {renderSortHeader("标的", "symbol", "left", "90px")}
+                {renderSortHeader("最新价", "price", "right", "90px")}
+                {renderSortHeader("涨跌幅", "change", "right", "85px")}
+                {renderSortHeader("短期", "trend_short", "left", "70px")}
+                {renderSortHeader("中期", "trend_medium", "left", "70px")}
+                {renderSortHeader("长期", "trend_long", "left", "70px")}
+                {renderSortHeader("形态交叉", "cross", "left", "75px")}
+                {renderSortHeader("RSI14", "rsi", "right", "75px")}
+                {renderSortHeader("MA5", "ma5", "right", "90px")}
+                {renderSortHeader("MA10", "ma10", "right", "90px")}
+                {renderSortHeader("历史最高", "ath_high", "right", "90px")}
+                {renderSortHeader("最高回撤", "drawdown_pct", "right", "90px")}
+                {renderSortHeader("高点日期 / 距今", "ath_date", "center", "115px")}
+                {renderSortHeader("MA20", "ma20", "right", "90px")}
+                {renderSortHeader("MA50", "ma50", "right", "90px")}
+                {renderSortHeader("MA200", "ma200", "right", "90px")}
                 <th style={{ minWidth: "110px", textAlign: "center" }}>操作</th>
               </tr>
             </thead>
             <tbody>
-              {items.length === 0 ? (
+              {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={15} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <td colSpan={17} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                     {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
               ) : (
-                items.map((row) => {
+                sortedItems.map((row) => {
                   const isUp = row.change?.startsWith("+");
                   const isDown = row.change?.startsWith("-");
 
@@ -399,6 +470,10 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                       <td className="font-mono" style={{ textAlign: "right" }}>
                         {row.ma10 ? Number(row.ma10).toFixed(3) : "—"}
                       </td>
+                      {/* 历史最高 */}
+                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                        {row.ath_high != null ? `$${Number(row.ath_high).toFixed(2)}` : "—"}
+                      </td>
                       {/* 最高回撤 */}
                       <td
                         className="font-mono"
@@ -410,6 +485,17 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                         title={row.ath_high != null ? `历史最高: $${Number(row.ath_high).toFixed(2)}` : undefined}
                       >
                         {row.drawdown_pct != null ? `${Number(row.drawdown_pct).toFixed(2)}%` : "—"}
+                      </td>
+                      {/* 高点日期 / 距今 */}
+                      <td className="font-mono" style={{ textAlign: "center", fontSize: "12px", lineHeight: "1.25" }}>
+                        {row.ath_date ? (
+                          <div>
+                            <div>{row.ath_date}</div>
+                            <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                              {row.ath_days === 0 ? "今日新高" : row.ath_days != null ? `已过 ${row.ath_days} 天` : "—"}
+                            </div>
+                          </div>
+                        ) : "—"}
                       </td>
                       {/* MA20 */}
                       <td className="font-mono" style={{ textAlign: "right" }}>

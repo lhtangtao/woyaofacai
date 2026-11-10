@@ -467,7 +467,7 @@ def test_multi_owner_sources_keep_person_quantity_not_group_total():
 
 
 def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
-    """验证观察列表在 MA20 前增加最高回撤列，且 K 线面板支持点击行弹出、再点击自动消失的抽屉交互"""
+    """验证观察列表在 MA20 前增加历史最高、最高回撤、高点日期/距今三列，三态排序与抽屉点击开关"""
     from PySide6.QtCore import QThreadPool
     from portfolio.ui.monitor_page import MonitoringPage
 
@@ -480,7 +480,10 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
 
     page.targets = [
         {"analysis_symbol": "AAOI.US", "source_type": "MANUAL", "archive_state": "HELD", "sources": []},
+        {"analysis_symbol": "MU.US", "source_type": "MANUAL", "archive_state": "HELD", "sources": []},
     ]
+    aaoi_date = (date.today() - timedelta(days=89)).isoformat()
+    mu_date = (date.today() - timedelta(days=10)).isoformat()
     page.market = {
         "AAOI.US": {
             "price": D("50"),
@@ -488,6 +491,7 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
             "bars": [],
             "metrics": {
                 "AVAILABLE_HIGH": D("200"),
+                "AVAILABLE_HIGH_DATE": aaoi_date,
                 "DRAWDOWN": D("-75.00"),
                 "MA20": D("60"),
                 "MA50": D("70"),
@@ -498,30 +502,64 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
                 "MEDIUM": "偏弱",
                 "LONG": "偏弱",
             },
-        }
+        },
+        "MU.US": {
+            "price": D("80"),
+            "change": D("2.50"),
+            "bars": [],
+            "metrics": {
+                "AVAILABLE_HIGH": D("100"),
+                "AVAILABLE_HIGH_DATE": mu_date,
+                "DRAWDOWN": D("-20.00"),
+                "MA20": D("75"),
+                "MA50": D("72"),
+                "MA200": D("68"),
+                "MA250": D("65"),
+                "DEV200": D("17.65"),
+                "SHORT": "偏强",
+                "MEDIUM": "偏强",
+                "LONG": "偏强",
+            },
+        },
     }
     page.draw_table()
     qtbot.wait(20)
 
-    # 1. 验证列头顺序：第2列为最高回撤，紧邻第3列 MA20
+    # 1. 验证列头顺序：历史最高 -> 最高回撤 -> 高点日期 / 距今 -> MA20
     headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
-    assert headers[2] == "最高回撤"
-    assert headers[3] == "MA20"
-    assert page.table.item(0, 2).text() == "-75.00%"
+    assert headers[2:6] == ["历史最高", "最高回撤", "高点日期 / 距今", "MA20"]
+    assert page.table.item(0, 2).text() == "200.00"
+    assert page.table.item(0, 3).text() == "-75.00%"
+    assert page.table.item(0, 4).text() == f"{aaoi_date}\n已过 89 天"
 
-    # 2. 初始状态抽屉隐藏
+    # 2. 验证三态排序：点击第3列（最高回撤）正序 -> 倒序 -> 清除排序
+    # 正序: -75.00% (AAOI) < -20.00% (MU)
+    page._on_watch_header_clicked(3)
+    assert page.table.horizontalHeaderItem(3).text() == "最高回撤 ↑"
+    assert [page.table.item(r, 0).data(256) for r in range(2)] == ["AAOI.US", "MU.US"]
+
+    # 倒序: -20.00% (MU) -> -75.00% (AAOI)
+    page._on_watch_header_clicked(3)
+    assert page.table.horizontalHeaderItem(3).text() == "最高回撤 ↓"
+    assert [page.table.item(r, 0).data(256) for r in range(2)] == ["MU.US", "AAOI.US"]
+
+    # 再点击一次 -> 清除排序，恢复默认 [AAOI.US, MU.US]
+    page._on_watch_header_clicked(3)
+    assert page.table.horizontalHeaderItem(3).text() == "最高回撤"
+    assert [page.table.item(r, 0).data(256) for r in range(2)] == ["AAOI.US", "MU.US"]
+
+    # 3. 初始状态抽屉隐藏
     assert not page._drawer_open
     assert page.drawer_frame.isHidden()
 
-    # 3. 首次点击该行（第2列最高回撤单元格）弹出抽屉
-    page._on_cell_clicked(0, 2)
+    # 4. 首次点击该行弹出抽屉，再次点击同一行自动收起消失
+    page._on_cell_clicked(0, 3)
     qtbot.wait(20)
     assert page._drawer_open
     assert not page.drawer_frame.isHidden()
     assert page.selected == "AAOI.US"
 
-    # 4. 再次点击同一行自动收起消失
-    page._on_cell_clicked(0, 2)
+    page._on_cell_clicked(0, 3)
     qtbot.wait(20)
     assert not page._drawer_open
     assert page.drawer_frame.isHidden()

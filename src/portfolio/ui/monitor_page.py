@@ -44,7 +44,7 @@ from portfolio.domain.monitor_rules import (
     RuntimeState,
     describe_rule,
 )
-from portfolio.domain.technical_indicators import PERIODS
+from portfolio.domain.technical_indicators import PERIODS, compute_ath_stats
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.monitor_mapping import MAPPING_VERSION, Mapping, normalize
 from portfolio.services.monitor_service import (
@@ -277,6 +277,8 @@ class MonitoringPage(QWidget):
         self.generation: int = 0
         self.account_source: Optional[str] = None
         self._history_sort_desc: bool = True
+        self._watch_sort_col: int = -1
+        self._watch_sort_dir: str = ""
 
         self._init_ui()
 
@@ -395,11 +397,12 @@ class MonitoringPage(QWidget):
         filters.addWidget(self.kind)
         col.addLayout(filters)
 
-        self.table = QTableWidget(0, 11)
-        self.table.setHorizontalHeaderLabels([
+        self._watch_headers = (
             "标的 / 来源",
             "现价 / 涨跌",
+            "历史最高",
             "最高回撤",
+            "高点日期 / 距今",
             "MA20",
             "MA50",
             "MA200",
@@ -408,7 +411,9 @@ class MonitoringPage(QWidget):
             "短/中/长",
             "规则",
             "操作",
-        ])
+        )
+        self.table = QTableWidget(0, len(self._watch_headers))
+        self.table.setHorizontalHeaderLabels(list(self._watch_headers))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -416,11 +421,13 @@ class MonitoringPage(QWidget):
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(56)
+        header.setMinimumSectionSize(52)
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for col_idx, width in ((9, 58), (10, 108)):
+        for col_idx, width in ((4, 108), (11, 56), (12, 108)):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(col_idx, width)
+        header.sectionClicked.connect(self._on_watch_header_clicked)
         self.table.setStyleSheet(
             "QTableWidget { font-size: 12px; }"
             "QTableWidget::item { padding-left: 2px; padding-right: 2px; }"
@@ -1028,11 +1035,9 @@ class MonitoringPage(QWidget):
                 continue
             rows.append(target)
 
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(rows))
-        selected_row = 0
-
-        for row, target in enumerate(rows):
+        # 先构建每行的数值与排序键值
+        prepared = []
+        for target in rows:
             symbol = target["analysis_symbol"]
             data = self.market.get(symbol, {})
             m = data.get("metrics", {})
@@ -1058,54 +1063,143 @@ class MonitoringPage(QWidget):
             act_rules = rule_counts.get(symbol, 0)
             rules_badge = f"{act_rules}条" if act_rules > 0 else "无"
 
-            ath = m.get("AVAILABLE_HIGH")
             curr_p = data.get("price")
-            drawdown_val = None
-            eff_high = ath
-            if ath is not None and ath > 0 and curr_p is not None:
-                eff_high = max(ath, curr_p)
-                drawdown_val = (curr_p / eff_high - 1) * 100
-            elif m.get("DRAWDOWN") is not None:
-                drawdown_val = m.get("DRAWDOWN")
+            eff_high, drawdown_val, eff_date, days_passed = compute_ath_stats(
+                data.get("bars"), m, curr_p
+            )
+            date_days_text = "—"
+            if eff_date:
+                days_str = "今日新高" if days_passed == 0 else (f"已过 {days_passed} 天" if days_passed is not None else "—")
+                date_days_text = f"{eff_date}\n{days_str}"
+
+            trend_text = "/".join(
+                m.get(k, "—").replace("偏", "").replace("数据不足", "—")
+                for k in ("SHORT", "MEDIUM", "LONG")
+            )
+            trend_score = sum(
+                1 if "强" in str(m.get(k, "")) else (-1 if "弱" in str(m.get(k, "")) else 0)
+                for k in ("SHORT", "MEDIUM", "LONG")
+            ) if any(m.get(k) not in (None, "数据不足", "—") for k in ("SHORT", "MEDIUM", "LONG")) else None
+
+            def _to_float(v):
+                if v is None:
+                    return None
+                try:
+                    return float(v)
+                except Exception:
+                    return None
+
+            sort_keys = {
+                0: symbol.removesuffix(".US"),
+                1: _to_float(curr_p),
+                2: _to_float(eff_high),
+                3: _to_float(drawdown_val),
+                4: eff_date,
+                5: _to_float(m.get("MA20")),
+                6: _to_float(m.get("MA50")),
+                7: _to_float(m.get("MA200")),
+                8: _to_float(m.get("MA250")),
+                9: _to_float(m.get("DEV200")),
+                10: trend_score,
+                11: act_rules,
+            }
+            prepared.append({
+                "target": target,
+                "symbol": symbol,
+                "data": data,
+                "m": m,
+                "is_manual": is_manual,
+                "source_label": source_label,
+                "act_rules": act_rules,
+                "rules_badge": rules_badge,
+                "curr_p": curr_p,
+                "eff_high": eff_high,
+                "drawdown_val": drawdown_val,
+                "eff_date": eff_date,
+                "days_passed": days_passed,
+                "date_days_text": date_days_text,
+                "trend_text": trend_text,
+                "sort_keys": sort_keys,
+            })
+
+        # 三态排序：正序 -> 倒序 -> 清除排序（缺失值始终沉底）
+        if 0 <= self._watch_sort_col < 12 and self._watch_sort_dir in ("asc", "desc"):
+            sc = self._watch_sort_col
+            rev = (self._watch_sort_dir == "desc")
+            valid_items = [p for p in prepared if p["sort_keys"].get(sc) is not None]
+            missing_items = [p for p in prepared if p["sort_keys"].get(sc) is None]
+            valid_items.sort(key=lambda p: p["sort_keys"][sc], reverse=rev)
+            prepared = valid_items + missing_items
+
+        # 刷新表头排序箭头指示
+        header_labels = []
+        for idx, title in enumerate(self._watch_headers):
+            if idx == self._watch_sort_col and self._watch_sort_dir == "asc":
+                header_labels.append(f"{title} ↑")
+            elif idx == self._watch_sort_col and self._watch_sort_dir == "desc":
+                header_labels.append(f"{title} ↓")
+            else:
+                header_labels.append(title)
+        self.table.setHorizontalHeaderLabels(header_labels)
+
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(prepared))
+        selected_row = 0
+
+        for row, entry in enumerate(prepared):
+            symbol = entry["symbol"]
+            data = entry["data"]
+            m = entry["m"]
+            is_manual = entry["is_manual"]
+            source_label = entry["source_label"]
+            act_rules = entry["act_rules"]
+            rules_badge = entry["rules_badge"]
+            curr_p = entry["curr_p"]
+            eff_high = entry["eff_high"]
+            drawdown_val = entry["drawdown_val"]
+            eff_date = entry["eff_date"]
+            days_passed = entry["days_passed"]
+            date_days_text = entry["date_days_text"]
+            trend_text = entry["trend_text"]
 
             values = [
                 symbol,
-                f"{fmt(data.get('price'))}\n{fmt(data.get('change'), suffix='%')}",
+                f"{fmt(curr_p)}\n{fmt(data.get('change'), suffix='%')}",
+                fmt(eff_high),
                 fmt(drawdown_val, suffix="%"),
+                date_days_text,
                 *(fmt(m.get("MA" + str(n))) for n in (20, 50, 200, 250)),
                 fmt(m.get("DEV200"), suffix="%"),
-                "/".join(
-                    m.get(k, "—").replace("偏", "").replace("数据不足", "—")
-                    for k in ("SHORT", "MEDIUM", "LONG")
-                ),
+                trend_text,
                 rules_badge,
             ]
 
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, symbol)
-                if col == 2:
+                if col in (2, 3, 4):
                     dd_pct_str = fmt(abs(drawdown_val), suffix="%") if drawdown_val is not None else "—"
+                    days_info = "今日新高" if days_passed == 0 else (f"已过 {days_passed} 天" if days_passed is not None else "—")
                     item.setToolTip(
-                        f"较最高点回撤: {dd_pct_str}\n历史最高价: {fmt(eff_high)}\n当前现价: {fmt(curr_p)}"
+                        f"历史最高价: {fmt(eff_high)}\n高点日期: {eff_date or '—'} ({days_info})\n较最高点回撤: {dd_pct_str}\n当前现价: {fmt(curr_p)}"
                     )
                 else:
                     item.setToolTip(value + "\n" + data.get("error", ""))
-                if col in range(1, 8):
+                if col in (1, 2, 3, 5, 6, 7, 8, 9):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (8, 9):
+                elif col in (4, 10, 11):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 clean_sym = symbol.removesuffix(".US")
-                if col in (1, 2, 7):
+                if col in (1, 3, 9):
                     number = (
                         data.get("change")
                         if col == 1
-                        else (drawdown_val if col == 2 else m.get("DEV200"))
+                        else (drawdown_val if col == 3 else m.get("DEV200"))
                     )
                     if number is not None:
                         item.setForeground(QColor(tokens(self).profit if number >= 0 else tokens(self).loss))
-                elif col == 9:
+                elif col == 11:
                     if act_rules > 0:
                         item.setForeground(QColor("#16A34A"))
                         font = item.font()
@@ -1130,7 +1224,7 @@ class MonitoringPage(QWidget):
                 remove_button.clicked.connect(lambda checked=False, sym=symbol: self._on_remove_stock(sym))
                 action_layout.addWidget(remove_button)
             actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
-            self.table.setCellWidget(row, 10, actions)
+            self.table.setCellWidget(row, 12, actions)
 
             # Column 0: clickable hyperlink widget for AI analysis navigation
             stock_cell = StockCellWidget(
@@ -1146,17 +1240,31 @@ class MonitoringPage(QWidget):
                 selected_row = row
 
         self.table.blockSignals(False)
-        if rows:
+        if prepared:
             if self._drawer_open and self.selected:
                 self.table.selectRow(selected_row)
-                self.selected = rows[selected_row]["analysis_symbol"]
+                self.selected = prepared[selected_row]["symbol"]
             elif not self.selected:
-                self.selected = rows[0]["analysis_symbol"]
+                self.selected = prepared[0]["symbol"]
         else:
             self.selected = ""
             if self._drawer_open:
                 self.close_kline_drawer()
         self.draw_detail()
+
+    def _on_watch_header_clicked(self, col: int):
+        """观察列表表头三态排序：第1次正序 -> 第2次倒序 -> 第3次清除排序"""
+        if col >= 12:
+            return
+        if self._watch_sort_col != col:
+            self._watch_sort_col = col
+            self._watch_sort_dir = "asc"
+        elif self._watch_sort_dir == "asc":
+            self._watch_sort_dir = "desc"
+        else:
+            self._watch_sort_col = -1
+            self._watch_sort_dir = ""
+        self.draw_table()
 
     def selection_changed(self):
         item = self.table.item(self.table.currentRow(), 0)
@@ -1246,9 +1354,9 @@ class MonitoringPage(QWidget):
         sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
         if not sym:
             return
-        if col == 9:
+        if col == 11:
             self._open_rule_dialog(default_symbol=sym)
-        elif 1 <= col <= 8:
+        elif 1 <= col <= 10:
             self._on_row_tapped(row, sym)
 
     def draw_detail(self):
@@ -1337,7 +1445,9 @@ class MonitoringPage(QWidget):
         vol_txt = f"5日均量: {fmt(m.get('VMA5'))}   ·   20日均量: {fmt(m.get('VMA20'))}"
         self.lbl_vol_summary.setText(vol_txt)
 
-        ath_txt = f"52周高/低: {fmt(m.get('HIGH52'))} / {fmt(m.get('LOW52'))}   ·   最高: {fmt(m.get('AVAILABLE_HIGH'))} (距最高: {fmt(m.get('DRAWDOWN'), suffix='%')})"
+        eff_high, dd_val, eff_date, days_passed = compute_ath_stats(data.get("bars"), m, data.get("price"))
+        days_tag = f" / {eff_date} · 已过{days_passed}天" if eff_date and days_passed is not None else (f" / {eff_date}" if eff_date else "")
+        ath_txt = f"52周高/低: {fmt(m.get('HIGH52'))} / {fmt(m.get('LOW52'))}   ·   最高: {fmt(eff_high)} (距最高: {fmt(dd_val, suffix='%')}{days_tag})"
         self.lbl_ath_summary.setText(ath_txt)
 
         bars = data.get("bars", [])

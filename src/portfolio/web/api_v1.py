@@ -1357,6 +1357,20 @@ def api_monitoring_watchlist():
                         (BASIS, *chunk),
                     ):
                         metrics[symbol] = json.loads(payload)
+                    missing_date_syms = [s for s in chunk if not (metrics.get(s) or {}).get("AVAILABLE_HIGH_DATE")]
+                    if missing_date_syms:
+                        m_ph = ",".join("?" for _ in missing_date_syms)
+                        bars_by_sym = {}
+                        for b_sym, b_date, b_payload in db.execute(
+                            f"SELECT analysis_symbol, bar_date, payload FROM daily_bars WHERE basis=? AND analysis_symbol IN ({m_ph})",
+                            (BASIS, *missing_date_syms),
+                        ):
+                            bp = json.loads(b_payload)
+                            bars_by_sym.setdefault(b_sym, []).append({"day": b_date, "high": bp.get("high")})
+                    else:
+                        bars_by_sym = {}
+
+        from portfolio.domain.technical_indicators import compute_ath_stats
 
         result = []
         for sym in sorted(symbols):
@@ -1374,18 +1388,11 @@ def api_monitoring_watchlist():
                 except Exception:
                     pass
 
-            ath = m.get("AVAILABLE_HIGH")
-            drawdown_pct = m.get("DRAWDOWN")
-            eff_high = ath
-            if price is not None and ath is not None:
-                try:
-                    p_val = float(price)
-                    ath_val = float(ath)
-                    if ath_val > 0:
-                        eff_high = max(ath_val, p_val)
-                        drawdown_pct = ((p_val / eff_high) - 1.0) * 100.0
-                except Exception:
-                    pass
+            eff_high, dd_dec, ath_date, ath_days = compute_ath_stats(
+                bars_by_sym.get(sym) if "bars_by_sym" in locals() else None, m, price
+            )
+            eff_high_f = float(eff_high) if eff_high is not None else None
+            drawdown_pct = float(dd_dec) if dd_dec is not None else None
 
             clean_sym = sym.removesuffix(".US")
             result.append({
@@ -1395,8 +1402,10 @@ def api_monitoring_watchlist():
                 "price": price or "—",
                 "change": change_pct,
                 "day": ms.get("bar_date", "—"),
-                "ath_high": eff_high,
+                "ath_high": eff_high_f,
                 "drawdown_pct": drawdown_pct,
+                "ath_date": ath_date,
+                "ath_days": ath_days,
                 "ma5": m.get("MA5"),
                 "ma10": m.get("MA10"),
                 "ma20": m.get("MA20"),
