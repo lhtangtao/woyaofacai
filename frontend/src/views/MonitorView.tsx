@@ -401,21 +401,17 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                 {renderSortHeader("历史最高", "ath_high", "right", "90px")}
                 {renderSortHeader("最高回撤", "drawdown_pct", "right", "90px")}
                 {renderSortHeader("高点日期 / 距今", "ath_date", "center", "115px")}
-                {renderSortHeader("MA20", "ma20", "right", "90px")}
-                {renderSortHeader("MA50", "ma50", "right", "90px")}
-                {renderSortHeader("MA200", "ma200", "right", "90px")}
-                {renderSortHeader("MA250", "ma250", "right", "90px")}
-                {renderSortHeader("距MA20", "dev20", "right", "85px")}
-                {renderSortHeader("距MA50", "dev50", "right", "85px")}
-                {renderSortHeader("距MA200", "dev200", "right", "90px")}
-                {renderSortHeader("距MA250", "dev250", "right", "90px")}
+                {renderSortHeader("MA20 / 偏离", "dev20", "right", "95px")}
+                {renderSortHeader("MA50 / 偏离", "dev50", "right", "95px")}
+                {renderSortHeader("MA200 / 偏离", "dev200", "right", "95px")}
+                {renderSortHeader("MA250 / 偏离", "dev250", "right", "95px")}
                 <th style={{ minWidth: "110px", textAlign: "center" }}>操作</th>
               </tr>
             </thead>
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={22} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <td colSpan={18} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                     {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
@@ -507,34 +503,24 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                           </div>
                         ) : "—"}
                       </td>
-                      {/* MA20 */}
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {row.ma20 ? Number(row.ma20).toFixed(3) : "—"}
-                      </td>
-                      {/* MA50 */}
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {row.ma50 ? Number(row.ma50).toFixed(3) : "—"}
-                      </td>
-                      {/* MA200 */}
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {row.ma200 ? Number(row.ma200).toFixed(3) : "—"}
-                      </td>
-                      {/* MA250 */}
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {row.ma250 ? Number(row.ma250).toFixed(3) : "—"}
-                      </td>
-                      {/* 距MA20 / 50 / 200 / 250 */}
-                      {[row.dev20, row.dev50, row.dev200, row.dev250].map((dv, idx) => (
-                        <td
-                          key={idx}
-                          className="font-mono"
-                          style={{
-                            textAlign: "right",
-                            color: dv != null ? (Number(dv) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "inherit",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {dv != null ? `${Number(dv) >= 0 ? "+" : ""}${Number(dv).toFixed(2)}%` : "—"}
+                      {/* MA20 / 50 / 200 / 250 双行（均价 + 偏离度） */}
+                      {([
+                        [row.ma20, row.dev20],
+                        [row.ma50, row.dev50],
+                        [row.ma200, row.dev200],
+                        [row.ma250, row.dev250],
+                      ] as const).map(([maVal, devVal], idx) => (
+                        <td key={idx} className="font-mono" style={{ textAlign: "right", lineHeight: "1.25" }}>
+                          <div>{maVal ? Number(maVal).toFixed(2) : "—"}</div>
+                          <div
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              color: devVal != null ? (Number(devVal) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "var(--text-muted)",
+                            }}
+                          >
+                            {devVal != null ? `${Number(devVal) >= 0 ? "+" : ""}${Number(devVal).toFixed(2)}%` : "—"}
+                          </div>
                         </td>
                       ))}
                       {/* 操作 */}

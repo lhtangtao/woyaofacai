@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QStandardPaths, Qt, QTimer
+from PySide6.QtCore import QRect, QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,6 +30,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -179,6 +182,49 @@ class AlertDetailDialog(QDialog):
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         btn_box.rejected.connect(self.accept)
         layout.addWidget(btn_box)
+
+
+TWO_LINE_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class TwoLineCellDelegate(QStyledItemDelegate):
+    """独立染色的双行单元格代理：上行主数值（深黑），下行偏离率/附注（涨绿/跌红/次灰）。"""
+
+    def paint(self, painter, option, index):
+        payload = index.data(TWO_LINE_ROLE)
+        if not payload:
+            super().paint(painter, option, index)
+            return
+
+        top_text, top_color, bottom_text, bottom_color, align_right = payload
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else None
+        if style:
+            style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, opt.widget)
+
+        painter.save()
+        rect = opt.rect.adjusted(6, 5, -6, -5)
+        h_half = rect.height() // 2
+        top_rect = QRect(rect.left(), rect.top(), rect.width(), h_half)
+        bot_rect = QRect(rect.left(), rect.top() + h_half, rect.width(), rect.height() - h_half)
+        h_flag = Qt.AlignmentFlag.AlignRight if align_right else Qt.AlignmentFlag.AlignHCenter
+
+        top_font = QFont(opt.font)
+        top_font.setPointSize(12)
+        top_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(top_font)
+        painter.setPen(QColor(top_color or "#0F172A"))
+        painter.drawText(top_rect, h_flag | Qt.AlignmentFlag.AlignVCenter, str(top_text))
+
+        bot_font = QFont(opt.font)
+        bot_font.setPointSize(11)
+        bot_font.setWeight(QFont.Weight.Medium)
+        painter.setFont(bot_font)
+        painter.setPen(QColor(bottom_color or "#64748B"))
+        painter.drawText(bot_rect, h_flag | Qt.AlignmentFlag.AlignVCenter, str(bottom_text))
+        painter.restore()
 
 
 class StockCellWidget(QWidget):
@@ -403,20 +449,17 @@ class MonitoringPage(QWidget):
             "历史最高",
             "最高回撤",
             "高点日期 / 距今",
-            "MA20",
-            "MA50",
-            "MA200",
-            "MA250",
-            "距MA20",
-            "距MA50",
-            "距MA200",
-            "距MA250",
+            "MA20 / 偏离",
+            "MA50 / 偏离",
+            "MA200 / 偏离",
+            "MA250 / 偏离",
             "短/中/长",
             "规则",
             "操作",
         )
         self.table = QTableWidget(0, len(self._watch_headers))
         self.table.setHorizontalHeaderLabels(list(self._watch_headers))
+        self.table.setItemDelegate(TwoLineCellDelegate(self.table))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -424,10 +467,10 @@ class MonitoringPage(QWidget):
         self.table.verticalHeader().hide()
         self.table.setAlternatingRowColors(True)
         header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(48)
+        header.setMinimumSectionSize(56)
         header.setCursor(Qt.CursorShape.PointingHandCursor)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for col_idx, width in ((4, 102), (14, 50), (15, 104)):
+        for col_idx, width in ((4, 108), (10, 56), (11, 108)):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(col_idx, width)
         header.sectionClicked.connect(self._on_watch_header_clicked)
@@ -1109,16 +1152,12 @@ class MonitoringPage(QWidget):
                 2: _to_float(eff_high),
                 3: _to_float(drawdown_val),
                 4: eff_date,
-                5: _to_float(m.get("MA20")),
-                6: _to_float(m.get("MA50")),
-                7: _to_float(m.get("MA200")),
-                8: _to_float(m.get("MA250")),
-                9: _to_float(dev20),
-                10: _to_float(dev50),
-                11: _to_float(dev200),
-                12: _to_float(dev250),
-                13: trend_score,
-                14: act_rules,
+                5: _to_float(dev20),
+                6: _to_float(dev50),
+                7: _to_float(dev200),
+                8: _to_float(dev250),
+                9: trend_score,
+                10: act_rules,
             }
             prepared.append({
                 "target": target,
@@ -1144,7 +1183,7 @@ class MonitoringPage(QWidget):
             })
 
         # 三态排序：正序 -> 倒序 -> 清除排序（缺失值始终沉底）
-        if 0 <= self._watch_sort_col < 15 and self._watch_sort_dir in ("asc", "desc"):
+        if 0 <= self._watch_sort_col < 11 and self._watch_sort_dir in ("asc", "desc"):
             sc = self._watch_sort_col
             rev = (self._watch_sort_dir == "desc")
             valid_items = [p for p in prepared if p["sort_keys"].get(sc) is not None]
@@ -1167,6 +1206,19 @@ class MonitoringPage(QWidget):
         self.table.setRowCount(len(prepared))
         selected_row = 0
 
+        profit_col = tokens(self).profit
+        loss_col = tokens(self).loss
+
+        def _ma_pair(n: int, dev_v):
+            ma_str = fmt(m.get(f"MA{n}"))
+            if ma_str == "—" and dev_v is None:
+                return "—", None
+            dev_str = fmt(dev_v, suffix="%")
+            if dev_v is not None and dev_v > 0:
+                dev_str = f"+{dev_str}"
+            c = profit_col if (dev_v is not None and dev_v >= 0) else (loss_col if dev_v is not None else "#64748B")
+            return f"{ma_str}\n{dev_str}", (ma_str, "#0F172A", dev_str, c, True)
+
         for row, entry in enumerate(prepared):
             symbol = entry["symbol"]
             data = entry["data"]
@@ -1187,52 +1239,69 @@ class MonitoringPage(QWidget):
             dev250 = entry["dev250"]
             trend_text = entry["trend_text"]
 
+            chg_v = data.get("change")
+            chg_str = fmt(chg_v, suffix="%")
+            if chg_v is not None and chg_v > 0:
+                chg_str = f"+{chg_str}"
+            chg_color = profit_col if (chg_v is not None and chg_v >= 0) else (loss_col if chg_v is not None else "#64748B")
+
+            ma20_txt, ma20_pair = _ma_pair(20, dev20)
+            ma50_txt, ma50_pair = _ma_pair(50, dev50)
+            ma200_txt, ma200_pair = _ma_pair(200, dev200)
+            ma250_txt, ma250_pair = _ma_pair(250, dev250)
+
+            days_info = "今日新高" if days_passed == 0 else (f"已过 {days_passed} 天" if days_passed is not None else "—")
+            days_color = profit_col if days_passed == 0 else "#64748B"
+
             values = [
                 symbol,
-                f"{fmt(curr_p)}\n{fmt(data.get('change'), suffix='%')}",
+                f"{fmt(curr_p)}\n{chg_str}",
                 fmt(eff_high),
                 fmt(drawdown_val, suffix="%"),
                 date_days_text,
-                *(fmt(m.get("MA" + str(n))) for n in (20, 50, 200, 250)),
-                fmt(dev20, suffix="%"),
-                fmt(dev50, suffix="%"),
-                fmt(dev200, suffix="%"),
-                fmt(dev250, suffix="%"),
+                ma20_txt,
+                ma50_txt,
+                ma200_txt,
+                ma250_txt,
                 trend_text,
                 rules_badge,
             ]
 
-            dev_col_map = {
-                1: data.get("change"),
-                3: drawdown_val,
-                9: dev20,
-                10: dev50,
-                11: dev200,
-                12: dev250,
+            two_line_payloads = {
+                1: (fmt(curr_p), "#0F172A", chg_str, chg_color, True),
+                4: (eff_date, "#0F172A", days_info, days_color, False) if eff_date else None,
+                5: ma20_pair,
+                6: ma50_pair,
+                7: ma200_pair,
+                8: ma250_pair,
             }
 
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, symbol)
+                if two_line_payloads.get(col) is not None:
+                    item.setData(TWO_LINE_ROLE, two_line_payloads[col])
+
                 if col in (2, 3, 4):
                     dd_pct_str = fmt(abs(drawdown_val), suffix="%") if drawdown_val is not None else "—"
-                    days_info = "今日新高" if days_passed == 0 else (f"已过 {days_passed} 天" if days_passed is not None else "—")
                     item.setToolTip(
                         f"历史最高价: {fmt(eff_high)}\n高点日期: {eff_date or '—'} ({days_info})\n较最高点回撤: {dd_pct_str}\n当前现价: {fmt(curr_p)}"
                     )
+                elif col in (5, 6, 7, 8):
+                    period_n = (20, 50, 200, 250)[col - 5]
+                    item.setToolTip(f"MA{period_n}: {fmt(m.get(f'MA{period_n}'))}\n偏离度: {value.splitlines()[-1] if chr(10) in value else '—'}\n点击表头可按偏离度排序")
                 else:
                     item.setToolTip(value + "\n" + data.get("error", ""))
-                if col in (1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12):
+
+                if col in (1, 2, 3, 5, 6, 7, 8):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (4, 13, 14):
+                elif col in (4, 9, 10):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 clean_sym = symbol.removesuffix(".US")
-                if col in dev_col_map:
-                    number = dev_col_map[col]
-                    if number is not None:
-                        item.setForeground(QColor(tokens(self).profit if number >= 0 else tokens(self).loss))
-                elif col == 14:
+                if col == 3 and drawdown_val is not None:
+                    item.setForeground(QColor(profit_col if drawdown_val >= 0 else loss_col))
+                elif col == 10:
                     if act_rules > 0:
                         item.setForeground(QColor("#16A34A"))
                         font = item.font()
@@ -1257,7 +1326,7 @@ class MonitoringPage(QWidget):
                 remove_button.clicked.connect(lambda checked=False, sym=symbol: self._on_remove_stock(sym))
                 action_layout.addWidget(remove_button)
             actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
-            self.table.setCellWidget(row, 15, actions)
+            self.table.setCellWidget(row, 11, actions)
 
             # Column 0: clickable hyperlink widget for AI analysis navigation
             stock_cell = StockCellWidget(
@@ -1287,7 +1356,7 @@ class MonitoringPage(QWidget):
 
     def _on_watch_header_clicked(self, col: int):
         """观察列表表头三态排序：第1次正序 -> 第2次倒序 -> 第3次清除排序"""
-        if col >= 15:
+        if col >= 11:
             return
         if self._watch_sort_col != col:
             self._watch_sort_col = col
@@ -1387,9 +1456,9 @@ class MonitoringPage(QWidget):
         sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
         if not sym:
             return
-        if col == 14:
+        if col == 10:
             self._open_rule_dialog(default_symbol=sym)
-        elif 1 <= col <= 13:
+        elif 1 <= col <= 9:
             self._on_row_tapped(row, sym)
 
     def draw_detail(self):

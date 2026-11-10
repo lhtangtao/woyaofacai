@@ -525,20 +525,19 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
     page.draw_table()
     qtbot.wait(20)
 
-    # 1. 验证列头顺序：历史最高 -> 最高回撤 -> 高点日期 / 距今 -> MA20..250 -> 距MA20..250
+    # 1. 验证列头顺序：历史最高 -> 最高回撤 -> 高点日期 / 距今 -> MA20/50/200/250 双行
     headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
-    assert headers[2:13] == [
+    assert headers[2:9] == [
         "历史最高", "最高回撤", "高点日期 / 距今",
-        "MA20", "MA50", "MA200", "MA250",
-        "距MA20", "距MA50", "距MA200", "距MA250",
+        "MA20 / 偏离", "MA50 / 偏离", "MA200 / 偏离", "MA250 / 偏离",
     ]
     assert page.table.item(0, 2).text() == "200.00"
     assert page.table.item(0, 3).text() == "-75.00%"
     assert page.table.item(0, 4).text() == f"{aaoi_date}\n已过 89 天"
     # AAOI 现价 50，MA20=60 => (50/60-1)*100 = -16.67%
-    assert page.table.item(0, 9).text() == "-16.67%"
+    assert page.table.item(0, 5).text() == "60.00\n-16.67%"
     # MU 现价 80，MA250=65 => (80/65-1)*100 = +23.08%
-    assert page.table.item(1, 12).text() == "23.08%"
+    assert page.table.item(1, 8).text() == "65.00\n+23.08%"
 
     # 2. 验证三态排序：点击第3列（最高回撤）正序 -> 倒序 -> 清除排序
     # 正序: -75.00% (AAOI) < -20.00% (MU)
