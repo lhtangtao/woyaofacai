@@ -110,3 +110,73 @@ def test_non_admin_cannot_read_personal_domestic_ledger():
         assert client.get("/api/v1/domestic/positions").status_code == 401
     lan = AuthContext("DIRECT_PHYSICAL_LAN", "LAN_VIEWER", None, None, None, None, LAN_VIEWER_CAPABILITIES, False)
     assert not lan.has_capability("users:manage")
+
+
+def tiantian_statement(content=b"tiantian"):
+    from portfolio.domestic.tiantian import DIVIDEND_HEADER, TRADE_HEADER, parse_pages
+
+    day = "2015-09-16"
+    row = [day, "000001", "示例基金", "强减", "成功", "10.30", "0.00", "0.00", "0.0000", "示例银行 | 1234"]
+    dividend = [day, "000001", "示例基金", "红利再投资", "--", "0.04", "1.0000"]
+    pages = [
+        SimpleNamespace(extract_text=lambda: "天天基金对账单 历史交易明细(2015-01-01~2015-12-31)",
+                        extract_tables=lambda: [[TRADE_HEADER, row]]),
+        SimpleNamespace(extract_tables=lambda: [[row], [DIVIDEND_HEADER, dividend]]),
+    ]
+    return parse_pages("statement.pdf", content, pages)
+
+
+def test_tiantian_migrates_legacy_and_leaves_calc_and_alipay_scope_unchanged(tmp_path):
+    from portfolio.domestic.fund_transactions import import_tiantian, preview_tiantian, verify_alipay_migration
+
+    publish(docs(), root=tmp_path)
+    calc_before = (tmp_path / CALC_FILE).read_bytes()
+    with connect(tmp_path / RAW_FILE) as raw:
+        old_rows = [tuple(row) for row in raw.execute("SELECT * FROM raw_alipay_fund_transactions ORDER BY id")]
+        raw.executescript("""
+            DROP TRIGGER raw_mirror_alipay_trade;
+            DROP TABLE raw_fund_transaction_sources;
+            DROP TABLE raw_fund_transactions;
+            DROP TABLE raw_fund_source_files;
+            DROP TABLE raw_schema_migrations;
+        """)
+    statement = tiantian_statement()
+    raw_before = (tmp_path / RAW_FILE).read_bytes()
+    preview = preview_tiantian(tmp_path, [statement])[0]
+    assert preview["records"] == 3 and preview["review"] == 2 and not preview["issues"]
+    assert preview["same_fields_retained"] == 1 and preview["duplicate_rows"] == 0
+    assert (tmp_path / RAW_FILE).read_bytes() == raw_before
+    result = import_tiantian([statement], root=tmp_path)
+    assert result["verified_alipay"] == 3 and result["batches"][0]["inserted"] == 3
+    assert (tmp_path / CALC_FILE).read_bytes() == calc_before
+    assert read_view("transactions", root=tmp_path)["total"] == 3
+    assert read_view("imports", root=tmp_path)["total"] == 2
+    assert not read_view("positions", root=tmp_path)["stale"]
+    assert rebuild(tmp_path)["status"] == "unchanged"
+    with connect(tmp_path / RAW_FILE, readonly=True) as raw:
+        assert verify_alipay_migration(raw) == 3
+        assert [tuple(row) for row in raw.execute("SELECT * FROM raw_alipay_fund_transactions ORDER BY id")] == old_rows
+        rows = raw.execute("""SELECT source_page, order_id, confirmed_amount, parse_status
+            FROM raw_fund_transactions WHERE account_id='TIANTIAN_FUND'
+            ORDER BY source_page,source_record_no""").fetchall()
+        assert [tuple(row) for row in rows] == [(1, None, "0.00", "待核对"), (2, None, "0.00", "待核对"),
+                                                (2, None, None, "正常")]
+    assert list((tmp_path / "backups").glob(f"*/{RAW_FILE}"))
+
+
+def test_tiantian_deduplicates_repeat_and_overlap_with_source_trace(tmp_path):
+    from portfolio.domestic.fund_transactions import import_tiantian, preview_tiantian
+
+    statement = tiantian_statement()
+    overlap = tiantian_statement(b"different PDF bytes")
+    import_tiantian([statement], root=tmp_path)
+    assert preview_tiantian(tmp_path, [statement])[0]["already_imported"]
+    assert import_tiantian([statement], root=tmp_path)["batches"][0]["status"] == "already_imported"
+    assert preview_tiantian(tmp_path, [overlap])[0]["duplicate_rows"] == 3
+    result = import_tiantian([overlap], root=tmp_path)["batches"][0]
+    assert (result["inserted"], result["duplicates"], result["overlapping_batches"]) == (0, 3, 1)
+    with connect(tmp_path / RAW_FILE, readonly=True) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM raw_fund_transactions").fetchone()[0] == 3
+        assert raw.execute("SELECT COUNT(*) FROM raw_fund_transaction_sources").fetchone()[0] == 6
+        assert raw.execute("SELECT COUNT(*) FROM raw_import_batches").fetchone()[0] == 2
+    assert not (tmp_path / CALC_FILE).exists()

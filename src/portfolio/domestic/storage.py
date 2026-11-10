@@ -135,8 +135,8 @@ def operation(root=DOMESTIC_ASSETS_DIR):
         yield root
 
 
-def backup(root):
-    sources = [root / name for name in (RAW_FILE, CALC_FILE) if (root / name).is_file()]
+def backup(root, *, names=(RAW_FILE, CALC_FILE)):
+    sources = [root / name for name in names if (root / name).is_file()]
     if not sources:
         return
     destination = root / "backups" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid4().hex[:8])
@@ -152,8 +152,8 @@ def insert(connection, table, row):
     connection.execute(f"INSERT INTO {table} ({columns}) VALUES ({params})", tuple(row.values()))
 
 
-def archive(root, doc):
-    directory = root / "imports" / "alipay"
+def archive(root, doc, *, platform="alipay"):
+    directory = root / "imports" / platform
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = directory / f"{doc.digest}.pdf"
     if path.exists():
@@ -173,9 +173,10 @@ def import_documents(root, documents):
     """Commit the raw import before touching any derived results."""
     if any(not doc.rows or (doc.source_type == "opening_asset" and doc.issues) for doc in documents):
         raise ValueError("导入未通过预检，请核对来源证明")
+    from .fund_transactions import begin_raw_transaction
+
     with connect(root / RAW_FILE) as db:
-        db.executescript(RAW_SCHEMA)
-        db.execute("BEGIN IMMEDIATE")
+        begin_raw_transaction(db)
         db.execute("INSERT OR IGNORE INTO raw_asset_accounts VALUES (?, '支付宝基金账户', '支付宝', '基金', 'CNY', ?)",
                    (ACCOUNT, now()))
         reports = []

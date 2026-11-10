@@ -55,13 +55,13 @@ def read_view(view, *, as_of="", start="", end="", fund="", kind="", page=1, siz
     if not raw_path.exists():
         return result
     with connect(raw_path, readonly=True) as raw:
-        latest_import = raw.execute("SELECT MAX(created_at) FROM raw_import_batches").fetchone()[0]
+        latest_import = raw.execute("SELECT MAX(created_at) FROM raw_import_batches WHERE source_type IN ('opening_asset','transaction')").fetchone()[0]
         if view == "imports":
-            result["total"], result["rows"] = paged(raw, "SELECT * FROM raw_import_batches", [], [],
+            result["total"], result["rows"] = paged(raw, "SELECT * FROM raw_import_batches", ["source_type IN ('opening_asset','transaction')"], [],
                                                      "created_at DESC", offset, size)
             result["issues"] = [dict(row) for row in raw.execute("""SELECT b.source_filename, i.source_page,
                 i.source_row_no, i.reason FROM raw_parse_issues i JOIN raw_import_batches b ON b.id=i.import_batch_id
-                ORDER BY i.id DESC LIMIT 100""")]
+                WHERE b.source_type IN ('opening_asset','transaction') ORDER BY i.id DESC LIMIT 100""")]
         if view == "transactions":
             where, args = [], []
             for clause, value in (("confirmation_date>=?", start), ("confirmation_date<=?", end),

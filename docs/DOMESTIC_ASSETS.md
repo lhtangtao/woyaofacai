@@ -30,3 +30,18 @@ PYTHONPATH=src .venv/bin/python -m portfolio.domestic rebuild --full
 持仓起点缺失时保留已确认的变动，持有份额标记待核对。月末缺少对应净值时，市值留空。基金申购和赎回属于基金账本。支付宝资金账户与银行卡流水需要各自的来源文件。
 
 后续平台接入可为对应 PDF、CSV 或 API 建独立原始表及解析入口，并注册账户。验证新来源的确认日期和资金口径后，将其接入同一标准交易与份额变化层。
+
+## 天天基金对账单原始入库
+
+```sh
+PYTHONPATH=src .venv/bin/python -m portfolio.domestic tiantian-preview /path/statement.pdf
+PYTHONPATH=src .venv/bin/python -m portfolio.domestic tiantian-import --confirm /path/statement.pdf
+```
+
+可一次指定多个 PDF。终端对每份文件单独隐藏输入密码。预检显示各期页数、日期、业务类型、解析问题及重复记录数。正式导入前备份 Raw DB，并将原始加密文件按 SHA-256 归档到 `imports/tiantian/`。
+
+统一原始表 `raw_fund_transactions` 按账户区分支付宝与天天基金。`raw_fund_source_files` 保存来源期间及实际日期，`raw_fund_transaction_sources` 保留每次出现的来源页码和原始字段。旧支付宝表继续支持现有查询，后续支付宝导入同时镜像至统一表。
+
+天天基金保留交易和单列的分红记录。订单号、申请字段和交易表未披露的基金类型留空，`--` 按缺值处理，原样仍保存在原始字段中。强减保留原业务类型，标记待核对。相同文件哈希只导入一次。跨文件重叠按完整字段与出现次数去重，同一文件内字段相同的多行仍分别保留。月度或年度期末持仓汇总不作为期初数据。
+
+本阶段只有 CLI 与原始库入库。Calc DB、持仓计算和应用页面沿用现有支付宝范围。

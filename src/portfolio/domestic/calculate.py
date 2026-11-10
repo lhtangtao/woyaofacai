@@ -72,7 +72,7 @@ def read_raw(root):
         openings = [dict(row) for row in raw.execute("SELECT * FROM raw_fund_opening_positions ORDER BY snapshot_date")]
         trades = [dict(row) for row in raw.execute("SELECT * FROM raw_alipay_fund_transactions ORDER BY confirmation_date, transaction_time, id")]
         nav = [dict(row) for row in raw.execute("SELECT * FROM raw_fund_nav ORDER BY nav_date, id")]
-        batches = [tuple(row) for row in raw.execute("SELECT source_type,file_sha256 FROM raw_import_batches ORDER BY 1,2")]
+        batches = [tuple(row) for row in raw.execute("SELECT source_type,file_sha256 FROM raw_import_batches WHERE source_type IN ('opening_asset','transaction') ORDER BY 1,2")]
     return openings, trades, nav, batches
 
 

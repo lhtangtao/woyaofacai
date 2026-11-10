@@ -1,8 +1,10 @@
-"""Local-only command line for Alipay PDF preflight, import and rebuild."""
+"""Local-only command line for domestic PDF preflight, import and rebuild."""
 from argparse import ArgumentParser
 from datetime import date
+from getpass import GetPassWarning, getpass
 import json
 from pathlib import Path
+import warnings
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 
@@ -24,7 +26,34 @@ def main():
             pdf.add_argument("--confirm", action="store_true", required=True)
     recalc = commands.add_parser("rebuild")
     recalc.add_argument("--full", action="store_true")
+    for command in ("tiantian-preview", "tiantian-import"):
+        pdf = commands.add_parser(command)
+        pdf.add_argument("files", nargs="+", type=Path)
+        if command == "tiantian-import":
+            pdf.add_argument("--confirm", action="store_true", required=True)
     args = parser.parse_args()
+    if args.command.startswith("tiantian-"):
+        from .fund_transactions import import_tiantian, preview_tiantian
+        from .tiantian import parse_pdf as parse_tiantian
+
+        documents = []
+        for path in args.files:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", GetPassWarning)
+                    password = getpass(f"{path.name} 的 PDF 密码：")
+                try:
+                    documents.append(parse_tiantian(path, password))
+                finally:
+                    del password
+            except GetPassWarning:
+                parser.error("请在支持密码隐藏输入的终端中运行")
+            except (OSError, ValueError) as exc:
+                parser.error(f"{path.name}：{exc}")
+        print(json.dumps(preview_tiantian(args.directory, documents), ensure_ascii=False), flush=True)
+        if args.command == "tiantian-import":
+            print(json.dumps(import_tiantian(documents, root=args.directory), ensure_ascii=False))
+        return
     if args.command == "rebuild":
         with operation(args.directory) as root:
             backup(root)
