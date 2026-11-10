@@ -415,6 +415,9 @@ def build_workspace(self):
     self.monthly_scalping_page = MonthlyScalpingPage(self)
     self.pages.addWidget(self.monthly_scalping_page)
     self.monthly_scalping_page.drill.connect(self.drill_chart)
+    from portfolio.ui.domestic_assets_page import DomesticAssetsPage
+    self.domestic_assets_page = DomesticAssetsPage(self)
+    self.pages.addWidget(self.domestic_assets_page)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

@@ -43,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "earnings", label: "持仓财报日历", icon: <Calendar size={16} /> },
     ],
   },
+  { title: "国内资产", entries: [{ id: "domestic", label: "支付宝基金", icon: <Wallet size={16} /> }] },
   {
     title: "交易与收益",
     entries: [
@@ -89,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
 
 interface SidebarProps {
   canViewOwnership?: boolean;
+  canViewDomestic?: boolean;
   currentRoute: string;
   onRouteChange: (route: string) => void;
   collapsed: boolean;
@@ -97,6 +99,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({
   canViewOwnership = false,
+  canViewDomestic = false,
   currentRoute,
   onRouteChange,
   collapsed,
@@ -162,7 +165,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           padding: "0 6px",
         }}
       >
-        {NAV_GROUPS.map((group) => (
+        {NAV_GROUPS.filter(group => group.title !== "国内资产" || canViewDomestic).map((group) => (
           <div key={group.title} style={{ marginBottom: "12px" }}>
             {!collapsed && (
               <div

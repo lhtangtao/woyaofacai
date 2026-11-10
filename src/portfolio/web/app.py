@@ -468,7 +468,10 @@ STATIC_DIST_DIR = Path(__file__).parent / "static_dist"
 
 # Register unified REST API v1
 from portfolio.web.api_v1 import api_v1
+from portfolio.web.domestic_api import domestic_api
+
 app.register_blueprint(api_v1)
+app.register_blueprint(domestic_api)
 
 
 @app.route("/assets/<path:filename>")
