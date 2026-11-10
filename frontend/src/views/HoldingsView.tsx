@@ -260,6 +260,14 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   const stockSummary: any[] = dashboardData?.stock_summary || [];
   const distData: any[] = dashboardData?.distribution?.[distTab] || [];
 
+  const returnToDashboard = () => {
+    setSelectedPersonId(personId !== undefined ? personId : initialFilter.person_id ?? null);
+    setSelectedBroker(broker ?? initialFilter.broker ?? "");
+    setSearchKeyword("");
+    setDetailPage(1);
+    setViewMode("dashboard");
+  };
+
   const drillToPerson = (pId: number | null) => {
     setSelectedPersonId(pId);
     setDimension("person");
@@ -494,7 +502,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           }}
         >
           <button
-            onClick={() => setViewMode("dashboard")}
+            onClick={returnToDashboard}
             style={{
               padding: "5px 14px",
               borderRadius: "6px",

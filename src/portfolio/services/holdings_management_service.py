@@ -1043,7 +1043,7 @@ class HoldingsManagementService:
                 matched_trades.extend(ts.get_trades(trade_scope, size=1000, page=page).rows)
         matched_trades = [
             row for row in matched_trades if (row.values[3] or "").upper() == ticker
-            and (scoped_drawer or _match_broker(broker, row.metadata.get("display_name"), row.values[1]))
+            and _match_broker(broker, row.metadata.get("display_name"), row.values[1])
         ]
 
         trade_records = []
