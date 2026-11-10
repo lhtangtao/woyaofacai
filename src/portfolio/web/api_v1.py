@@ -1374,6 +1374,19 @@ def api_monitoring_watchlist():
                 except Exception:
                     pass
 
+            ath = m.get("AVAILABLE_HIGH")
+            drawdown_pct = m.get("DRAWDOWN")
+            eff_high = ath
+            if price is not None and ath is not None:
+                try:
+                    p_val = float(price)
+                    ath_val = float(ath)
+                    if ath_val > 0:
+                        eff_high = max(ath_val, p_val)
+                        drawdown_pct = ((p_val / eff_high) - 1.0) * 100.0
+                except Exception:
+                    pass
+
             clean_sym = sym.removesuffix(".US")
             result.append({
                 "symbol": clean_sym,
@@ -1382,6 +1395,8 @@ def api_monitoring_watchlist():
                 "price": price or "—",
                 "change": change_pct,
                 "day": ms.get("bar_date", "—"),
+                "ath_high": eff_high,
+                "drawdown_pct": drawdown_pct,
                 "ma5": m.get("MA5"),
                 "ma10": m.get("MA10"),
                 "ma20": m.get("MA20"),

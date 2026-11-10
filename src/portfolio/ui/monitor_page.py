@@ -240,16 +240,14 @@ class StockCellWidget(QWidget):
         layout.addWidget(self.sub_lbl)
 
     def _on_link_activated(self, link: str):
-        if self.on_select_row:
-            self.on_select_row(self.row_idx, self.symbol)
         if self.on_link_clicked:
             self.on_link_clicked(link)
 
     def mousePressEvent(self, event):
-        # Click on non-hyperlink area of the cell selects the table row normally
+        # Click on non-hyperlink area of the cell triggers row tap (toggle drawer)
         if self.on_select_row:
             self.on_select_row(self.row_idx, self.symbol)
-        super().mousePressEvent(event)
+        event.accept()
 
 
 class MonitoringPage(QWidget):
@@ -273,6 +271,7 @@ class MonitoringPage(QWidget):
         self.rules: List[MonitorRule] = []
         self.alert_events: List[AlertEvent] = []
         self.selected: str = ""
+        self._drawer_open: bool = False
         self.busy: bool = False
         self.worker: Optional[Worker] = None
         self.generation: int = 0
@@ -382,12 +381,9 @@ class MonitoringPage(QWidget):
         layout = QVBoxLayout(parent)
         layout.setContentsMargins(6, 10, 6, 6)
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        layout.addWidget(split)
-
-        # Left Column: Watchlist Table
+        # Full-width Watchlist Table
         left, col = card()
-        split.addWidget(left)
+        layout.addWidget(left)
 
         filters = QHBoxLayout()
         self.search = QLineEdit()
@@ -399,10 +395,11 @@ class MonitoringPage(QWidget):
         filters.addWidget(self.kind)
         col.addLayout(filters)
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels([
             "标的 / 来源",
             "现价 / 涨跌",
+            "最高回撤",
             "MA20",
             "MA50",
             "MA200",
@@ -421,10 +418,9 @@ class MonitoringPage(QWidget):
         header = self.table.horizontalHeader()
         header.setMinimumSectionSize(56)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for col_idx, width in ((8, 56), (9, 104)):
+        for col_idx, width in ((9, 58), (10, 108)):
             header.setSectionResizeMode(col_idx, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(col_idx, width)
-        self.table.setMinimumWidth(680)
         self.table.setStyleSheet(
             "QTableWidget { font-size: 12px; }"
             "QTableWidget::item { padding-left: 2px; padding-right: 2px; }"
@@ -437,20 +433,36 @@ class MonitoringPage(QWidget):
         self.mapping_button.clicked.connect(self.edit_mapping)
         table_actions.addWidget(self.mapping_button)
 
+        tip_lbl = label("提示：点击任意行弹出右侧 K 线与技术指标抽屉，再次点击该行即可自动收起。")
+        tip_lbl.setStyleSheet("color: #64748B; font-size: 11px; margin-left: 8px;")
+        table_actions.addWidget(tip_lbl)
+
         table_actions.addStretch()
         col.addLayout(table_actions)
 
-        # Right Column: Chart & Indicator Cards
-        self.right_panel, r_col = card()
-        split.addWidget(self.right_panel)
-        split.setSizes([780, 620])
-        split.setChildrenCollapsible(False)
+        # Floating Drawer Overlay + Slide-Out Right Panel (K-Line & Indicators)
+        self.drawer_overlay = QWidget(self)
+        self.drawer_overlay.setStyleSheet("background: rgba(15, 23, 42, 0.25);")
+        self.drawer_overlay.mousePressEvent = lambda e: self.close_kline_drawer()
+        self.drawer_overlay.hide()
+
+        self.drawer_frame = QFrame(self)
+        self.drawer_frame.setObjectName("monitorKlineDrawer")
+        self.drawer_frame.setStyleSheet(
+            "#monitorKlineDrawer { background: #FFFFFF; border-left: 1px solid #CBD5E1; }"
+        )
+        drawer_outer = QVBoxLayout(self.drawer_frame)
+        drawer_outer.setContentsMargins(16, 14, 14, 14)
+        drawer_outer.setSpacing(10)
+        self.drawer_frame.hide()
+
+        self.right_panel = self.drawer_frame
 
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        r_col.addWidget(right_scroll)
+        drawer_outer.addWidget(right_scroll)
 
         right_body = QWidget()
         right_scroll.setWidget(right_body)
@@ -487,6 +499,18 @@ class MonitoringPage(QWidget):
         )
         self.add_rule_for_stock_btn.clicked.connect(lambda: self._open_rule_dialog(default_symbol=self.selected))
         header_row.addWidget(self.add_rule_for_stock_btn)
+
+        self.close_drawer_btn = QPushButton("✕")
+        self.close_drawer_btn.setFixedSize(28, 28)
+        self.close_drawer_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_drawer_btn.setToolTip("收起 K 线分析抽屉")
+        self.close_drawer_btn.setStyleSheet(
+            "QPushButton { background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 14px; color: #475569; font-weight: bold; font-size: 13px; }"
+            "QPushButton:hover { background: #E2E8F0; color: #0F172A; }"
+        )
+        self.close_drawer_btn.clicked.connect(self.close_kline_drawer)
+        header_row.addWidget(self.close_drawer_btn)
+
         detail_layout.addLayout(header_row)
 
         self.detail = label("")
@@ -1033,9 +1057,21 @@ class MonitoringPage(QWidget):
 
             act_rules = rule_counts.get(symbol, 0)
             rules_badge = f"{act_rules}条" if act_rules > 0 else "无"
+
+            ath = m.get("AVAILABLE_HIGH")
+            curr_p = data.get("price")
+            drawdown_val = None
+            eff_high = ath
+            if ath is not None and ath > 0 and curr_p is not None:
+                eff_high = max(ath, curr_p)
+                drawdown_val = (curr_p / eff_high - 1) * 100
+            elif m.get("DRAWDOWN") is not None:
+                drawdown_val = m.get("DRAWDOWN")
+
             values = [
                 symbol,
                 f"{fmt(data.get('price'))}\n{fmt(data.get('change'), suffix='%')}",
+                fmt(drawdown_val, suffix="%"),
                 *(fmt(m.get("MA" + str(n))) for n in (20, 50, 200, 250)),
                 fmt(m.get("DEV200"), suffix="%"),
                 "/".join(
@@ -1048,18 +1084,28 @@ class MonitoringPage(QWidget):
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, symbol)
-                item.setToolTip(value + "\n" + data.get("error", ""))
-                if col in range(1, 7):
+                if col == 2:
+                    dd_pct_str = fmt(abs(drawdown_val), suffix="%") if drawdown_val is not None else "—"
+                    item.setToolTip(
+                        f"较最高点回撤: {dd_pct_str}\n历史最高价: {fmt(eff_high)}\n当前现价: {fmt(curr_p)}"
+                    )
+                else:
+                    item.setToolTip(value + "\n" + data.get("error", ""))
+                if col in range(1, 8):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                elif col in (7, 8):
+                elif col in (8, 9):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
                 clean_sym = symbol.removesuffix(".US")
-                if col in (1, 6):
-                    number = data.get("change") if col == 1 else m.get("DEV200")
+                if col in (1, 2, 7):
+                    number = (
+                        data.get("change")
+                        if col == 1
+                        else (drawdown_val if col == 2 else m.get("DEV200"))
+                    )
                     if number is not None:
                         item.setForeground(QColor(tokens(self).profit if number >= 0 else tokens(self).loss))
-                elif col == 8:
+                elif col == 9:
                     if act_rules > 0:
                         item.setForeground(QColor("#16A34A"))
                         font = item.font()
@@ -1084,7 +1130,7 @@ class MonitoringPage(QWidget):
                 remove_button.clicked.connect(lambda checked=False, sym=symbol: self._on_remove_stock(sym))
                 action_layout.addWidget(remove_button)
             actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
-            self.table.setCellWidget(row, 9, actions)
+            self.table.setCellWidget(row, 10, actions)
 
             # Column 0: clickable hyperlink widget for AI analysis navigation
             stock_cell = StockCellWidget(
@@ -1092,7 +1138,7 @@ class MonitoringPage(QWidget):
                 source_label=source_label,
                 row_idx=row,
                 on_link_clicked=self.jump_to_stock_analysis,
-                on_select_row=self._select_table_row,
+                on_select_row=self._on_row_tapped,
             )
             self.table.setCellWidget(row, 0, stock_cell)
             self.table.setRowHeight(row, 56)
@@ -1101,16 +1147,35 @@ class MonitoringPage(QWidget):
 
         self.table.blockSignals(False)
         if rows:
-            self.table.selectRow(selected_row)
-            self.selected = rows[selected_row]["analysis_symbol"]
+            if self._drawer_open and self.selected:
+                self.table.selectRow(selected_row)
+                self.selected = rows[selected_row]["analysis_symbol"]
+            elif not self.selected:
+                self.selected = rows[0]["analysis_symbol"]
         else:
             self.selected = ""
+            if self._drawer_open:
+                self.close_kline_drawer()
         self.draw_detail()
 
     def selection_changed(self):
         item = self.table.item(self.table.currentRow(), 0)
         self.selected = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if self._drawer_open and self.selected:
+            self.draw_detail()
+
+    def _on_row_tapped(self, row_idx: int, symbol: str):
+        if not symbol:
+            return
+        if self._drawer_open and self.selected == symbol:
+            self.close_kline_drawer()
+            return
+        self.table.blockSignals(True)
+        self.table.selectRow(row_idx)
+        self.table.blockSignals(False)
+        self.selected = symbol
         self.draw_detail()
+        self.open_kline_drawer()
 
     def _select_table_row(self, row_idx: int, symbol: str):
         self.table.blockSignals(True)
@@ -1118,6 +1183,38 @@ class MonitoringPage(QWidget):
         self.table.blockSignals(False)
         self.selected = symbol
         self.draw_detail()
+
+    def open_kline_drawer(self):
+        if not hasattr(self, "drawer_frame"):
+            return
+        self._drawer_open = True
+        self._position_drawer()
+        self.drawer_overlay.show()
+        self.drawer_frame.show()
+        self.drawer_overlay.raise_()
+        self.drawer_frame.raise_()
+
+    def close_kline_drawer(self):
+        self._drawer_open = False
+        if hasattr(self, "drawer_overlay"):
+            self.drawer_overlay.hide()
+        if hasattr(self, "drawer_frame"):
+            self.drawer_frame.hide()
+        self.table.blockSignals(True)
+        self.table.clearSelection()
+        self.table.blockSignals(False)
+
+    def _position_drawer(self):
+        if not hasattr(self, "drawer_frame"):
+            return
+        w = min(680, max(520, int(self.width() * 0.48))) if self.width() > 0 else 620
+        self.drawer_overlay.setGeometry(self.rect())
+        self.drawer_frame.setGeometry(max(0, self.width() - w), 0, w, self.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._drawer_open:
+            self._position_drawer()
 
     def jump_to_stock_analysis(self, symbol: str):
         """Navigate to AI Stock Analysis page (Page 20) with target symbol loaded."""
@@ -1145,11 +1242,14 @@ class MonitoringPage(QWidget):
             self.host.pages.setCurrentIndex(20)
 
     def _on_cell_clicked(self, row: int, col: int):
-        if col == 8:
-            item = self.table.item(row, 0)
-            sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
-            if sym:
-                self._open_rule_dialog(default_symbol=sym)
+        item = self.table.item(row, 0)
+        sym = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if not sym:
+            return
+        if col == 9:
+            self._open_rule_dialog(default_symbol=sym)
+        elif 1 <= col <= 8:
+            self._on_row_tapped(row, sym)
 
     def draw_detail(self):
         data = self.market.get(self.selected, {})
@@ -1590,6 +1690,8 @@ class MonitoringPage(QWidget):
 
     # --- TAB SWITCHING & DIALOG LAUNCHERS ---
     def _on_tab_changed(self, idx: int):
+        if idx != 0 and self._drawer_open:
+            self.close_kline_drawer()
         if idx == 1:
             self._load_rules_table()
         elif idx == 2:

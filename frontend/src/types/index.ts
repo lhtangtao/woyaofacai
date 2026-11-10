@@ -124,6 +124,8 @@ export interface WatchlistItem {
   ma50: string | null;
   ma200: string | null;
   day: string;
+  ath_high?: number | string | null;
+  drawdown_pct?: number | null;
 }
 
 export interface ReportDetailData {

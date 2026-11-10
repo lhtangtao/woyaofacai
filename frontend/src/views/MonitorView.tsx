@@ -324,6 +324,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                 {/* UN-TRUNCATED MAs: 90px min-width each */}
                 <th style={{ minWidth: "90px", textAlign: "right" }}>MA5</th>
                 <th style={{ minWidth: "90px", textAlign: "right" }}>MA10</th>
+                <th style={{ minWidth: "90px", textAlign: "right" }}>最高回撤</th>
                 <th style={{ minWidth: "90px", textAlign: "right" }}>MA20</th>
                 <th style={{ minWidth: "90px", textAlign: "right" }}>MA50</th>
                 <th style={{ minWidth: "90px", textAlign: "right" }}>MA200</th>
@@ -333,7 +334,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={14} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <td colSpan={15} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                     {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
@@ -397,6 +398,18 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                       {/* MA10 */}
                       <td className="font-mono" style={{ textAlign: "right" }}>
                         {row.ma10 ? Number(row.ma10).toFixed(3) : "—"}
+                      </td>
+                      {/* 最高回撤 */}
+                      <td
+                        className="font-mono"
+                        style={{
+                          textAlign: "right",
+                          color: row.drawdown_pct != null ? (Number(row.drawdown_pct) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "inherit",
+                          fontWeight: 600,
+                        }}
+                        title={row.ath_high != null ? `历史最高: $${Number(row.ath_high).toFixed(2)}` : undefined}
+                      >
+                        {row.drawdown_pct != null ? `${Number(row.drawdown_pct).toFixed(2)}%` : "—"}
                       </td>
                       {/* MA20 */}
                       <td className="font-mono" style={{ textAlign: "right" }}>

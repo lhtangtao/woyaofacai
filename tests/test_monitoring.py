@@ -464,3 +464,64 @@ def test_multi_owner_sources_keep_person_quantity_not_group_total():
     )
     values = holding_sources(analytics, {1: dict(symbol="AAOX", market="US")}, {})
     assert [(s["person_id"], s["quantity"]) for s in values] == [(1, "6"), (2, "4")]
+
+
+def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
+    """验证观察列表在 MA20 前增加最高回撤列，且 K 线面板支持点击行弹出、再点击自动消失的抽屉交互"""
+    from PySide6.QtCore import QThreadPool
+    from portfolio.ui.monitor_page import MonitoringPage
+
+    store = MonitorStore(tmp_path / "monitoring.sqlite3")
+    window = SimpleNamespace(pool=QThreadPool(), info=None)
+    page = MonitoringPage(window, store=store)
+    qtbot.addWidget(page)
+    page.resize(1440, 900)
+    page.show()
+
+    page.targets = [
+        {"analysis_symbol": "AAOI.US", "source_type": "MANUAL", "archive_state": "HELD", "sources": []},
+    ]
+    page.market = {
+        "AAOI.US": {
+            "price": D("50"),
+            "change": D("-5.00"),
+            "bars": [],
+            "metrics": {
+                "AVAILABLE_HIGH": D("200"),
+                "DRAWDOWN": D("-75.00"),
+                "MA20": D("60"),
+                "MA50": D("70"),
+                "MA200": D("90"),
+                "MA250": D("95"),
+                "DEV200": D("-44.44"),
+                "SHORT": "偏弱",
+                "MEDIUM": "偏弱",
+                "LONG": "偏弱",
+            },
+        }
+    }
+    page.draw_table()
+    qtbot.wait(20)
+
+    # 1. 验证列头顺序：第2列为最高回撤，紧邻第3列 MA20
+    headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
+    assert headers[2] == "最高回撤"
+    assert headers[3] == "MA20"
+    assert page.table.item(0, 2).text() == "-75.00%"
+
+    # 2. 初始状态抽屉隐藏
+    assert not page._drawer_open
+    assert page.drawer_frame.isHidden()
+
+    # 3. 首次点击该行（第2列最高回撤单元格）弹出抽屉
+    page._on_cell_clicked(0, 2)
+    qtbot.wait(20)
+    assert page._drawer_open
+    assert not page.drawer_frame.isHidden()
+    assert page.selected == "AAOI.US"
+
+    # 4. 再次点击同一行自动收起消失
+    page._on_cell_clicked(0, 2)
+    qtbot.wait(20)
+    assert not page._drawer_open
+    assert page.drawer_frame.isHidden()
