@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -495,10 +496,11 @@ def build_progress_page(self):
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     container = QWidget()
     c_layout = QVBoxLayout(container)
-    c_layout.setContentsMargins(0, 0, 16, 0)
+    c_layout.setContentsMargins(0, 0, 0, 0)
     c_layout.setSpacing(14)
 
     try:
@@ -507,10 +509,21 @@ def build_progress_page(self):
         data = []
 
     theme = tokens(self)
+
+    def wrapped_label(text):
+        label = QLabel(text)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setWordWrap(True)
+        policy = label.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        label.setSizePolicy(policy)
+        return label
+
     for entry in sorted(data, key=lambda item: item.get("time", ""), reverse=True):
         card = QFrame()
+        card.setObjectName("progressCard")
         card.setStyleSheet(f"""
-            QFrame {{
+            QFrame#progressCard {{
                 background-color: {theme.panel};
                 border: 1px solid {theme.border};
                 border-radius: 8px;
@@ -526,34 +539,34 @@ def build_progress_page(self):
         tag_str = entry.get("tag", "优化")
 
         h_widget = QWidget()
-        h_layout = QHBoxLayout(h_widget)
+        h_layout = QGridLayout(h_widget)
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(8)
 
         time_lbl = QLabel(time_str)
         time_lbl.setStyleSheet(f"color: {theme.brand}; font-weight: bold; font-size: 13px;")
-        h_layout.addWidget(time_lbl)
+        h_layout.addWidget(time_lbl, 0, 0, Qt.AlignmentFlag.AlignTop)
 
-        title_lbl = QLabel(title_str)
+        title_lbl = wrapped_label(title_str)
         title_lbl.setStyleSheet(f"color: {theme.heading}; font-weight: bold; font-size: 14px;")
-        h_layout.addWidget(title_lbl, 1)
+        h_layout.addWidget(title_lbl, 0, 1)
+        h_layout.setColumnStretch(1, 1)
 
         author_str = entry.get("author", "")
         if author_str:
             author_lbl = QLabel(author_str)
             author_lbl.setStyleSheet(f"background-color: {theme.hover}; color: {theme.violet}; border: 1px solid {theme.border}; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500;")
-            h_layout.addWidget(author_lbl)
+            h_layout.addWidget(author_lbl, 1, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
-        tag_lbl = QLabel(tag_str)
-        tag_lbl.setStyleSheet(f"background-color: {theme.selected}; color: {theme.brand}; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500;")
-        h_layout.addWidget(tag_lbl)
+        tag_lbl = wrapped_label(tag_str)
+        tag_lbl.setStyleSheet(f"color: {theme.brand}; font-size: 12px; font-weight: 500;")
+        h_layout.addWidget(tag_lbl, 1, 1)
 
         c_v.addWidget(h_widget)
 
         # Bullet points
         for d in entry.get("details", []):
-            item_lbl = QLabel(f"•  {d}")
-            item_lbl.setWordWrap(True)
+            item_lbl = wrapped_label(f"•  {d}")
             item_lbl.setStyleSheet(f"color: {theme.text}; font-size: 13px; line-height: 1.5; margin-left: 4px;")
             c_v.addWidget(item_lbl)
 

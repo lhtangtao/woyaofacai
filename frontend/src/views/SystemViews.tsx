@@ -145,9 +145,9 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
 
   // Progress Changelog
   if (mode === "progress") {
-    const logs = data?.logs || [];
+    const logs = data?.progress_logs || [];
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto" }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px", overflowY: "auto", overflowX: "hidden", overflowWrap: "anywhere" }}>
         <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
           <History size={18} color="var(--brand)" />
           <span>项目架构演进与开发日志 (Progress Log)</span>
@@ -156,7 +156,7 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {logs.map((log: any, idx: number) => (
             <div key={idx} className="card-panel" style={{ padding: "14px 18px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "4px 12px", marginBottom: "8px" }}>
                 <span style={{ fontSize: "15px", fontWeight: 700, color: "var(--text-heading)" }}>
                   {log.title || `更新记录`}
                 </span>
@@ -164,6 +164,12 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
                   {log.timestamp || log.time}
                 </span>
               </div>
+              {(log.author || log.tag) && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", marginBottom: "8px", fontSize: "12px", color: "var(--brand)" }}>
+                  {log.author && <strong>{log.author}</strong>}
+                  {log.tag && <span>{log.tag}</span>}
+                </div>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 {(log.details || []).map((detail: string, dIdx: number) => (
                   <div key={dIdx} style={{ fontSize: "13px", lineHeight: "1.5", color: "var(--text-main)" }}>
