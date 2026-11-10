@@ -1272,9 +1272,7 @@ class MonthlyPerformancePage(QWidget):
         self.table_view.horizontalHeader().setHighlightSections(False)
         self.table_view.horizontalHeader().setSectionsClickable(True)
         self.table_view.horizontalHeader().sectionClicked.connect(self.on_header_section_clicked)
-        # 展示 20 行高度并禁用内层纵向滚动条，由最外层页面滚动
-        self.table_view.setMinimumHeight(390)
-        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_view.setStyleSheet("""
             QTableView {
                 background-color: #FFFFFF;
@@ -1367,6 +1365,7 @@ class MonthlyPerformancePage(QWidget):
         page_h.addWidget(self.next_page_btn)
 
         table_vbox.addWidget(self.table_pager)
+        self.update_pagination_ui()
         content_layout.addWidget(table_card)
 
         scroll.setWidget(content_widget)
@@ -2255,16 +2254,9 @@ class MonthlyPerformancePage(QWidget):
     def refresh_table_view(self, filtered_rows: List[Tuple], month_summaries: List[List[Any]]):
         self.table_model.highlight_month = self.selected_month
         current_tab = self.tab_bar.currentIndex()
-        header = self.table_view.horizontalHeader()
         is_flow = current_tab == 3
         self.table_model.show_all_rows = is_flow
         self.table_pager.setVisible(not is_flow)
-        self.table_view.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff if is_flow else Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        if not is_flow:
-            self.table_view.setMaximumHeight(16777215)
-            self.table_view.setMinimumHeight(390)
         self.flow_panel.setVisible(is_flow)
         self.flow_totals_label.setVisible(is_flow)
         if is_flow:
@@ -2411,11 +2403,6 @@ class MonthlyPerformancePage(QWidget):
             self.table_count_lbl.setText(f"共 {len(s_rows)} 条记录")
 
         self.adjust_current_table_columns()
-        if is_flow:
-            height = (header.height() + self.table_view.verticalHeader().length()
-                      + 2 * self.table_view.frameWidth()
-                      + self.table_view.horizontalScrollBar().sizeHint().height())
-            self.table_view.setFixedHeight(height)
         self.update_pagination_ui()
 
     @staticmethod
@@ -2485,6 +2472,12 @@ class MonthlyPerformancePage(QWidget):
         self.update_pagination_ui()
 
     def update_pagination_ui(self):
+        table = self.table_view
+        # Fit every visible model row, reserving space for the scrollbar on narrow windows.
+        height = (table.horizontalHeader().height() + table.verticalHeader().length()
+                  + 2 * table.frameWidth() + table.horizontalScrollBar().sizeHint().height())
+        table.setFixedHeight(height)
+
         total_rows = len(self.table_model.all_rows)
         cur_page = self.table_model.page
         page_sz = self.table_model.page_size
