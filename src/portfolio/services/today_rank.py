@@ -35,6 +35,7 @@ def today_rank(reports, pnl, day, *, channel=None, ticker='', rate=None):
 
     rank = None
     rate_rank = None
+    rate_label = None
     direction = None
     if pnl is None:
         text = '— 等待有效盈亏'
@@ -48,14 +49,15 @@ def today_rank(reports, pnl, day, *, channel=None, ticker='', rate=None):
         rate_desc = ""
         if rate is not None and days_rate and rate != 0:
             rate_rank = 1 + sum(r > rate if rate > 0 else r < rate for r in days_rate)
-            rate_desc = f" · 收益率第 {rate_rank} 名"
+            rate_label = f"{'亏损率' if rate < 0 else '收益率'}第 {rate_rank} 名"
+            rate_desc = f" · {rate_label}"
         text = f'{direction}第 {rank} 名{rate_desc}'
 
     detail_note = note + f' 有效历史 {len(days_pnl)} 天；缺失/未知收益排除 {missing} 天。'
     if rank is not None:
         detail_note += f' 当日金额{direction}第 {rank} 名'
-    if rate_rank is not None:
-        detail_note += f'，收益率第 {rate_rank} 名'
+    if rate_label is not None:
+        detail_note += f'，{rate_label}'
     detail_note += '。'
 
     return dict(

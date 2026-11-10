@@ -117,6 +117,7 @@ def build_workspace(self):
     self.cancel_button.clicked.connect(self.cancel_queries)
     status.addWidget(self.cancel_button)
     layout.addWidget(self.source_toolbar)
+    self.source_toolbar.hide()
     self.stat_widget = QWidget()
     stats = QHBoxLayout(self.stat_widget)
     stats.setContentsMargins(0, 0, 0, 0)

@@ -340,3 +340,12 @@ def test_today_rank_includes_rate_ranking():
     assert res['rate_rank'] == 3
     assert res['text'] == '盈利第 2 名 · 收益率第 3 名'
 
+    for row in (r1, r2, r3):
+        row[19] = -row[19]
+    reports['每日持仓收益'] = Report('每日持仓收益', (), tuple(ReportRow(tuple(row), meta) for row in (r1, r2, r3)))
+    res = today_rank(reports, D(-1500), '2026-10-19', rate=D('-0.09'))
+    assert res['rank'] == 2
+    assert res['rate_rank'] == 3
+    assert res['text'] == '亏损第 2 名 · 亏损率第 3 名'
+    assert '亏损率第 3 名' in res['note']
+

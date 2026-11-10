@@ -109,6 +109,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             action.setShortcut(shortcut)
             action.triggered.connect(callback)
             file_menu.addAction(action)
+        file_menu.addAction("取消查询", self.cancel_queries)
         file_menu.addAction("更新人民币汇率（补齐历史）", lambda: self.update_fx(force=True))
         file_menu.addAction('重新检查当月收盘价入库', self.check_monthly_history)
         view = self.menuBar().addMenu("外观")

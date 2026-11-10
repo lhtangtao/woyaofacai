@@ -1,11 +1,8 @@
 import React from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
   RefreshCw,
   RotateCcw,
   Download,
-  Database,
   User,
   Sun,
   Moon,
@@ -15,15 +12,9 @@ import { PersonItem, UserProfile } from "../types";
 interface WorkspaceHeaderProps {
   title: string;
   subtitle?: string;
-  compactTradeHeader?: boolean;
-  canGoBack: boolean;
-  canGoForward: boolean;
-  onGoBack: () => void;
-  onGoForward: () => void;
   onRefresh: () => void;
   onResetFilters?: () => void;
   onExport?: () => void;
-  dbName: string;
   user: UserProfile | null;
   persons: PersonItem[];
   currentPersonId: number | null;
@@ -36,15 +27,9 @@ interface WorkspaceHeaderProps {
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   title,
   subtitle,
-  compactTradeHeader = false,
-  canGoBack,
-  canGoForward,
-  onGoBack,
-  onGoForward,
   onRefresh,
   onResetFilters,
   onExport,
-  dbName,
   user,
   hidePersonSelector = false,
   persons,
@@ -76,37 +61,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {!compactTradeHeader && <div style={{ display: "flex", gap: "2px" }}>
-            <button
-              onClick={onGoBack}
-              disabled={!canGoBack}
-              className="btn btn-quiet"
-              style={{
-                width: "28px",
-                height: "28px",
-                padding: 0,
-                opacity: canGoBack ? 1 : 0.4,
-              }}
-              title="后退 (⌥←)"
-            >
-              <ArrowLeft size={16} />
-            </button>
-            <button
-              onClick={onGoForward}
-              disabled={!canGoForward}
-              className="btn btn-quiet"
-              style={{
-                width: "28px",
-                height: "28px",
-                padding: 0,
-                opacity: canGoForward ? 1 : 0.4,
-              }}
-              title="前进 (⌥→)"
-            >
-              <ArrowRight size={16} />
-            </button>
-          </div>}
-
           <div>
             <h1
               style={{
@@ -209,7 +163,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         </div>
       </div>
 
-      {/* Sub Bar: Database badge & status */}
+      {/* Account identity and access scope */}
       <div
         style={{
           display: "flex",
@@ -220,11 +174,6 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {!compactTradeHeader && <>
-            <Database size={13} color="var(--brand)" />
-            <span>源库: {dbName || "money.sqlite3"} · 只读保全</span>
-            <span style={{ color: "var(--text-subtle)" }}>|</span>
-          </>}
           <span>当前身份: {user?.person_name || user?.username || "访客"}</span>
           {isIsolatedUser && (
             <span

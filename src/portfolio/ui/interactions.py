@@ -261,7 +261,6 @@ class InteractionMixin:
         self.pages.setCurrentIndex(page)
         trade_page = page == 0 and hasattr(self, "trade_center")
         self.description.setVisible(not trade_page)
-        self.source_toolbar.setVisible(not trade_page)
         self.trade_refresh_button.setVisible(trade_page)
         self.refresh_button.setText("重连数据源" if trade_page else "刷新")
         self.refresh_button.setToolTip("重新打开当前数据库并检查结构 · ⌘R" if trade_page else "刷新当前数据源 · ⌘R")

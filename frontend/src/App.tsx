@@ -258,14 +258,8 @@ export const App: React.FC = () => {
         <WorkspaceHeader
           title={headerMeta.title}
           subtitle={headerMeta.subtitle}
-          compactTradeHeader={currentRoute === "trades"}
-          canGoBack={historyIndex > 0}
-          canGoForward={historyIndex < history.length - 1}
-          onGoBack={goBack}
-          onGoForward={goForward}
           onRefresh={handleRefresh}
           onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
-          dbName={bootstrap?.database?.name || "money.sqlite3"}
           user={bootstrap?.user || null}
           hidePersonSelector={currentRoute === "trades" || (assetRoute && currentRoute !== "overview") ||
             ["people", "brokers", "reports:当前持仓", "reports:股票汇总"].includes(currentRoute)}
