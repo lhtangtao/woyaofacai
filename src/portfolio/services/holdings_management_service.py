@@ -1104,27 +1104,94 @@ class HoldingsManagementService:
         # Default sort descending by trade time
         trade_records.sort(key=lambda x: str(x["trade_time"]), reverse=True)
 
-        # 3. Tab 2: 持仓分析 (Quantity and Cost changes over time)
+        # 3. 聚合「每日持仓收益」用于持仓分析 (Tab 2) 与收益分析 (Tab 3) 及未结当月表现补充
+        daily_rep = analytics.reports.get("每日持仓收益") if analytics else None
+        daily_by_date: dict[str, dict[str, Any]] = {}
+        if daily_rep:
+            for r in daily_rep.rows:
+                if len(r.values) <= 22 or not r.values[3] or r.values[3].upper() != ticker:
+                    continue
+                if person_id is not None and r.metadata.get("person_id") is not None and r.metadata.get("person_id") != person_id:
+                    continue
+                if account_id is not None and r.metadata.get("account_id") is not None and r.metadata.get("account_id") != account_id:
+                    continue
+                if instrument_id is not None and r.metadata.get("instrument_id") is not None and r.metadata.get("instrument_id") != instrument_id:
+                    continue
+                if broker and not _match_broker(broker, r.values[1], r.metadata.get("broker_code") or r.values[1]):
+                    continue
+                dt = str(r.values[0])[:10]
+                rec = daily_by_date.setdefault(dt, {
+                    "qty": Decimal(0),
+                    "mv": Decimal(0),
+                    "net": Decimal(0),
+                    "pnl": Decimal(0),
+                    "init_mv": Decimal(0),
+                    "buy": Decimal(0),
+                    "cost_list": [],
+                })
+                rec["qty"] += (r.values[8] if isinstance(r.values[8], Decimal) else Decimal(0))
+                rec["mv"] += (r.values[11] if isinstance(r.values[11], Decimal) else Decimal(0))
+                rec["net"] += (r.values[22] if isinstance(r.values[22], Decimal) else Decimal(0))
+                rec["pnl"] += (r.values[19] if isinstance(r.values[19], Decimal) else Decimal(0))
+                rec["init_mv"] += (r.values[15] if isinstance(r.values[15], Decimal) else Decimal(0))
+                rec["buy"] += (r.values[16] if isinstance(r.values[16], Decimal) else Decimal(0))
+                if isinstance(r.values[9], Decimal):
+                    rec["cost_list"].append(r.values[9])
+
+        sorted_daily_dates = sorted(daily_by_date.keys())
+
+        # Tab 2: 持仓分析 (Quantity and Cost changes over time)
         holding_analysis = {"dates": [], "quantities": [], "costs": []}
-        # Chronological sort for the chart
-        for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
-            dt = str(t["trade_time"])[:10]
-            holding_analysis["dates"].append(dt)
-            holding_analysis["quantities"].append(t["post_quantity"] or 0)
-            # Cost per share
-            c_val = serialize_val(cost_price)
-            holding_analysis["costs"].append(c_val or 0)
+        if sorted_daily_dates:
+            for dt in sorted_daily_dates:
+                rec = daily_by_date[dt]
+                qty_val = rec["qty"]
+                if qty_val > 0 and rec["net"] > 0:
+                    c_per_share = rec["net"] / qty_val
+                elif len(rec["cost_list"]) == 1:
+                    c_per_share = rec["cost_list"][0]
+                else:
+                    c_per_share = Decimal(0)
+                holding_analysis["dates"].append(dt)
+                holding_analysis["quantities"].append(serialize_val(qty_val) or 0)
+                holding_analysis["costs"].append(serialize_val(c_per_share) or 0)
+        else:
+            for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
+                dt = str(t["trade_time"])[:10]
+                holding_analysis["dates"].append(dt)
+                holding_analysis["quantities"].append(t["post_quantity"] or 0)
+                holding_analysis["costs"].append(serialize_val(cost_price) or 0)
 
         # 4. Tab 3: 收益分析 (PnL Analysis)
+        chart_dates = []
+        cumulative_rates = []
+        cumulative_pnls = []
+        floating_rates = []
+        cum_pnl_acc = Decimal(0)
+        max_base_acc = Decimal(0)
+        for dt in sorted_daily_dates:
+            rec = daily_by_date[dt]
+            cum_pnl_acc += rec["pnl"]
+            day_base = rec["net"] if rec["net"] > 0 else (rec["init_mv"] + rec["buy"])
+            if day_base > max_base_acc:
+                max_base_acc = day_base
+            cum_rate = ratio(cum_pnl_acc, max_base_acc) if max_base_acc > 0 else Decimal(0)
+            flt_rate = ratio(rec["mv"] - rec["net"], rec["net"]) if (rec["qty"] > 0 and rec["net"] > 0) else None
+            chart_dates.append(dt)
+            cumulative_rates.append(serialize_val(cum_rate))
+            cumulative_pnls.append(serialize_val(cum_pnl_acc))
+            floating_rates.append(serialize_val(flt_rate))
+
         pnl_analysis = {
             "floating_pnl": serialize_val(floating_pnl),
             "floating_rate": serialize_val(floating_pnl_rate),
             "realized_pnl": serialize_val(total_pnl - floating_pnl),
             "cumulative_pnl": serialize_val(total_pnl),
             "cumulative_rate": serialize_val(total_pnl_rate),
-            "chart_dates": [],
-            "cumulative_rates": [],
-            "floating_rates": [],
+            "chart_dates": chart_dates,
+            "cumulative_rates": cumulative_rates,
+            "cumulative_pnls": cumulative_pnls,
+            "floating_rates": floating_rates,
             "markers": [],
         }
         # Collect buy / sell execution markers
@@ -1138,28 +1205,56 @@ class HoldingsManagementService:
 
         # 5. Tab 4: 月度表现 (Monthly Performance)
         monthly_rep = analytics.reports.get("每月持仓收益") if analytics else None
-        monthly_records = []
+        monthly_map: dict[str, dict[str, Decimal]] = {}
         if monthly_rep:
             for r in monthly_rep.rows:
                 if r.values[3] and r.values[3].upper() == ticker:
-                    if person_id is not None and r.metadata.get("person_id") != person_id:
+                    if person_id is not None and r.metadata.get("person_id") is not None and r.metadata.get("person_id") != person_id:
                         continue
-                    if account_id is not None and r.metadata.get("account_id") != account_id:
+                    if account_id is not None and r.metadata.get("account_id") is not None and r.metadata.get("account_id") != account_id:
                         continue
-                    if instrument_id is not None and r.metadata.get("instrument_id") != instrument_id:
+                    if instrument_id is not None and r.metadata.get("instrument_id") is not None and r.metadata.get("instrument_id") != instrument_id:
                         continue
-                    m_pnl = r.values[20]
-                    m_mv = r.values[11]
-                    m_rate = r.values[21] if len(r.values) > 21 else None
-                    if m_rate is None and m_mv and m_mv > 0 and m_pnl is not None:
-                        m_rate = ratio(m_pnl, m_mv - m_pnl)
-                    monthly_records.append({
-                        "month": str(r.values[0]),
-                        "market_value": serialize_val(m_mv),
-                        "monthly_pnl": serialize_val(m_pnl),
-                        "return_rate": serialize_val(m_rate),
-                    })
-        monthly_records.sort(key=lambda x: x["month"], reverse=True)
+                    if broker and not _match_broker(broker, r.values[1], r.metadata.get("broker_code") or r.values[1]):
+                        continue
+                    m = str(r.values[0])
+                    m_pnl = r.values[20] if isinstance(r.values[20], Decimal) else Decimal(0)
+                    m_mv = r.values[11] if isinstance(r.values[11], Decimal) else Decimal(0)
+                    init_mv_m = r.values[15] if isinstance(r.values[15], Decimal) else Decimal(0)
+                    buy_m = r.values[16] if isinstance(r.values[16], Decimal) else Decimal(0)
+                    base_m = init_mv_m + buy_m
+                    if base_m <= 0:
+                        base_m = m_mv - m_pnl
+                    rec = monthly_map.setdefault(m, {"mv": Decimal(0), "pnl": Decimal(0), "base": Decimal(0)})
+                    rec["mv"] += m_mv
+                    rec["pnl"] += m_pnl
+                    rec["base"] += max(Decimal(0), base_m)
+
+        # 若当前月（如最新交易月）在「每月持仓收益」尚未月结，从「每日持仓收益」实时补充
+        if sorted_daily_dates:
+            daily_months: dict[str, list[str]] = {}
+            for dt in sorted_daily_dates:
+                daily_months.setdefault(dt[:7], []).append(dt)
+            for m, dts in daily_months.items():
+                if m not in monthly_map:
+                    last_dt = dts[-1]
+                    first_dt = dts[0]
+                    m_mv = daily_by_date[last_dt]["mv"]
+                    m_pnl = sum((daily_by_date[d]["pnl"] for d in dts), Decimal(0))
+                    m_base = daily_by_date[first_dt]["init_mv"] + sum((daily_by_date[d]["buy"] for d in dts), Decimal(0))
+                    if m_base <= 0:
+                        m_base = m_mv - m_pnl
+                    monthly_map[m] = {"mv": m_mv, "pnl": m_pnl, "base": max(Decimal(0), m_base)}
+
+        monthly_records = []
+        for m, rec in sorted(monthly_map.items(), reverse=True):
+            m_rate = ratio(rec["pnl"], rec["base"]) if rec["base"] > 0 else None
+            monthly_records.append({
+                "month": m,
+                "market_value": serialize_val(rec["mv"]),
+                "monthly_pnl": serialize_val(rec["pnl"]),
+                "return_rate": serialize_val(m_rate),
+            })
 
         elapsed_ms = (time.monotonic() - start_t) * 1000
         logger.info(

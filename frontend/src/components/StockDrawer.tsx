@@ -162,13 +162,19 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
   };
 
   // ECharts: PnL Rate Analysis
+  const pnlDates = pnlAnalysis.chart_dates && pnlAnalysis.chart_dates.length
+    ? pnlAnalysis.chart_dates
+    : (pnlAnalysis.markers || []).map((m: any) => m.date);
   const pnlChartOption = {
-    tooltip: { trigger: "axis" },
+    tooltip: {
+      trigger: "axis",
+      valueFormatter: (v: any) => (v == null ? "—" : `${Number(v).toFixed(2)}%`),
+    },
     legend: { data: ["累计收益率", "浮动收益率"], bottom: 0 },
     grid: { left: "4%", right: "4%", top: "12%", bottom: "16%", containLabel: true },
     xAxis: {
       type: "category",
-      data: (pnlAnalysis.markers || []).map((m: any) => m.date),
+      data: pnlDates,
       axisLabel: { fontSize: 11 },
     },
     yAxis: {
@@ -178,15 +184,22 @@ export const StockDrawer: React.FC<StockDrawerProps> = ({ ticker, personId, brok
     },
     series: [
       {
-        name: "成交买卖点",
-        type: "scatter",
-        data: (pnlAnalysis.markers || []).map((m: any) => [m.date, Number(m.price || 0)]),
-        itemStyle: {
-          color: (param: any) => {
-            const item = (pnlAnalysis.markers || [])[param.dataIndex];
-            return item?.side?.includes("买") ? loss : profit;
-          },
-        },
+        name: "累计收益率",
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        data: (pnlAnalysis.cumulative_rates || []).map((v: any) => (v == null ? null : Number((v * 100).toFixed(2)))),
+        itemStyle: { color: "#2563EB" },
+        lineStyle: { width: 2 },
+      },
+      {
+        name: "浮动收益率",
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        data: (pnlAnalysis.floating_rates || []).map((v: any) => (v == null ? null : Number((v * 100).toFixed(2)))),
+        itemStyle: { color: "#10B981" },
+        lineStyle: { width: 1.5, type: "dashed" },
       },
     ],
   };

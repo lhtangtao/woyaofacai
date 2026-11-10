@@ -53,41 +53,53 @@ logger = logging.getLogger(__name__)
 
 class ModernMetricCard(QFrame):
     """Modern financial card matching mockup styling."""
-    def __init__(self, title: str, parent=None):
+    def __init__(self, title: str, parent=None, compact: bool = False):
         super().__init__(parent)
         self.setObjectName("card")
         self.setStyleSheet("""
             QFrame#card {
                 background: #FFFFFF;
                 border: 1px solid #E2E8F0;
-                border-radius: 10px;
+                border-radius: 8px;
+            }
+            QFrame#card QLabel {
+                border: none;
+                background: transparent;
             }
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(4)
+        layout.setContentsMargins(10 if compact else 14, 8 if compact else 12, 10 if compact else 14, 8 if compact else 12)
+        layout.setSpacing(3 if compact else 4)
 
         self.title_lbl = QLabel(title)
-        self.title_lbl.setStyleSheet("color: #64748B; font-size: 12px; font-weight: 500;")
+        self.title_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;" if compact else "color: #64748B; font-size: 12px; font-weight: 500;")
 
         self.val_lbl = QLabel("—")
-        self.val_lbl.setFont(numeric_font(22, bold=True))
+        self.val_lbl.setFont(numeric_font(16 if compact else 22, bold=True))
         self.val_lbl.setStyleSheet("color: #0F172A;")
 
-        self.sub_lbl = QLabel("—")
+        self.sub_lbl = QLabel("")
         self.sub_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+        self.sub_lbl.hide()
 
         layout.addWidget(self.title_lbl)
         layout.addWidget(self.val_lbl)
         layout.addWidget(self.sub_lbl)
+        if compact:
+            layout.addStretch()
 
-    def set_content(self, main_val: str, sub_val: str, sub_color: str | None = None):
+    def set_content(self, main_val: str, sub_val: str = "", sub_color: str | None = None):
         self.val_lbl.setText(main_val)
-        self.sub_lbl.setText(sub_val)
-        if sub_color:
-            self.sub_lbl.setStyleSheet(f"color: {sub_color}; font-size: 11px; font-weight: 600;")
+        if sub_val:
+            self.sub_lbl.setText(sub_val)
+            self.sub_lbl.show()
+            if sub_color:
+                self.sub_lbl.setStyleSheet(f"color: {sub_color}; font-size: 11px; font-weight: 600;")
+            else:
+                self.sub_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
         else:
-            self.sub_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+            self.sub_lbl.setText("")
+            self.sub_lbl.hide()
 
 
 class DonutChartWidget(QWidget):
@@ -410,17 +422,18 @@ class StockDrawerWidget(QFrame):
 
         # 2. Top 6 Metrics
         metrics_frame = QFrame()
-        metrics_frame.setStyleSheet("background: #fff; border: 1px solid var(--border-color); border-radius: 8px; padding: 4px;")
+        metrics_frame.setObjectName("stockMetricsContainer")
+        metrics_frame.setStyleSheet("#stockMetricsContainer { background: transparent; border: none; padding: 0px; }")
         m_layout = QHBoxLayout(metrics_frame)
-        m_layout.setContentsMargins(6, 6, 6, 6)
+        m_layout.setContentsMargins(0, 0, 0, 0)
         m_layout.setSpacing(8)
 
-        self.m_qty = ModernMetricCard("当前持仓")
-        self.m_cost = ModernMetricCard("持仓成本")
-        self.m_curr = ModernMetricCard("最新价")
-        self.m_mv = ModernMetricCard("持仓市值")
-        self.m_fpnl = ModernMetricCard("浮动盈亏")
-        self.m_cpnl = ModernMetricCard("累计盈亏")
+        self.m_qty = ModernMetricCard("当前持仓", compact=True)
+        self.m_cost = ModernMetricCard("持仓成本", compact=True)
+        self.m_curr = ModernMetricCard("最新价", compact=True)
+        self.m_mv = ModernMetricCard("持仓市值", compact=True)
+        self.m_fpnl = ModernMetricCard("浮动盈亏", compact=True)
+        self.m_cpnl = ModernMetricCard("累计盈亏", compact=True)
         for m in (self.m_qty, self.m_cost, self.m_curr, self.m_mv, self.m_fpnl, self.m_cpnl):
             m_layout.addWidget(m, 1)
         layout.addWidget(metrics_frame)
@@ -481,7 +494,16 @@ class StockDrawerWidget(QFrame):
         tab_pnl = QWidget()
         tp_layout = QVBoxLayout(tab_pnl)
         tp_layout.setContentsMargins(0, 4, 0, 0)
-        tp_layout.addWidget(QLabel("买卖点与收益走势分析"))
+        tp_layout.setSpacing(8)
+        pnl_cards_row = QHBoxLayout()
+        pnl_cards_row.setSpacing(8)
+        self.pnl_flt_card = ModernMetricCard("浮动盈亏 (USD)", compact=True)
+        self.pnl_rlz_card = ModernMetricCard("已实现盈亏 (USD)", compact=True)
+        self.pnl_cum_card = ModernMetricCard("累计盈亏 (USD)", compact=True)
+        for c in (self.pnl_flt_card, self.pnl_rlz_card, self.pnl_cum_card):
+            pnl_cards_row.addWidget(c, 1)
+        tp_layout.addLayout(pnl_cards_row)
+        tp_layout.addWidget(QLabel("历史累计收益率与持仓浮动收益率走势"))
         self.pnl_canvas = ChartCanvas()
         self.pnl_canvas.setMinimumHeight(240)
         tp_layout.addWidget(self.pnl_canvas, 1)
@@ -496,7 +518,7 @@ class StockDrawerWidget(QFrame):
         self.monthly_model = HoldingsTableModel(self.monthly_table)
         self.monthly_model.columns = ("月份", "月末市值(USD)", "月度盈亏(USD)", "收益率")
         self.monthly_table.setModel(self.monthly_model)
-        self.monthly_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.monthly_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.monthly_table.horizontalHeader().sectionClicked.connect(self.monthly_model.toggle_sort)
         tm_layout.addWidget(self.monthly_table, 1)
         self.stack.addWidget(tab_monthly)
@@ -523,16 +545,16 @@ class StockDrawerWidget(QFrame):
 
         # Metrics
         qty = summary.get("current_quantity") or 0
-        self.m_qty.set_content(f"{qty:,.0f} 股", "当前剩余持仓")
+        self.m_qty.set_content(f"{qty:,.0f} 股", "")
 
         cost = summary.get("cost_price")
-        self.m_cost.set_content(f"${cost:,.2f}" if cost else "—", "净投入每股成本")
+        self.m_cost.set_content(f"${cost:,.2f}" if cost else "—", "")
 
         curr = summary.get("current_price")
-        self.m_curr.set_content(f"${curr:,.2f}" if curr else "—", "最新有效行情")
+        self.m_curr.set_content(f"${curr:,.2f}" if curr else "—", "")
 
         mv = summary.get("market_value") or 0
-        self.m_mv.set_content(f"${mv:,.2f}", "当前持仓市值")
+        self.m_mv.set_content(f"${mv:,.2f}", "")
 
         fpnl = summary.get("floating_pnl")
         frate = summary.get("floating_pnl_rate")
@@ -564,10 +586,28 @@ class StockDrawerWidget(QFrame):
 
         # Tab 3: PnL analysis
         pnl_data = drawer_data.get("pnl_analysis", {})
-        points = tuple((day, Decimal(str(value))) for day,value in
-                       zip(pnl_data.get("chart_dates", []),pnl_data.get("cumulative_rates", [])) if value is not None)
-        series = (Series("累计收益率", points),) if points else ()
-        self.pnl_canvas.chart = Chart(90, "收益率走势图", "trend", series, "包含买卖成交点位标记")
+        def _fmt_pnl(val):
+            if val is None:
+                return "—"
+            return f"{'+' if val > 0 else ''}${val:,.2f}"
+        flt_v = pnl_data.get("floating_pnl")
+        rlz_v = pnl_data.get("realized_pnl")
+        cum_v = pnl_data.get("cumulative_pnl")
+        self.pnl_flt_card.set_content(_fmt_pnl(flt_v), sub_f if frate is not None else "", fpnl_color)
+        rlz_color = "#16A34A" if (rlz_v or 0) > 0 else "#DC2626" if (rlz_v or 0) < 0 else "#64748B"
+        self.pnl_rlz_card.set_content(_fmt_pnl(rlz_v), "")
+        self.pnl_rlz_card.val_lbl.setStyleSheet(f"color: {rlz_color};")
+        self.pnl_cum_card.set_content(_fmt_pnl(cum_v), sub_c if crate is not None else "", cpnl_color)
+
+        p_series = []
+        p_dates = pnl_data.get("chart_dates", [])
+        cum_pts = tuple((day, Decimal(str(value))) for day, value in zip(p_dates, pnl_data.get("cumulative_rates", [])) if value is not None)
+        if cum_pts:
+            p_series.append(Series("累计收益率", cum_pts))
+        flt_pts = tuple((day, Decimal(str(value))) for day, value in zip(p_dates, pnl_data.get("floating_rates", [])) if value is not None)
+        if flt_pts:
+            p_series.append(Series("持仓浮动收益率", flt_pts))
+        self.pnl_canvas.chart = Chart(90, "收益率走势图", "trend", tuple(p_series), "按日追踪累计收益率与浮动收益率走势", ratio=True)
         self.pnl_canvas.update()
 
         # Tab 4: Monthly performance

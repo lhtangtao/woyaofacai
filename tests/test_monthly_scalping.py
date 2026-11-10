@@ -324,3 +324,37 @@ def test_monthly_scalping_open_stock_replay(app, demo_path):
         assert page._replay_dialog is not None
         assert sym in page._replay_dialog.windowTitle()
         page._replay_dialog.close()
+
+
+def test_stock_drawer_data_completeness_and_clean_cards(app, demo_path):
+    """验证股票抽屉：收益分析、持仓分析、月度表现与交易记录均完整产出，顶部前4卡无冗余副标题"""
+    from portfolio.services.holdings_management_service import HoldingsManagementService
+    from portfolio.ui.holdings_page import StockDrawerWidget
+
+    service = AnalyticsService(demo_path)
+    scope = QueryScope(as_of=date.today(), ledger=Ledger.PERSON)
+    analytics = service.calculate(scope)
+    pa = analytics.reports.get("人员资产")
+    assert pa and pa.rows
+    sample_row = pa.rows[0]
+    ticker = str(sample_row.values[2])
+    broker = str(sample_row.values[1])
+    person_id = sample_row.metadata.get("person_id")
+
+    data = HoldingsManagementService.get_stock_drawer_data(
+        str(demo_path), analytics, ticker, person_id=person_id, broker=broker
+    )
+    assert len(data["trades"]) > 0
+    assert len(data["holding_analysis"]["dates"]) > 0
+    assert len(data["pnl_analysis"]["chart_dates"]) > 0
+    assert len(data["pnl_analysis"]["cumulative_rates"]) > 0
+    assert len(data["monthly_performance"]) > 0
+
+    drawer = StockDrawerWidget()
+    drawer.set_data(data)
+    assert not drawer.m_qty.sub_lbl.isVisible()
+    assert not drawer.m_cost.sub_lbl.isVisible()
+    assert not drawer.m_curr.sub_lbl.isVisible()
+    assert not drawer.m_mv.sub_lbl.isVisible()
+    assert drawer.monthly_model.rowCount() > 0
+    drawer.close()
