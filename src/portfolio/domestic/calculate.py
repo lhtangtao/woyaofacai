@@ -9,8 +9,10 @@ from uuid import uuid4
 from .alipay import record_id
 from .storage import ACCOUNT, CALC_FILE, CALC_SCHEMA, RAW_FILE, connect, insert, now
 
-VERSION = "1"
+VERSION = "2"
 ZERO = Decimal(0)
+# 用户确认这三只支付宝基金在该期初日尚未持有。
+ALIPAY_ZERO_OPENINGS = {date(2021, 11, 11): frozenset({"002611", "012414", "019172"})}
 
 
 def amount(value):
@@ -146,7 +148,9 @@ def rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, ca
         return
     opening = next((row for row in snapshots if row["snapshot_date"] == first.isoformat()), None)
     quantity = amount(opening["total_shares"]) if opening else None
-    if fund and opening is None:
+    if quantity is None and fund in ALIPAY_ZERO_OPENINGS.get(first, ()):
+        quantity = ZERO
+    if fund and quantity is None:
         checks.append(("MISSING_OPENING", fund, "基金无期初证明份额"))
     dates = [row["transaction_time"][:10] for row in fund_trades if row["transaction_time"]]
     name = (fund_trades[-1]["fund_name"] if fund_trades else snapshots[0]["fund_name"])

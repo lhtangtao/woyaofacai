@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from portfolio.domestic.alipay import Document, parse_transactions
+from portfolio.domestic.alipay import Document, finish_transaction, parse_transactions
 from portfolio.domestic.calculate import rebuild
 from portfolio.domestic.query import read_transaction, read_view
 from portfolio.domestic.service import publish
@@ -74,6 +74,29 @@ def test_repeat_import_and_rebuild_are_safe(tmp_path):
     assert rebuild(tmp_path, full=True)["status"] == "complete"
     after = read_view("positions", root=tmp_path)["rows"]
     assert [row["holding_shares"] for row in before] == [row["holding_shares"] for row in after]
+
+
+def test_alipay_confirmed_zero_openings_are_limited_to_the_named_funds_and_date(tmp_path):
+    proof, transactions = docs()
+    day = date(2021, 11, 12)
+    for index, fund in enumerate(("002611", "012414", "019172"), start=3):
+        row = raw_trade(str(index) * 32, fund, "用户买入", day, "3.50")
+        finish_transaction(transactions, [(4, index, row)])
+    publish([proof, transactions], root=tmp_path)
+    opening = {row["fund_code"]: row["holding_shares"] for row in
+               read_view("positions", root=tmp_path, as_of="2021-11-11")["rows"]}
+    closing = {row["fund_code"]: row["holding_shares"] for row in
+               read_view("positions", root=tmp_path, as_of=day.isoformat())["rows"]}
+    for fund in ("002611", "012414", "019172"):
+        assert opening[fund] == "0"
+        assert closing[fund] == "3.50"
+    assert opening["000001"] == "100.00"
+    assert opening["000002"] is None and closing["000002"] is None
+
+    other_snapshot = tmp_path / "other_snapshot"
+    proof.rows[0]["snapshot_date"] = "2021-11-10"
+    publish([proof, transactions], root=other_snapshot)
+    assert read_view("positions", root=other_snapshot, as_of=day.isoformat(), fund="002611")["rows"][0]["holding_shares"] is None
 
 
 def test_non_admin_cannot_read_personal_domestic_ledger():
