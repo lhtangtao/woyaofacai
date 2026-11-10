@@ -50,6 +50,7 @@ def build_workspace(self):
     layout.setContentsMargins(24, 20, 24, 18)
     layout.setSpacing(10)
     top = QHBoxLayout()
+    self.top_bar_layout = top
     back = QPushButton()
     back.setIcon(icon("back", self))
     back.setObjectName("quiet")
@@ -401,6 +402,10 @@ def build_workspace(self):
     self.pages.addWidget(self.monitor_page)
     from portfolio.ui.holdings_page import HoldingsPage
     self.holdings_page = HoldingsPage(self)
+    if hasattr(self.holdings_page, "mode_box"):
+        idx = self.top_bar_layout.indexOf(self.refresh_button)
+        self.top_bar_layout.insertWidget(max(0, idx), self.holdings_page.mode_box, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.holdings_page.mode_box.hide()
     self.pages.addWidget(self.holdings_page)
     self.holdings_page.drill.connect(self.drill_chart)
     from portfolio.ui.daily_performance_page import DailyPerformancePage

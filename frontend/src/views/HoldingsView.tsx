@@ -25,6 +25,8 @@ interface HoldingsViewProps {
   initialDimension?: "person" | "broker" | "stock";
   initialStatus?: string;
   initialMode?: "dashboard" | "detail";
+  controlledMode?: "dashboard" | "detail";
+  onModeChange?: (mode: "dashboard" | "detail") => void;
   initialFilter?: {
     person_id?: number | null;
     broker?: string;
@@ -43,10 +45,17 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
   initialDimension = "person",
   initialStatus = "持有中",
   initialMode = "dashboard",
+  controlledMode,
+  onModeChange,
   initialFilter = {},
 }) => {
   // Mode: "dashboard" (仪表板总览) or "detail" (统一持仓明细页)
-  const [viewMode, setViewMode] = useState<"dashboard" | "detail">(initialMode);
+  const [innerViewMode, setInnerViewMode] = useState<"dashboard" | "detail">(initialMode);
+  const viewMode = controlledMode ?? innerViewMode;
+  const setViewMode = (m: "dashboard" | "detail") => {
+    setInnerViewMode(m);
+    onModeChange?.(m);
+  };
   const [dimension, setDimension] = useState<"person" | "broker" | "stock">(initialDimension);
 
   // Filters (仅支持持有中与已清仓两种状态，默认持有中)
@@ -479,19 +488,19 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto", position: "relative" }}>
-      {/* Top Header Bar: Person Tabs on Left, Mode Switcher on Right */}
+      {/* Top Header Bar: Mode Switcher (only shown when uncontrolled) */}
+      {controlledMode === undefined && (
       <div
         className="card-panel"
         style={{
           padding: "10px 16px",
           display: "flex",
-          justifyContent: "space-between",
+          justifyContent: "flex-end",
           alignItems: "center",
           flexWrap: "wrap",
           gap: "10px",
         }}
       >
-        {/* Right: View Mode Toggle (仪表板总览 vs 持仓明细页) */}
         <div
           style={{
             display: "flex",
@@ -533,6 +542,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           </button>
         </div>
       </div>
+      )}
 
       {/* =========================================================================
           VIEW 1: 主页仪表板 (Dashboard)

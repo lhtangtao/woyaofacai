@@ -671,34 +671,31 @@ class HoldingsPage(QWidget):
         self._selected_person_filter = None
         self._cached_dash_data = None
 
+        has_host_topbar = getattr(parent, "top_bar_layout", None) is not None
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(16, 12, 16, 16)
-        root_layout.setSpacing(10)
-
-        # 1. Top Control Bar (Person Filter Tabs on Left, Mode Switcher on Right)
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(12)
+        root_layout.setContentsMargins(0 if has_host_topbar else 16, 2 if has_host_topbar else 12, 0 if has_host_topbar else 16, 12)
+        root_layout.setSpacing(8)
 
         # Left: Person Filter Dropdown (与主界面统一风格的下拉选择框)
         self.person_filter = PersonFilter(self)
         self.person_filter.setMinimumWidth(136)
         self.person_filter.changed.connect(self._on_person_filter_changed)
-        top_bar.addWidget(self.person_filter)
         self.person_filter.hide()
-        top_bar.addStretch(1)
 
-        # Right: Mode Switcher (仪表板总览 vs 持仓明细页)
-        mode_box = QFrame()
-        mode_box.setStyleSheet("background: #F1F5F9; border-radius: 8px; padding: 2px;")
-        mb_layout = QHBoxLayout(mode_box)
-        mb_layout.setContentsMargins(2, 2, 2, 2)
+        # Right: Mode Switcher (仪表板总览 vs 持仓明细页) — 挂载到主窗口标题栏与「刷新」同行
+        self.mode_box = QFrame()
+        self.mode_box.setObjectName("holdingsModeBox")
+        self.mode_box.setStyleSheet("#holdingsModeBox { background: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 8px; }")
+        mb_layout = QHBoxLayout(self.mode_box)
+        mb_layout.setContentsMargins(3, 3, 3, 3)
         mb_layout.setSpacing(4)
 
         self.mode_dash_btn = QPushButton("仪表板总览")
         self.mode_dash_btn.setCheckable(True)
         self.mode_dash_btn.setChecked(True)
+        self.mode_dash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mode_dash_btn.setStyleSheet("""
-            QPushButton { border: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748B; background: transparent; }
+            QPushButton { border: none; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748B; background: transparent; }
             QPushButton:checked { background: #2563EB; color: #FFFFFF; font-weight: bold; }
         """)
         self.mode_dash_btn.clicked.connect(lambda: self.switch_view_mode("dashboard"))
@@ -706,15 +703,21 @@ class HoldingsPage(QWidget):
 
         self.mode_detail_btn = QPushButton("持仓明细页")
         self.mode_detail_btn.setCheckable(True)
+        self.mode_detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mode_detail_btn.setStyleSheet("""
-            QPushButton { border: none; padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748B; background: transparent; }
+            QPushButton { border: none; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #64748B; background: transparent; }
             QPushButton:checked { background: #2563EB; color: #FFFFFF; font-weight: bold; }
         """)
         self.mode_detail_btn.clicked.connect(lambda: self.switch_view_mode("detail"))
         mb_layout.addWidget(self.mode_detail_btn)
 
-        top_bar.addWidget(mode_box)
-        root_layout.addLayout(top_bar)
+        if not has_host_topbar:
+            top_bar = QHBoxLayout()
+            top_bar.setSpacing(12)
+            top_bar.addWidget(self.person_filter)
+            top_bar.addStretch(1)
+            top_bar.addWidget(self.mode_box)
+            root_layout.addLayout(top_bar)
 
         # 2. Main Stack (Dashboard vs Detail)
         self.stack = QStackedWidget(self)

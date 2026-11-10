@@ -22,6 +22,7 @@ interface WorkspaceHeaderProps {
   onPersonChange: (personId: number | null) => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  extraActions?: React.ReactNode;
 }
 
 export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
@@ -37,6 +38,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onPersonChange,
   theme,
   onToggleTheme,
+  extraActions,
 }) => {
   // Determine if person selector is disabled (e.g. regular isolated user)
   const isIsolatedUser = user?.role === "user" && user?.person_id != null;
@@ -87,7 +89,8 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
         </div>
 
         {/* Actions Right */}
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          {extraActions}
           {/* Person Selector */}
           {!hidePersonSelector && <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <User size={14} color="var(--text-muted)" />

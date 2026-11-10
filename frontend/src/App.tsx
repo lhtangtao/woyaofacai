@@ -46,6 +46,17 @@ export const App: React.FC = () => {
 
   // Refresh trigger counter
   const [refreshKey, setRefreshKey] = useState(0);
+  const [holdingsViewMode, setHoldingsViewMode] = useState<"dashboard" | "detail">(
+    window.location.hash === "#holdings-closed" ? "detail" : "dashboard"
+  );
+
+  useEffect(() => {
+    if (currentRoute === "holdings:closed") {
+      setHoldingsViewMode("detail");
+    } else if (currentRoute === "holdings") {
+      setHoldingsViewMode("dashboard");
+    }
+  }, [currentRoute]);
 
   // Login Modal State
   const [showLogin, setShowLogin] = useState(false);
@@ -271,6 +282,52 @@ export const App: React.FC = () => {
           onPersonChange={setSelectedPersonId}
           theme={theme}
           onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
+          extraActions={
+            (currentRoute === "holdings" || currentRoute === "holdings:closed") ? (
+              <div
+                style={{
+                  display: "flex",
+                  background: "var(--bg-app, #f1f5f9)",
+                  padding: "2px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-color, #e2e8f0)",
+                  height: "32px",
+                  alignItems: "center",
+                }}
+              >
+                <button
+                  onClick={() => setHoldingsViewMode("dashboard")}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: holdingsViewMode === "dashboard" ? "var(--brand, #2563eb)" : "transparent",
+                    color: holdingsViewMode === "dashboard" ? "#fff" : "var(--text-muted, #64748b)",
+                    fontWeight: holdingsViewMode === "dashboard" ? 700 : 500,
+                    fontSize: "12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  仪表板总览
+                </button>
+                <button
+                  onClick={() => setHoldingsViewMode("detail")}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: holdingsViewMode === "detail" ? "var(--brand, #2563eb)" : "transparent",
+                    color: holdingsViewMode === "detail" ? "#fff" : "var(--text-muted, #64748b)",
+                    fontWeight: holdingsViewMode === "detail" ? 700 : 500,
+                    fontSize: "12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  持仓明细页
+                </button>
+              </div>
+            ) : undefined
+          }
         />
 
         {/* Dynamic Route Body */}
@@ -311,6 +368,8 @@ export const App: React.FC = () => {
                 ticker={selectedTicker}
                 initialMode={currentRoute === "holdings:closed" ? "detail" : "dashboard"}
                 initialStatus={currentRoute === "holdings:closed" ? "已清仓" : "持有中"}
+                controlledMode={holdingsViewMode}
+                onModeChange={setHoldingsViewMode}
               />
             )}
             {currentRoute === "reports:当前持仓" && (

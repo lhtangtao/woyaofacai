@@ -1,5 +1,17 @@
 [
   {
+    "title": "持仓管理 将「仪表板总览 / 持仓明细页」切换器并入顶栏与刷新同行",
+    "time": "2026-11-10 23:26",
+    "author": "Antigravity",
+    "tag": "Mac 桌面端与 React Web 端双端优化完成，构建与几何对齐实测通过，已推送远端",
+    "details": [
+      "修改者：Antigravity（双端顶栏空间紧凑优化）",
+      "【1. 用户痛点】持仓管理页面上方原有的「仪表板总览 | 持仓明细页」切换组件独占一整行且左侧全空，与上方主标题/刷新按钮分离，平白占用垂直空间且观感松散。",
+      "【2. Mac 桌面端顶栏合一】在 workspace.py 中暴露 top_bar_layout，将 HoldingsPage 的模式切换栏（mode_box）优雅挂载至主窗口顶部标题栏右侧、紧靠「刷新」按钮左侧，并在高度（34px）与垂直居中线（y=44.0）上完全等高对齐；在 interactions.py 路由切换时控制仅在持仓管理页（page 22）显示该组件；移除页面内部多余占位顶栏，节省出完整一行空间。",
+      "【3. React Web 端同步优化】在 WorkspaceHeader 中扩展 extraActions 插槽，并在 App.tsx 与 HoldingsView.tsx 实现受控同步（controlledMode / onModeChange），当处于持仓管理路由时同步将「仪表板总览 | 持仓明细页」并入主头栏与「刷新」按钮同行；Vite 生产构建 0 报错通过。"
+    ]
+  },
+  {
     "title": "天天基金对账单导入统一国内原始库",
     "time": "2026-11-10 23:00",
     "author": "Codex",
