@@ -179,7 +179,7 @@ class DonutChartWidget(QWidget):
         # 2. Center Text
         painter.setPen(QColor(t.heading))
         painter.setFont(QFont(".AppleSystemUIFont", 14, QFont.Weight.Bold))
-        text_mv = f"${self.total_val:,.0f}" if self.total_val >= 10000 else f"${self.total_val:,.2f}"
+        text_mv = f"{self.total_val:,.0f}" if self.total_val >= 10000 else f"{self.total_val:,.2f}"
         painter.drawText(QRectF(cx - inner_r, cy - 14, inner_r * 2, 20), Qt.AlignmentFlag.AlignCenter, text_mv)
 
         painter.setPen(QColor(t.muted))
@@ -318,7 +318,7 @@ class HoldingsTableModel(FinanceModel):
         col_name = self.columns[col] if col < len(self.columns) else ""
         is_total = (row.values[0] == "合计") or row.metadata.get("is_total", False)
 
-        currency = "¥" if row.metadata.get("currency") == "CNY" else "$"
+        currency = "¥" if row.metadata.get("currency") == "CNY" else ""
         if role == Qt.ItemDataRole.DisplayRole:
             if col_name == "操作" and not is_total:
                 return "🔍 查看明细"
@@ -771,6 +771,7 @@ class HoldingsPage(QWidget):
         p_layout.addLayout(p_hdr)
 
         self.p_table = FinanceTable(freeze=False)
+        self.p_table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.p_model = HoldingsTableModel(self.p_table)
         self.p_model.columns = ("人员", "持仓市值", "本金", "累计盈亏", "收益率", "持仓股票", "当前持仓", "已清仓")
         self.p_table.setModel(self.p_model)
@@ -807,15 +808,19 @@ class HoldingsPage(QWidget):
         b_layout.addWidget(b_hdr_widget)
 
         self.b_table = FinanceTable(freeze=False)
+        self.b_table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.b_model = HoldingsTableModel(self.b_table)
         self.b_model.columns = ("券商", "持仓市值", "本金", "累计盈亏", "收益率")
         self.b_table.setModel(self.b_model)
-        self.b_table.horizontalHeader().setFixedHeight(36)
-        self.b_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.b_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.b_table.horizontalHeader().setStretchLastSection(True)
-        self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
-        self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
+        b_hdr_view = self.b_table.horizontalHeader()
+        b_hdr_view.setFixedHeight(36)
+        b_hdr_view.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        b_hdr_view.setMinimumSectionSize(56)
+        b_hdr_view.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        b_hdr_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        b_hdr_view.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        b_hdr_view.setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.b_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; } QTableView::item { padding: 0 3px; }")
         self.b_table.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         self.b_table.clicked.connect(self._on_broker_table_clicked)
         self.b_table.horizontalHeader().sectionClicked.connect(self.b_model.toggle_sort)
@@ -841,15 +846,19 @@ class HoldingsPage(QWidget):
         s_layout.addWidget(s_hdr_widget)
 
         self.s_table = FinanceTable(freeze=False)
+        self.s_table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.s_model = HoldingsTableModel(self.s_table)
         self.s_model.columns = ("Ticker", "持仓市值", "本金", "累计盈亏", "收益率")
         self.s_table.setModel(self.s_model)
-        self.s_table.horizontalHeader().setFixedHeight(36)
-        self.s_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.s_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.s_table.horizontalHeader().setStretchLastSection(True)
-        self.s_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
-        self.s_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; }")
+        s_hdr_view = self.s_table.horizontalHeader()
+        s_hdr_view.setFixedHeight(36)
+        s_hdr_view.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        s_hdr_view.setMinimumSectionSize(52)
+        s_hdr_view.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        s_hdr_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        s_hdr_view.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        s_hdr_view.setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.s_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0; } QTableView::item { padding: 0 3px; }")
         self.s_table.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
         self.s_table.clicked.connect(self._on_stock_table_clicked)
         self.s_table.horizontalHeader().sectionClicked.connect(self.s_model.toggle_sort)
@@ -1208,7 +1217,7 @@ class HoldingsPage(QWidget):
         frate = float(cards.get("floating_pnl_rate") or 0)
         fpnl_color = "#16A34A" if fpnl > 0 else "#DC2626" if fpnl < 0 else "#64748B"
         sub_mv = f"{fpnl:+,.2f} ({frate*100:+.2f}%)" if fpnl != 0 else "—"
-        self.card_mv.set_content(f"${mv:,.2f}", sub_mv, fpnl_color)
+        self.card_mv.set_content(f"{mv:,.2f}", sub_mv, fpnl_color)
 
         tot_s = cards.get("total_stock_count") or 0
         op_s = cards.get("open_stock_count") or 0
@@ -1218,11 +1227,11 @@ class HoldingsPage(QWidget):
         cpnl = float(cards.get("cumulative_pnl") or 0)
         crate = float(cards.get("cumulative_pnl_rate") or 0)
         cpnl_color = "#16A34A" if cpnl > 0 else "#DC2626" if cpnl < 0 else "#64748B"
-        self.card_pnl.set_content(f"${cpnl:+,.2f}", f"收益率 {crate*100:+.2f}%", cpnl_color)
+        self.card_pnl.set_content(f"{cpnl:+,.2f}", f"收益率 {crate*100:+.2f}%", cpnl_color)
 
         inv = float(cards.get("total_invested") or 0)
         rpnl = float(cards.get("realized_pnl") or 0)
-        self.card_invest.set_content(f"${inv:,.2f}", f"已实现 ${rpnl:,.2f} | 浮动 ${fpnl:,.2f}")
+        self.card_invest.set_content(f"{inv:,.2f}", f"已实现 {rpnl:,.2f} | 浮动 {fpnl:,.2f}")
 
         # 2. Tables
         # 人员持仓明细

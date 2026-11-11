@@ -254,7 +254,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
     const number = Number(value);
     const sign = number > 0 ? "+" : "";
     if (kind === "rate") return `${sign}${(number * 100).toFixed(2)}%`;
-    if (kind === "gain" || kind === "money") return `${kind === "gain" ? sign : ""}$${formatNumber(number)}`;
+    if (kind === "gain" || kind === "money") return `${kind === "gain" ? sign : ""}${formatNumber(number)}`;
     return formatNumber(number, Number.isInteger(number) ? 0 : 2);
   };
   const formatPercent = (val: any) => {
@@ -399,7 +399,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
         left: "41%",
         top: "43%",
         style: {
-          text: `$${formatNumber(cards.total_market_value, 0)}`,
+          text: `${formatNumber(cards.total_market_value, 0)}`,
           textAlign: "center",
           fontSize: 15,
           fontWeight: "bold",
@@ -555,7 +555,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             <div className="card-panel" style={{ padding: "16px 20px" }}>
               <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>持仓总市值 (USD)</div>
               <div style={{ fontSize: "24px", fontWeight: 800, marginTop: "6px", fontFamily: "var(--font-mono)", color: "var(--text-heading, #0f172a)" }}>
-                ${formatNumber(cards.total_market_value, 2)}
+                {formatNumber(cards.total_market_value, 2)}
               </div>
               <div style={{ marginTop: "6px", fontSize: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
                 <span
@@ -564,7 +564,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                     fontWeight: 700,
                   }}
                 >
-                  {(cards.floating_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.floating_pnl, 2)}
+                  {(cards.floating_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.floating_pnl, 2)}
                 </span>
                 <span
                   style={{
@@ -601,7 +601,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                 }}
               >
-                {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.cumulative_pnl, 2)}
               </div>
               <div style={{ marginTop: "6px", fontSize: "12px", fontWeight: 600 }}>
                 <span
@@ -618,10 +618,10 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             <div className="card-panel" style={{ padding: "16px 20px" }}>
               <div style={{ fontSize: "12px", color: "var(--text-muted, #64748b)", fontWeight: 500 }}>总投入 (USD)</div>
               <div style={{ fontSize: "24px", fontWeight: 800, marginTop: "6px", fontFamily: "var(--font-mono)", color: "var(--text-heading, #0f172a)" }}>
-                ${formatNumber(cards.total_invested, 2)}
+                {formatNumber(cards.total_invested, 2)}
               </div>
               <div style={{ marginTop: "6px", fontSize: "11px", color: "var(--text-muted, #64748b)" }}>
-                已实现 +${formatNumber(cards.realized_pnl, 2)} | 浮动 ${(cards.floating_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.floating_pnl, 2)}
+                已实现 {(cards.realized_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.realized_pnl, 2)} | 浮动 {(cards.floating_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.floating_pnl, 2)}
               </div>
             </div>
           </div>
@@ -673,10 +673,10 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       <tr key={idx}>
                         <td style={{ textAlign: "center", fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
                         <td className="font-mono" style={{ textAlign: "center" }}>
-                          ${formatNumber(p.market_value, 2)}
+                          {formatNumber(p.market_value, 2)}
                         </td>
                         <td className="font-mono" style={{ textAlign: "center" }}>
-                          ${formatNumber(p.principal ?? ((p.market_value || 0) - (p.total_pnl || 0)), 2)}
+                          {formatNumber(p.principal ?? ((p.market_value || 0) - (p.total_pnl || 0)), 2)}
                         </td>
                         <td
                           className="font-mono"
@@ -686,7 +686,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                             color: (p.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
                         >
-                          {(p.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(p.total_pnl, 2)}
+                          {(p.total_pnl || 0) >= 0 ? "+" : ""}{formatNumber(p.total_pnl, 2)}
                         </td>
                         <td
                           className="font-mono"
@@ -707,8 +707,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                     {personSummary.length > 0 && (
                       <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
                         <td style={{ textAlign: "center" }}>合计</td>
-                        <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_market_value, 2)}</td>
-                        <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_invested, 2)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(cards.total_market_value, 2)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(cards.total_invested, 2)}</td>
                         <td
                           className="font-mono"
                           style={{
@@ -716,7 +716,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                             color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
                         >
-                          {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                          {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.cumulative_pnl, 2)}
                         </td>
                         <td
                           className="font-mono"
@@ -770,8 +770,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       {sortedBrokerSummary.map((b, idx) => (
                         <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
                           <td style={{ textAlign: "center", fontWeight: 600 }}>{b.channel}</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(b.market_value, 2)}</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(b.principal ?? ((b.market_value || 0) - (b.total_pnl || 0)), 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(b.market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(b.principal ?? ((b.market_value || 0) - (b.total_pnl || 0)), 2)}</td>
                           <td
                             className="font-mono"
                             style={{
@@ -780,7 +780,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                               color: (b.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            {(b.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(b.total_pnl, 2)}
+                            {(b.total_pnl || 0) >= 0 ? "+" : ""}{formatNumber(b.total_pnl, 2)}
                           </td>
                           <td
                             className="font-mono"
@@ -796,8 +796,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       {brokerSummary.length > 0 && (
                         <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
                           <td style={{ textAlign: "center" }}>合计</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_market_value, 2)}</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_invested, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(cards.total_market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(cards.total_invested, 2)}</td>
                           <td
                             className="font-mono"
                             style={{
@@ -805,7 +805,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                               color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}${formatNumber(cards.cumulative_pnl, 2)}
+                            {(cards.cumulative_pnl || 0) >= 0 ? "+" : ""}{formatNumber(cards.cumulative_pnl, 2)}
                           </td>
                           <td
                             className="font-mono"
@@ -860,8 +860,8 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           onClick={() => drillToStock(s.ticker)}
                         >
                           <td style={{ textAlign: "center", fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(s.market_value, 2)}</td>
-                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(s.principal ?? ((s.market_value || 0) - (s.total_pnl || 0)), 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(s.market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>{formatNumber(s.principal ?? ((s.market_value || 0) - (s.total_pnl || 0)), 2)}</td>
                           <td
                             className="font-mono"
                             style={{
@@ -870,7 +870,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                               color: (s.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
-                            {(s.total_pnl || 0) >= 0 ? "+" : ""}${formatNumber(s.total_pnl, 2)}
+                            {(s.total_pnl || 0) >= 0 ? "+" : ""}{formatNumber(s.total_pnl, 2)}
                           </td>
                           <td
                             className="font-mono"
@@ -1161,16 +1161,16 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         {qty != null ? formatNumber(qty, qty % 1 === 0 ? 0 : 2) : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "center" }}>
-                        {r.cost_price != null ? `$${formatNumber(r.cost_price, 2)}` : "—"}
+                        {r.cost_price != null ? formatNumber(r.cost_price, 2) : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "center", color: "var(--brand)" }}>
-                        {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
+                        {r.current_price != null ? formatNumber(r.current_price, 2) : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "center", fontWeight: 700 }}>
-                        {r.market_value != null ? `$${formatNumber(r.market_value, 2)}` : "—"}
+                        {r.market_value != null ? formatNumber(r.market_value, 2) : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "center" }}>
-                        {r.cost_amount != null ? `$${formatNumber(r.cost_amount, 2)}` : "—"}
+                        {r.cost_amount != null ? formatNumber(r.cost_amount, 2) : "—"}
                       </td>
                       <td
                         className="font-mono"
@@ -1190,7 +1190,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           color: totalPnl != null && totalPnl > 0 ? "var(--profit-color, #16A34A)" : totalPnl != null && totalPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
                         }}
                       >
-                        {totalPnl != null ? `${totalPnl > 0 ? "+" : ""}$${formatNumber(totalPnl, 2)}` : "—"}
+                        {totalPnl != null ? `${totalPnl > 0 ? "+" : ""}${formatNumber(totalPnl, 2)}` : "—"}
                       </td>
                       <td className="font-mono" style={{ textAlign: "center" }}>
                         {r.buy_count != null ? r.buy_count : "—"}
