@@ -1,5 +1,16 @@
 [
   {
+    "title": "资产走势图：隐藏筛选卡片内多余的条件标签 Chips 行",
+    "time": "2026-11-11 23:25",
+    "author": "Antigravity",
+    "tag": "界面精简",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "隐藏资产走势图局部筛选卡片第二行的「全部人员 × / USD × / 股票市值口径 ×」多余胶囊标签行（chips_container），界面更简洁且不占用额外行高。",
+      "更新 tests/test_capital_chart.py 并运行通过。"
+    ]
+  },
+  {
     "title": "持仓管理：去除金额单元格美元符号并优化汇总表列宽以消除省略号",
     "time": "2026-11-11 23:12",
     "author": "Antigravity",

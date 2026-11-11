@@ -335,8 +335,10 @@ class AssetFilterCard(QFrame):
 
         main_layout.addLayout(row1)
 
-        # 第二行：生效过滤标签 Chips
-        self.chips_row = QHBoxLayout()
+        # 第二行：生效过滤标签 Chips（根据用户需求隐藏，不占用额外行高，保留隐藏控件保持向后兼容）
+        self.chips_container = QWidget(self)
+        self.chips_container.setVisible(False)
+        self.chips_row = QHBoxLayout(self.chips_container)
         self.chips_row.setContentsMargins(0, 0, 0, 0)
         self.chips_row.setSpacing(8)
 
@@ -352,7 +354,7 @@ class AssetFilterCard(QFrame):
         self.chips_row.addWidget(self.chip_scope)
         self.chips_row.addStretch()
 
-        main_layout.addLayout(self.chips_row)
+        main_layout.addWidget(self.chips_container)
 
         self.btn_reset.clicked.connect(self.reset_filters)
         self.combo_channel.currentIndexChanged.connect(self.on_channel_changed)

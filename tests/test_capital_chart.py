@@ -122,16 +122,19 @@ def test_capital_filter_card_interactions_and_chips(qtbot):
     page.show_chart()
     assert not page.selector.isVisible()
 
-    # 测试人员 Chips 标签同步
-    assert fc.chip_person.isVisible()
+    # 验证过滤标签 Chips 整行已隐藏，不冗余展示
+    assert not fc.chips_container.isVisible()
+    assert not fc.chip_person.isVisible()
+    assert not fc.chip_currency.isVisible()
+    assert not fc.chip_scope.isVisible()
     fc.sync_person("个人")
     assert "个人" in fc.chip_person.text()
 
-    # 测试渠道选择与 Chips 联动
+    # 测试渠道选择与筛选复位
     fc.set_available_channels(["长桥", "盈立"])
     fc.combo_channel.setCurrentText("长桥")
-    assert fc.chip_channel.isVisible()
     assert "长桥" in fc.chip_channel.text()
+    assert not fc.chips_container.isVisible()
 
     # 重置筛选
     fc.reset_filters()
