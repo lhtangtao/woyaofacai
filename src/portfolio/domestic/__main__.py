@@ -35,7 +35,20 @@ def main():
     nav.add_argument("--fund", action="append", help="可重复指定基金代码")
     nav.add_argument("--attempts", type=int, choices=range(1, 6), default=3)
     nav.add_argument("--confirm", action="store_true", required=True)
+    commands.add_parser("check-recent-nav", help="检查并补齐最近 30 天的历史基金净值")
     args = parser.parse_args()
+    if args.command == "check-recent-nav":
+        from contextlib import redirect_stdout
+        from .nav_recent import check
+
+        if not args.directory.is_dir():
+            return 0
+        with (args.directory / "recent_nav.log").open("a", encoding="utf-8") as log, redirect_stdout(log):
+            try:
+                return 2 if check(args.directory) else 0
+            except Exception as exc:
+                print(f"国内净值检查未完成：{type(exc).__name__}。请检查网络、数据库和 domestic-nav 依赖。")
+                return 1
     if args.command == "collect-nav":
         from .nav_collection import run
 

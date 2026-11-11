@@ -177,7 +177,7 @@ class Collector:
                     custody_fee=details.get("托管费率"), source="AKShare/Eastmoney+Xueqiu", fetched_at=now(),
                     raw_payload=encode(dict(details=details, directory=fund.get("directory")))), details
 
-    def hk_history(self, fund_code, product, action):
+    def hk_history(self, fund_code, product, action, *, start=START):
         """Use the endpoint behind AKShare's HK adapter, with bounded date windows."""
         from akshare.fund.fund_em import headers
         from akshare.utils import http
@@ -188,12 +188,12 @@ class Collector:
                   {"REGDATE": "权益登记日", "EXDDATE": "除息日", "ISSDATE": "分红发放日",
                    "BONUS": "每份分红", "CURRENCY": "单位"})
         records = []
-        for year in range(START.year, self.end.year + 1):
+        for year in range(start.year, self.end.year + 1):
             response = http.get("https://overseas.1234567.com.cn/overseasapi/OpenApiHander.ashx",
                                 headers=headers, params=dict(
                                     api="HKFDApi", m="MethodJZ", hkfcode=product, action=action,
                                     pageindex="0", pagesize="1000",
-                                    date1=max(START, date(year, 1, 1)).isoformat(),
+                                    date1=max(start, date(year, 1, 1)).isoformat(),
                                     date2=min(self.end, date(year, 12, 31)).isoformat()))
             response.raise_for_status()
             data = json.loads(response.text, parse_float=Decimal)

@@ -29,6 +29,7 @@ START_MOBILE=1
 START_PUBLIC=1
 START_DESKTOP=1
 STOP_ALL=0
+SKIP_NAV_SYNC=0
 DERIVED_MODE=""
 
 APP_ARGS=()
@@ -46,6 +47,7 @@ for arg in "$@"; do
             SYNC_EXCEL_ONLY=1
             ;;
         --no-sync)
+            SKIP_NAV_SYNC=1
             SYNC_API=0
             SYNC_EXCEL_ONLY=0
             ;;
@@ -175,6 +177,10 @@ if [[ "$DO_SYNC" == "1" ]]; then
             print "继续启动应用...\n"
         fi
     fi
+fi
+
+if [[ "$SKIP_NAV_SYNC" == "0" && -x "$APP_DIR/.venv/bin/python" ]]; then
+    nohup "$APP_DIR/.venv/bin/python" -m portfolio.domestic check-recent-nav >/dev/null 2>&1 &!
 fi
 
 # Synchronize/check/rebuild before either client starts serving data.

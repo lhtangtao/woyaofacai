@@ -42,3 +42,33 @@ def test_nav_gap_and_dividend_per_ten_are_recorded():
     assert not any(issue["date"] == "2021-11-13" for issue in collector.issues)
     events = list(collector.events("000001"))
     assert len(events) == 1 and events[0]["dividend_per_share"] == "0.0450"
+
+
+def test_recent_gap_check_repairs_only_history_and_skips_complete_funds(tmp_path, monkeypatch):
+    import akshare as ak
+    from portfolio.domestic import nav_recent
+    from portfolio.domestic.storage import RAW_FILE, connect
+
+    with connect(tmp_path / RAW_FILE) as db:
+        db.executescript(SCHEMA)
+    fund = {"code": "000001", "name": "测试基金", "kind": "混合型"}
+    monkeypatch.setattr(nav_recent, "fund_list", lambda _: [fund])
+    trading_days = [date(2021, 11, 11), date(2021, 11, 12), date(2021, 11, 15)]
+    monkeypatch.setattr(ak, "tool_trade_date_hist_sina", lambda: pd.DataFrame({"trade_date": trading_days}))
+    calls = []
+
+    def history(code, first, last):
+        calls.append((code, first, last))
+        return [
+            {"FSRQ": str(day), "DWJZ": "1.2345", "LJJZ": "1.2345", "JZZZL": "0"}
+            for day in trading_days
+        ]
+
+    monkeypatch.setattr(nav_recent, "mainland_history", history)
+    assert not nav_recent.check(tmp_path, today=date(2021, 11, 15))
+    assert not nav_recent.check(tmp_path, today=date(2021, 11, 15))
+    assert calls == [("000001", "2021-11-11", "2021-11-12")]
+    with connect(tmp_path / RAW_FILE, readonly=True) as db:
+        assert [r[0] for r in db.execute("SELECT nav_date FROM raw_fund_nav_daily ORDER BY nav_date")] == [
+            "2021-11-11", "2021-11-12",
+        ]

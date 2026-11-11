@@ -8,6 +8,8 @@ python -m portfolio.domestic collect-nav --fund 161725 --confirm
 python -m portfolio.domestic collect-nav --confirm
 ```
 
+运行 `启动Money3.command` 时，国内基金净值会在后台检查截至昨天的 30 天，按需补采缺口。检查日志位于国内资产库目录的 `recent_nav.log`。可用 `python -m portfolio.domestic check-recent-nav` 手动触发，使用 `--no-sync` 启动时跳过。
+
 净值与基金事件写入国内 Raw DB 独立表。报告保存在该数据库目录的 `nav_reports/`，逐条记录数据缺口。退出码 2 表示有待核对数据，已成功写入的数据可从报告核查。
 
 「国内资产 → 持仓管理」可按平台筛选基金，点击基金行查看该账户交易及已有历史持仓。市值和趋势取决于本地净值和计算覆盖情况。
