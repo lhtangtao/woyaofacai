@@ -66,7 +66,10 @@ def main():
             _, warnings = fetch_missing(c, load_evidence(c), persist)
     with connection() as c:
         c.execute("BEGIN IMMEDIATE")
+        from portfolio.sync.trade_fees import audit_recent_fees
+
         summary = refresh_fees(c)
+        summary["recent_7d_audit"] = audit_recent_fees(c, days=7)
         invalid = c.execute("""SELECT count(*) FROM (
             SELECT t.id FROM broker_trades t JOIN person_trade_fees f ON f.broker_trade_id=t.id
             WHERE t.record_state='ACTIVE' AND t.accounting_role='ACCOUNT_LEDGER' AND t.fees_e8 IS NOT NULL

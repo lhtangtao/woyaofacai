@@ -66,7 +66,7 @@ def summary(connection,query,args):
     for currency,buy,sell,fee,unknown in connection.execute(f"SELECT currency,CASE WHEN sum(CASE WHEN kind='MARKET_TRADE' AND side='BUY' AND amount_e8 IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE exact_e8_sum(CASE WHEN kind='MARKET_TRADE' AND side='BUY' THEN amount_e8 END) END,CASE WHEN sum(CASE WHEN kind='MARKET_TRADE' AND side='SELL' AND amount_e8 IS NULL THEN 1 ELSE 0 END)>0 THEN NULL ELSE exact_e8_sum(CASE WHEN kind='MARKET_TRADE' AND side='SELL' THEN amount_e8 END) END,exact_e8_sum(fees_e8),sum(CASE WHEN fees_e8 IS NULL THEN 1 ELSE 0 END) FROM ({query}) GROUP BY currency ORDER BY currency",args):
         def money(v):
             with localcontext() as ctx:ctx.prec=50;return Decimal(v)/Decimal(100000000) if v is not None else None
-        currencies.append(dict(currency=currency,buy_amount=money(buy),sell_amount=money(sell),fees=money(fee) if not unknown else None,unknown_fees=unknown))
+        currencies.append(dict(currency=currency,buy_amount=money(buy),sell_amount=money(sell),fees=money(fee) if not unknown else None,known_fees=money(fee),unknown_fees=unknown))
     return dict(matched=row[0],buys=row[1] or 0,sells=row[2] or 0,review=row[3] or 0,currencies=currencies)
 
 

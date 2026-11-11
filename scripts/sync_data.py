@@ -41,18 +41,29 @@ def main():
     clean_stale_staging_files(database)
     if not args.no_api:
         from portfolio.sync.fee_api import fetch_missing
-        from portfolio.sync.trade_fees import load_evidence, store_evidence, refresh_fees
+        from portfolio.sync.trade_fees import audit_recent_fees, load_evidence, store_evidence, refresh_fees
         from portfolio.sync.database_store import connect_database
         def persist(evidence):
             with connect_database(database) as writer:
                 store_evidence(writer, evidence)
         with connect_database(database, readonly=True) as reader:
-            _, warnings = fetch_missing(reader, load_evidence(reader), persist)
+            _, warnings = fetch_missing(reader, load_evidence(reader), persist, recent_days=7)
         with connect_database(database) as writer:
             summary = refresh_fees(writer)
+            recent = audit_recent_fees(writer, days=7)
         for warning in warnings:
             print('[FEES WARNING] '+warning)
-        print(f"[FEES] 已确认 {summary['known_trades']} 笔费用，待补 {summary['unknown_trades']} 笔。")
+        print(
+            f"[FEES] 已确认 {summary['known_trades']} 笔费用，待补 {summary['unknown_trades']} 笔"
+            f"（其中待次日结算 {summary.get('pending_settlement_trades', 0)} 笔）。"
+        )
+        print(
+            f"[FEES AUDIT 7D] 近7天成交 {recent['total_trades']} 笔（含多人分摊 {recent['multi_person_orders']} 笔）："
+            f"已入账 {recent['known_trades']} 笔，待结算 {recent['pending_settlement_trades']} 笔，"
+            f"分摊异常 {recent['allocation_mismatches']} 笔。"
+        )
+        if recent["allocation_mismatches"]:
+            print(f"[FEES WARNING] 近7天存在多人分摊不一致订单：{recent['mismatch_details']}")
     print("[DONE] Money3本地同步完成。")
     return 0
 

@@ -1,5 +1,18 @@
 [
   {
+    "title": "交易明细 修复长桥次日结算手续费未重抓与多人分摊漏记问题，增加近7天订单核查",
+    "time": "2026-11-11 13:29",
+    "author": "Antigravity",
+    "tag": "Mac 桌面端与 React Web 端双端优化完成，近7天与历史未结算长桥费用已全量补齐并按多人份额分摊",
+    "details": [
+      "修改者：Antigravity（修复长桥次日结算 0 费快照被永久锁定导致多人分摊手续费缺失的问题）",
+      "【1. 问题根因】长桥股票买卖在成交当日通过 `order_detail` 查询时，若券商尚未完成次日费用结算，`charge_detail.items` 下的 `fees` 数组为空且 `total_amount` 返回 `0.00`；此前 `fee_api.fetch_missing` 将其当作已确认证据永久跳过，且 `trade_fees.store_evidence` 在后续拉取到真实手续费时会触发冲突校验报错。",
+      "【2. 未结算识别与安全升级】在 `trade_fees.py` 新增 `is_longbridge_charge_settled()` / `is_evidence_settled()` 区分「未出账临时 0 费」与「已确认结算」：对未结算订单标记 `PENDING_SETTLEMENT`（桌面端和 Web 端悬停提示「待券商次日结算」），次日拉取到真实费用明细后在 `store_evidence()` 中安全升级覆盖并通过 `refresh_fees()` 按多人成交股数精确分摊。",
+      "【3. 最近7天订单复查与分摊一致性审计】在 `fee_api.fetch_missing(recent_days=7)` 中自动重查未结算订单及近 7 天长桥 0 费订单；新增 `audit_recent_fees(days=7)` 在 `sync_data.py` 与 `backfill_fees.py` 每次同步后核查近 7 天成交与多人分摊守恒情况；交易明细统计卡片在存在待结算记录时保留已核实手续费合计并提示待结算笔数。",
+      "【4. 实库验证补齐】已对本地业务库 `数据库/money.sqlite3` 完成费用补抓与重算，成功追回 10/28~11/06 期间 6 笔长桥未结算订单费用合计 $7.60（含多笔 LITX 三人分摊订单），长桥累计已确认手续费由 $822.20 更新为 $829.80，近7天多人分摊零异常。"
+    ]
+  },
+  {
     "title": "持仓管理 券商持仓汇总全渠道跳转带筛选及全流程中文渠道展示",
     "time": "2026-11-11 11:27",
     "author": "Antigravity",

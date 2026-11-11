@@ -1,7 +1,7 @@
 """只读获取缺失的券商订单费用；已确认费用永远复用，不重复请求。"""
 
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import time
 
@@ -9,6 +9,7 @@ from portfolio.paths import CREDENTIALS_PATH
 from portfolio.sync.trade_fees import (
     e8,
     fingerprint,
+    is_evidence_settled,
     longbridge_evidence,
     schwab_evidence,
     trades,
@@ -111,19 +112,40 @@ def match_orders(rows, orders):
     return matches
 
 
-def fetch_missing(c, existing, persist, *, progress=lambda message: print(message, flush=True)):
+def fetch_missing(
+    c,
+    existing,
+    persist,
+    *,
+    recent_days: int = 7,
+    progress=lambda message: print(message, flush=True),
+):
     """Network outside database write transactions. Persist every successful order immediately."""
     rows = trades(c)
     output = {}
     warnings = []
+    recent_cutoff = (date.today() - timedelta(days=max(0, int(recent_days)))).isoformat()
+
+    def needs_recheck(row, data):
+        if not is_evidence_settled(row["broker_code"], data):
+            return True
+        # 最近 N 天内若长桥手续费仍为 0，同步时主动复查一次，防止次日/延迟出账遗漏
+        if (
+            row["broker_code"] == "LONGBRIDGE"
+            and (row.get("business_date") or "") >= recent_cutoff
+            and data.get("fees_e8") in (None, 0)
+        ):
+            return True
+        return False
 
     def covered(row):
         direct = (row["broker_code"], row["account_id"], str(row["broker_order_id"]))
         if row["broker_order_id"] and direct in existing:
-            return True
+            return not needs_recheck(row, existing[direct])
         return any(
             key[:2] == (row["broker_code"], row["account_id"])
             and data.get("matches", {}).get(str(row["id"])) == fingerprint(row)
+            and not needs_recheck(row, data)
             for key, data in existing.items()
         )
 
@@ -190,16 +212,14 @@ def fetch_missing(c, existing, persist, *, progress=lambda message: print(messag
         for index, identity in enumerate(sorted(set(matches.values())), 1):
             try:
                 cached = existing.get(("LONGBRIDGE", targets[0]["account_id"], identity))
-                if cached:
+                identity_rows = [
+                    row for row in targets if matches.get(str(row["id"])) == identity
+                ]
+                if cached and identity_rows and not any(needs_recheck(row, cached) for row in identity_rows):
                     linked = dict(cached)
                     linked["matches"] = dict(cached.get("matches", {}))
                     linked["matches"].update(
-                        {
-                            tid: fingerprint(row)
-                            for row in targets
-                            for tid, oid in matches.items()
-                            if oid == identity and str(row["id"]) == tid
-                        }
+                        {str(row["id"]): fingerprint(row) for row in identity_rows}
                     )
                     persist({("LONGBRIDGE", targets[0]["account_id"], identity): linked})
                     continue

@@ -109,6 +109,8 @@ class CenterModel(FinanceModel):
             if key=='current_price':
                 return quote_text(row)
             if key=='fees' and value is None:
+                if row.get('fee_status')=='PENDING_SETTLEMENT':
+                    return '手续费待券商次日结算，将在后续同步中自动补齐与分摊'
                 return '手续费尚未核实'
             if key in ('post_cost','cost_change','post_quantity'):
                 return row.get('cost_note')
@@ -461,8 +463,10 @@ class TradeCenterPage(QWidget):
         self.table.fit_columns()
         self.mark_selected()
         titles=('匹配交易总数','买入记录','卖出记录','手续费合计','待核查记录');s=data['stats']
-        amounts=lambda key:' / '.join((c['currency']+'：' if len(s['currencies'])>1 else '')+(money_text(c[key]) if c[key] is not None else '—（未完整核实）') for c in s['currencies']) or '—'
-        values=(format(s['matched'],',')+f"\n买入 {s['buys']:,} · 卖出 {s['sells']:,} · 其他 —",format(s['buys'],',')+'\n买入总额 '+amounts('buy_amount'),format(s['sells'],',')+'\n卖出总额 '+amounts('sell_amount'),amounts('fees')+'\n按币种核实汇总',format(s['review'],',')+'\n关联、解析或导入异常')
+        amounts=lambda key:' / '.join((c['currency']+'：' if len(s['currencies'])>1 else '')+(money_text(c[key]) if c[key] is not None else money_text(c['known_fees']) if key=='fees' and c.get('known_fees') is not None else '—（未完整核实）') for c in s['currencies']) or '—'
+        pending_fee_count=sum((c.get('unknown_fees') or 0) for c in s['currencies'])
+        fee_hint=f'已核实汇总 · {pending_fee_count} 笔待核实/结算' if pending_fee_count else '按币种核实汇总'
+        values=(format(s['matched'],',')+f"\n买入 {s['buys']:,} · 卖出 {s['sells']:,} · 其他 —",format(s['buys'],',')+'\n买入总额 '+amounts('buy_amount'),format(s['sells'],',')+'\n卖出总额 '+amounts('sell_amount'),amounts('fees')+'\n'+fee_hint,format(s['review'],',')+'\n关联、解析或导入异常')
         for card,title,value in zip(self.cards,titles,values):card.setText(title+'\n'+value)
         self.cards[0].setToolTip(values[0]+'\n汇总接口未提供其他交易类型笔数。')
         self.cards[1].setChecked(self.applied.get('side')=='BUY' and self.applied.get('kind')=='MARKET_TRADE');self.cards[2].setChecked(self.applied.get('side')=='SELL' and self.applied.get('kind')=='MARKET_TRADE');self.cards[4].setChecked(bool(self.applied.get('review_only')))

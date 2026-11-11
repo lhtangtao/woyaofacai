@@ -95,13 +95,16 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
   const stats = data?.stats;
   const currencies = (key:string) => (stats?.currencies || []).map((entry:any) => {
     const currency = stats.currencies.length > 1 ? entry.currency + ' ' : '';
-    return currency + (entry[key] == null ? '—（未完整核实）' : tradeMoney(entry[key]));
+    const raw = entry[key] != null ? entry[key] : (key === 'fees' && entry.known_fees != null ? entry.known_fees : null);
+    return currency + (raw == null ? '—（未完整核实）' : tradeMoney(raw));
   }).join(' / ') || '—';
+  const pendingFees = (stats?.currencies || []).reduce((acc:number, entry:any) => acc + Number(entry.unknown_fees || 0), 0);
+  const feeHint = pendingFees > 0 ? `已核实汇总 · ${pendingFees} 笔待核实/结算` : '按币种核实汇总';
   const cards = [
     {title:'匹配交易总数',value:tradeCount(stats?.matched),hint:stats ? `买入 ${tradeCount(stats.buys)} · 卖出 ${tradeCount(stats.sells)} · 其他 —` : '买入 · 卖出 · 其他',tooltip:'汇总接口未提供其他交易类型笔数',Icon:Layers,tone:'blue'},
     {title:'买入记录',value:tradeCount(stats?.buys),hint:'买入总额 ' + currencies('buy_amount'),Icon:ArrowUpRight,tone:'green',key:'side',target:'BUY'},
     {title:'卖出记录',value:tradeCount(stats?.sells),hint:'卖出总额 ' + currencies('sell_amount'),Icon:ArrowDownRight,tone:'red',key:'side',target:'SELL'},
-    {title:'手续费合计',value:currencies('fees'),hint:'按币种核实汇总',Icon:Coins,tone:'blue'},
+    {title:'手续费合计',value:currencies('fees'),hint:feeHint,Icon:Coins,tone:'blue'},
     {title:'待核查记录',value:tradeCount(stats?.review),hint:'关联、解析或导入异常',Icon:Clock,tone:'blue',key:'review_only',target:true},
   ];
   const allKeys:string[] = data?.keys || [];
@@ -201,7 +204,7 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
             {data?.items?.map((item:any) => <tr key={item.record_id} tabIndex={0} aria-selected={selected === item.record_id} className={selected === item.record_id ? 'selected' : ''}
               onClick={() => openRow(item.record_id)} onKeyDown={event => rowKey(event,item.record_id)}>
               {visible.map(key => <td key={key} data-column={key} className={key === 'cost_change' ? `numeric tc-cost ${tradeTone(item.cost_diff)}` : tradeNumericKeys.has(key) ? 'numeric' : ''}
-                title={key === 'trade_date' && tradeCell(item,key).length === 10 ? '账务日期；实际成交时刻请查看交易详情。' : key === 'current_price' ? tradeQuoteInfo(item) : key === 'fees' && item.fees == null ? '手续费尚未核实' : ['post_quantity','post_cost','cost_change'].includes(key) ? item.cost_note : tradeCell(item,key)}>
+                title={key === 'trade_date' && tradeCell(item,key).length === 10 ? '账务日期；实际成交时刻请查看交易详情。' : key === 'current_price' ? tradeQuoteInfo(item) : key === 'fees' && item.fees == null ? (item.fee_status === 'PENDING_SETTLEMENT' ? '手续费待券商次日结算，将在后续同步中自动补齐与分摊' : '手续费尚未核实') : ['post_quantity','post_cost','cost_change'].includes(key) ? item.cost_note : tradeCell(item,key)}>
                 {key === 'side' ? <span className={`tc-side ${tradeSideTone(item.side_code,item.kind_code)}`}>{item.side}</span> : tradeCell(item,key)}
               </td>)}
             </tr>)}

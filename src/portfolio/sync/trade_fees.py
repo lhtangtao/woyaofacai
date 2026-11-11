@@ -1,7 +1,7 @@
 """订单费用及人员份额，金额均为1e-8定点整数；不修改成交/收益金额。"""
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_EVEN
 import json
 
@@ -104,6 +104,27 @@ def load_evidence(c):
     }
 
 
+def is_longbridge_charge_settled(data):
+    """判断长桥订单费用证据是否已完成结算（未出账的临时 0 费需等待后续复查）。"""
+    if not data:
+        return False
+    fees_e8 = data.get("fees_e8")
+    if fees_e8 is not None and fees_e8 > 0:
+        return True
+    charge = data.get("charge_detail") or {}
+    items = charge.get("items") or []
+    return any(bool(item.get("fees")) for item in items)
+
+
+def is_evidence_settled(broker, data):
+    """按券商渠道判断订单费用证据是否已最终确认。"""
+    if not data:
+        return False
+    if broker == "LONGBRIDGE":
+        return is_longbridge_charge_settled(data)
+    return True
+
+
 def store_evidence(c, evidence):
     from portfolio.sync.sync_and_split_operations import _ticker
 
@@ -115,17 +136,36 @@ def store_evidence(c, evidence):
         ).fetchone()
         data = incoming
         if saved:
-            data = json.loads(saved[0])
-            if any(
-                data.get(k) != incoming.get(k) for k in ("fees_e8", "currency", "quantity_e8", "side")
-            ) or _ticker(data["symbol"]) != _ticker(incoming["symbol"]):
+            existing_data = json.loads(saved[0])
+            same_trade_meta = (
+                all(existing_data.get(k) == incoming.get(k) for k in ("currency", "quantity_e8", "side"))
+                and _ticker(existing_data["symbol"]) == _ticker(incoming["symbol"])
+            )
+            if not same_trade_meta:
                 raise ValueError("已确认的订单费用证据发生冲突；保留原值，需人工核对")
-            for field in ("matches", "clock_evidence"):
-                if field in incoming:
-                    data.setdefault(field, {}).update(incoming[field])
-            for field in ("updated_booktime", "executed_price", "api_symbol"):
-                if field in incoming:
-                    data.setdefault(field, incoming[field])
+            if existing_data.get("fees_e8") != incoming.get("fees_e8"):
+                # 长桥等渠道在交易当日可能先返回 total_amount=0 且明细为空的未结算状态，次日结算后允许升级覆盖
+                if is_evidence_settled(broker, existing_data):
+                    raise ValueError("已确认的订单费用证据发生冲突；保留原值，需人工核对")
+                data = dict(incoming)
+                for field in ("matches", "clock_evidence"):
+                    merged = dict(existing_data.get(field) or {})
+                    merged.update(incoming.get(field) or {})
+                    if merged:
+                        data[field] = merged
+            else:
+                data = existing_data
+                if "charge_detail" in incoming and (
+                    not existing_data.get("charge_detail", {}).get("items")
+                    or (not is_evidence_settled(broker, existing_data) and is_evidence_settled(broker, incoming))
+                ):
+                    data["charge_detail"] = incoming["charge_detail"]
+                for field in ("matches", "clock_evidence"):
+                    if field in incoming:
+                        data.setdefault(field, {}).update(incoming[field])
+                for field in ("updated_booktime", "executed_price", "api_symbol"):
+                    if field in incoming:
+                        data.setdefault(field, incoming[field])
         c.execute(
             "INSERT OR REPLACE INTO order_fee_evidence VALUES (?,?,?,?,?)",
             (broker, account, identity, json.dumps(data, ensure_ascii=False), now()),
@@ -332,9 +372,12 @@ def refresh_fees(c):
                 )
             ):
                 if sum(r["quantity_e8"] for r in members) == data["quantity_e8"]:
-                    total = data["fees_e8"]
                     source = data["source"]
-                    status = "KNOWN"
+                    if is_evidence_settled(broker, data):
+                        total = data["fees_e8"]
+                        status = "KNOWN"
+                    else:
+                        status = "PENDING_SETTLEMENT"
                 else:
                     status = "ORDER_QUANTITY_MISMATCH"
         allocated = (
@@ -411,9 +454,107 @@ def refresh_fees(c):
         "broker_trades": len(rows),
         "known_trades": sum(v is not None for v in fees.values()),
         "unknown_trades": sum(v is None for v in fees.values()),
+        "pending_settlement_trades": sum(v == "PENDING_SETTLEMENT" for v in statuses.values()),
         "person_operations": len(operations),
         "known_person_operations": sum(
             r["operation_kind"] == "OWNER_TRANSFER" or r["id"] in allocations for r in operations
         ),
         "internal_operations": sum(r["operation_kind"] == "OWNER_TRANSFER" for r in operations),
+    }
+
+
+def audit_recent_fees(c, days=7, reference_date=None):
+    """核查最近 N 天内订单手续费的入账与多人分摊一致性。"""
+    end_date = reference_date or date.today()
+    start_date = end_date - timedelta(days=max(0, int(days)))
+    rows = [
+        dict(r)
+        for r in c.execute(
+            """
+            SELECT bt.id, ba.broker_code, i.symbol, bt.business_date, bt.side,
+                   bt.quantity_e8, bt.fees_e8, bt.broker_order_id,
+                   coalesce(bf.status, 'NOT_COLLECTED') AS fee_status
+            FROM broker_trades bt
+            JOIN broker_accounts ba ON ba.id = bt.account_id
+            JOIN instruments i ON i.id = bt.instrument_id
+            LEFT JOIN broker_fee_records bf ON bf.broker_trade_id = bt.id
+            WHERE bt.record_state = 'ACTIVE'
+              AND bt.accounting_role = 'ACCOUNT_LEDGER'
+              AND bt.business_date >= ?
+              AND bt.business_date <= ?
+            ORDER BY bt.business_date DESC, bt.id DESC
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        )
+    ]
+    ops_by_trade = defaultdict(list)
+    if rows:
+        trade_ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" for _ in trade_ids)
+        for op in c.execute(
+            f"""
+            SELECT po.id, po.broker_trade_id, po.person_id, p.name AS person_name,
+                   po.quantity_e8, ptf.fees_e8 AS ptf_fees_e8, ptf.status AS ptf_status
+            FROM person_operations po
+            JOIN persons p ON p.id = po.person_id
+            LEFT JOIN person_trade_fees ptf ON ptf.operation_id = po.id
+            WHERE po.operation_kind = 'MARKET_TRADE'
+              AND po.broker_trade_id IN ({placeholders})
+            ORDER BY po.id
+            """,
+            trade_ids,
+        ):
+            ops_by_trade[op["broker_trade_id"]].append(dict(op))
+
+    pending_settlement = []
+    unconfirmed = []
+    allocation_mismatches = []
+    multi_person_orders = 0
+    for row in rows:
+        members = ops_by_trade.get(row["id"], [])
+        if len(members) > 1:
+            multi_person_orders += 1
+        if row["fee_status"] == "PENDING_SETTLEMENT":
+            pending_settlement.append(row)
+        elif row["fee_status"] != "KNOWN" or row["fees_e8"] is None:
+            unconfirmed.append(row)
+        else:
+            qty_sum = sum(m["quantity_e8"] for m in members)
+            fee_missing = any(m["ptf_fees_e8"] is None or m["ptf_status"] != "KNOWN" for m in members)
+            fee_sum = sum(m["ptf_fees_e8"] or 0 for m in members)
+            if qty_sum != row["quantity_e8"] or fee_missing or fee_sum != row["fees_e8"]:
+                allocation_mismatches.append(row)
+
+    return {
+        "days": int(days),
+        "window_start": start_date.isoformat(),
+        "window_end": end_date.isoformat(),
+        "total_trades": len(rows),
+        "known_trades": len(rows) - len(pending_settlement) - len(unconfirmed),
+        "pending_settlement_trades": len(pending_settlement),
+        "unconfirmed_trades": len(unconfirmed),
+        "multi_person_orders": multi_person_orders,
+        "allocation_mismatches": len(allocation_mismatches),
+        "pending_details": [
+            {
+                "trade_id": r["id"],
+                "business_date": r["business_date"],
+                "broker_code": r["broker_code"],
+                "symbol": r["symbol"],
+                "side": r["side"],
+                "order_id": r["broker_order_id"],
+            }
+            for r in pending_settlement
+        ],
+        "mismatch_details": [
+            {
+                "trade_id": r["id"],
+                "business_date": r["business_date"],
+                "broker_code": r["broker_code"],
+                "symbol": r["symbol"],
+                "side": r["side"],
+                "order_id": r["broker_order_id"],
+            }
+            for r in allocation_mismatches
+        ],
     }
