@@ -11,6 +11,7 @@ dependencies = ["PySide6>=6.8,<7", "longbridge==5.2.1"]
 
 [project.optional-dependencies]
 domestic = ["pdfplumber>=0.11,<1"]
+domestic-nav = ["akshare==1.20.37"]
 sync = ["pandas==2.2.3", "openpyxl==3.1.5", "schwab-py==1.5.1", "requests>=2.32,<3"]
 dev = ["pytest>=8,<10", "pytest-qt>=4.4,<5", "ruff>=0.9,<1"]
 

@@ -31,7 +31,20 @@ def main():
         pdf.add_argument("files", nargs="+", type=Path)
         if command == "tiantian-import":
             pdf.add_argument("--confirm", action="store_true", required=True)
+    nav = commands.add_parser("collect-nav", help="采集历史基金净值到国内原始库")
+    nav.add_argument("--fund", action="append", help="可重复指定基金代码")
+    nav.add_argument("--attempts", type=int, choices=range(1, 6), default=3)
+    nav.add_argument("--confirm", action="store_true", required=True)
     args = parser.parse_args()
+    if args.command == "collect-nav":
+        from .nav_collection import run
+
+        try:
+            return 2 if run(args.directory, code=args.fund, attempts=args.attempts) else 0
+        except ImportError:
+            parser.error("请先安装国内净值采集依赖 pip install '.[domestic-nav]'")
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     if args.command.startswith("tiantian-"):
         from .fund_transactions import import_tiantian, preview_tiantian
         from .tiantian import parse_pdf as parse_tiantian
@@ -72,4 +85,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

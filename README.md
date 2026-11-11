@@ -1,5 +1,15 @@
 # Money3 · 本地投资管理 0.3.0
 
+国内基金历史净值由显式命令采集。安装采集依赖后可运行：
+
+```sh
+python -m pip install '.[domestic-nav]'
+python -m portfolio.domestic collect-nav --fund 161725 --confirm
+python -m portfolio.domestic collect-nav --confirm
+```
+
+净值与基金事件写入国内 Raw DB 独立表。报告保存在该数据库目录的 `nav_reports/`，逐条记录数据缺口。退出码 2 表示有待核对数据，已成功写入的数据可从报告核查。
+
 「国内资产 → 持仓管理」可按平台筛选基金，点击基金行查看该账户交易及已有历史持仓。市值和趋势取决于本地净值和计算覆盖情况。
 
 Web「今日盈亏」已补齐四张卡片、真实五分钟曲线、渠道盈亏/资产联动、日期/Ticker/组合搜索和10秒行情刷新，复用原生财务引擎及同一行情缓存。源库只读，原生桌面界面保持原样；重启 Web 服务载入新 API。浏览器与原生组件截图对比、实际测试结果及4项已有回归失败见 [专项验收](docs/VALIDATION_WEB_TODAY.md)。
