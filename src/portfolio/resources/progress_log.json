@@ -1,5 +1,15 @@
 [
   {
+    "title": "交易明细：Ticker 筛选改为精准匹配（避免 MU 误匹配 MUU）",
+    "time": "2026-11-11 23:33",
+    "author": "Antigravity",
+    "tag": "筛选体验修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "将交易明细（Trade Center）的 Ticker 字段过滤从子串包含匹配（instr）调整为不区分大小写的精准匹配（支持自动兼容 .US 后缀），输入 mu 仅匹配 MU，不再误匹配 MUU 或 AMUU。"
+    ]
+  },
+  {
     "title": "资产走势图：隐藏筛选卡片内多余的条件标签 Chips 行",
     "time": "2026-11-11 23:25",
     "author": "Antigravity",

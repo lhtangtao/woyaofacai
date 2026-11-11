@@ -388,3 +388,17 @@ def test_trade_center_page_pending_fee_display_and_tooltip(demo_path, qtbot):
     assert "次日结算" in model.data(model.index(0, fee_col), Qt.ItemDataRole.ToolTipRole)
     assert "1.16" in page.cards[3].value.text()
     assert "3 笔待核实/结算" in page.cards[3].hint.text()
+
+
+def test_trade_center_ticker_filter_exact_match():
+    import sqlite3
+    from portfolio.db.repositories.trade_center import filtered
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (symbol TEXT)")
+    conn.executemany("INSERT INTO t (symbol) VALUES (?)", [("MU",), ("MUU",), ("MU.US",), ("AMUU",)])
+
+    q, args = filtered("SELECT * FROM t", [], {"symbol": "mu"})
+    rows = [r[0] for r in conn.execute(q, args).fetchall()]
+    assert rows == ["MU", "MU.US"]
+

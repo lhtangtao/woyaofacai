@@ -37,7 +37,8 @@ def base(connection,scope,filters):
 def filtered(query,args,params,*,derived=False):
     where=[];args=list(args)
     if params.get('symbol'):
-        where.append("instr(upper(symbol),upper(?))>0");args.append(params['symbol'].strip())
+        sym=params['symbol'].strip().upper().removesuffix('.US')
+        where.append('(upper(symbol)=? OR upper(symbol)=?)');args.extend((sym,sym+'.US'))
     if params.get('broker'):
         where.append('(broker_code=? OR display_name=?)');args.extend([params['broker']]*2)
     if params.get('kind'):where.append('kind=?');args.append(params['kind'])
