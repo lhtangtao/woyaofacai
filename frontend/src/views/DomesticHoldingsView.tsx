@@ -7,7 +7,7 @@ type Data = { rows: Row[]; transactions: Row[]; history: Row[]; raw_path: string
 const holdings = [["fund_name","基金名称"],["fund_code","基金代码"],["platform","交易平台"],["fund_type","基金类型"],["shares","持有份额"],["nav","最新净值"],["nav_date","净值日期"],["market_value","持仓市值（CNY）"],["pnl","累计盈亏"],["rate","收益率"],["weight","持仓占比"],["status","状态"]];
 const trades = [["confirmation_date","确认日期"],["platform","交易平台"],["kind","交易类型"],["confirmed_shares","确认份额"],["confirmed_amount","确认金额"],["fee","手续费"],["confirmed_nav","确认净值"],["confirmation_status","确认状态"],["parse_error","备注"]];
 const money = new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const numeric = new Set(["shares","nav","market_value","confirmed_shares","confirmed_amount","fee","confirmed_nav"]);
+const numeric = new Set(["pnl","rate","shares","nav","market_value","confirmed_shares","confirmed_amount","fee","confirmed_nav"]);
 const value = (v: string | null | undefined) => v == null ? "—" : money.format(Number(v));
 const sorted = (rows: Row[], key: string, asc: boolean) => [...rows].sort((a,b) => {
   const x = a[key], y = b[key];
@@ -70,6 +70,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
   const pending = (r:Row) => r.status !== "已清仓" && r.market_value == null;
   const rows = scope.filter(r => !status || (status === "待估值" ? pending(r) : r.status === status));
   const priced = scope.filter(r => Number(r.market_value) > 0);
+  const returns = scope.filter(r=>r.pnl != null);
   const total = priced.reduce((sum,r) => sum + Number(r.market_value),0);
   const missing = scope.filter(pending).length;
   const ordered = sort[0] === "market_value" || sort[0] === "weight"
@@ -104,8 +105,9 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
       <button onClick={() => onSort([key,order[0] === key && order[1] === "desc" ? "asc" : "desc"])}>{label}
         {order[0] === key ? order[1] === "asc" ? " ↑" : " ↓" : ""}</button></th>)}{isHolding && <th />}</tr></thead>
       <tbody>{items.map(r => <tr key={r.id ?? r.account_id + ":" + r.fund_code} onClick={isHolding ? () => open(r) : undefined}>
-        {columns.map(([key]) => <td key={key} title={r.issue ?? undefined} className={/shares|nav$|amount|fee|value|weight/.test(key) ? "dh-number" : ""}>
-          {["market_value","confirmed_amount","fee"].includes(key) ? value(r[key]) :
+        {columns.map(([key]) => <td key={key} title={(["pnl","rate"].includes(key) ? r.return_issue : r.issue) ?? undefined} className={/shares|nav$|amount|fee|value|weight|pnl|rate/.test(key) ? "dh-number" : ""}>
+          {["market_value","confirmed_amount","fee","pnl"].includes(key) ? value(r[key]) :
+            key === "rate" && r.rate != null ? Number(r.rate).toFixed(2)+"%" :
             key === "weight" && total && r.market_value != null ? (100*Number(r.market_value)/total).toFixed(2)+"%" : r[key] ?? "—"}</td>)}
         {isHolding && <td><button aria-label={`查看 ${r.fund_name}`} onClick={e => { e.stopPropagation(); open(r); }}>›</button></td>}</tr>)}</tbody>
       {isHolding && <tfoot><tr><td colSpan={7}>已估值合计</td><td className="dh-number">{rows.some(r=>r.market_value != null) ? money.format(rows.reduce((sum,r)=>sum+Number(r.market_value ?? 0),0)) : "—"}</td><td colSpan={5} /></tr></tfoot>}</table>
@@ -128,7 +130,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
       <div className="dh-cards">
         {card(missing ? "已估值部分（CNY）" : "持仓总市值（CNY）",priced.length ? money.format(total) : "—")}
         {card("已确认持有基金数量",String(new Set(scope.filter(r=>r.status==="持有中").map(r=>r.fund_code)).size))}
-        {card("累计盈亏（含已清仓）","待计算")}<section className="dh-card"><span>待估值记录</span><strong>{missing}</strong><button onClick={()=>filter(setStatus,"待估值")}>查看待估值</button></section>
+        {card(returns.length === scope.length ? "累计盈亏（含已清仓）" : "累计盈亏（已核算部分）",returns.length ? money.format(returns.reduce((sum,r)=>sum+Number(r.pnl),0)) : "待计算")}<section className="dh-card"><span>待估值记录</span><strong>{missing}</strong><button onClick={()=>filter(setStatus,"待估值")}>查看待估值</button></section>
       </div>
       <div className="dh-card dh-filters">
         {select("交易平台",platform,options(all,"platform"),v=>filter(setPlatform,v))}
@@ -155,7 +157,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
       <h2>持仓明细 · {account.fund_name}</h2>
       <p>{account.platform} · {account.account_name} · {account.fund_code} · 数据日期 {account.as_of ?? "—"} · {account.status}</p>
       <div className="dh-cards">{card("当前持有份额",account.shares ?? "—")}{card("最新单位净值",account.nav ?? "—",account.nav_date ?? "净值缺失")}
-        {card("当前持仓市值（CNY）",value(account.market_value))}{card("累计盈亏","待计算")}{card("收益率","待计算")}</div>
+        {card("当前持仓市值（CNY）",value(account.market_value))}{card("累计盈亏",value(account.pnl))}{card("收益率",account.rate == null ? "—" : Number(account.rate).toFixed(2)+"%")}</div>
       <div className="dh-detail">
         <section className="dh-card"><h3>交易明细 · {account.platform}</h3><div className="dh-filters">
           <label>确认起日<input type="date" value={start} onChange={e=>{setStart(e.target.value);setTradePage(1);}} /></label>
@@ -164,7 +166,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
           {table(tx.slice((currentTradePage-1)*tradeSize,currentTradePage*tradeSize),trades,tradeSort,v=>{setTradeSort(v);setTradePage(1);})}
           {paging(tx.length,tradePage,tradeSize,setTradePage,setTradeSize)}</section>
         <section className="dh-card"><h3>持仓概览</h3><p>平台 {account.platform}</p><p>账户 {account.account_name}</p><p>基金代码 {account.fund_code}</p>
-          <p>当前份额 {account.shares ?? "—"}</p><p>市值 {value(account.market_value)}</p><p>累计买入份额 {account.buy_shares ?? "—"}</p><p>累计卖出份额 {account.sell_shares ?? "—"}</p><p>累计分红 {value(account.cash_dividend)}</p>{account.issue && <p>{account.issue}</p>}{account.last_confirmed_date && <p>最近可核对份额 {account.last_confirmed_shares} · {account.last_confirmed_date}</p>}<p>累计净值 {account.accumulated_nav ?? "—"} · 来源 {account.nav_source ?? "—"}</p></section>
+          <p>当前份额 {account.shares ?? "—"}</p><p>市值 {value(account.market_value)}</p><p>累计买入份额 {account.buy_shares ?? "—"}</p><p>累计卖出份额 {account.sell_shares ?? "—"}</p><p>累计分红 {value(account.cash_dividend)}</p><p>剩余持仓成本 {value(account.cost)}</p><p>已实现盈亏 {value(account.realized_pnl)}</p><p>{account.return_issue ?? "收益率 = 累计盈亏 ÷ 累计买入金额（非年化）"}</p>{account.issue && <p>{account.issue}</p>}{account.last_confirmed_date && <p>最近可核对份额 {account.last_confirmed_shares} · {account.last_confirmed_date}</p>}<p>累计净值 {account.accumulated_nav ?? "—"} · 来源 {account.nav_source ?? "—"}</p></section>
       </div>
       <section className="dh-card"><h3>份额 / 市值变化</h3><select aria-label="趋势范围" value={trend} onChange={e=>setTrend(e.target.value)}>
         <option value="6">近6个月</option><option value="12">近1年</option><option value="">全部</option><option value="custom">自定义</option></select>

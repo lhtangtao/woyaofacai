@@ -41,3 +41,19 @@ def test_nav_cutoff_keeps_actual_date_and_flags_disagreement():
         price = next(daily_nav(db, {"raw_fund_nav_daily"}, "000001", "2026-01-03"))
         assert (price["nav_date"], price["unit_nav"], price["accumulated_nav"]) == ("2026-01-02", "1.25", "8")
         assert price["nav_issue"]
+
+
+def test_alipay_returns_use_confirmed_cash_and_reinvest_without_new_cost():
+    from portfolio.domestic.fund_returns import confirmed_returns
+
+    def trade(kind, shares, cash):
+        return dict(transaction_type=kind, signed_shares=shares, confirmed_amount=cash, status="正常")
+
+    trades = [trade("BUY", "10", "100"), trade("REINVEST", "2", None),
+              trade("SELL", "-6", "70"), trade("CASH_DIVIDEND", "0", "3")]
+    result = confirmed_returns(trades, Decimal("6"), Decimal("65"))
+    assert Decimal(result["cost"]) == 50
+    assert Decimal(result["realized_pnl"]) == 20
+    assert Decimal(result["pnl"]) == Decimal(result["rate"]) == 38
+    assert confirmed_returns(trades, Decimal("5"), Decimal("65")) == {}
+    assert confirmed_returns([trade("TRANSFER_IN", "6", "50")], Decimal("6"), Decimal("65")) == {}

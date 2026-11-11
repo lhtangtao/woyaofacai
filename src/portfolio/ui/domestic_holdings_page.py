@@ -18,7 +18,7 @@ POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="�
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
               confirmed_amount="确认金额", fee="手续费", confirmed_nav="确认净值", confirmation_status="确认状态",
               parse_error="备注")
-NUMERIC = {"shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav"}
+NUMERIC = {"pnl", "rate", "shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav"}
 
 
 def amount(value):
@@ -106,15 +106,16 @@ class FundTable(QWidget):
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
-                if key in ("market_value", "confirmed_amount", "fee"):
+                if key in ("market_value", "confirmed_amount", "fee", "pnl"):
                     val = amount(val)
-                elif key == "weight" and val is not None:
+                elif key in ("weight", "rate") and val is not None:
                     val = f"{Decimal(val):.2f}%"
                 item = QTableWidgetItem("›" if key == "arrow" else str(val) if val is not None else "—")
                 if key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if row.get("issue"):
-                    item.setToolTip(row["issue"])
+                tooltip = row.get("return_issue") if key in ("pnl", "rate") else row.get("issue")
+                if tooltip:
+                    item.setToolTip(tooltip)
                 self.table.setItem(i, j, item)
         self.note.setText(f"共 {len(self.rows)} 条 · 第 {self.page + 1} / {pages} 页")
         self.prev.setEnabled(self.page > 0)
@@ -284,10 +285,12 @@ class DomesticHoldingsPage(QWidget):
         missing = len(pending)
         for row in rows:
             row["weight"] = str(Decimal(row["market_value"]) / total * 100) if total and row["market_value"] is not None else None
+        returns = [Decimal(r["pnl"]) for r in scope if r.get("pnl") is not None]
+        pnl_label = "累计盈亏（含已清仓）" if len(returns) == len(scope) else "累计盈亏（已核算部分）"
         clear(self.over_cards)
         for title, value in ((("已估值部分（CNY）" if missing else "持仓总市值（CNY）"), amount(total if valued else None)),
                              ("已确认持有基金数量", str(len({r["fund_code"] for r in scope if r["status"] == "持有中"}))),
-                             ("累计盈亏（含已清仓）", "待计算"), ("待估值记录", str(missing))):
+                             (pnl_label, amount(sum(returns)) if returns else "待计算"), ("待估值记录", str(missing))):
             box, body = card(title, value)
             if title == "待估值记录":
                 action = QPushButton("查看待估值")
@@ -385,14 +388,16 @@ class DomesticHoldingsPage(QWidget):
         self.breadcrumb.setText(f"国内资产 / 持仓管理 / {row['fund_name']}")
         for label, value in (("当前持有份额", row["shares"] or "—"),
                              (f"最新单位净值 · {row['nav_date'] or '净值缺失'}", row["nav"] or "—"),
-                             ("当前市值（CNY）", amount(row["market_value"])), ("累计盈亏", "待计算"),
-                             ("收益率", "待计算")):
+                             ("当前市值（CNY）", amount(row["market_value"])), ("累计盈亏", amount(row.get("pnl"))),
+                             ("收益率", f"{Decimal(row['rate']):.2f}%" if row.get("rate") is not None else "—")):
             self.detail_cards.addWidget(card(label, value)[0], 1)
         self.fund_overview.setText(
             f"平台  {row['platform']}\n账户  {row['account_name']}\n基金代码  {row['fund_code']}\n"
             f"数据日期  {row['as_of'] or '—'}\n{row['status']}\n\n"
             f"当前份额  {row['shares'] or '—'}\n当前市值  {amount(row['market_value'])}\n"
             f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
+            f"剩余持仓成本  {amount(row.get('cost'))}\n已实现盈亏  {amount(row.get('realized_pnl'))}\n"
+            f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
             f"累计分红  {amount(row.get('cash_dividend'))}\n"
             f"数据说明  {row.get('issue') or '—'}\n"
             f"最近可核对份额  {row.get('last_confirmed_shares', '—')}  {row.get('last_confirmed_date', '')}\n"

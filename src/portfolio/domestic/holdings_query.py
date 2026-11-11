@@ -5,7 +5,9 @@ from decimal import Decimal, InvalidOperation, localcontext
 from itertools import groupby
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
-from .storage import CALC_FILE, RAW_FILE, connect
+from .calculate import ALIPAY_ZERO_OPENINGS
+from .fund_returns import confirmed_returns
+from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 
 PENDING = "待计算"
 SOURCE_PRIORITY = {"AKShare/Eastmoney": 0, "AKShare/Eastmoney Hong Kong": 0}
@@ -162,7 +164,20 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             value = str(qty * nav) if status == "持有中" and nav is not None else None
             info = metadata.get(key[1], {})
             meta = accounts.get(key[0], {})
-            result["rows"].append(dict(account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
+            returns = {}
+            if (key[0] == ACCOUNT and position and status != PENDING
+                    and key[1] in ALIPAY_ZERO_OPENINGS.get(date(2021, 11, 11), ()) and not opening):
+                trades = calc.execute("""SELECT t.transaction_type,t.confirmed_amount,t.status,m.signed_shares
+                    FROM calc_fund_transactions t LEFT JOIN calc_fund_share_movements m
+                    ON m.raw_transaction_id=t.raw_transaction_id
+                    WHERE t.account_id=? AND t.fund_code=? AND
+                    (t.effective_date IS NULL OR t.effective_date>? AND t.effective_date<=?)
+                    ORDER BY t.effective_date,t.raw_transaction_id""", (*key, "2021-11-11", as_of))
+                returns = confirmed_returns(trades, qty, Decimal(value) if value is not None else None)
+            return_issue = None if returns else (
+                "天天基金历史流水或成本基准待核对" if meta.get("platform") == "天天基金" else
+                "期初成本、交易或估值尚未完整核对")
+            result["rows"].append(dict(**returns, return_issue=return_issue, account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
                 fund_type=info.get("fund_type") or record.get("fund_type") or "待分类", platform=meta.get("platform", "—"),
                 account_name=meta.get("account_name", "—"), shares=shares, nav=str(nav) if nav is not None else None,
                 nav_date=nav_date, market_value=value, as_of=as_of, status=status, issue=issue,
