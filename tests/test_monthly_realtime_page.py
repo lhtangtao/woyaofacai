@@ -287,3 +287,44 @@ def test_available_years_and_months_include_2025(qtbot):
     months = [page.month_combo.itemText(i) for i in range(page.month_combo.count())]
     assert any(m.startswith("2025-") for m in months)
     assert any(m.startswith("2026-") for m in months)
+
+def test_total_return_tab_layout_and_metrics(qtbot):
+    """验证年度走势详情右侧新增第 3 个「总收益走势」标签与全周期统计指标格式。"""
+    page = MonthlyRealtimePnlPage()
+    qtbot.addWidget(page)
+    assert page.tab_bar.count() == 3
+    assert page.tab_bar.tabText(0) == "月度走势详情"
+    assert page.tab_bar.tabText(1) == "年度走势详情"
+    assert page.tab_bar.tabText(2) == "总收益走势"
+
+    page.tab_bar.setCurrentIndex(2)
+    assert not page.month_combo.isVisible()
+    assert not page.year_combo.isVisible()
+    assert not page.baseline_switch_frame.isVisible()
+
+    points = [
+        ("2025-01-16T02:00:00Z", Decimal("0.00")),
+        ("2025-11-05T06:20:00Z", Decimal("15000.00")),
+        ("2026-11-11T08:50:00Z", Decimal("-8000.00")),
+    ]
+    chart = Chart(
+        id=0,
+        title="2025-01-16 ~ 2026-11-11 累计总收益走势",
+        kind="line",
+        series=(Series("累计盈亏", tuple(points)),),
+        note="",
+        calendar_axis="all",
+    )
+    page._shared_period = "2025-01-16 ~ 2026-11-11"
+    page._display_shared_chart(chart, {"baseline_state": "READY"}, year=False, is_all=True)
+
+    assert page.kpi_start.title_lbl.text().startswith("统计起点盈亏")
+    assert page.kpi_latest.title_lbl.text().startswith("当前累计总收益")
+    assert page.kpi_delta.title_lbl.text().startswith("累计总变化")
+    assert page.kpi_range.title_lbl.text().startswith("全周期波动区间")
+    assert page.right_panel.range_title_lbl.text() == "📅 全周期区间"
+    assert "0.00" in page.kpi_start.val_lbl.text()
+    assert "-8,000.00" in page.kpi_latest.val_lbl.text()
+    assert "2025-01-16" in page.kpi_start.sub_lbl.text()
+    assert "2025-11-05" in page.right_panel.max_time_lbl.text()
+    assert "2026-11-11" in page.right_panel.min_time_lbl.text()

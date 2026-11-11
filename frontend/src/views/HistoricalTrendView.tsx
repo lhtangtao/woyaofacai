@@ -80,10 +80,10 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   }, [data, loading, maintenance?.running]);
   return <div style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
     <div className="card-panel" style={{ display: "flex", flexWrap: "wrap", gap: 12, padding: 12, alignItems: "center" }}>
-      {!embedded && <select aria-label="月度或年度" value={kind} onChange={e => { const next = e.target.value; periodChosen.current = true; setKind(next); setPeriod(next === "year" ? period.slice(0, 4) : `${period.slice(0, 4)}-${(marketDay.current || new Date().toLocaleDateString("sv-SE")).slice(5, 7)}`); }}><option value="month">月度走势详情</option><option value="year">年度走势详情</option></select>}
-      <input aria-label="走势期间" type={kind === "month" ? "month" : "number"} min={kind === "year" ? "2025" : "2025-01"} value={period} onChange={e => { periodChosen.current = true; setPeriod(e.target.value); }} />
+      {!embedded && <select aria-label="月度或年度" value={kind} onChange={e => { const next = e.target.value; periodChosen.current = true; setKind(next); if (next !== "all") setPeriod(next === "year" ? period.slice(0, 4) : `${period.slice(0, 4)}-${(marketDay.current || new Date().toLocaleDateString("sv-SE")).slice(5, 7)}`); }}><option value="month">月度走势详情</option><option value="year">年度走势详情</option><option value="all">总收益走势</option></select>}
+      {kind !== "all" && <input aria-label="走势期间" type={kind === "month" ? "month" : "number"} min={kind === "year" ? "2025" : "2025-01"} value={period} onChange={e => { periodChosen.current = true; setPeriod(e.target.value); }} />}
       <select aria-label="走势模式" value={mode} onChange={e => setMode(e.target.value)}><option value="cumulative">累计盈亏走势</option><option value="intraday">每日日内盈亏</option></select>
-      {mode === "cumulative" && (
+      {mode === "cumulative" && kind !== "all" && (
         <div role="group" aria-label="起点模式切换" style={{ display: "inline-flex", gap: 4, background: "#f1f5f9", padding: 2, borderRadius: 6, border: "1px solid #e2e8f0" }}>
           <button
             type="button"

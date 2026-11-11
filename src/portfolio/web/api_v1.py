@@ -2318,17 +2318,29 @@ def api_shared_history():
     """Same derived service as the native month/year page, scoped before SQL."""
     try:
         import calendar
-        from portfolio.services.derived_queries import trend,load_history
+        from portfolio.services.derived_queries import first_us_trade_day, trend, load_history
         from portfolio.services.web_today import desktop_quote_store,exact_json
-        kind=request.args.get('kind','month');year=kind=='year'
-        if kind not in ('month','year'):raise ValueError('走势范围必须是month或year。')
+        kind=request.args.get('kind','month');year=kind=='year';all_history=kind=='all'
+        if kind not in ('month','year','all'):raise ValueError('走势范围必须是month、year或all。')
         period=request.args.get('period',date.today().strftime('%Y' if year else '%Y-%m'))
-        if year:first,last=date(int(period),1,1),date(int(period),12,31)
+        if all_history:
+            scope=get_user_query_scope(as_of=date.today(),person_id=request.args.get('person_id',type=int))
+            scope=replace(scope,start_date=None,search=request.args.get("search", ""))
+            scope=asset_filter_scope(get_analytics_service(), scope, broker_param="asset_broker", ticker_param="asset_ticker")
+            first=first_us_trade_day(DATABASE_PATH,scope) or date(2025,1,1)
+            last=date.today()
+            if last<first:last=first
+            period=f'{first.isoformat()} ~ {last.isoformat()}'
+        elif year:
+            first,last=date(int(period),1,1),date(int(period),12,31)
+            scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
+            scope=replace(scope,start_date=None,search=request.args.get("search", ""))
+            scope=asset_filter_scope(get_analytics_service(), scope, broker_param="asset_broker", ticker_param="asset_ticker")
         else:
             y,m=map(int,period.split('-'));first,last=date(y,m,1),date(y,m,calendar.monthrange(y,m)[1])
-        scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
-        scope=replace(scope,start_date=None,search=request.args.get("search", ""))
-        scope=asset_filter_scope(get_analytics_service(), scope, broker_param="asset_broker", ticker_param="asset_ticker")
+            scope=get_user_query_scope(as_of=max(first,min(last,date.today())),person_id=request.args.get('person_id',type=int))
+            scope=replace(scope,start_date=None,search=request.args.get("search", ""))
+            scope=asset_filter_scope(get_analytics_service(), scope, broker_param="asset_broker", ticker_param="asset_ticker")
         quotes=desktop_quote_store();quotes.source=DATABASE_PATH
         from portfolio.services.derived_store import DerivedStore
         if not DerivedStore(DATABASE_PATH).readiness()['ready']:
@@ -2345,9 +2357,9 @@ def api_shared_history():
         if mode not in ('cumulative','intraday'):raise ValueError('未知走势模式。')
         zero_base_raw=request.args.get('zero_base','1').strip().lower()
         zero_base=zero_base_raw not in ('0','false','no')
-        chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
-        opening_pnl=get_period_opening_pnl(analytics,period,is_year=year,channels=channels,ticker=ticker)
-        effective_base_pnl=Decimal(0) if (zero_base or mode!='cumulative') else opening_pnl
+        chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,all_history=all_history,start_date=first if all_history else None,end_date=last if all_history else None,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+        opening_pnl=Decimal(0) if all_history else get_period_opening_pnl(analytics,period,is_year=year,channels=channels,ticker=ticker)
+        effective_base_pnl=Decimal(0) if (all_history or zero_base or mode!='cumulative') else opening_pnl
         series_payload=[
             {
                 'name':s.name,

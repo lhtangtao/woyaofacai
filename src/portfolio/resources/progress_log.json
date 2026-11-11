@@ -1,5 +1,17 @@
 [
   {
+    "title": "月度/年度走势详情：新增第 3 个「总收益走势」标签（展示首次买美股至今整体累计走势）",
+    "time": "2026-11-12 01:38",
+    "author": "Antigravity",
+    "tag": "全周期总收益走势图",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在「月度走势详情 → 年度走势详情」右侧新增第 3 个独立标签「总收益走势」，自动定位账本中美股首次建仓/成交日期（2025-01-16）至今的全周期区间。",
+      "后端（derived_queries.py）新增 first_us_trade_day 与 trend(all_history=True) 全历史连续采样模式（4 小时采样点，横坐标以 YY-MM 按月标注）。",
+      "Mac 桌面端（monthly_realtime_page.py）与 Web 端（api_v1.py、HistoricalTrendView.tsx）同步适配全周期指标卡、区间极值年月时间戳展示及悬停 Tooltip 完整日期格式。"
+    ]
+  },
+  {
     "title": "月度/年度走势详情：补齐 2025 年美股交易日历、5分钟历史行情与年度曲线切换支持",
     "time": "2026-11-12 01:18",
     "author": "Antigravity",

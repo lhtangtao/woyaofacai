@@ -258,11 +258,51 @@ def day_history(source,quotes,scope,day):
     return tuple((stamp,'History5',items) for stamp,items in rows.get(day,())),status
 
 
-def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,mode='cumulative',now=None,history_data=None,progress=None):
+def first_us_trade_day(source, scope=None) -> date | None:
+    """查询账本中美股标的首次交易或期初基准的最早日期。"""
+    with readonly_connection(source) as c:
+        person_ids = tuple(getattr(scope, 'person_ids', None) or ()) if scope and getattr(scope, 'ledger', None) == Ledger.PERSON else ()
+        if person_ids:
+            ph = ','.join('?' for _ in person_ids)
+            row = c.execute(
+                f"""SELECT MIN(d) FROM (
+                    SELECT MIN(o.business_date) AS d FROM person_operations o
+                    JOIN instruments i ON i.id = o.instrument_id
+                    WHERE i.market = 'US' AND o.person_id IN ({ph})
+                    UNION ALL
+                    SELECT MIN(b.baseline_date) AS d FROM historical_baselines b
+                    JOIN instruments i ON i.id = b.instrument_id
+                    WHERE i.market = 'US' AND b.person_id IN ({ph})
+                ) WHERE d IS NOT NULL""",
+                person_ids + person_ids,
+            ).fetchone()
+            if row and row[0]:
+                return date.fromisoformat(row[0])
+        row = c.execute(
+            """SELECT MIN(d) FROM (
+                SELECT MIN(o.business_date) AS d FROM person_operations o
+                JOIN instruments i ON i.id = o.instrument_id WHERE i.market = 'US'
+                UNION ALL
+                SELECT MIN(t.business_date) AS d FROM broker_trades t
+                JOIN instruments i ON i.id = t.instrument_id WHERE i.market = 'US' AND t.record_state = 'ACTIVE'
+                UNION ALL
+                SELECT MIN(b.baseline_date) AS d FROM historical_baselines b
+                JOIN instruments i ON i.id = b.instrument_id WHERE i.market = 'US'
+            ) WHERE d IS NOT NULL"""
+        ).fetchone()
+        return date.fromisoformat(row[0]) if row and row[0] else None
+
+
+def trend(source,quotes,analytics,period,*,year=False,all_history=False,start_date=None,end_date=None,channels=None,ticker=None,mode='cumulative',now=None,history_data=None,progress=None):
     """No invented intraday points and no smoothing to a different daily result."""
     from portfolio.services.charts_service import Chart,Series
     now=now or datetime.now(UTC)
-    if year:
+    if all_history:
+        first=start_date or first_us_trade_day(source,analytics.scope) or date(2025,1,1)
+        last=end_date or min(now.astimezone(NY).date(),analytics.scope.as_of)
+        if last<first:last=first
+        step=timedelta(hours=4) if (last-first).days>180 else timedelta(hours=2)
+    elif year:
         first=date(int(period),1,1);last=date(int(period),12,31);step=timedelta(hours=2)
     else:
         import calendar
@@ -296,10 +336,11 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
             day=d.isoformat();start=datetime.combine(d-timedelta(days=1),time(20),NY).astimezone(UTC)
             end=datetime.combine(d,time(20),NY).astimezone(UTC)
             close=datetime.combine(d,time(13 if d in halves else 16),NY).astimezone(UTC)
-            if not year or d.month!=last_month:
-                ticks.append(start.isoformat());labels[start.isoformat()]=f'{d.month}月' if year else d.strftime('%m-%d')
+            if not (year or all_history) or (d.year, d.month)!=last_month:
+                ticks.append(start.isoformat())
+                labels[start.isoformat()]=f'{d.year % 100:02d}-{d.month:02d}' if all_history else f'{d.month}月' if year else d.strftime('%m-%d')
                 boundaries.append((start.isoformat(),'','dot'))
-            last_month=d.month
+            last_month=(d.year, d.month)
             samples=by_day.get(day,[])
             baseline=running if mode=='cumulative' else Decimal(0)
             day_valid=day in state.get('valid_days',())
@@ -365,9 +406,11 @@ def trend(source,quotes,analytics,period,*,year=False,channels=None,ticker=None,
     if baseline_breaks:note+=' 累计未知日：'+','.join(baseline_breaks[:5])+'；没有可信基准不补零。'
     if bridge_rejected:note+=' 绝对基准与日报前缀核对不一致，停止使用恢复基准：'+','.join(bridge_rejected[:5])
     if recovered:note+=' 已用经核对的期初市值、实际买卖现金流与可信日末估值恢复累计基准：'+','.join(recovered[:5])
-    chart=Chart(0,f'{period} '+('累计盈亏走势' if mode=='cumulative' else '每日日内盈亏走势'),'line',
+    title_prefix=f'{first.isoformat()} ~ {last.isoformat()} ' if all_history else f'{period} '
+    title_mode=('累计总收益走势' if all_history else '累计盈亏走势') if mode=='cumulative' else '每日日内盈亏走势'
+    chart=Chart(0,title_prefix+title_mode,'line',
                 (Series('累计盈亏' if mode=='cumulative' else '当日盈亏',tuple(points)),),note,
                 x_labels=labels,x_ticks=tuple(ticks),vertical_lines=tuple(boundaries),highlight_extremes=True,
-                show_points=False,line_width=1.5,calendar_axis='year' if year else 'month',break_keys=tuple(breaks))
+                show_points=False,line_width=1.5,calendar_axis='all' if all_history else 'year' if year else 'month',break_keys=tuple(breaks))
     if progress:progress('整理曲线采样（按交易日）',len(calendar_days),len(calendar_days))
     return chart,state

@@ -83,6 +83,7 @@ def calculate_realtime_metrics(
     series_points,
     *,
     is_year=False,
+    is_all=False,
     period_str="",
     state=None,
     base_pnl: Decimal | None = None,
@@ -90,11 +91,11 @@ def calculate_realtime_metrics(
     opening_pnl: Decimal | None = None,
 ):
     """
-    计算月度/年度走势详情的核心指标：
-    1. 月初/年初累计盈亏: 从最开始到上个月底时的累计盈亏 (若传入 base_pnl 则使用 base_pnl)
+    计算月度/年度/全部历史走势详情的核心指标：
+    1. 月初/年初/首次起点累计盈亏: 从最开始到上个月底时的累计盈亏 (若传入 base_pnl 则使用 base_pnl)
     2. 当前最新累计盈亏: 从一开始到当前最新的累计盈亏数据 (基于 base_pnl 叠加当期变动)
-    3. 本月/本年变化: 最新累计盈亏 - 月初累计盈亏 (delta_val)
-    4. 月内/年内波动区间: range_val = max_val - min_val
+    3. 本月/本年/全周期变化: 最新累计盈亏 - 起点累计盈亏 (delta_val)
+    4. 月内/年内/全周期波动区间: range_val = max_val - min_val
     5. 最高点与最低点及发生时间
     6. 最大回撤 (时序算法: max_dd = trough - prior_peak)
     7. 数据覆盖状态
@@ -107,7 +108,12 @@ def calculate_realtime_metrics(
                 valid.append((dt_bj, Decimal(str(v)), stamp_str))
 
     # 区间文字
-    if is_year:
+    if is_all:
+        if valid:
+            period_range_text = f"{valid[0][0].strftime('%Y-%m-%d %H:%M')} ～ {valid[-1][0].strftime('%Y-%m-%d %H:%M')}"
+        else:
+            period_range_text = f"{period_str}（首次交易至今）" if period_str else "首次买美股至今"
+    elif is_year:
         year_str = period_str or str(date.today().year)
         period_range_text = f"{year_str}-01-01 00:00 ～ {year_str}-12-31 23:59"
     else:
@@ -124,11 +130,11 @@ def calculate_realtime_metrics(
             "valid_count": 0,
             "period_range_text": period_range_text,
             "start_val": base_pnl,
-            "start_time_text": f"上{'年' if is_year else '月'}底累计 · {period_str}起点" if base_pnl is not None else "无有效历史数据",
+            "start_time_text": "首次买美股起点 · $0.00" if is_all else (f"上{'年' if is_year else '月'}底累计 · {period_str}起点" if base_pnl is not None else "无有效历史数据"),
             "latest_val": None,
             "latest_time_text": "无有效历史数据",
             "delta_val": None,
-            "delta_sub_text": f"较{'年初' if is_year else '月初'}变化（最新－{'年初' if is_year else '月初'}）",
+            "delta_sub_text": "全周期累计总变化（首次买入至今）" if is_all else f"较{'年初' if is_year else '月初'}变化（最新－{'年初' if is_year else '月初'}）",
             "range_val": None,
             "range_sub_text": "—",
             "max_val": None,
@@ -141,12 +147,14 @@ def calculate_realtime_metrics(
             "status_level": "neutral",
         }
 
-    # 1. 月初/年初累计盈亏
+    # 1. 月初/年初/全周期起点累计盈亏
     first_dt_bj, first_val, _ = valid[0]
     if base_pnl is not None:
         start_val = base_pnl
         valid_totals = [(dt_bj, base_pnl + v, s) for dt_bj, v, s in valid]
-        if zero_base:
+        if is_all:
+            start_time_text = f"首次买美股起点 · {first_dt_bj.strftime('%Y-%m-%d')}"
+        elif zero_base:
             extra = f" (期初累计 {opening_pnl:+,.2f})" if opening_pnl else ""
             start_time_text = f"{'本年' if is_year else '本月'}起点归零 · {period_str}起点{extra}"
         else:
@@ -154,24 +162,25 @@ def calculate_realtime_metrics(
     else:
         start_val = first_val
         valid_totals = valid
-        start_time_text = f"{'年初' if is_year else '本月'}起点 · {first_dt_bj.strftime('%Y-%m-%d')}"
+        start_time_text = f"{'首次起点' if is_all else '年初起点' if is_year else '本月起点'} · {first_dt_bj.strftime('%Y-%m-%d')}"
 
     # 2. 当前最新累计盈亏
+    time_fmt = "%Y-%m-%d %H:%M" if is_all else "%m-%d %H:%M"
     latest_dt_bj, latest_val, _ = valid_totals[-1]
-    latest_time_text = f"最近有效点 · {latest_dt_bj.strftime('%m-%d %H:%M')} 北京时间"
+    latest_time_text = f"最近有效点 · {latest_dt_bj.strftime(time_fmt)} 北京时间"
 
-    # 3. 本月/本年变化 = 当前最新 - 月初
+    # 3. 周期变化
     delta_val = latest_val - start_val
-    delta_sub_text = f"较{'年初' if is_year else '月初'}变化（最新－{'年初' if is_year else '月初'}）"
+    delta_sub_text = "全周期累计总变化（最新－首次起点）" if is_all else f"较{'年初' if is_year else '月初'}变化（最新－{'年初' if is_year else '月初'}）"
 
     # 4. 极值与波动区间（基于全周期累计点位）
     max_tuple = max(valid_totals, key=lambda x: x[1])
     max_val = max_tuple[1]
-    max_time_text = max_tuple[0].strftime("%m-%d %H:%M")
+    max_time_text = max_tuple[0].strftime(time_fmt)
 
     min_tuple = min(valid_totals, key=lambda x: x[1])
     min_val = min_tuple[1]
-    min_time_text = min_tuple[0].strftime("%m-%d %H:%M")
+    min_time_text = min_tuple[0].strftime(time_fmt)
 
     range_val = max_val - min_val
     range_sub_text = f"{max_val:+,.2f} ～ {min_val:+,.2f}"
@@ -576,8 +585,12 @@ class RightAnalysisCard(QFrame):
 
         layout.addStretch()
 
+    def set_period_mode(self, mode: str):
+        titles = {"all": "📅 全周期区间", "year": "📅 本年区间", "month": "📅 本月区间"}
+        self.range_title_lbl.setText(titles.get(mode, "📅 本月区间"))
+
     def set_is_year(self, is_year: bool):
-        self.range_title_lbl.setText("📅 本年区间" if is_year else "📅 本月区间")
+        self.set_period_mode("year" if is_year else "month")
 
     def update_metrics(self, m: dict):
         self.range_val_lbl.setText(m.get("period_range_text", "—"))
@@ -663,7 +676,8 @@ class RealtimeChartCanvas(ChartCanvas):
         if best_pt and min_dist < 40:
             rect, key, val, name = best_pt
             dt_bj = to_bj_datetime(key)
-            dt_str = dt_bj.strftime("%m-%d %H:%M") if dt_bj else key
+            time_fmt = "%Y-%m-%d %H:%M" if getattr(self.chart, "calendar_axis", None) == "all" else "%m-%d %H:%M"
+            dt_str = dt_bj.strftime(time_fmt) if dt_bj else key
 
             # Check change compared to previous valid
             delta_str = "—"
@@ -734,7 +748,7 @@ class RealtimeChartCanvas(ChartCanvas):
         painter.drawEllipse(QPointF(hx, hy), 5.0, 5.0)
 
         # 3. 浮动白色卡片 Tooltip
-        card_w, card_h = 175, 105
+        card_w, card_h = (198 if getattr(self.chart, "calendar_axis", None) == "all" else 175), 105
         card_x = hx + 12
         if card_x + card_w > self.width() - 10:
             card_x = hx - card_w - 12
@@ -815,11 +829,12 @@ class MonthlyRealtimePnlPage(QWidget):
         layout.setContentsMargins(16, 12, 16, 16)
         layout.setSpacing(10)
 
-        # 1. 顶部 Tab 栏：月度走势详情 vs 年度走势详情
+        # 1. 顶部 Tab 栏：月度走势详情 vs 年度走势详情 vs 总收益走势
         self.tab_bar = QTabBar(self)
         self.tab_bar.setDrawBase(False)
         self.tab_bar.addTab("月度走势详情")
         self.tab_bar.addTab("年度走势详情")
+        self.tab_bar.addTab("总收益走势")
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tab_bar)
 
@@ -850,6 +865,12 @@ class MonthlyRealtimePnlPage(QWidget):
         self.year_combo.setVisible(False)
         self.year_combo.currentIndexChanged.connect(self._on_year_changed)
         top_bar.addWidget(self.year_combo)
+
+        # 全周期静态范围说明（仅在「总收益走势」Tab 展示）
+        self.lbl_all_range = QLabel("统计区间：首次购入美股至今")
+        self.lbl_all_range.setStyleSheet("font-size: 12px; font-weight: 600; color: #334155; padding: 2px 6px;")
+        self.lbl_all_range.setVisible(False)
+        top_bar.addWidget(self.lbl_all_range)
 
         # 走势模式下拉框
         lbl_mode = QLabel("走势模式：")
@@ -1092,9 +1113,14 @@ class MonthlyRealtimePnlPage(QWidget):
 
     def _sync_chips(self):
         """Sync chip labels with current filters."""
-        is_year = (self.tab_bar.currentIndex() == 1)
-        period = self.year_combo.currentText() if is_year else self.month_combo.currentText()
-        self.chip_period.setText(f"{'年份' if is_year else '月份'}: {period}")
+        tab_idx = self.tab_bar.currentIndex()
+        is_year = (tab_idx == 1)
+        is_all = (tab_idx == 2)
+        if is_all:
+            self.chip_period.setText("区间: 首次买美股至今")
+        else:
+            period = self.year_combo.currentText() if is_year else self.month_combo.currentText()
+            self.chip_period.setText(f"{'年份' if is_year else '月份'}: {period}")
 
         person_txt = self.person_combo.currentText()
         self.chip_person.setText(f"人员: {person_txt} ×")
@@ -1158,7 +1184,9 @@ class MonthlyRealtimePnlPage(QWidget):
                 self._init_available_months()
             if not self.year_combo.count():
                 self._init_available_years()
-            if self.tab_bar.currentIndex() == 1:
+            if self.tab_bar.currentIndex() == 2:
+                self._load_all_data()
+            elif self.tab_bar.currentIndex() == 1:
                 self._load_year_data(self.year_combo.currentText())
             else:
                 self._load_month_data(self.month_combo.currentText())
@@ -1169,7 +1197,9 @@ class MonthlyRealtimePnlPage(QWidget):
         from portfolio.domain.live_quotes import market_trade_day
         _, days, halves, _ = self.window.quote_store.load(datetime.now(UTC))
         today = market_trade_day(datetime.now(UTC), days, halves)
-        if self.tab_bar.currentIndex() == 1:
+        if self.tab_bar.currentIndex() == 2:
+            self._load_all_data()
+        elif self.tab_bar.currentIndex() == 1:
             if self.year_combo.currentText() == str(today.year):
                 self._load_year_data(self.year_combo.currentText())
         else:
@@ -1303,7 +1333,9 @@ class MonthlyRealtimePnlPage(QWidget):
                 self.person_combo.blockSignals(True)
                 self.person_combo.setCurrentIndex(idx)
                 self.person_combo.blockSignals(False)
-                if self.tab_bar.currentIndex() == 1:
+                if self.tab_bar.currentIndex() == 2:
+                    self._load_all_data()
+                elif self.tab_bar.currentIndex() == 1:
                     self._load_year_data(self.year_combo.currentText())
                 else:
                     self._load_month_data(self.month_combo.currentText())
@@ -1399,9 +1431,11 @@ class MonthlyRealtimePnlPage(QWidget):
         if self.tab_bar.currentIndex() == 1:
             self._load_year_data(self.year_combo.currentText())
 
-    def _sync_baseline_switch_ui(self, is_year: bool | None = None):
+    def _sync_baseline_switch_ui(self, is_year: bool | None = None, is_all: bool | None = None):
         if is_year is None:
             is_year = bool(getattr(self, "_shared_year", self.tab_bar.currentIndex() == 1))
+        if is_all is None:
+            is_all = bool(getattr(self, "_shared_all", self.tab_bar.currentIndex() == 2))
         period_prefix = "当年" if is_year else "当月"
         self.zero_base_btn.setText(f"{period_prefix}收益 (起点为0)")
         self.cum_base_btn.setText("累计模式 (含期初)")
@@ -1417,7 +1451,7 @@ class MonthlyRealtimePnlPage(QWidget):
         self.zero_base_btn.setStyleSheet(active_qss if self.zero_base else inactive_qss)
         self.cum_base_btn.setStyleSheet(inactive_qss if self.zero_base else active_qss)
         mode = self.mode_combo.currentData() or "cumulative"
-        self.baseline_switch_frame.setVisible(mode == "cumulative")
+        self.baseline_switch_frame.setVisible(mode == "cumulative" and not is_all)
 
     def set_zero_base(self, zero_base: bool):
         zero_base = bool(zero_base)
@@ -1431,26 +1465,32 @@ class MonthlyRealtimePnlPage(QWidget):
                 self._shared_raw_chart,
                 getattr(self, "_shared_state", {}) or {},
                 bool(getattr(self, "_shared_year", self.tab_bar.currentIndex() == 1)),
+                bool(getattr(self, "_shared_all", self.tab_bar.currentIndex() == 2)),
             )
 
     def _on_tab_changed(self, index):
         is_year = (index == 1)
-        self.lbl_month.setVisible(not is_year)
-        self.month_combo.setVisible(not is_year)
+        is_all = (index == 2)
+        self.lbl_month.setVisible(index == 0)
+        self.month_combo.setVisible(index == 0)
         self.lbl_year.setVisible(is_year)
         self.year_combo.setVisible(is_year)
-        self._sync_baseline_switch_ui(is_year=is_year)
+        self.lbl_all_range.setVisible(is_all)
+        self._sync_baseline_switch_ui(is_year=is_year, is_all=is_all)
 
-        # 切换卡片标题（月初 vs 年初）
-        self.kpi_start.set_title("年初累计盈亏" if is_year else "月初累计盈亏")
-        self.kpi_delta.set_title("本年变化" if is_year else "本月变化")
-        self.kpi_range.set_title("年内波动区间" if is_year else "月内波动区间")
-        self.right_panel.set_is_year(is_year)
+        # 切换卡片标题（月初 vs 年初 vs 全周期）
+        self.kpi_start.set_title("统计起点盈亏" if is_all else ("年初累计盈亏" if is_year else "月初累计盈亏"))
+        self.kpi_delta.set_title("累计总变化" if is_all else ("本年变化" if is_year else "本月变化"))
+        self.kpi_range.set_title("全周期波动区间" if is_all else ("年内波动区间" if is_year else "月内波动区间"))
+        self.right_panel.set_period_mode("all" if is_all else ("year" if is_year else "month"))
 
         mode_data = self.mode_combo.currentData() or "cumulative"
         self.mode_combo.blockSignals(True)
         self.mode_combo.clear()
-        if is_year:
+        if is_all:
+            self.mode_combo.addItem("从第一天至今累计总走势", "cumulative")
+            self.mode_combo.addItem("每日日内盈亏走势", "intraday")
+        elif is_year:
             self.mode_combo.addItem("当年累计盈亏走势", "cumulative")
             self.mode_combo.addItem("每日日内盈亏走势", "intraday")
         else:
@@ -1460,7 +1500,9 @@ class MonthlyRealtimePnlPage(QWidget):
         self.mode_combo.setCurrentIndex(max(0, idx))
         self.mode_combo.blockSignals(False)
 
-        if is_year:
+        if is_all:
+            self._load_all_data()
+        elif is_year:
             if not self.year_combo.count():
                 self._init_available_years()
             elif not self._cached_year_by_day or self._cached_year != self.year_combo.currentText():
@@ -1491,7 +1533,9 @@ class MonthlyRealtimePnlPage(QWidget):
         if getattr(self, "_syncing_person", False):
             return
         selected_val = self.person_combo.currentData()
-        if self.tab_bar.currentIndex() == 1:
+        if self.tab_bar.currentIndex() == 2:
+            self._load_all_data()
+        elif self.tab_bar.currentIndex() == 1:
             self._load_year_data(self.year_combo.currentText())
         else:
             self._load_month_data(self.month_combo.currentText())
@@ -1522,34 +1566,43 @@ class MonthlyRealtimePnlPage(QWidget):
             return tuple(int(pid) for pid in selected) or None
         return (selected,) if selected is not None else None
 
-    def _load_shared_period(self, period, year):
+    def _load_shared_period(self, period, year, is_all=False):
         if not self.analytics or not self.window:
             return
         inherited = getattr(self, "_parent_filters", None) is not None
         if inherited and getattr(self.analytics, "scope", None) and getattr(self.analytics.scope, "as_of", None):
             as_of = self.analytics.scope.as_of
-            period = str(as_of.year) if year else as_of.strftime("%Y-%m")
-        if not period:
+            period = "all" if is_all else (str(as_of.year) if year else as_of.strftime("%Y-%m"))
+        if not period and not is_all:
             return
-        from portfolio.services.derived_queries import load_history
+        from portfolio.services.derived_queries import first_us_trade_day, load_history
 
         source = self._resolve_source_path()
         if not source:
             return
-        if year:
-            first, last = date(int(period), 1, 1), date(int(period), 12, 31)
-        else:
-            y, m = map(int, period.split("-"))
-            first, last = date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
         people = self.analytics.scope.person_ids if inherited else self._shared_person_ids()
         others_mode = (
             (getattr(self.window.person, "currentData", lambda: None)() == "OTHERS")
             if inherited
             else (self.person_combo.currentData() == "OTHERS")
         )
-        scope = replace(self.analytics.scope, person_ids=people, start_date=None, as_of=min(last, date.today()))
+        temp_as_of = min(getattr(self.analytics.scope, "as_of", None) or date.today(), date.today())
+        scope = replace(self.analytics.scope, person_ids=people, start_date=None, as_of=temp_as_of)
         if getattr(self, "_parent_filters", None) is None:
             scope = replace(scope, account_ids=None, instrument_ids=None, category=None, search="")
+        if is_all:
+            first = first_us_trade_day(source, scope) or date(2025, 1, 1)
+            last = temp_as_of
+            if last < first:
+                last = first
+            period = f"{first.isoformat()} ~ {last.isoformat()}"
+            self.lbl_all_range.setText(f"统计区间：{period}")
+        elif year:
+            first, last = date(int(period), 1, 1), date(int(period), 12, 31)
+        else:
+            y, m = map(int, period.split("-"))
+            first, last = date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
+        scope = replace(scope, as_of=min(last, date.today()))
         if scope.as_of < first:
             scope = replace(scope, as_of=last)
         inherited_filters = getattr(self, "_parent_filters", None)
@@ -1569,14 +1622,14 @@ class MonthlyRealtimePnlPage(QWidget):
             ticker = search_txt
 
         mode = self.mode_combo.currentData() or "cumulative"
-        request = (period, year, scope, others_mode, tuple(sorted(channels or ())), ticker, mode)
+        request = (period, year, is_all, scope, others_mode, tuple(sorted(channels or ())), ticker, mode)
         if getattr(self, "_shared_busy", None) == request:
             return
         self._shared_request = request
         self._shared_busy = request
         self.summary_badge.setText("正在读取共享历史派生数据…")
         self.canvas.chart = None
-        self.canvas.set_loading("正在读取并整理月度/年度历史曲线…")
+        self.canvas.set_loading("正在读取并整理全部历史总收益曲线…" if is_all else "正在读取并整理月度/年度历史曲线…")
 
         def task(cancel):
             from time import monotonic
@@ -1616,6 +1669,9 @@ class MonthlyRealtimePnlPage(QWidget):
                 result,
                 period,
                 year=year,
+                all_history=is_all,
+                start_date=first if is_all else None,
+                end_date=last if is_all else None,
                 channels=channels,
                 ticker=ticker,
                 mode=mode,
@@ -1647,6 +1703,9 @@ class MonthlyRealtimePnlPage(QWidget):
                         sub_res,
                         period,
                         year=year,
+                        all_history=is_all,
+                        start_date=first if is_all else None,
+                        end_date=last if is_all else None,
                         channels=channels,
                         ticker=ticker,
                         mode=mode,
@@ -1677,8 +1736,10 @@ class MonthlyRealtimePnlPage(QWidget):
             self._shared_busy = None
             self.canvas.set_loading()
             self._shared_analytics, self._shared_rows, self._shared_state, chart = value
-            self._shared_period, self._shared_year = period, year
-            if year:
+            self._shared_period, self._shared_year, self._shared_all = period, year, is_all
+            if is_all:
+                self._cached_all = period
+            elif year:
                 self._cached_year = period
             else:
                 self._cached_month = period
@@ -1692,7 +1753,7 @@ class MonthlyRealtimePnlPage(QWidget):
             tickers = {r.values[3] for r in value[0].reports["每日持仓收益"].rows}
             self.channel_filter.populate(sorted(channels))
             self.stock_combo.populate(sorted(tickers))
-            self._display_shared_chart(chart, value[2], year)
+            self._display_shared_chart(chart, value[2], year, is_all=is_all)
 
         lane = f"shared-trend-{id(self)}"
         self.window._submit(lane, task, ready)
@@ -1740,7 +1801,10 @@ class MonthlyRealtimePnlPage(QWidget):
             control.setToolTip("随今日盈亏主页面的人员、渠道和股票筛选同步更新。")
         self.update_chart()
 
-    def _render_shared_chart(self, year):
+    def _render_shared_chart(self, year, is_all=False):
+        if is_all:
+            self._load_shared_period("all", False, is_all=True)
+            return
         if (
             getattr(self, "_parent_filters", None) is not None
             and self.analytics
@@ -1751,7 +1815,7 @@ class MonthlyRealtimePnlPage(QWidget):
             period = str(as_of.year) if year else as_of.strftime("%Y-%m")
         else:
             period = self.year_combo.currentText() if year else self.month_combo.currentText()
-        self._load_shared_period(period, year)
+        self._load_shared_period(period, year, is_all=False)
 
     def _sync_loading(self, status=None):
         if getattr(self, "_shared_busy", None):
@@ -1785,21 +1849,28 @@ class MonthlyRealtimePnlPage(QWidget):
                 self.bottom_status_lbl.setText(self.canvas.empty_message)
                 self.canvas.update()
 
-    def _display_shared_chart(self, chart, state, year):
+    def _display_shared_chart(self, chart, state, year, is_all=False):
         self._shared_raw_chart = chart
         self._shared_state = state
         self._shared_year = bool(year)
+        self._shared_all = bool(is_all)
 
         # 1. 周期与模式
-        combo_period = (self.year_combo.currentText() if year else self.month_combo.currentText())
-        shared_period = getattr(self, "_shared_period", None) if getattr(self, "embedded", False) else None
-        period = shared_period or combo_period or (str(date.today().year) if year else date.today().strftime("%Y-%m"))
+        if is_all:
+            period = getattr(self, "_shared_period", None) or getattr(self, "_cached_all", None) or "首次买入至今"
+        else:
+            combo_period = (self.year_combo.currentText() if year else self.month_combo.currentText())
+            shared_period = getattr(self, "_shared_period", None) if getattr(self, "embedded", False) else None
+            period = shared_period or combo_period or (str(date.today().year) if year else date.today().strftime("%Y-%m"))
         mode = self.mode_combo.currentData() or "cumulative"
-        self._sync_baseline_switch_ui(is_year=bool(year))
+        self._sync_baseline_switch_ui(is_year=bool(year), is_all=bool(is_all))
 
         if mode == "intraday":
             mode_text = "每日日内盈亏走势"
             self.canvas.value_label = "当日盈亏"
+        elif is_all:
+            mode_text = "累计总收益走势（首次买美股至今）"
+            self.canvas.value_label = "累计总收益"
         elif self.zero_base:
             mode_text = f"{'当年' if year else '当月'}收益走势（起点为0）"
             self.canvas.value_label = "当年收益" if year else "当月收益"
@@ -1808,7 +1879,7 @@ class MonthlyRealtimePnlPage(QWidget):
             self.canvas.value_label = "累计盈亏"
         self.chart_title_lbl.setText(f"{period} {mode_text}")
 
-        # 2. 计算所选周期起点之前的历史累计总盈亏基准（从最开始到上个月底/上年底时的累计盈亏）
+        # 2. 计算所选周期起点之前的历史累计总盈亏基准（全周期模式下从第一天开始，期初为 0）
         parent_filters = getattr(self, "_parent_filters", None)
         if parent_filters is not None:
             ch_val, tk_val = parent_filters
@@ -1822,8 +1893,8 @@ class MonthlyRealtimePnlPage(QWidget):
             if (self.analytics and getattr(self.analytics, "reports", None) and "每月持仓收益" in self.analytics.reports)
             else (getattr(self.window, "analytics", None) or self.analytics)
         )
-        opening_pnl = get_period_opening_pnl(analytics_for_opening, period, is_year=year, channels=channels, ticker=ticker)
-        effective_base_pnl = Decimal(0) if (self.zero_base or mode != "cumulative") else opening_pnl
+        opening_pnl = Decimal(0) if is_all else get_period_opening_pnl(analytics_for_opening, period, is_year=year, channels=channels, ticker=ticker)
+        effective_base_pnl = Decimal(0) if (is_all or self.zero_base or mode != "cumulative") else opening_pnl
 
         # 3. 规整化 X 轴标签：避免显示未解析的原始 ISO 字符串，统一为优雅日期
         clean_labels = dict(chart.x_labels) if chart.x_labels else {}
@@ -1874,23 +1945,32 @@ class MonthlyRealtimePnlPage(QWidget):
         m = calculate_realtime_metrics(
             all_pts,
             is_year=year,
+            is_all=is_all,
             period_str=period,
             state=state,
             base_pnl=effective_base_pnl if mode == "cumulative" else None,
-            zero_base=(self.zero_base and mode == "cumulative"),
+            zero_base=(not is_all and self.zero_base and mode == "cumulative"),
             opening_pnl=opening_pnl,
         )
 
         # 更新 4 个核心 KPI 卡片
         self.kpi_start.set_title(
-            ("本年起点盈亏" if year else "本月起点盈亏")
-            if (self.zero_base and mode == "cumulative")
-            else ("年初累计盈亏" if year else "月初累计盈亏")
+            "统计起点盈亏"
+            if is_all
+            else (
+                ("本年起点盈亏" if year else "本月起点盈亏")
+                if (self.zero_base and mode == "cumulative")
+                else ("年初累计盈亏" if year else "月初累计盈亏")
+            )
         )
         self.kpi_latest.set_title(
-            ("当前当年收益" if year else "当前当月收益")
-            if (self.zero_base and mode == "cumulative")
-            else "当前最新累计盈亏"
+            "当前累计总收益"
+            if is_all
+            else (
+                ("当前当年收益" if year else "当前当月收益")
+                if (self.zero_base and mode == "cumulative")
+                else "当前最新累计盈亏"
+            )
         )
         self.kpi_start.update_data(m["start_val"], m["start_time_text"])
         self.kpi_latest.update_data(m["latest_val"], m["latest_time_text"])
@@ -1904,7 +1984,7 @@ class MonthlyRealtimePnlPage(QWidget):
         if m["valid_count"] > 0:
             latest_val_str = f"{m['latest_val']:+,.2f} USD" if m["latest_val"] is not None else "—"
             latest_time = m["latest_time_text"].replace("最近有效点 · ", "").replace(" 北京时间", "")
-            val_title = ("最新当年收益" if year else "最新当月收益") if (self.zero_base and mode == "cumulative") else "最新累计盈亏"
+            val_title = "累计总收益" if is_all else (("最新当年收益" if year else "最新当月收益") if (self.zero_base and mode == "cumulative") else "最新累计盈亏")
             status_text = f"有效采样 {m['valid_count']} · 最近有效点 {latest_time} 北京时间 · {val_title} {latest_val_str}"
             self.bottom_status_lbl.setText(status_text)
         else:
@@ -1913,38 +1993,49 @@ class MonthlyRealtimePnlPage(QWidget):
         self._sync_loading()
 
     def _load_month_data(self, month_str):
-        return self._load_shared_period(month_str, False)
+        return self._load_shared_period(month_str, False, is_all=False)
 
     def _load_year_data(self, year_str):
-        return self._load_shared_period(year_str, True)
+        return self._load_shared_period(year_str, True, is_all=False)
+
+    def _load_all_data(self):
+        return self._load_shared_period("all", False, is_all=True)
 
     def _on_filter_changed(self, *_):
         self.update_chart()
 
     def update_chart(self):
-        if self.tab_bar.currentIndex() == 1:
+        tab_idx = self.tab_bar.currentIndex()
+        if tab_idx == 2:
+            self._render_all_chart()
+        elif tab_idx == 1:
             self._render_year_chart()
         else:
             self._render_month_chart()
 
     def _render_month_chart(self):
-        return self._render_shared_chart(False)
+        return self._render_shared_chart(False, is_all=False)
 
     def _render_year_chart(self):
-        return self._render_shared_chart(True)
+        return self._render_shared_chart(True, is_all=False)
+
+    def _render_all_chart(self):
+        return self._render_shared_chart(False, is_all=True)
 
     def export(self):
         """Export the realtime chart card to high-resolution PNG."""
-        is_year = (self.tab_bar.currentIndex() == 1)
-        period = self._cached_year or "当年" if is_year else (self._cached_month or "当月")
+        tab_idx = self.tab_bar.currentIndex()
+        is_all = (tab_idx == 2)
+        is_year = (tab_idx == 1)
+        period = (getattr(self, "_cached_all", None) or "首次买入至今") if is_all else (self._cached_year or "当年" if is_year else (self._cached_month or "当月"))
         mode = "累计走势" if self.mode_combo.currentData() == "cumulative" else "日内走势"
         ch = self.channel_filter.text().replace(" ", "_")
         ticker = self.stock_combo.selected_ticker() or "全股票"
         person = self.person_combo.currentText()
-        sampling = "两小时采样" if is_year else "半小时采样"
-        chart_type = "整年实时" if is_year else "整月实时"
+        sampling = "四小时采样" if is_all else ("两小时采样" if is_year else "半小时采样")
+        chart_type = "全历史总收益" if is_all else ("整年实时" if is_year else "整月实时")
         title = f"{period}_{chart_type}{mode}_{person}_{ch}_{ticker}_{sampling}"
-        dlg_title = "导出整年实时走势图" if is_year else "导出当月实时走势图"
+        dlg_title = "导出全历史总收益走势图" if is_all else ("导出整年实时走势图" if is_year else "导出当月实时走势图")
         path, _ = QFileDialog.getSaveFileName(self, dlg_title, f"{title}.png", "PNG (*.png)")
         if path:
             try:
