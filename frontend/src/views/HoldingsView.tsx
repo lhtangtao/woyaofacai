@@ -1005,6 +1005,26 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 )}
               </div>}
 
+              {selectedBroker && (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedBroker(""); setDetailPage(1); }}
+                  style={{
+                    background: "#EFF6FF",
+                    color: "#2563EB",
+                    border: "1px solid #BFDBFE",
+                    borderRadius: "6px",
+                    padding: "4px 10px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  title="点击清除券商渠道筛选，查看全部渠道"
+                >
+                  渠道: {selectedBroker} ✕
+                </button>
+              )}
+
               <button onClick={exportDetailCsv} disabled={detailLoading || !totalDetailCount} className="btn btn-quiet" style={{ fontSize: "12px", padding: "5px 10px" }}>
                 <Download size={14} style={{ marginRight: "4px" }} />
                 导出明细

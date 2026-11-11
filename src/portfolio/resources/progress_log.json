@@ -1,5 +1,17 @@
 [
   {
+    "title": "持仓管理 券商持仓汇总全渠道跳转带筛选及全流程中文渠道展示",
+    "time": "2026-11-11 11:27",
+    "author": "Antigravity",
+    "tag": "Mac 桌面端与 React Web 端双端修复完成，全部券商渠道支持跳转筛选与中文显示，测试验证通过",
+    "details": [
+      "修改者：Antigravity（修复券商渠道汇总下钻丢失筛选条件，统一中英文映射与中文渠道显示）",
+      "【1. 问题根因】此前 `get_dashboard_data` 返回 `broker_summary` 时使用了原始英文券商代码（`BBAE`、`FIRSTRADE`、`LONGBRIDGE`、`SCHWAB`），而 Mac 端 `HoldingsPage.broker_combo` 下拉选项为中文名称（`长桥`、`第一证券`、`嘉信`、`BBAE`），导致仅 `BBAE` 能匹配选中，点击其余券商下钻均回退到「全部渠道」；同时 `_match_broker` 将反向查找的过滤代码误加入行候选集合，导致渠道过滤失效。",
+      "【2. 统一中文渠道展示与中英文双向匹配】在 `holdings_management_service.py` 扩展 `CHANNEL_LABELS` 并新增 `channel_label()`，使仪表板券商汇总、资产分布图表、持仓明细表与股票抽屉交易记录均按中文名称展示（`长桥`、`第一证券`、`嘉信`、`BBAE`、`富途`、`老虎`）；修复 `_match_broker` 分离过滤标识集与行标识集，支持按中文名称或原始英文代码精确筛选。",
+      "【3. 下钻反馈与快捷清除筛选】Mac 端 `HoldingsPage.set_view` 统一标准化渠道名称并支持动态补充未知渠道、屏蔽切换期间多余信号；Mac 端与 React Web 端（`HoldingsView.tsx`）均在持仓明细工具栏展示可点击一键清除的「渠道: XXX ✕」状态胶囊，清晰呈现当前券商筛选。"
+    ]
+  },
+  {
     "title": "行情监控中心 均线与偏离度升级为双行成对展示（上行均价/下行偏离度独立着色）",
     "time": "2026-11-11 01:15",
     "author": "Antigravity",

@@ -62,7 +62,23 @@ CLOSED_ACCOUNT_COLUMNS = (
     ("current_price", "当前价", "money"), ("first_buy_date", "首次买入时间", "text"),
     ("last_close_date", "最终清仓时间", "text"), ("category", "股票分类", "text"),
 )
-CHANNEL_LABELS = {"LONGBRIDGE": "长桥", "FIRSTRADE": "第一证券", "SCHWAB": "嘉信"}
+CHANNEL_LABELS = {
+    "LONGBRIDGE": "长桥",
+    "LONG BRIDGE": "长桥",
+    "FIRSTRADE": "第一证券",
+    "SCHWAB": "嘉信",
+    "BBAE": "BBAE",
+    "FUTU": "富途",
+    "TIGER": "老虎",
+}
+
+
+def channel_label(raw: Any) -> str:
+    """将券商代码或混合文本统一转换为中文渠道显示名"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return CHANNEL_LABELS.get(text.upper(), text)
 
 
 def _match_broker(broker_filter: str | None, channel: str | None = None, code: str | None = None) -> bool:
@@ -70,16 +86,22 @@ def _match_broker(broker_filter: str | None, channel: str | None = None, code: s
     if not broker_filter:
         return True
     bf = broker_filter.strip().casefold()
-    ch = (channel or "").strip().casefold()
-    cd = (code or "").strip().casefold()
-    lbl = CHANNEL_LABELS.get((code or "").upper(), "").casefold()
-    rev = ""
+    if not bf:
+        return True
+    filter_ids = {bf}
     for k, v in CHANNEL_LABELS.items():
-        if v.casefold() == bf or k.casefold() == bf:
-            rev = k.casefold()
-            break
-    candidates = {c for c in (ch, cd, lbl, rev) if c}
-    return any(bf in c or c in bf for c in candidates)
+        if k.casefold() == bf or v.casefold() == bf:
+            filter_ids.add(k.casefold())
+            filter_ids.add(v.casefold())
+    row_ids: set[str] = set()
+    for raw in (channel, code):
+        val = (raw or "").strip()
+        if val:
+            row_ids.add(val.casefold())
+            lbl = CHANNEL_LABELS.get(val.upper())
+            if lbl:
+                row_ids.add(lbl.casefold())
+    return any(f in r or (len(r) >= 2 and r in f) for f in filter_ids for r in row_ids)
 
 
 def closed_columns(mode):
@@ -142,8 +164,10 @@ class HoldingsManagementService:
         if person_id is not None and pa_rows:
             pa_rows = tuple(r for r in pa_rows if r.metadata.get("person_id") == person_id)
         if broker and pa_rows:
-            clean_b = broker.strip().upper()
-            pa_rows = tuple(r for r in pa_rows if clean_b in (r.values[1] or "").strip().upper() or (r.values[1] or "").strip().upper() in clean_b)
+            pa_rows = tuple(
+                r for r in pa_rows
+                if _match_broker(broker, r.values[1], r.metadata.get("broker_code"))
+            )
 
         # 实时行情叠加：优先使用最新实时报价更新持有中标的的市值、浮动盈亏与浮动收益率
         latest_quotes_map = HoldingsManagementService.get_latest_quotes_map()
@@ -284,7 +308,7 @@ class HoldingsManagementService:
         broker_summary = []
         if qh_rows and person_id is None and not broker:
             for r in qh_rows:
-                channel = r.values[0]
+                channel = channel_label(r.values[0])
                 mv = r.values[1] or Decimal(0)
                 pnl = r.values[8] or Decimal(0)
                 net = r.values[2] or Decimal(0)
@@ -301,7 +325,7 @@ class HoldingsManagementService:
             # Fallback by grouping pa_rows by channel
             b_groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"mv": Decimal(0), "pnl": Decimal(0), "net": Decimal(0)})
             for r in pa_rows:
-                ch_name = r.values[1] or "未知渠道"
+                ch_name = channel_label(r.values[1] or "未知渠道")
                 if isinstance(r.values[7], Decimal) and r.values[4] == "持有中":
                     b_groups[ch_name]["mv"] += r.values[7]
                 if isinstance(r.values[8], Decimal):
@@ -674,7 +698,8 @@ class HoldingsManagementService:
             p_id = r.metadata.get("person_id")
             acc_id = r.metadata.get("account_id")
             inst_id = r.metadata.get("instrument_id")
-            channel = r.values[1] or ""
+            raw_ch = r.values[1] or ""
+            channel = channel_label(raw_ch)
             tk = r.values[2] or ""
             qty = r.values[3]
             st = r.values[4] or "持有中"
@@ -690,7 +715,7 @@ class HoldingsManagementService:
                 continue
             if account_ids is not None and acc_id not in account_ids:
                 continue
-            if broker_filter and broker_filter not in channel.upper():
+            if broker_filter and not _match_broker(broker_filter, channel, r.metadata.get("broker_code") or raw_ch):
                 continue
             if ticker_filter and ticker_filter != tk.upper():
                 continue
@@ -699,7 +724,7 @@ class HoldingsManagementService:
             if status == "已清仓" and st != "已清仓":
                 continue
             if search_text:
-                combined = f"{p_name} {channel} {tk}".upper()
+                combined = f"{p_name} {channel} {raw_ch} {tk}".upper()
                 if search_text not in combined:
                     continue
 
@@ -1053,7 +1078,7 @@ class HoldingsManagementService:
             # 2. 归属人员
             p_name = r.metadata.get("person_name") or "个人"
             # 3. 券商渠道
-            channel = r.values[1] or ""
+            channel = channel_label(r.values[1] or "")
             # 4. 交易方向
             side = r.values[4] or "买入"
             # 5. 成交数量

@@ -41,7 +41,12 @@ from portfolio.domain.analytics import Report, ReportRow, ratio
 from portfolio.domain.models import exact_text
 from portfolio.paths import DATABASE_PATH
 from portfolio.services.charts_service import Chart, Series
-from portfolio.services.holdings_management_service import HoldingsManagementService, closed_account_rows, closed_columns
+from portfolio.services.holdings_management_service import (
+    HoldingsManagementService,
+    channel_label,
+    closed_account_rows,
+    closed_columns,
+)
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.filters import PersonFilter
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
@@ -955,6 +960,21 @@ class HoldingsPage(QWidget):
         detail_bar.addWidget(self.broker_combo)
         self.broker_combo.hide()
 
+        # Active broker filter chip (shown when filtered by a specific broker channel)
+        self.active_broker_chip = QPushButton("渠道: — ✕")
+        self.active_broker_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.active_broker_chip.setToolTip("点击清除券商渠道筛选，查看全部渠道")
+        self.active_broker_chip.setStyleSheet("""
+            QPushButton {
+                background: #EFF6FF; color: #2563EB; font-weight: 600; font-size: 12px;
+                border: 1px solid #BFDBFE; border-radius: 6px; padding: 5px 10px;
+            }
+            QPushButton:hover { background: #DBEAFE; border-color: #93C5FD; }
+        """)
+        self.active_broker_chip.clicked.connect(lambda: self.broker_combo.setCurrentIndex(0))
+        detail_bar.addWidget(self.active_broker_chip)
+        self.active_broker_chip.hide()
+
         # Search input
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索人员、券商或股票代码…")
@@ -1067,25 +1087,36 @@ class HoldingsPage(QWidget):
 
     def set_view(self, mode: str, dimension: str = "person", status: str = "持有中", person_id: int | None = None, broker: str | None = None, ticker: str | None = None):
         self.dimension = dimension
+        blocked_s = self.status_combo.blockSignals(True)
         s_idx = self.status_combo.findData(status)
-        if s_idx >= 0:
-            self.status_combo.setCurrentIndex(s_idx)
-        else:
-            self.status_combo.setCurrentIndex(0)
+        self.status_combo.setCurrentIndex(s_idx if s_idx >= 0 else 0)
+        self.status_combo.blockSignals(blocked_s)
+
+        blocked_b = self.broker_combo.blockSignals(True)
         if broker:
-            clean = broker.strip()
+            normalized_b = channel_label(broker)
             idx = -1
             for i in range(self.broker_combo.count()):
-                if self.broker_combo.itemText(i).casefold() == clean.casefold() or (self.broker_combo.itemData(i) and str(self.broker_combo.itemData(i)).casefold() == clean.casefold()):
+                t_val = self.broker_combo.itemText(i).casefold()
+                d_val = str(self.broker_combo.itemData(i) or "").casefold()
+                if normalized_b.casefold() in (t_val, d_val) or broker.strip().casefold() in (t_val, d_val):
                     idx = i
                     break
-            self.broker_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            if idx < 0:
+                self.broker_combo.addItem(normalized_b, normalized_b)
+                idx = self.broker_combo.count() - 1
+            self.broker_combo.setCurrentIndex(idx)
         else:
             self.broker_combo.setCurrentIndex(0)
+        self.broker_combo.blockSignals(blocked_b)
+
+        blocked_q = self.search_input.blockSignals(True)
         if ticker:
             self.search_input.setText(ticker)
         else:
             self.search_input.clear()
+        self.search_input.blockSignals(blocked_q)
+
         if person_id is not None:
             self._selected_person_filter = person_id
             self.person_filter.blockSignals(True)
@@ -1382,17 +1413,25 @@ class HoldingsPage(QWidget):
                     "ticker": item.get("ticker"),
                 }))
 
+        if broker_filter:
+            b_disp = channel_label(broker_filter)
+            self.active_broker_chip.setText(f"渠道: {b_disp} ✕")
+            self.active_broker_chip.show()
+        else:
+            self.active_broker_chip.hide()
+
         self.detail_model.replace(rows)
         self.detail_table.verticalScrollBar().setValue(v_scroll)
         self.detail_table.horizontalScrollBar().setValue(h_scroll)
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(f"[桌面端持仓] 明细表格刷新完成 (状态: {status_filter})，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
         view_title = ("已清仓 · " + self.closed_mode.tabText(self.closed_mode.currentIndex())) if closed else "当前持仓明细"
+        broker_tag = f" · 渠道：{channel_label(broker_filter)}" if broker_filter else ""
         if not rows:
-            self.detail_info.setText(f"{view_title} · 没有符合筛选条件的记录")
+            self.detail_info.setText(f"{view_title}{broker_tag} · 没有符合筛选条件的记录")
             return
         note = "沿用原清仓收益报表的账本口径，操作笔数可包含划转" if mode == "account" else "点击任意行查看交易记录"
-        self.detail_info.setText(f"{view_title} · 共 {len(rows)} 条标的记录 · {note}")
+        self.detail_info.setText(f"{view_title}{broker_tag} · 共 {len(rows)} 条标的记录 · {note}")
 
     def _on_person_table_clicked(self, index):
         if not index.isValid():

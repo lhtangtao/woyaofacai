@@ -164,7 +164,7 @@ def test_mac_modes_filter_sort_export_and_drawer(closed_ledger, qtbot, monkeypat
     page._on_detail_row_clicked(page.detail_model.index(0,0))
     assert not page.drawer.isHidden()
     assert page.drawer.trade_model.rowCount() == 2
-    assert page.drawer.trade_model.rows[0].values[2:4] == ("LONGBRIDGE", "卖出")
+    assert page.drawer.trade_model.rows[0].values[2:4] == ("长桥", "卖出")
     out=tmp_path/"closed.csv"
     monkeypatch.setattr(QFileDialog,"getSaveFileName",lambda *a:(str(out),""))
     page._export_detail()
