@@ -78,9 +78,15 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
       b.market_value == null ? -1 : (Number(a.market_value) - Number(b.market_value)) * (sort[1] === "asc" ? 1 : -1))
     : sorted(rows,sort[0],sort[1] === "asc");
   const account = detail?.rows[0] ?? selected;
-  const tx = sorted((detail?.transactions ?? []).map(r => ({...r, platform: account?.platform ?? null}) as Row).filter(r => (!tradeKind || r.kind === tradeKind) &&
+  const records = detail?.transactions ?? [];
+  const hasConfirmedNav = records.some(r => r.confirmed_nav != null);
+  const hasExceptionalStatus = records.some(r => r.confirmation_status && r.confirmation_status !== "成功");
+  const tradeColumns = trades.filter(([key]) => (key !== "confirmed_nav" || hasConfirmedNav) &&
+    (key !== "confirmation_status" || hasExceptionalStatus));
+  const visibleTradeSort = tradeColumns.some(([key]) => key === tradeSort[0]) ? tradeSort : ["confirmation_date","desc"];
+  const tx = sorted(records.map(r => ({...r, platform: account?.platform ?? null}) as Row).filter(r => (!tradeKind || r.kind === tradeKind) &&
     ((!start && !end) || (!!r.confirmation_date && (!start || r.confirmation_date >= start) &&
-      (!end || r.confirmation_date <= end)))),tradeSort[0],tradeSort[1] === "asc");
+      (!end || r.confirmation_date <= end)))),visibleTradeSort[0],visibleTradeSort[1] === "asc");
   const currentTradePage = Math.min(tradePage, Math.max(1, Math.ceil(tx.length/tradeSize)));
   const history = detail?.history ?? [];
   const points = trend === "custom" ? history.filter(r => (!trendStart || r.month! >= trendStart) &&
@@ -163,7 +169,8 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
           <label>确认起日<input type="date" value={start} onChange={e=>{setStart(e.target.value);setTradePage(1);}} /></label>
           <label>确认止日<input type="date" value={end} onChange={e=>{setEnd(e.target.value);setTradePage(1);}} /></label>
           {select("交易类型",tradeKind,options(detail?.transactions ?? [],"kind"),v=>{setTradeKind(v);setTradePage(1);})}</div>
-          {table(tx.slice((currentTradePage-1)*tradeSize,currentTradePage*tradeSize),trades,tradeSort,v=>{setTradeSort(v);setTradePage(1);})}
+          {records.length > 0 && !hasConfirmedNav && <p>原始交易记录未提供确认净值。</p>}
+          {table(tx.slice((currentTradePage-1)*tradeSize,currentTradePage*tradeSize),tradeColumns,visibleTradeSort,v=>{setTradeSort(v);setTradePage(1);})}
           {paging(tx.length,tradePage,tradeSize,setTradePage,setTradeSize)}</section>
         <section className="dh-card"><h3>持仓概览</h3><p>平台 {account.platform}</p><p>账户 {account.account_name}</p><p>基金代码 {account.fund_code}</p>
           <p>当前份额 {account.shares ?? "—"}</p><p>市值 {value(account.market_value)}</p><p>累计买入份额 {account.buy_shares ?? "—"}</p><p>累计卖出份额 {account.sell_shares ?? "—"}</p><p>累计分红 {value(account.cash_dividend)}</p><p>剩余持仓成本 {value(account.cost)}</p><p>已实现盈亏 {value(account.realized_pnl)}</p><p>{account.return_issue ?? "收益率 = 累计盈亏 ÷ 累计买入金额（非年化）"}</p>{account.issue && <p>{account.issue}</p>}{account.last_confirmed_date && <p>最近可核对份额 {account.last_confirmed_shares} · {account.last_confirmed_date}</p>}<p>累计净值 {account.accumulated_nav ?? "—"} · 来源 {account.nav_source ?? "—"}</p></section>

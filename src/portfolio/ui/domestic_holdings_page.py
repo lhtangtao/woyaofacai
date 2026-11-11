@@ -197,6 +197,10 @@ class DomesticHoldingsPage(QWidget):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(self.render_trades)
         body.addLayout(filter_row)
+        self.trade_source_note = QLabel("原始交易记录未提供确认净值。")
+        self.trade_source_note.setWordWrap(True)
+        self.trade_source_note.hide()
+        body.addWidget(self.trade_source_note)
         self.trades = FundTable(TRADES, "confirmation_date")
         body.addWidget(self.trades)
         middle.addWidget(box, 3)
@@ -407,7 +411,15 @@ class DomesticHoldingsPage(QWidget):
         start, end = self.start.text().strip(), self.end.text().strip()
         kind = self.tx_kind.currentData()
         platform = next((r["platform"] for r in self.detail.get("rows", [])), "—")
-        self.trades.rows = [dict(r, platform=platform) for r in self.detail.get("transactions", [])
+        records = self.detail.get("transactions", [])
+        has_nav = any(r.get("confirmed_nav") is not None for r in records)
+        show_status = any(r.get("confirmation_status") not in (None, "", "成功") for r in records)
+        self.trade_source_note.setVisible(bool(records) and not has_nav)
+        for field, visible in (("confirmed_nav", has_nav), ("confirmation_status", show_status)):
+            self.trades.table.setColumnHidden(list(TRADES).index(field), not visible)
+            if not visible and self.trades.sort == field:
+                self.trades.sort, self.trades.descending = "confirmation_date", True
+        self.trades.rows = [dict(r, platform=platform) for r in records
                             if (not kind or r["kind"] == kind) and ((not start and not end) or
                                 r["confirmation_date"] and (not start or r["confirmation_date"] >= start)
                                 and (not end or r["confirmation_date"] <= end))]
