@@ -6,14 +6,18 @@ from decimal import Decimal, InvalidOperation, localcontext
 from .alipay import record_id
 from .storage import CALC_FILE, RAW_FILE, connect, now
 
-VERSION = "2"
+VERSION = "3"
 BUY = {"买基金", "定时定额投资", "认购结果"}
-SELL = {"卖基金", "卖基金回活期宝", "活期宝转入—赎回", "活期宝即充即用", "快速取现", "普通取现"}
+SELL = {"卖基金", "卖基金回活期宝", "活期宝转入—赎回", "活期宝即充即用", "活期宝即充即用调减", "快速取现", "普通取现"}
 INCREASE = {"份额调增", "超级转换-转入", "超级转换份额调增", "卖基金充值", "红利再投资"}
 DECREASE = {"超级转换-转出", "超级转换份额调减", "强减"}
 NO_MOVEMENT = {"修改分红方式", "跨分账户份额转卡", "现金分红"}
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS calc_tiantian_no_trade_periods (
+ account_id TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+ PRIMARY KEY(account_id,start_date,end_date)
+);
 CREATE TABLE IF NOT EXISTS calc_tiantian_positions (
  account_id TEXT NOT NULL, fund_code TEXT NOT NULL, trade_date TEXT NOT NULL,
  holding_shares TEXT, PRIMARY KEY(account_id,fund_code,trade_date)
@@ -168,7 +172,7 @@ def rebuild_tiantian(root):
             FROM raw_fund_corporate_actions WHERE event_type='SPLIT' AND conversion_ratio IS NOT NULL""")
         ] if "raw_fund_corporate_actions" in tables else []
         established = dict(raw.execute("SELECT fund_code,establishment_date FROM raw_fund_info")) if "raw_fund_info" in tables else {}
-    version = record_id(rows, dict(periods), split_rows, established)
+
     groups = defaultdict(list)
     splits = defaultdict(lambda: defaultdict(list))
     for code, day, ratio in split_rows:
@@ -178,6 +182,10 @@ def rebuild_tiantian(root):
     with connect(root / CALC_FILE) as db, localcontext() as precision:
         precision.prec = 60
         db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
+        for account, start, end in db.execute("SELECT * FROM calc_tiantian_no_trade_periods"):
+            if not any(r["account_id"] == account and start <= (r["confirmation_date"] or "") <= end for r in rows):
+                periods[account].append((start, end))
+        version = record_id(rows, dict(periods), split_rows, established)
         if db.execute("SELECT 1 FROM calc_tiantian_run WHERE version=? AND raw_version=?", (VERSION, version)).fetchone():
             return {"status": "unchanged"}
         for table in ("calc_tiantian_positions", "calc_tiantian_funds", "calc_tiantian_issues"):

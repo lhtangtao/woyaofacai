@@ -57,3 +57,15 @@ def test_alipay_returns_use_confirmed_cash_and_reinvest_without_new_cost():
     assert Decimal(result["pnl"]) == Decimal(result["rate"]) == 38
     assert confirmed_returns(trades, Decimal("5"), Decimal("65")) == {}
     assert confirmed_returns([trade("TRANSFER_IN", "6", "50")], Decimal("6"), Decimal("65")) == {}
+
+
+def test_tiantian_returns_use_net_cash_with_sub_cent_fee_ambiguity():
+    from portfolio.domestic.fund_returns import tiantian_returns
+
+    purchase = dict(transaction_type_raw="定时定额投资", confirmed_shares="4.64",
+                    confirmed_amount="10.00", confirmed_nav="2.1521", fee="0.01",
+                    confirmation_status="成功", parse_status="正常")
+    result = tiantian_returns([purchase], Decimal("4.64"), Decimal("12"))
+    assert Decimal(result["cost"]) == Decimal("10.00")
+    assert Decimal(result["pnl"]) == 2
+    assert tiantian_returns([dict(purchase, confirmed_amount="8")], Decimal("4.64"), Decimal("12")) == {}

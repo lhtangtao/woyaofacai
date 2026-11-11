@@ -39,3 +39,41 @@ def confirmed_returns(transactions, shares, market_value):
     pnl = (market_value or ZERO) - cost + realized + dividends
     return dict(cost=exact(cost), realized_pnl=exact(realized), cash_dividend=exact(dividends),
                 pnl=exact(pnl), rate=exact(pnl / contributed * 100))
+
+
+def tiantian_returns(rows, shares, market_value):
+    from collections import Counter
+    from .tiantian_positions import BUY, SELL, movement, subscription_key
+
+    confirmations = Counter(subscription_key(r) for r in rows if r["transaction_type_raw"] == "认购结果"
+                            and r["confirmation_status"] == "成功" and r["parse_status"] == "正常")
+    trades = []
+    for row in rows:
+        kind = row["transaction_type_raw"]
+        delta = movement(row, confirmations)
+        if delta is None:
+            return {}
+        cash = row["confirmed_amount"]
+        if kind in BUY | SELL | {"超级转换-转入", "超级转换-转出"}:
+            # Conversion legs carry acquisition/redemption value at fund level.
+            side = "BUY" if kind in BUY or kind == "超级转换-转入" else "SELL"
+            if any(row[k] is None for k in ("confirmed_amount", "fee", "confirmed_nav")):
+                return {}
+            amount, fee, nav = (Decimal(row[k]) for k in ("confirmed_amount", "fee", "confirmed_nav"))
+            gross = abs(delta) * nav
+            if fee < ZERO or nav <= ZERO:
+                return {}
+            signed_fee = fee if side == "BUY" else -fee
+            # The statement's confirmed cash includes purchase fees and deducts
+            # redemption fees. Allow for the disclosed cash/share rounding.
+            tolerance = Decimal("0.005") * (1 + nav) + abs(delta) * Decimal("0.00005")
+            if abs(amount - gross - signed_fee) > tolerance:
+                return {}
+        elif kind in ("现金分红", "红利再投资"):
+            side = "CASH_DIVIDEND" if kind == "现金分红" else "REINVEST"
+        elif delta == ZERO:
+            continue
+        else:
+            return {}
+        trades.append(dict(transaction_type=side, signed_shares=exact(delta), confirmed_amount=cash, status="正常"))
+    return confirmed_returns(trades, shares, market_value)

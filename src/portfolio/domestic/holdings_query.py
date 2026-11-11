@@ -6,7 +6,7 @@ from itertools import groupby
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .calculate import ALIPAY_ZERO_OPENINGS
-from .fund_returns import confirmed_returns
+from .fund_returns import confirmed_returns, tiantian_returns
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 
 PENDING = "待计算"
@@ -174,6 +174,11 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                     (t.effective_date IS NULL OR t.effective_date>? AND t.effective_date<=?)
                     ORDER BY t.effective_date,t.raw_transaction_id""", (*key, "2021-11-11", as_of))
                 returns = confirmed_returns(trades, qty, Decimal(value) if value is not None else None)
+            elif recent and not recent["issue"] and status != PENDING and Decimal(recent["observed_shares"]) == qty:
+                trades = [dict(r) for r in raw.execute("""SELECT * FROM raw_fund_transactions
+                    WHERE account_id=? AND fund_code=? AND source_platform='TIANTIAN'
+                    AND confirmation_date<=? ORDER BY confirmation_date,transaction_time,id""", (*key, as_of))]
+                returns = tiantian_returns(trades, qty, Decimal(value) if value is not None else None)
             return_issue = None if returns else (
                 "天天基金历史流水或成本基准待核对" if meta.get("platform") == "天天基金" else
                 "期初成本、交易或估值尚未完整核对")
