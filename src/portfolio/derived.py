@@ -12,7 +12,7 @@ from portfolio.paths import DATABASE_PATH, quote_cache_path
 from portfolio.services.derived_store import DerivedStore, exclusive, utcnow
 
 
-def rebuild(source, *, mode='changed', start=date(2026,1,1), end=None, legacy=None, automatic=False):
+def rebuild(source, *, mode='changed', start=date(2025,1,1), end=None, legacy=None, automatic=False):
     from portfolio.services.derived_builder import build_all,validate_generation,historical_people
     from portfolio.services.derived_dependencies import check_changes,source_identity
     from portfolio.services.derived_maintenance import write_progress,needs_rebuild,clean_stale_staging_files
@@ -168,18 +168,18 @@ def main(argv=None):
     commands=parser.add_subparsers(dest='command',required=True)
     commands.add_parser('inspect',help='只读数据库完整性及表分类盘点')
     coverage=commands.add_parser('coverage',help='只读逐证券/日/时段五分钟覆盖检查')
-    coverage.add_argument('--start',type=date.fromisoformat,default=date(2026,1,1));coverage.add_argument('--end',type=date.fromisoformat,default=date.today())
+    coverage.add_argument('--start',type=date.fromisoformat,default=date(2025,1,1));coverage.add_argument('--end',type=date.fromisoformat,default=date.today())
     calendar=commands.add_parser('fetch-calendar',help='显式从长桥保存真实交易所日历，不查询个人资产')
-    calendar.add_argument('--start',type=date.fromisoformat,default=date(2026,1,1))
+    calendar.add_argument('--start',type=date.fromisoformat,default=date(2025,1,1))
     calendar.add_argument('--end',type=date.fromisoformat,default=date(date.today().year,12,31))
     prices=commands.add_parser('fetch-missing-prices',help='显式仅补取缺失证券/日期的五分钟行情')
-    prices.add_argument('--start',type=date.fromisoformat,default=date(2026,1,1))
+    prices.add_argument('--start',type=date.fromisoformat,default=date(2025,1,1))
     prices.add_argument('--end',type=date.fromisoformat,default=date.today())
     commands.add_parser('init',help='创建空派生库，不写事实库')
     commands.add_parser('import-history',help='显式备份后向事实库追加旧历史行情；不覆盖原始表')
     build=commands.add_parser('rebuild',help='所有历史人员，离线本地计算并原子发布')
     build.add_argument('--mode',choices=['changed','all'],default='changed')
-    build.add_argument('--start',type=date.fromisoformat,default=date(2026,1,1));build.add_argument('--end',type=date.fromisoformat)
+    build.add_argument('--start',type=date.fromisoformat,default=date(2025,1,1));build.add_argument('--end',type=date.fromisoformat)
     commands.add_parser('check',help='检测源数据变化并标记旧派生分区无效，不执行重算')
     commands.add_parser('status',help='只读查看派生库状态')
     args=parser.parse_args(argv);store=DerivedStore(args.db)

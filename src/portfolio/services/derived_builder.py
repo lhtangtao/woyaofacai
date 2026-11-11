@@ -126,7 +126,7 @@ def historical_report_end(end,now):
     return min(end,completed)
 
 
-def build_all(source,derived,quotes,*,start=date(2026,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True,on_reports=None,on_partition=None):
+def build_all(source,derived,quotes,*,start=date(2025,1,1),end=None,force=False,progress=print,on_progress=None,retry_errors=True,on_reports=None,on_partition=None):
     from portfolio.services.analytics_service import AnalyticsService
     from portfolio.services.derived_dependencies import partition_dependency
     import logging

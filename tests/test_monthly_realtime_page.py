@@ -273,3 +273,17 @@ def test_hover_dot_lies_exactly_on_curve_point(qtbot):
     assert abs(page.canvas.hover_point["y"] - exact_pt.y()) < 0.01
 
 
+
+def test_available_years_and_months_include_2025(qtbot):
+    """验证年度/月度走势页左上角年份与月份选择器默认包含 2025 与 2026 供切换。"""
+    page = MonthlyRealtimePnlPage()
+    qtbot.addWidget(page)
+    page.tab_bar.setCurrentIndex(1)
+    years = [page.year_combo.itemText(i) for i in range(page.year_combo.count())]
+    assert "2026" in years
+    assert "2025" in years
+
+    page.tab_bar.setCurrentIndex(0)
+    months = [page.month_combo.itemText(i) for i in range(page.month_combo.count())]
+    assert any(m.startswith("2025-") for m in months)
+    assert any(m.startswith("2026-") for m in months)

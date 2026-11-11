@@ -322,7 +322,7 @@ class Producer:
             with exclusive(str(self.store.path)+'.price-history',wait=False),self.store.active(),localcontext() as ctx:
                 ctx.prec=50
                 if build_running(self.source):return
-                dates=pending_history_days(self.source,self.store,self.quotes,date(2026,1,1),current)
+                dates=pending_history_days(self.source,self.store,self.quotes,date(2025,1,1),current)
                 if not dates:return
                 started=monotonic();done=0;failures=[]
                 other=Producer(self.source)

@@ -1326,7 +1326,7 @@ class MonthlyRealtimePnlPage(QWidget):
             today = date.today()
             months = [
                 f"{year}-{month:02d}"
-                for year in range(2026, today.year + 1)
+                for year in range(2025, today.year + 1)
                 for month in range(1, (today.month if year == today.year else 12) + 1)
             ][::-1]
         preferred = date.today().strftime("%Y-%m")
@@ -1363,7 +1363,21 @@ class MonthlyRealtimePnlPage(QWidget):
             finally:
                 conn.close()
         if not years:
-            years = [str(year) for year in range(date.today().year, 2025, -1)]
+            years = [str(year) for year in range(date.today().year, 2024, -1)]
+        source_path = self._resolve_source_path()
+        if source_path and Path(source_path).is_file():
+            try:
+                with sqlite3.connect(Path(source_path).as_uri() + "?mode=ro", uri=True) as src:
+                    op_years = [
+                        r[0]
+                        for r in src.execute(
+                            "SELECT DISTINCT substr(business_date,1,4) FROM person_operations WHERE business_date IS NOT NULL"
+                        )
+                        if r[0]
+                    ]
+                years = sorted(set(years) | set(op_years), reverse=True)
+            except Exception:
+                pass
         preferred = str(date.today().year)
         if self.window and hasattr(self.window, "quote_store") and self.window.quote_store:
             try:

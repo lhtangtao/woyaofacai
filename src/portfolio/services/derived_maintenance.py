@@ -129,7 +129,7 @@ def schedule_changed(source,start=None):
         def work():
             from portfolio.derived import rebuild
             try:
-                return rebuild(store.source,mode='changed',start=min(start or date(2026,1,1),date(2026,1,1)),automatic=True)
+                return rebuild(store.source,mode='changed',start=min(start or date(2025,1,1),date(2025,1,1)),automatic=True)
             except BuildBusyError:
                 # Follow the actual owner's shared progress; never overwrite it.
                 return {'state':'BUILDING'}
