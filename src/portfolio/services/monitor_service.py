@@ -175,7 +175,7 @@ class LongbridgeMonitorProvider:
             values = self._context().quote(symbols)
             result = {}
             for q in values:
-                options = [(q.timestamp, q.last_done, "Intraday", q.prev_close)]
+                options = [(q.timestamp, q.last_done, "Intraday", q.prev_close, True)]
                 for attr, session in (
                     ("pre_market_quote", "Pre"),
                     ("post_market_quote", "Post"),
@@ -183,13 +183,23 @@ class LongbridgeMonitorProvider:
                 ):
                     item = getattr(q, attr, None)
                     if item is not None:
-                        options.append((item.timestamp, item.last_done, session, q.prev_close))
-                stamp, price, session, prev = max(options, key=lambda v: v[0].astimezone(UTC))
+                        # 盘前/盘后/夜盘必须以对应分时对象自带的 prev_close（上一常规交易日收盘价）为准，
+                        # 不可误用主行情 q.prev_close（盘前期间仍为前日收盘价，会导致涨跌幅偏差一天）。
+                        item_prev = getattr(item, "prev_close", None)
+                        has_item_prev = item_prev is not None and item_prev > 0
+                        prev = (
+                            item_prev
+                            if has_item_prev
+                            else (q.last_done if q.last_done and q.last_done > 0 else q.prev_close)
+                        )
+                        options.append((item.timestamp, item.last_done, session, prev, True))
+                stamp, price, session, prev, prev_verified = max(options, key=lambda v: v[0].astimezone(UTC))
                 result[q.symbol] = dict(
                     price=str(price),
                     stamp=stamp.astimezone(UTC).isoformat(),
                     session=session,
                     prev_close=str(prev),
+                    session_prev_verified=prev_verified,
                 )
         return result
 
@@ -361,15 +371,35 @@ class MonitorService:
                 or (expected is not None and (not bars or bars[-1].day < expected))
             )
             metrics, series = technicals(bars, price)
-            previous = (
+            raw_prev = (
                 Decimal(q["prev_close"]) if q.get("prev_close") and Decimal(q["prev_close"]) > 0 else None
             )
-            if previous is None and bars:
-                # Intraday latest uses last completed close; a quote on its own
-                # completed trading date instead compares the preceding close.
+            bar_previous = None
+            if bars:
                 quote_day = stamp.astimezone(NY).date() if stamp else bars[-1].day
-                eligible = [b for b in bars if b.day < quote_day]
-                previous = eligible[-1].close if eligible else None
+                q_session = q.get("session")
+                # 盘后/夜盘在当日常规收盘之后发生，基准应取 <= quote_day 的最近已完成日线；
+                # 盘前与盘中基准取 < quote_day 的上一交易日收盘价。
+                if q_session in ("Post", "Overnight"):
+                    eligible = [b for b in bars if b.day <= quote_day]
+                else:
+                    eligible = [b for b in bars if b.day < quote_day]
+                bar_previous = eligible[-1].close if eligible else None
+
+            if (
+                q.get("session") in ("Pre", "Post", "Overnight")
+                and not q.get("session_prev_verified")
+                and bar_previous is not None
+            ):
+                # 自动纠正旧版本缓存中盘前/盘后/夜盘误存的 q.prev_close
+                previous = bar_previous
+            else:
+                previous = raw_prev if raw_prev is not None else bar_previous
+
+            if previous is not None and isinstance(q, dict) and q.get("price"):
+                q["prev_close"] = str(previous)
+                if q.get("session") in ("Pre", "Post", "Overnight") and (q.get("session_prev_verified") or bar_previous is not None):
+                    q["session_prev_verified"] = True
             state["bar_date"] = bars[-1].day.isoformat() if bars else ""
             session = us_session(
                 now, getattr(self.provider, "days", None) or (), getattr(self.provider, "halves", ())

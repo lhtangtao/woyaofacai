@@ -525,34 +525,33 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
     page.draw_table()
     qtbot.wait(20)
 
-    # 1. 验证列头顺序：历史最高 -> 最高回撤 -> 高点日期 / 距今 -> MA20/50/200/250 双行
+    # 1. 验证列头顺序：历史最高 / 回撤 -> 高点日期 / 距今 -> MA20/50/200/250 双行
     headers = [page.table.horizontalHeaderItem(i).text() for i in range(page.table.columnCount())]
-    assert headers[2:9] == [
-        "历史最高", "最高回撤", "高点日期 / 距今",
+    assert headers[2:8] == [
+        "历史最高 / 回撤", "高点日期 / 距今",
         "MA20 / 偏离", "MA50 / 偏离", "MA200 / 偏离", "MA250 / 偏离",
     ]
-    assert page.table.item(0, 2).text() == "200.00"
-    assert page.table.item(0, 3).text() == "-75.00%"
-    assert page.table.item(0, 4).text() == f"{aaoi_date}\n已过 89 天"
+    assert page.table.item(0, 2).text() == "200.00\n-75.00%"
+    assert page.table.item(0, 3).text() == f"{aaoi_date}\n已过 89 天"
     # AAOI 现价 50，MA20=60 => (50/60-1)*100 = -16.67%
-    assert page.table.item(0, 5).text() == "60.00\n-16.67%"
+    assert page.table.item(0, 4).text() == "60.00\n-16.67%"
     # MU 现价 80，MA250=65 => (80/65-1)*100 = +23.08%
-    assert page.table.item(1, 8).text() == "65.00\n+23.08%"
+    assert page.table.item(1, 7).text() == "65.00\n+23.08%"
 
-    # 2. 验证三态排序：点击第3列（最高回撤）正序 -> 倒序 -> 清除排序
+    # 2. 验证三态排序：点击第2列（历史最高 / 回撤）正序 -> 倒序 -> 清除排序
     # 正序: -75.00% (AAOI) < -20.00% (MU)
-    page._on_watch_header_clicked(3)
-    assert page.table.horizontalHeaderItem(3).text() == "最高回撤 ↑"
+    page._on_watch_header_clicked(2)
+    assert page.table.horizontalHeaderItem(2).text() == "历史最高 / 回撤 ↑"
     assert [page.table.item(r, 0).data(256) for r in range(2)] == ["AAOI.US", "MU.US"]
 
     # 倒序: -20.00% (MU) -> -75.00% (AAOI)
-    page._on_watch_header_clicked(3)
-    assert page.table.horizontalHeaderItem(3).text() == "最高回撤 ↓"
+    page._on_watch_header_clicked(2)
+    assert page.table.horizontalHeaderItem(2).text() == "历史最高 / 回撤 ↓"
     assert [page.table.item(r, 0).data(256) for r in range(2)] == ["MU.US", "AAOI.US"]
 
     # 再点击一次 -> 清除排序，恢复默认 [AAOI.US, MU.US]
-    page._on_watch_header_clicked(3)
-    assert page.table.horizontalHeaderItem(3).text() == "最高回撤"
+    page._on_watch_header_clicked(2)
+    assert page.table.horizontalHeaderItem(2).text() == "历史最高 / 回撤"
     assert [page.table.item(r, 0).data(256) for r in range(2)] == ["AAOI.US", "MU.US"]
 
     # 3. 初始状态抽屉隐藏
@@ -560,13 +559,71 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
     assert page.drawer_frame.isHidden()
 
     # 4. 首次点击该行弹出抽屉，再次点击同一行自动收起消失
-    page._on_cell_clicked(0, 3)
+    page._on_cell_clicked(0, 2)
     qtbot.wait(20)
     assert page._drawer_open
     assert not page.drawer_frame.isHidden()
     assert page.selected == "AAOI.US"
 
-    page._on_cell_clicked(0, 3)
+    page._on_cell_clicked(0, 2)
     qtbot.wait(20)
     assert not page._drawer_open
     assert page.drawer_frame.isHidden()
+
+
+def test_longbridge_pre_market_uses_session_prev_close(tmp_path):
+    """盘前/盘后/夜盘必须使用对应分时段的 prev_close（昨收），避免错用主行情 q.prev_close（前日收盘）。"""
+    fake_quote = SimpleNamespace(
+        symbol="NVDA.US",
+        timestamp=datetime(2026, 11, 10, 21, 0, 1, tzinfo=UTC),
+        last_done=D("168.890"),
+        prev_close=D("178.670"),
+        pre_market_quote=SimpleNamespace(
+            timestamp=datetime(2026, 11, 11, 10, 51, 0, tzinfo=UTC),
+            last_done=D("178.120"),
+            prev_close=D("168.890"),
+        ),
+        post_market_quote=None,
+        overnight_quote=None,
+    )
+    provider = LongbridgeMonitorProvider("unused")
+    provider.context = SimpleNamespace(quote=lambda _syms: [fake_quote])
+    quotes = provider.quotes(["NVDA.US"])
+    assert quotes["NVDA.US"]["session"] == "Pre"
+    assert quotes["NVDA.US"]["price"] == "178.120"
+    assert quotes["NVDA.US"]["prev_close"] == "168.890"
+    assert quotes["NVDA.US"]["session_prev_verified"] is True
+
+    # 进一步校验 MonitorService._load 计算的涨跌幅为 +5.46% 左右而非 -0.31%
+    store = MonitorStore(tmp_path / "monitoring.sqlite3")
+    pre_provider = Provider()
+    pre_provider.days = {date(2026, 11, 9), date(2026, 11, 10), date(2026, 11, 11)}
+    pre_provider.cutoff = date(2026, 11, 10)
+    pre_provider.series = [
+        DailyBar(date(2026, 11, 9), D("175"), D("180"), D("174"), D("178.67"), D("1000")),
+        DailyBar(date(2026, 11, 10), D("176"), D("177"), D("168"), D("168.89"), D("1000")),
+    ]
+    pre_provider.quotes = lambda _syms: quotes
+    svc = MonitorService(
+        store,
+        pre_provider,
+        clock=lambda: datetime(2026, 11, 11, 10, 51, 10, tzinfo=UTC),
+    )
+    tgt = [dict(resolve("NVDA.US").record(), market="US", account_id=1, person_id=1, quantity="10", holding_status="COMPLETE")]
+    targets = store.sync("scope", tgt, datetime(2026, 11, 11, 10, 51, 10, tzinfo=UTC))
+    out = svc.load(targets, threading.Event(), network=True)
+    chg = out["NVDA.US"]["change"]
+    assert chg is not None and abs(chg - D("5.4650956")) < D("0.01")
+
+    # 模拟旧版缓存中误存入 q.prev_close=178.67 且无 session_prev_verified 标记，重算时应自动改用 11/10 收盘价 168.89
+    st = store.state("NVDA.US")
+    st["quote"] = {
+        "price": "178.120",
+        "stamp": datetime(2026, 11, 11, 10, 51, 0, tzinfo=UTC).isoformat(),
+        "session": "Pre",
+        "prev_close": "178.670",
+    }
+    store.save_market("NVDA.US", st)
+    out_cached = svc.load(targets, threading.Event(), network=False)
+    assert out_cached["NVDA.US"]["change"] is not None
+    assert abs(out_cached["NVDA.US"]["change"] - D("5.4650956")) < D("0.01")

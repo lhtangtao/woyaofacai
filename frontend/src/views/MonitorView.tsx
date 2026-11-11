@@ -398,8 +398,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                 {renderSortHeader("RSI14", "rsi", "right", "75px")}
                 {renderSortHeader("MA5", "ma5", "right", "90px")}
                 {renderSortHeader("MA10", "ma10", "right", "90px")}
-                {renderSortHeader("历史最高", "ath_high", "right", "90px")}
-                {renderSortHeader("最高回撤", "drawdown_pct", "right", "90px")}
+                {renderSortHeader("历史最高 / 回撤", "drawdown_pct", "right", "105px")}
                 {renderSortHeader("高点日期 / 距今", "ath_date", "center", "115px")}
                 {renderSortHeader("MA20 / 偏离", "dev20", "right", "95px")}
                 {renderSortHeader("MA50 / 偏离", "dev50", "right", "95px")}
@@ -411,7 +410,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
             <tbody>
               {sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={18} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                  <td colSpan={17} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                     {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
                   </td>
                 </tr>
@@ -476,21 +475,24 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
                       <td className="font-mono" style={{ textAlign: "right" }}>
                         {row.ma10 ? Number(row.ma10).toFixed(3) : "—"}
                       </td>
-                      {/* 历史最高 */}
-                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
-                        {row.ath_high != null ? `$${Number(row.ath_high).toFixed(2)}` : "—"}
-                      </td>
-                      {/* 最高回撤 */}
+                      {/* 历史最高 / 回撤 */}
                       <td
                         className="font-mono"
-                        style={{
-                          textAlign: "right",
-                          color: row.drawdown_pct != null ? (Number(row.drawdown_pct) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "inherit",
-                          fontWeight: 600,
-                        }}
+                        style={{ textAlign: "right", lineHeight: "1.25" }}
                         title={row.ath_high != null ? `历史最高: $${Number(row.ath_high).toFixed(2)}` : undefined}
                       >
-                        {row.drawdown_pct != null ? `${Number(row.drawdown_pct).toFixed(2)}%` : "—"}
+                        <div style={{ fontWeight: 600 }}>
+                          {row.ath_high != null ? `$${Number(row.ath_high).toFixed(2)}` : "—"}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            color: row.drawdown_pct != null ? (Number(row.drawdown_pct) >= 0 ? "var(--profit-color)" : "var(--loss-color)") : "var(--text-muted)",
+                          }}
+                        >
+                          {row.drawdown_pct != null ? `${Number(row.drawdown_pct).toFixed(2)}%` : "—"}
+                        </div>
                       </td>
                       {/* 高点日期 / 距今 */}
                       <td className="font-mono" style={{ textAlign: "center", fontSize: "12px", lineHeight: "1.25" }}>
