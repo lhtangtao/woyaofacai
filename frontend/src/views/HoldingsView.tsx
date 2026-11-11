@@ -446,9 +446,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
       "Ticker",
       "数量",
       "成本价",
-      "成本总额",
       "当前最新价",
-      "市值",
+      "持仓市值",
+      "本金",
       "收益率",
       "累计盈亏",
       "买入次数",
@@ -464,9 +464,9 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
           `"${r.ticker || ""}"`,
           r.quantity ?? "",
           r.cost_price ?? "",
-          r.cost_amount ?? "",
           r.current_price ?? "",
           r.market_value ?? "",
+          r.cost_amount ?? "",
           r.pnl_rate != null ? `${(r.pnl_rate * 100).toFixed(2)}%` : "",
           r.total_pnl ?? "",
           r.buy_count ?? "",
@@ -642,25 +642,28 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                 <table className="finance-table" style={{ fontSize: "12px" }}>
                   <thead>
                     <tr>
-                      <th onClick={() => togglePSort("name")} style={{ cursor: "pointer", userSelect: "none" }}>
+                      <th onClick={() => togglePSort("name")} style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }}>
                         人员 {pSortField === "name" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("market_value")}>
-                        持仓市值 (USD) {pSortField === "market_value" ? (pSortAsc ? "▲" : "▼") : ""}
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("market_value")}>
+                        持仓市值 {pSortField === "market_value" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_pnl")}>
-                        累计盈亏 (USD) {pSortField === "total_pnl" ? (pSortAsc ? "▲" : "▼") : ""}
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("principal")}>
+                        本金 {pSortField === "principal" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("pnl_rate")}>
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_pnl")}>
+                        累计盈亏 {pSortField === "total_pnl" ? (pSortAsc ? "▲" : "▼") : ""}
+                      </th>
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("pnl_rate")}>
                         收益率 {pSortField === "pnl_rate" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_stocks")}>
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("total_stocks")}>
                         持仓股票 {pSortField === "total_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("open_stocks")}>
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("open_stocks")}>
                         当前持仓 {pSortField === "open_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
-                      <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("closed_stocks")}>
+                      <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => togglePSort("closed_stocks")}>
                         已清仓 {pSortField === "closed_stocks" ? (pSortAsc ? "▲" : "▼") : ""}
                       </th>
                     </tr>
@@ -668,14 +671,17 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <tbody>
                     {sortedPersonSummary.map((p, idx) => (
                       <tr key={idx}>
-                        <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>
+                        <td style={{ textAlign: "center", fontWeight: 700, color: "var(--brand, #2563EB)" }}>{p.name}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>
                           ${formatNumber(p.market_value, 2)}
+                        </td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>
+                          ${formatNumber(p.principal ?? ((p.market_value || 0) - (p.total_pnl || 0)), 2)}
                         </td>
                         <td
                           className="font-mono"
                           style={{
-                            textAlign: "right",
+                            textAlign: "center",
                             fontWeight: 700,
                             color: (p.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
@@ -685,27 +691,28 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         <td
                           className="font-mono"
                           style={{
-                            textAlign: "right",
+                            textAlign: "center",
                             fontWeight: 600,
                             color: (p.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
                         >
                           {formatPercent(p.pnl_rate)}
                         </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.total_stocks || 0)}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.open_stocks || 0)}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(p.closed_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(p.total_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(p.open_stocks || 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(p.closed_stocks || 0)}</td>
                       </tr>
                     ))}
                     {/* 合计行 */}
                     {personSummary.length > 0 && (
                       <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
-                        <td>合计</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                        <td style={{ textAlign: "center" }}>合计</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_invested, 2)}</td>
                         <td
                           className="font-mono"
                           style={{
-                            textAlign: "right",
+                            textAlign: "center",
                             color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
                         >
@@ -714,15 +721,15 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         <td
                           className="font-mono"
                           style={{
-                            textAlign: "right",
+                            textAlign: "center",
                             color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                           }}
                         >
                           {formatPercent(cards.cumulative_pnl_rate)}
                         </td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.total_stock_count ?? 0)}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.open_stock_count ?? 0)}</td>
-                        <td className="font-mono" style={{ textAlign: "right" }}>{Math.round(cards.closed_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(cards.total_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(cards.open_stock_count ?? 0)}</td>
+                        <td className="font-mono" style={{ textAlign: "center" }}>{Math.round(cards.closed_stock_count ?? 0)}</td>
                       </tr>
                     )}
                   </tbody>
@@ -742,16 +749,19 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <table className="finance-table" style={{ fontSize: "11px" }}>
                     <thead>
                       <tr>
-                        <th onClick={() => toggleBSort("channel")} style={{ cursor: "pointer", userSelect: "none" }}>
+                        <th onClick={() => toggleBSort("channel")} style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }}>
                           券商 {bSortField === "channel" ? (bSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("market_value")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("market_value")}>
                           持仓市值 {bSortField === "market_value" ? (bSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("total_pnl")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("principal")}>
+                          本金 {bSortField === "principal" ? (bSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("total_pnl")}>
                           累计盈亏 {bSortField === "total_pnl" ? (bSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("pnl_rate")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleBSort("pnl_rate")}>
                           收益率 {bSortField === "pnl_rate" ? (bSortAsc ? "▲" : "▼") : ""}
                         </th>
                       </tr>
@@ -759,12 +769,13 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                     <tbody>
                       {sortedBrokerSummary.map((b, idx) => (
                         <tr key={idx} style={{ cursor: "pointer" }} onClick={() => drillToBroker(b.channel)}>
-                          <td style={{ fontWeight: 600 }}>{b.channel}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(b.market_value, 2)}</td>
+                          <td style={{ textAlign: "center", fontWeight: 600 }}>{b.channel}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(b.market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(b.principal ?? ((b.market_value || 0) - (b.total_pnl || 0)), 2)}</td>
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               fontWeight: 700,
                               color: (b.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
@@ -774,7 +785,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               color: (b.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
@@ -784,12 +795,13 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       ))}
                       {brokerSummary.length > 0 && (
                         <tr style={{ background: "var(--bg-app, #F8FAFC)", fontWeight: "bold" }}>
-                          <td>合计</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                          <td style={{ textAlign: "center" }}>合计</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(cards.total_invested, 2)}</td>
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               color: (cards.cumulative_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
@@ -798,7 +810,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               color: (cards.cumulative_pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
@@ -823,16 +835,19 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                   <table className="finance-table" style={{ fontSize: "11px" }}>
                     <thead>
                       <tr>
-                        <th onClick={() => toggleSSort("ticker")} style={{ cursor: "pointer", userSelect: "none" }}>
+                        <th onClick={() => toggleSSort("ticker")} style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }}>
                           Ticker {sSortField === "ticker" ? (sSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("market_value")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("market_value")}>
                           持仓市值 {sSortField === "market_value" ? (sSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("total_pnl")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("principal")}>
+                          本金 {sSortField === "principal" ? (sSortAsc ? "▲" : "▼") : ""}
+                        </th>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("total_pnl")}>
                           累计盈亏 {sSortField === "total_pnl" ? (sSortAsc ? "▲" : "▼") : ""}
                         </th>
-                        <th style={{ textAlign: "right", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("pnl_rate")}>
+                        <th style={{ textAlign: "center", cursor: "pointer", userSelect: "none" }} onClick={() => toggleSSort("pnl_rate")}>
                           收益率 {sSortField === "pnl_rate" ? (sSortAsc ? "▲" : "▼") : ""}
                         </th>
                       </tr>
@@ -844,12 +859,13 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           style={{ cursor: "pointer" }}
                           onClick={() => drillToStock(s.ticker)}
                         >
-                          <td style={{ fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
-                          <td className="font-mono" style={{ textAlign: "right" }}>${formatNumber(s.market_value, 2)}</td>
+                          <td style={{ textAlign: "center", fontWeight: 700, color: "var(--brand, #2563EB)" }}>{s.ticker}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(s.market_value, 2)}</td>
+                          <td className="font-mono" style={{ textAlign: "center" }}>${formatNumber(s.principal ?? ((s.market_value || 0) - (s.total_pnl || 0)), 2)}</td>
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               fontWeight: 700,
                               color: (s.total_pnl || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
@@ -859,7 +875,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                           <td
                             className="font-mono"
                             style={{
-                              textAlign: "right",
+                              textAlign: "center",
                               color: (s.pnl_rate || 0) >= 0 ? "var(--profit-color, #16A34A)" : "var(--loss-color, #DC2626)",
                             }}
                           >
@@ -1051,51 +1067,51 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
             <table aria-label="持仓明细" className="finance-table" style={{ fontSize: "12px" }}>
               <thead>
                 {statusFilter === "已清仓" ? (
-                  <tr>{closedColumns.map(([key,label,kind]) =>
+                  <tr>{closedColumns.map(([key,label]) =>
                     <th key={key} onClick={() => toggleDetailSort(key)}
-                      style={{cursor:"pointer", textAlign:kind === "text" ? "left" : "right", whiteSpace:"nowrap"}}>
+                      style={{cursor:"pointer", textAlign:"center", whiteSpace:"nowrap"}}>
                       {label} {sortField === key ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
                   )}</tr>
                 ) : (
                   <tr>
-                    <th onClick={() => toggleDetailSort("person_name")} style={{ cursor: "pointer" }}>
+                    <th onClick={() => toggleDetailSort("person_name")} style={{ textAlign: "center", cursor: "pointer" }}>
                       归属人员 {sortField === "person_name" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th onClick={() => toggleDetailSort("channel")} style={{ cursor: "pointer" }}>
+                    <th onClick={() => toggleDetailSort("channel")} style={{ textAlign: "center", cursor: "pointer" }}>
                       券商渠道 {sortField === "channel" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th onClick={() => toggleDetailSort("ticker")} style={{ cursor: "pointer" }}>
+                    <th onClick={() => toggleDetailSort("ticker")} style={{ textAlign: "center", cursor: "pointer" }}>
                       Ticker {sortField === "ticker" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("quantity")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("quantity")}>
                       数量 {sortField === "quantity" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_price")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_price")}>
                       成本价 {sortField === "cost_price" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_amount")}>
-                      成本总额 {sortField === "cost_amount" ? (sortAsc ? "▲" : "▼") : ""}
-                    </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("current_price")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("current_price")}>
                       当前最新价 {sortField === "current_price" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("market_value")}>
-                      市值 {sortField === "market_value" ? (sortAsc ? "▲" : "▼") : ""}
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("market_value")}>
+                      持仓市值 {sortField === "market_value" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("pnl_rate")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("cost_amount")}>
+                      本金 {sortField === "cost_amount" ? (sortAsc ? "▲" : "▼") : ""}
+                    </th>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("pnl_rate")}>
                       收益率 {sortField === "pnl_rate" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("total_pnl")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("total_pnl")}>
                       累计盈亏 {sortField === "total_pnl" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("buy_count")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("buy_count")}>
                       买入次数 {sortField === "buy_count" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("sell_count")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("sell_count")}>
                       卖出次数 {sortField === "sell_count" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
-                    <th style={{ textAlign: "right", cursor: "pointer" }} onClick={() => toggleDetailSort("weight")}>
+                    <th style={{ textAlign: "center", cursor: "pointer" }} onClick={() => toggleDetailSort("weight")}>
                       持仓占比 {sortField === "weight" ? (sortAsc ? "▲" : "▼") : ""}
                     </th>
                   </tr>
@@ -1121,7 +1137,7 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                         const tooltip = split ? `原始清仓价 ${closedCell(row.orig_close_price,"money")} · ${row.split_notes || ""}`
                           : key === "current_price" ? [row.quote_status,row.quote_time].filter(Boolean).join(" · ") : undefined;
                         return <td key={key} title={tooltip} className={kind === "text" ? undefined : "font-mono"}
-                          style={{whiteSpace:"nowrap", textAlign:kind === "text" ? "left" : "right", color:colored ? tone : key === "ticker" ? "var(--brand)" : undefined}}>
+                          style={{whiteSpace:"nowrap", textAlign:"center", color:colored ? tone : key === "ticker" ? "var(--brand)" : undefined}}>
                           {closedCell(value,kind)}{split ? "*" : ""}
                         </td>;
                       })}
@@ -1138,28 +1154,28 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       onClick={() => openDetail(r)}
                       title="点击从右侧打开该标的深度交易与收益抽屉"
                     >
-                      <td style={{ fontWeight: 600 }}>{r.person_name}</td>
-                      <td>{r.channel}</td>
-                      <td style={{ fontWeight: 700, color: "var(--brand)" }}>{r.ticker}</td>
-                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 600 }}>
+                      <td style={{ textAlign: "center", fontWeight: 600 }}>{r.person_name}</td>
+                      <td style={{ textAlign: "center" }}>{r.channel}</td>
+                      <td style={{ textAlign: "center", fontWeight: 700, color: "var(--brand)" }}>{r.ticker}</td>
+                      <td className="font-mono" style={{ textAlign: "center", fontWeight: 600 }}>
                         {qty != null ? formatNumber(qty, qty % 1 === 0 ? 0 : 2) : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right" }}>
+                      <td className="font-mono" style={{ textAlign: "center" }}>
                         {r.cost_price != null ? `$${formatNumber(r.cost_price, 2)}` : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right" }}>
-                        {r.cost_amount != null ? `$${formatNumber(r.cost_amount, 2)}` : "—"}
-                      </td>
-                      <td className="font-mono" style={{ textAlign: "right", color: "var(--brand)" }}>
+                      <td className="font-mono" style={{ textAlign: "center", color: "var(--brand)" }}>
                         {r.current_price != null ? `$${formatNumber(r.current_price, 2)}` : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right", fontWeight: 700 }}>
+                      <td className="font-mono" style={{ textAlign: "center", fontWeight: 700 }}>
                         {r.market_value != null ? `$${formatNumber(r.market_value, 2)}` : "—"}
+                      </td>
+                      <td className="font-mono" style={{ textAlign: "center" }}>
+                        {r.cost_amount != null ? `$${formatNumber(r.cost_amount, 2)}` : "—"}
                       </td>
                       <td
                         className="font-mono"
                         style={{
-                          textAlign: "right",
+                          textAlign: "center",
                           fontWeight: 600,
                           color: pnlRate != null && pnlRate > 0 ? "var(--profit-color, #16A34A)" : pnlRate != null && pnlRate < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
                         }}
@@ -1169,20 +1185,20 @@ export const HoldingsView: React.FC<HoldingsViewProps> = ({
                       <td
                         className="font-mono"
                         style={{
-                          textAlign: "right",
+                          textAlign: "center",
                           fontWeight: 700,
                           color: totalPnl != null && totalPnl > 0 ? "var(--profit-color, #16A34A)" : totalPnl != null && totalPnl < 0 ? "var(--loss-color, #DC2626)" : "var(--text-muted)",
                         }}
                       >
                         {totalPnl != null ? `${totalPnl > 0 ? "+" : ""}$${formatNumber(totalPnl, 2)}` : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right" }}>
+                      <td className="font-mono" style={{ textAlign: "center" }}>
                         {r.buy_count != null ? r.buy_count : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right" }}>
+                      <td className="font-mono" style={{ textAlign: "center" }}>
                         {r.sell_count != null ? r.sell_count : "—"}
                       </td>
-                      <td className="font-mono" style={{ textAlign: "right", color: "var(--text-muted)" }}>
+                      <td className="font-mono" style={{ textAlign: "center", color: "var(--text-muted)" }}>
                         {r.weight != null ? `${(Number(r.weight) * 100).toFixed(2)}%` : "0.00%"}
                       </td>
                     </tr>

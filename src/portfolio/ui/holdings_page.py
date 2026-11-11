@@ -302,6 +302,8 @@ class HoldingsTableModel(FinanceModel):
                     arrow = " ▲" if self.sort_order == Qt.SortOrder.AscendingOrder else " ▼"
                     return f"{col_name}{arrow}"
                 return col_name
+            if role == Qt.ItemDataRole.TextAlignmentRole:
+                return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             return None
         if orientation == Qt.Orientation.Vertical and role == Qt.ItemDataRole.DisplayRole:
             return str(section + 1)
@@ -333,7 +335,7 @@ class HoldingsTableModel(FinanceModel):
                 if any(w in col_name for w in ("收益率", "比例", "涨幅", "涨跌幅", "涨跌")):
                     sign = "+" if val > 0 else ""
                     return f"{sign}{val * 100:.2f}%"
-                if any(w in col_name for w in ("市值", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价", "清仓收益")):
+                if any(w in col_name for w in ("市值", "本金", "盈亏", "投入", "成本", "价格", "现金", "金额", "总额", "均价", "清仓价", "当前价", "最新价", "清仓收益")):
                     sign = "+" if ("盈亏" in col_name or col_name == "清仓收益") and val > 0 else ""
                     if col_name == "清仓价" and row.metadata.get("is_split_adjusted"):
                         return f"{currency}{val:,.2f}*"
@@ -352,11 +354,7 @@ class HoldingsTableModel(FinanceModel):
             return None
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            if col_name == "操作":
-                return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            if isinstance(val, (int, float, Decimal)):
-                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            return int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
 
         if role == Qt.ItemDataRole.FontRole:
             if is_total:
@@ -774,9 +772,10 @@ class HoldingsPage(QWidget):
 
         self.p_table = FinanceTable(freeze=False)
         self.p_model = HoldingsTableModel(self.p_table)
-        self.p_model.columns = ("人员", "持仓市值(USD)", "累计盈亏(USD)", "收益率", "持仓股票", "当前持仓", "已清仓")
+        self.p_model.columns = ("人员", "持仓市值", "本金", "累计盈亏", "收益率", "持仓股票", "当前持仓", "已清仓")
         self.p_table.setModel(self.p_model)
         self.p_table.horizontalHeader().setFixedHeight(36)
+        self.p_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.p_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.p_table.horizontalHeader().setStretchLastSection(True)
         self.p_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
@@ -809,9 +808,10 @@ class HoldingsPage(QWidget):
 
         self.b_table = FinanceTable(freeze=False)
         self.b_model = HoldingsTableModel(self.b_table)
-        self.b_model.columns = ("券商", "持仓市值(USD)", "累计盈亏", "收益率")
+        self.b_model.columns = ("券商", "持仓市值", "本金", "累计盈亏", "收益率")
         self.b_table.setModel(self.b_model)
         self.b_table.horizontalHeader().setFixedHeight(36)
+        self.b_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.b_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.b_table.horizontalHeader().setStretchLastSection(True)
         self.b_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
@@ -842,9 +842,10 @@ class HoldingsPage(QWidget):
 
         self.s_table = FinanceTable(freeze=False)
         self.s_model = HoldingsTableModel(self.s_table)
-        self.s_model.columns = ("Ticker", "持仓市值(USD)", "累计盈亏", "收益率")
+        self.s_model.columns = ("Ticker", "持仓市值", "本金", "累计盈亏", "收益率")
         self.s_table.setModel(self.s_model)
         self.s_table.horizontalHeader().setFixedHeight(36)
+        self.s_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.s_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.s_table.horizontalHeader().setStretchLastSection(True)
         self.s_table.horizontalHeader().setStyleSheet("background: #FFFFFF; border: none; border-bottom: 1px solid #E2E8F0;")
@@ -1008,10 +1009,11 @@ class HoldingsPage(QWidget):
         self.detail_table = FinanceTable(freeze=False)
         self.detail_model = HoldingsTableModel(self.detail_table)
         self.detail_model.columns = (
-            "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
-            "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
+            "归属人员", "券商渠道", "Ticker", "数量", "成本价",
+            "当前最新价", "持仓市值", "本金", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比"
         )
         self.detail_table.setModel(self.detail_model)
+        self.detail_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
         self.detail_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.detail_table.horizontalHeader().sectionClicked.connect(self.detail_model.toggle_sort)
         self.detail_table.clicked.connect(self._on_detail_row_clicked)
@@ -1227,14 +1229,17 @@ class HoldingsPage(QWidget):
         p_recs = dash.get("person_summary", [])
         p_rows = []
         tot_p_mv = Decimal(0)
+        tot_p_principal = Decimal(0)
         tot_p_pnl = Decimal(0)
         tot_p_stocks = 0
         tot_p_open = 0
         tot_p_closed = 0
         for pr in p_recs:
             p_mv = Decimal(str(pr.get("market_value") or 0))
+            p_principal = Decimal(str(pr.get("principal") if pr.get("principal") is not None else (p_mv - Decimal(str(pr.get("total_pnl") or 0)))))
             p_pnl = Decimal(str(pr.get("total_pnl") or 0))
             tot_p_mv += p_mv
+            tot_p_principal += p_principal
             tot_p_pnl += p_pnl
             ts = int(pr.get("total_stocks") or 0)
             os = int(pr.get("open_stocks") or 0)
@@ -1245,6 +1250,7 @@ class HoldingsPage(QWidget):
             p_rows.append(ReportRow((
                 pr.get("name"),
                 p_mv,
+                p_principal,
                 p_pnl,
                 Decimal(str(pr.get("pnl_rate") or 0)) if pr.get("pnl_rate") is not None else None,
                 ts,
@@ -1253,11 +1259,12 @@ class HoldingsPage(QWidget):
             ), {"person_id": pr.get("person_id")}))
 
         if p_rows:
-            p_base = (tot_p_mv - tot_p_pnl)
+            p_base = tot_p_principal if tot_p_principal > 0 else (tot_p_mv - tot_p_pnl)
             p_tot_rate = ratio(tot_p_pnl, p_base) if p_base > 0 else None
             p_rows.append(ReportRow((
                 "合计",
                 tot_p_mv,
+                tot_p_principal,
                 tot_p_pnl,
                 p_tot_rate,
                 tot_p_stocks,
@@ -1272,24 +1279,29 @@ class HoldingsPage(QWidget):
         b_recs = dash.get("broker_summary", [])
         b_rows = []
         tot_b_mv = Decimal(0)
+        tot_b_principal = Decimal(0)
         tot_b_pnl = Decimal(0)
         for br in b_recs:
             b_mv = Decimal(str(br.get("market_value") or 0))
             b_pnl = Decimal(str(br.get("total_pnl") or 0))
+            b_principal = Decimal(str(br.get("principal") if br.get("principal") is not None else (b_mv - b_pnl)))
             tot_b_mv += b_mv
+            tot_b_principal += b_principal
             tot_b_pnl += b_pnl
             b_rows.append(ReportRow((
                 br.get("channel"),
                 b_mv,
+                b_principal,
                 b_pnl,
                 Decimal(str(br.get("pnl_rate") or 0)) if br.get("pnl_rate") is not None else None,
             ), {}))
         if b_rows:
-            b_base = (tot_b_mv - tot_b_pnl)
+            b_base = tot_b_principal if tot_b_principal > 0 else (tot_b_mv - tot_b_pnl)
             b_tot_rate = ratio(tot_b_pnl, b_base) if b_base > 0 else None
             b_rows.append(ReportRow((
                 "合计",
                 tot_b_mv,
+                tot_b_principal,
                 tot_b_pnl,
                 b_tot_rate,
             ), {"is_total": True}))
@@ -1298,10 +1310,14 @@ class HoldingsPage(QWidget):
         s_recs = dash.get("stock_summary", [])
         s_rows = []
         for sr in s_recs[:10]:
+            s_mv = Decimal(str(sr.get("market_value") or 0))
+            s_pnl = Decimal(str(sr.get("total_pnl") or 0))
+            s_principal = Decimal(str(sr.get("principal") if sr.get("principal") is not None else (s_mv - s_pnl)))
             s_rows.append(ReportRow((
                 sr.get("ticker"),
-                Decimal(str(sr.get("market_value") or 0)),
-                Decimal(str(sr.get("total_pnl") or 0)),
+                s_mv,
+                s_principal,
+                s_pnl,
                 Decimal(str(sr.get("pnl_rate") or 0)) if sr.get("pnl_rate") is not None else None,
             ), {}))
 
@@ -1365,8 +1381,8 @@ class HoldingsPage(QWidget):
 
         schema = closed_columns(mode) if closed else ()
         target_cols = tuple(label for _,label,_ in schema) if closed else (
-            "归属人员", "券商渠道", "Ticker", "数量", "成本价", "成本总额",
-            "当前最新价", "市值", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比",
+            "归属人员", "券商渠道", "Ticker", "数量", "成本价",
+            "当前最新价", "持仓市值", "本金", "收益率", "累计盈亏", "买入次数", "卖出次数", "持仓占比",
         )
         v_scroll = self.detail_table.verticalScrollBar().value()
         h_scroll = self.detail_table.horizontalScrollBar().value()
@@ -1399,9 +1415,9 @@ class HoldingsPage(QWidget):
                     item.get("ticker"),
                     to_dec(item.get("quantity")),
                     to_dec(item.get("cost_price")),
-                    to_dec(item.get("cost_amount")),
                     to_dec(item.get("current_price")),
                     to_dec(item.get("market_value")),
+                    to_dec(item.get("cost_amount")),
                     to_dec(item.get("pnl_rate")),
                     to_dec(item.get("total_pnl")),
                     item.get("buy_count"),

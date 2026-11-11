@@ -263,6 +263,7 @@ class HoldingsManagementService:
                     "market_value": Decimal(0),
                     "total_pnl": Decimal(0),
                     "net_invested": Decimal(0),
+                    "has_net": False,
                     "all_stocks": set(),
                     "open_stocks": set(),
                     "closed_stocks": set(),
@@ -277,26 +278,29 @@ class HoldingsManagementService:
                         item["market_value"] += r.values[7]
                     if isinstance(r.values[8], Decimal):
                         item["total_pnl"] += r.values[8]
-                    if isinstance(r.values[12], Decimal):
+                    if len(r.values) > 12 and isinstance(r.values[12], Decimal):
                         item["net_invested"] += r.values[12]
+                        item["has_net"] = True
                 elif r.values[4] == "已清仓":
                     item["closed_stocks"].add(ticker)
                     if isinstance(r.values[8], Decimal):
                         item["total_pnl"] += r.values[8]
-                    if isinstance(r.values[12], Decimal):
+                    if len(r.values) > 12 and isinstance(r.values[12], Decimal):
                         item["net_invested"] += r.values[12]
+                        item["has_net"] = True
 
         person_summary = []
         for p_id, item in sorted(person_groups.items(), key=lambda x: str(x[1]["name"])):
             closed_count = len(item["closed_stocks"] - item["open_stocks"])
-            net = item["net_invested"]
             mv = item["market_value"]
-            base = net if net > 0 else (mv - item["total_pnl"])
+            principal = item["net_invested"] if item["has_net"] else (mv - item["total_pnl"])
+            base = principal if principal > 0 else (mv - item["total_pnl"])
             p_rate = ratio(item["total_pnl"], base) if base > 0 else None
             person_summary.append({
                 "person_id": p_id,
                 "name": item["name"],
                 "market_value": serialize_val(mv),
+                "principal": serialize_val(principal),
                 "total_pnl": serialize_val(item["total_pnl"]),
                 "pnl_rate": serialize_val(p_rate),
                 "total_stocks": len(item["all_stocks"]),
@@ -311,32 +315,36 @@ class HoldingsManagementService:
                 channel = channel_label(r.values[0])
                 mv = r.values[1] or Decimal(0)
                 pnl = r.values[8] or Decimal(0)
-                net = r.values[2] or Decimal(0)
+                net = r.values[2] if r.values[2] is not None else (mv - pnl)
                 b_rate = ratio(pnl, net if net > 0 else (mv - pnl))
                 cash = r.values[12]
                 broker_summary.append({
                     "channel": channel,
                     "market_value": serialize_val(mv),
+                    "principal": serialize_val(net),
                     "total_pnl": serialize_val(pnl),
                     "pnl_rate": serialize_val(b_rate),
                     "cash": serialize_val(cash),
                 })
         else:
             # Fallback by grouping pa_rows by channel
-            b_groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"mv": Decimal(0), "pnl": Decimal(0), "net": Decimal(0)})
+            b_groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"mv": Decimal(0), "pnl": Decimal(0), "net": Decimal(0), "has_net": False})
             for r in pa_rows:
                 ch_name = channel_label(r.values[1] or "未知渠道")
                 if isinstance(r.values[7], Decimal) and r.values[4] == "持有中":
                     b_groups[ch_name]["mv"] += r.values[7]
                 if isinstance(r.values[8], Decimal):
                     b_groups[ch_name]["pnl"] += r.values[8]
-                if isinstance(r.values[12], Decimal):
+                if len(r.values) > 12 and isinstance(r.values[12], Decimal):
                     b_groups[ch_name]["net"] += r.values[12]
+                    b_groups[ch_name]["has_net"] = True
             for ch_name, b_data in sorted(b_groups.items()):
-                b_rate = ratio(b_data["pnl"], b_data["net"]) if b_data["net"] > 0 else None
+                principal = b_data["net"] if b_data["has_net"] else (b_data["mv"] - b_data["pnl"])
+                b_rate = ratio(b_data["pnl"], principal) if principal > 0 else None
                 broker_summary.append({
                     "channel": ch_name,
                     "market_value": serialize_val(b_data["mv"]),
+                    "principal": serialize_val(principal),
                     "total_pnl": serialize_val(b_data["pnl"]),
                     "pnl_rate": serialize_val(b_rate),
                     "cash": None,
@@ -355,6 +363,7 @@ class HoldingsManagementService:
                     "floating_pnl": Decimal(0),
                     "total_pnl": Decimal(0),
                     "net_invested": Decimal(0),
+                    "has_net": False,
                     "quantity": Decimal(0),
                     "status": "已清仓",
                 }
@@ -368,21 +377,25 @@ class HoldingsManagementService:
                 if isinstance(r.values[8], Decimal):
                     sg["floating_pnl"] += r.values[8]
                     sg["total_pnl"] += r.values[8]
-                if isinstance(r.values[12], Decimal):
+                if len(r.values) > 12 and isinstance(r.values[12], Decimal):
                     sg["net_invested"] += r.values[12]
+                    sg["has_net"] = True
             elif r.values[4] == "已清仓":
                 if isinstance(r.values[8], Decimal):
                     sg["total_pnl"] += r.values[8]
-                if isinstance(r.values[12], Decimal):
+                if len(r.values) > 12 and isinstance(r.values[12], Decimal):
                     sg["net_invested"] += r.values[12]
+                    sg["has_net"] = True
 
         stock_summary = []
         for tk, sg in sorted(stock_groups.items(), key=lambda x: (x[1]["status"] != "持有中", -x[1]["market_value"])):
-            base = sg["net_invested"] if sg["net_invested"] > 0 else (sg["market_value"] - sg["total_pnl"])
+            principal = sg["net_invested"] if sg["has_net"] else (sg["market_value"] - sg["total_pnl"])
+            base = principal if principal > 0 else (sg["market_value"] - sg["total_pnl"])
             s_rate = ratio(sg["total_pnl"], base) if base > 0 else None
             stock_summary.append({
                 "ticker": tk,
                 "market_value": serialize_val(sg["market_value"]),
+                "principal": serialize_val(principal),
                 "floating_pnl": serialize_val(sg["floating_pnl"]),
                 "total_pnl": serialize_val(sg["total_pnl"]),
                 "pnl_rate": serialize_val(s_rate),

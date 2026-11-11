@@ -152,3 +152,21 @@ def test_mac_broker_table_click_and_chip_clear(multi_broker_ledger, qtbot):
     assert page.broker_combo.currentIndex() == 0
     assert page.active_broker_chip.isHidden()
     assert len(page.detail_model.rows) == 4
+
+    # 验证所有表格：去掉 (USD)、在持仓市值后面加上本金、且全部表头与单元格居中对齐
+    from PySide6.QtCore import Qt
+
+    for model in (page.p_model, page.b_model, page.s_model, page.detail_model):
+        cols = model.columns
+        assert all("(USD)" not in c and "（USD）" not in c for c in cols)
+        mv_idx = cols.index("持仓市值")
+        assert cols[mv_idx + 1] == "本金"
+        for col in range(len(cols)):
+            h_align = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.TextAlignmentRole)
+            assert bool(h_align & Qt.AlignmentFlag.AlignHCenter)
+            if model.rowCount() > 0:
+                c_align = model.data(model.index(0, col), Qt.ItemDataRole.TextAlignmentRole)
+                assert bool(c_align & Qt.AlignmentFlag.AlignHCenter)
+        if model.rowCount() > 0:
+            principal_text = model.data(model.index(0, mv_idx + 1), Qt.ItemDataRole.DisplayRole)
+            assert principal_text.startswith("$")
