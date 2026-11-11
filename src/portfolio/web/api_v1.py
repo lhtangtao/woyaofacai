@@ -2334,20 +2334,33 @@ def api_shared_history():
             return jsonify({'status':'ok','chart':{'title':period+' 历史走势','series':[],'note':state.get('message','尚无已发布历史数据，请查看任务状态。'),'boundaries':[]},
                             'cache':state,'channels':[],'tickers':[]})
         from portfolio.services.derived_queries import historical_analytics
+        from portfolio.ui.monthly_realtime_page import get_period_opening_pnl
         analytics=historical_analytics(DATABASE_PATH,scope,first,last)
         channels=request.args.getlist('channel') or None
         ticker=request.args.get('ticker') or None
         rows,state=load_history(DATABASE_PATH,quotes,scope,first,last,aggregate=True,channels=channels,ticker=ticker)
         mode=request.args.get('mode','cumulative')
         if mode not in ('cumulative','intraday'):raise ValueError('未知走势模式。')
+        zero_base_raw=request.args.get('zero_base','1').strip().lower()
+        zero_base=zero_base_raw not in ('0','false','no')
         chart,state=trend(DATABASE_PATH,quotes,analytics,period,year=year,channels=channels,ticker=ticker,mode=mode,history_data=(rows,state))
+        opening_pnl=get_period_opening_pnl(analytics,period,is_year=year,channels=channels,ticker=ticker)
+        effective_base_pnl=Decimal(0) if (zero_base or mode!='cumulative') else opening_pnl
+        series_payload=[
+            {
+                'name':s.name,
+                'points':[(k,(Decimal(str(v))+effective_base_pnl) if (v is not None and mode=='cumulative') else v) for k,v in s.points]
+            }
+            for s in chart.series
+        ]
         if state.get('baseline_state')=='REPORT_PENDING':
             from portfolio.services.derived_maintenance import schedule_changed
             schedule_changed(DATABASE_PATH)
         daily=analytics.reports['每日持仓收益'].rows
-        return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':[{'name':s.name,'points':s.points} for s in chart.series],
+        return jsonify(exact_json({'status':'ok','chart':{'title':chart.title,'series':series_payload,
                      'note':chart.note,'boundaries':chart.vertical_lines,'x_ticks':chart.x_ticks,
-                     'x_labels':chart.x_labels,'calendar_axis':chart.calendar_axis,'line_width':chart.line_width,'break_keys':chart.break_keys},'cache':state,
+                     'x_labels':chart.x_labels,'calendar_axis':chart.calendar_axis,'line_width':chart.line_width,'break_keys':chart.break_keys,
+                     'zero_base':zero_base,'opening_pnl':opening_pnl},'cache':state,
                      'channels':sorted({r.values[1] for r in daily}),'tickers':sorted({r.values[3] for r in daily})}))
     except (ValueError,TypeError) as exc:return jsonify({'status':'error','message':str(exc)}),400
     except Exception:

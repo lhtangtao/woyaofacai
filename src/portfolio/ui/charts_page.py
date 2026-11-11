@@ -480,6 +480,7 @@ class ChartCanvas(QWidget):
         super().__init__(parent)
         self.card_mode = card_mode
         self.chart, self.hits = None, []
+        self.point_coords = {}
         self.setMinimumSize(360, 260)
         self.setMouseTracking(True)
         self.hover_index = None
@@ -577,6 +578,7 @@ class ChartCanvas(QWidget):
         else:
             painter.fillRect(self.rect(), QColor(t.panel))
         self.hits = []
+        self.point_coords = {}
         self.back_button_rect = None
         chart = self.chart
         if getattr(self, "loading_message", ""):
@@ -899,6 +901,9 @@ class ChartCanvas(QWidget):
                     left + (category_positions[key] + (0 if fixed_axis else 0.5)) * step,
                     ys(value),
                 )
+                pt = QPointF(x, y)
+                self.point_coords[(series.name, key)] = pt
+                self.point_coords.setdefault(key, pt)
                 painter.setPen(QPen(color, getattr(chart, "line_width", 2.0)))
                 if chart.kind == "line":
                     if last and not series.name.startswith(("B ", "S ", "◇")):

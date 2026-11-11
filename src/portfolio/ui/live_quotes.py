@@ -98,6 +98,8 @@ class LiveQuotesPanel(QWidget):
             window.asset_trend.set_parent_filters(page.channel_overview.selected_channel,page.local_search.text())
             if not window.analytics or window.analytics.scope!=scope:
                 window.asset_trend.set_analytics(SimpleNamespace(scope=scope,source_identity=str(self.source_path)))
+            elif getattr(window.asset_trend.analytics,'reports',None) is None:
+                window.asset_trend.set_analytics(window.analytics)
             window.asset_trend.show()
 
     def refresh_channel_cash(self, force=False):

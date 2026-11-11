@@ -86,6 +86,8 @@ def calculate_realtime_metrics(
     period_str="",
     state=None,
     base_pnl: Decimal | None = None,
+    zero_base: bool = False,
+    opening_pnl: Decimal | None = None,
 ):
     """
     计算月度/年度走势详情的核心指标：
@@ -144,7 +146,11 @@ def calculate_realtime_metrics(
     if base_pnl is not None:
         start_val = base_pnl
         valid_totals = [(dt_bj, base_pnl + v, s) for dt_bj, v, s in valid]
-        start_time_text = f"上{'年' if is_year else '月'}底累计 · {period_str}起点"
+        if zero_base:
+            extra = f" (期初累计 {opening_pnl:+,.2f})" if opening_pnl else ""
+            start_time_text = f"{'本年' if is_year else '本月'}起点归零 · {period_str}起点{extra}"
+        else:
+            start_time_text = f"上{'年' if is_year else '月'}底累计 · {period_str}起点"
     else:
         start_val = first_val
         valid_totals = valid
@@ -632,6 +638,7 @@ class RealtimeChartCanvas(ChartCanvas):
     def __init__(self, parent=None, card_mode=False):
         super().__init__(parent, card_mode=card_mode)
         self.hide_legend = True
+        self.value_label = "累计盈亏"
         self.hover_point = None  # (x, y, dt_str, val_str, delta_str, status_str)
         self.setMouseTracking(True)
 
@@ -660,25 +667,33 @@ class RealtimeChartCanvas(ChartCanvas):
 
             # Check change compared to previous valid
             delta_str = "—"
+            delta_num = Decimal(0)
             pts = self.chart.series[0].points if self.chart.series else ()
             for i, (k, v) in enumerate(pts):
-                if k == key and i > 0 and pts[i - 1][1] is not None and v is not None:
-                    diff = Decimal(str(v)) - Decimal(str(pts[i - 1][1]))
-                    delta_str = f"{diff:+,.2f} USD"
+                if k == key and v is not None:
+                    for prev_idx in range(i - 1, -1, -1):
+                        prev_val = pts[prev_idx][1]
+                        if prev_val is not None:
+                            delta_num = Decimal(str(v)) - Decimal(str(prev_val))
+                            delta_str = f"{delta_num:+,.2f} USD"
+                            break
                     break
 
             val_str = f"{Decimal(str(val)):+,.2f} USD"
-            # Calculate approx Y for the point
-            cy = rect.center().y()
-            # If hit has exact Y, cy is in rect
+            point_map = getattr(self, "point_coords", {}) or {}
+            exact_pt = point_map.get((name, key)) or point_map.get(key)
+            hx = exact_pt.x() if exact_pt is not None else rect.center().x()
+            hy = exact_pt.y() if exact_pt is not None else rect.center().y()
             self.hover_point = {
-                "x": rect.center().x(),
-                "y": cy,
+                "x": hx,
+                "y": hy,
+                "key": key,
+                "series_name": name,
                 "time": dt_str,
                 "val": val_str,
                 "delta": delta_str,
                 "val_num": Decimal(str(val)),
-                "delta_num": Decimal(str(delta_str.replace(" USD", "").replace("+", ""))) if "USD" in delta_str else Decimal(0),
+                "delta_num": delta_num,
             }
             self.update()
         else:
@@ -703,18 +718,19 @@ class RealtimeChartCanvas(ChartCanvas):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         hp = self.hover_point
-        hx = hp["x"]
+        point_map = getattr(self, "point_coords", {}) or {}
+        exact_pt = point_map.get((hp.get("series_name", ""), hp.get("key", ""))) or point_map.get(hp.get("key", ""))
+        hx = exact_pt.x() if exact_pt is not None else hp["x"]
+        hy = exact_pt.y() if exact_pt is not None else hp["y"]
 
         # 1. 垂直标线
         pen_line = QPen(QColor("#94A3B8"), 1.0, Qt.PenStyle.DashLine)
         painter.setPen(pen_line)
         painter.drawLine(QPointF(hx, 30), QPointF(hx, self.height() - 60))
 
-        # 2. 高亮实心圆点
+        # 2. 高亮实心圆点（精准落在曲线顶点上）
         painter.setPen(QPen(QColor("#FFFFFF"), 2))
         painter.setBrush(QColor("#2563EB"))
-        # We can find accurate y from zero axis or hit rect
-        hy = hp["y"]
         painter.drawEllipse(QPointF(hx, hy), 5.0, 5.0)
 
         # 3. 浮动白色卡片 Tooltip
@@ -740,9 +756,9 @@ class RealtimeChartCanvas(ChartCanvas):
         painter.setPen(QColor("#0F172A"))
         painter.drawText(QRectF(card_x + 65, card_y + 8, card_w - 75, 18), Qt.AlignmentFlag.AlignRight, hp["time"])
 
-        # 行2：累计盈亏
+        # 行2：当月/当年收益 或 累计盈亏
         painter.setPen(QColor("#64748B"))
-        painter.drawText(QRectF(card_x + 10, card_y + 30, 55, 18), Qt.AlignmentFlag.AlignLeft, "累计盈亏")
+        painter.drawText(QRectF(card_x + 10, card_y + 30, 58, 18), Qt.AlignmentFlag.AlignLeft, getattr(self, "value_label", "累计盈亏"))
         c_pnl = "#16A34A" if hp["val_num"] >= 0 else "#DC2626"
         painter.setPen(QColor(c_pnl))
         painter.drawText(QRectF(card_x + 65, card_y + 30, card_w - 75, 18), Qt.AlignmentFlag.AlignRight, hp["val"])
@@ -955,10 +971,42 @@ class MonthlyRealtimePnlPage(QWidget):
         chart_card_layout.setContentsMargins(14, 12, 14, 12)
         chart_card_layout.setSpacing(6)
 
-        # 图表卡片顶部工具栏（根据需求移除右上角缩放/重置/说明按钮）
-        self.chart_title_lbl = QLabel("2026-11 累计盈亏走势")
+        # 图表卡片顶部工具栏（左侧标题 + 右侧起点归零/累计模式切换开关）
+        self.zero_base = True
+        self._shared_raw_chart = None
+        chart_header_layout = QHBoxLayout()
+        chart_header_layout.setContentsMargins(0, 0, 0, 2)
+        chart_header_layout.setSpacing(8)
+
+        self.chart_title_lbl = QLabel("2026-11 当月收益走势（起点为0）")
         self.chart_title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #0F172A; padding: 2px 0 6px 0;")
-        chart_card_layout.addWidget(self.chart_title_lbl)
+        chart_header_layout.addWidget(self.chart_title_lbl)
+        chart_header_layout.addStretch(1)
+
+        self.baseline_switch_frame = QFrame()
+        self.baseline_switch_frame.setStyleSheet(
+            "QFrame { background: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 7px; }"
+        )
+        baseline_switch_layout = QHBoxLayout(self.baseline_switch_frame)
+        baseline_switch_layout.setContentsMargins(2, 2, 2, 2)
+        baseline_switch_layout.setSpacing(2)
+
+        self.zero_base_btn = QPushButton("当月收益 (起点为0)")
+        self.zero_base_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zero_base_btn.setFixedHeight(26)
+        self.zero_base_btn.clicked.connect(lambda: self.set_zero_base(True))
+
+        self.cum_base_btn = QPushButton("累计模式 (含期初)")
+        self.cum_base_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.cum_base_btn.setFixedHeight(26)
+        self.cum_base_btn.clicked.connect(lambda: self.set_zero_base(False))
+
+        baseline_switch_layout.addWidget(self.zero_base_btn)
+        baseline_switch_layout.addWidget(self.cum_base_btn)
+        chart_header_layout.addWidget(self.baseline_switch_frame)
+
+        chart_card_layout.addLayout(chart_header_layout)
+        self._sync_baseline_switch_ui(is_year=False)
 
         # 保留隐藏控件保持向后兼容
         self.zoom_combo = QComboBox()
@@ -1156,6 +1204,7 @@ class MonthlyRealtimePnlPage(QWidget):
     def clear(self):
         self.analytics = None
         self._shared_request = None
+        self._shared_raw_chart = None
         if hasattr(self, "_shared_analytics"):
             del self._shared_analytics
         self._rendered_cache_key = None
@@ -1336,12 +1385,47 @@ class MonthlyRealtimePnlPage(QWidget):
         if self.tab_bar.currentIndex() == 1:
             self._load_year_data(self.year_combo.currentText())
 
+    def _sync_baseline_switch_ui(self, is_year: bool | None = None):
+        if is_year is None:
+            is_year = bool(getattr(self, "_shared_year", self.tab_bar.currentIndex() == 1))
+        period_prefix = "当年" if is_year else "当月"
+        self.zero_base_btn.setText(f"{period_prefix}收益 (起点为0)")
+        self.cum_base_btn.setText("累计模式 (含期初)")
+        active_qss = (
+            "QPushButton { background: #2563EB; color: #FFFFFF; border: none; "
+            "border-radius: 5px; font-size: 12px; font-weight: 600; padding: 0 10px; }"
+        )
+        inactive_qss = (
+            "QPushButton { background: transparent; color: #475569; border: none; "
+            "border-radius: 5px; font-size: 12px; font-weight: 500; padding: 0 10px; }"
+            "QPushButton:hover { color: #0F172A; background: #E2E8F0; }"
+        )
+        self.zero_base_btn.setStyleSheet(active_qss if self.zero_base else inactive_qss)
+        self.cum_base_btn.setStyleSheet(inactive_qss if self.zero_base else active_qss)
+        mode = self.mode_combo.currentData() or "cumulative"
+        self.baseline_switch_frame.setVisible(mode == "cumulative")
+
+    def set_zero_base(self, zero_base: bool):
+        zero_base = bool(zero_base)
+        if self.zero_base == zero_base and getattr(self, "_shared_raw_chart", None) is not None:
+            self._sync_baseline_switch_ui()
+            return
+        self.zero_base = zero_base
+        self._sync_baseline_switch_ui()
+        if getattr(self, "_shared_raw_chart", None) is not None:
+            self._display_shared_chart(
+                self._shared_raw_chart,
+                getattr(self, "_shared_state", {}) or {},
+                bool(getattr(self, "_shared_year", self.tab_bar.currentIndex() == 1)),
+            )
+
     def _on_tab_changed(self, index):
         is_year = (index == 1)
         self.lbl_month.setVisible(not is_year)
         self.month_combo.setVisible(not is_year)
         self.lbl_year.setVisible(is_year)
         self.year_combo.setVisible(is_year)
+        self._sync_baseline_switch_ui(is_year=is_year)
 
         # 切换卡片标题（月初 vs 年初）
         self.kpi_start.set_title("年初累计盈亏" if is_year else "月初累计盈亏")
@@ -1688,16 +1772,44 @@ class MonthlyRealtimePnlPage(QWidget):
                 self.canvas.update()
 
     def _display_shared_chart(self, chart, state, year):
+        self._shared_raw_chart = chart
+        self._shared_state = state
+        self._shared_year = bool(year)
+
         # 1. 周期与模式
-        period = (self.year_combo.currentText() if year else self.month_combo.currentText()) or (str(date.today().year) if year else date.today().strftime("%Y-%m"))
-        mode_text = "每日日内盈亏走势" if (self.mode_combo.currentData() == "intraday") else "累计盈亏走势"
+        combo_period = (self.year_combo.currentText() if year else self.month_combo.currentText())
+        shared_period = getattr(self, "_shared_period", None) if getattr(self, "embedded", False) else None
+        period = shared_period or combo_period or (str(date.today().year) if year else date.today().strftime("%Y-%m"))
         mode = self.mode_combo.currentData() or "cumulative"
+        self._sync_baseline_switch_ui(is_year=bool(year))
+
+        if mode == "intraday":
+            mode_text = "每日日内盈亏走势"
+            self.canvas.value_label = "当日盈亏"
+        elif self.zero_base:
+            mode_text = f"{'当年' if year else '当月'}收益走势（起点为0）"
+            self.canvas.value_label = "当年收益" if year else "当月收益"
+        else:
+            mode_text = "累计盈亏走势（含期初）"
+            self.canvas.value_label = "累计盈亏"
         self.chart_title_lbl.setText(f"{period} {mode_text}")
 
-        # 2. 计算所选周期起点之前的历史累计总盈亏基准（从最开始到上个月底时的累计盈亏）
-        channels = self.channel_filter.selected_channels()
-        ticker = self.stock_combo.selected_ticker()
-        base_pnl = get_period_opening_pnl(self.analytics, period, is_year=year, channels=channels, ticker=ticker)
+        # 2. 计算所选周期起点之前的历史累计总盈亏基准（从最开始到上个月底/上年底时的累计盈亏）
+        parent_filters = getattr(self, "_parent_filters", None)
+        if parent_filters is not None:
+            ch_val, tk_val = parent_filters
+            channels = [ch_val] if ch_val else None
+            ticker = tk_val or None
+        else:
+            channels = self.channel_filter.selected_channels()
+            ticker = self.stock_combo.selected_ticker()
+        analytics_for_opening = (
+            self.analytics
+            if (self.analytics and getattr(self.analytics, "reports", None) and "每月持仓收益" in self.analytics.reports)
+            else (getattr(self.window, "analytics", None) or self.analytics)
+        )
+        opening_pnl = get_period_opening_pnl(analytics_for_opening, period, is_year=year, channels=channels, ticker=ticker)
+        effective_base_pnl = Decimal(0) if (self.zero_base or mode != "cumulative") else opening_pnl
 
         # 3. 规整化 X 轴标签：避免显示未解析的原始 ISO 字符串，统一为优雅日期
         clean_labels = dict(chart.x_labels) if chart.x_labels else {}
@@ -1707,11 +1819,11 @@ class MonthlyRealtimePnlPage(QWidget):
                     dt_bj = to_bj_datetime(k)
                     clean_labels[k] = dt_bj.strftime("%m-%d") if dt_bj else ""
 
-        # 4. 图表曲线点位处理：若为累计走势，叠加基准盈亏展示真实累计走势；清除 series 名称彻底隐藏“累计盈亏”图例
+        # 4. 图表曲线点位处理：默认起点为0仅展示当月/当年收益，切换累计模式时叠加期初历史基准盈亏
         chart_series_shifted = []
         for s in chart.series:
             shifted_points = tuple(
-                (k, (Decimal(str(v)) + base_pnl) if (v is not None and mode == "cumulative") else v)
+                (k, (Decimal(str(v)) + effective_base_pnl) if (v is not None and mode == "cumulative") else v)
                 for k, v in s.points
             )
             # 用户明确要求：去掉“累计盈亏”字样，设置 name="" 结合 hide_legend 彻底移除
@@ -1745,9 +1857,27 @@ class MonthlyRealtimePnlPage(QWidget):
                             has_val[k] = True
                 all_pts = [(k, pts_map[k] if has_val[k] else None) for k, _ in chart.series[0].points]
 
-        m = calculate_realtime_metrics(all_pts, is_year=year, period_str=period, state=state, base_pnl=base_pnl)
+        m = calculate_realtime_metrics(
+            all_pts,
+            is_year=year,
+            period_str=period,
+            state=state,
+            base_pnl=effective_base_pnl if mode == "cumulative" else None,
+            zero_base=(self.zero_base and mode == "cumulative"),
+            opening_pnl=opening_pnl,
+        )
 
         # 更新 4 个核心 KPI 卡片
+        self.kpi_start.set_title(
+            ("本年起点盈亏" if year else "本月起点盈亏")
+            if (self.zero_base and mode == "cumulative")
+            else ("年初累计盈亏" if year else "月初累计盈亏")
+        )
+        self.kpi_latest.set_title(
+            ("当前当年收益" if year else "当前当月收益")
+            if (self.zero_base and mode == "cumulative")
+            else "当前最新累计盈亏"
+        )
         self.kpi_start.update_data(m["start_val"], m["start_time_text"])
         self.kpi_latest.update_data(m["latest_val"], m["latest_time_text"])
         self.kpi_delta.update_data(m["delta_val"], m["delta_sub_text"])
@@ -1760,7 +1890,8 @@ class MonthlyRealtimePnlPage(QWidget):
         if m["valid_count"] > 0:
             latest_val_str = f"{m['latest_val']:+,.2f} USD" if m["latest_val"] is not None else "—"
             latest_time = m["latest_time_text"].replace("最近有效点 · ", "").replace(" 北京时间", "")
-            status_text = f"有效采样 {m['valid_count']} · 最近有效点 {latest_time} 北京时间 · 最新累计盈亏 {latest_val_str}"
+            val_title = ("最新当年收益" if year else "最新当月收益") if (self.zero_base and mode == "cumulative") else "最新累计盈亏"
+            status_text = f"有效采样 {m['valid_count']} · 最近有效点 {latest_time} 北京时间 · {val_title} {latest_val_str}"
             self.bottom_status_lbl.setText(status_text)
         else:
             self.bottom_status_lbl.setText("当前范围没有有效历史采样；请检查初始化、价格覆盖与缓存状态。")

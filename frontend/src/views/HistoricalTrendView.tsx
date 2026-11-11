@@ -8,6 +8,7 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   const [kind, setKind] = useState(initialKind);
   const [period, setPeriod] = useState(initialKind === "year" ? new Date().getFullYear().toString() : new Date().toLocaleDateString("sv-SE").slice(0, 7));
   const [mode, setMode] = useState("cumulative");
+  const [zeroBase, setZeroBase] = useState(true);
   const [channels, setChannels] = useState<string[]>([]);
   const [ticker, setTicker] = useState("");
   const [storedData, setData] = useState<any>(null);
@@ -21,7 +22,7 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   const marketDay = useRef("");
   const filterChannels = embedded ? (selectedChannel ? [selectedChannel] : []) : channels;
   const filterTicker = embedded ? selectedTicker : ticker;
-  const requestKey = JSON.stringify([kind, period, mode, filterChannels, filterTicker, personId, search, assetBroker, assetTicker]);
+  const requestKey = JSON.stringify([kind, period, mode, zeroBase, filterChannels, filterTicker, personId, search, assetBroker, assetTicker]);
   const data = dataKey === requestKey ? storedData : null;
   useEffect(() => {
     let active = true;
@@ -43,14 +44,14 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
   }, [initialKind]);
   useEffect(() => {
     let active = true;
-    const load = () => { setLoading(true); return api.historicalTrend({ kind, period, mode, channels: filterChannels, ticker: filterTicker, personId, search, assetBroker, assetTicker })
+    const load = () => { setLoading(true); return api.historicalTrend({ kind, period, mode, zeroBase, channels: filterChannels, ticker: filterTicker, personId, search, assetBroker, assetTicker })
       .then((result: any) => { if (active) { setData(result); setDataKey(requestKey); setError(""); } })
       .catch((err: any) => { if (active) { setData(null); setError(err.message || "历史数据读取失败"); } })
       .finally(() => { if (active) setLoading(false); }); };
     load();
     const timer = window.setInterval(load, 60000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [kind, period, mode, JSON.stringify(filterChannels), filterTicker, personId, search, assetBroker, assetTicker, refresh]);
+  }, [kind, period, mode, zeroBase, JSON.stringify(filterChannels), filterTicker, personId, search, assetBroker, assetTicker, refresh]);
   const option = useMemo(() => {
     const points = data?.chart?.series?.[0]?.points || [];
     const valid = points.filter((p: any) => p[1] !== null).map((p: any) => [p[0], Number(p[1])]);
@@ -82,6 +83,42 @@ export function HistoricalTrendView({ personId, initialKind = "month", embedded 
       {!embedded && <select aria-label="月度或年度" value={kind} onChange={e => { const next = e.target.value; periodChosen.current = true; setKind(next); setPeriod(next === "year" ? period.slice(0, 4) : `${period.slice(0, 4)}-${(marketDay.current || new Date().toLocaleDateString("sv-SE")).slice(5, 7)}`); }}><option value="month">月度走势详情</option><option value="year">年度走势详情</option></select>}
       <input aria-label="走势期间" type={kind === "month" ? "month" : "number"} min={kind === "year" ? "2026" : "2026-01"} value={period} onChange={e => { periodChosen.current = true; setPeriod(e.target.value); }} />
       <select aria-label="走势模式" value={mode} onChange={e => setMode(e.target.value)}><option value="cumulative">累计盈亏走势</option><option value="intraday">每日日内盈亏</option></select>
+      {mode === "cumulative" && (
+        <div role="group" aria-label="起点模式切换" style={{ display: "inline-flex", gap: 4, background: "#f1f5f9", padding: 2, borderRadius: 6, border: "1px solid #e2e8f0" }}>
+          <button
+            type="button"
+            onClick={() => setZeroBase(true)}
+            style={{
+              background: zeroBase ? "#2563eb" : "transparent",
+              color: zeroBase ? "#ffffff" : "#475569",
+              border: "none",
+              borderRadius: 5,
+              padding: "4px 10px",
+              fontSize: 12,
+              fontWeight: zeroBase ? 600 : 500,
+              cursor: "pointer",
+            }}
+          >
+            {kind === "year" ? "当年收益 (起点为0)" : "当月收益 (起点为0)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setZeroBase(false)}
+            style={{
+              background: !zeroBase ? "#2563eb" : "transparent",
+              color: !zeroBase ? "#ffffff" : "#475569",
+              border: "none",
+              borderRadius: 5,
+              padding: "4px 10px",
+              fontSize: 12,
+              fontWeight: !zeroBase ? 600 : 500,
+              cursor: "pointer",
+            }}
+          >
+            累计模式 (含期初)
+          </button>
+        </div>
+      )}
       {!embedded && <><details><summary>{channels.length ? channels.join("、") : "全部渠道"}</summary><label><input type="checkbox" checked={!channels.length} onChange={() => setChannels([])} />全部渠道</label>{(data?.channels || []).map((ch: string) => <label key={ch} style={{ display: "block" }}><input type="checkbox" checked={channels.includes(ch)} onChange={() => setChannels(current => current.includes(ch) ? current.filter(v => v !== ch) : [...current, ch])} />{ch}</label>)}</details>
       <input aria-label="Ticker筛选" list="history-tickers" placeholder="全部股票" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())} /><datalist id="history-tickers">{(data?.tickers || []).map((t: string) => <option key={t} value={t} />)}</datalist></>}
       <button onClick={() => setRefresh(v => v + 1)}>刷新</button>

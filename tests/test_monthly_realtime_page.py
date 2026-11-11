@@ -145,7 +145,16 @@ def test_monthly_realtime_page_ui_layout_and_cards(qtbot):
     )
     page._display_shared_chart(chart, {"baseline_state": "READY"}, year=False)
 
-    # 验证卡片数据同步更新
+    # 1. 默认模式为起点为0（仅计算当月收益）
+    assert page.zero_base is True
+    assert "0.00" in page.kpi_start.val_lbl.text()
+    assert "-11,205.38" in page.kpi_latest.val_lbl.text()
+    assert "-11,205.38" in page.kpi_delta.val_lbl.text()
+    assert "-11,205.38" in page.bottom_status_lbl.text()
+
+    # 2. 切换为累计模式（含期初 -2,346.18）：最新累计为 -13,551.56
+    page.set_zero_base(False)
+    assert page.zero_base is False
     assert "-2,346.18" in page.kpi_start.val_lbl.text()
     assert "-13,551.56" in page.kpi_latest.val_lbl.text()
     # 本月变化: -13551.56 - (-2346.18) = -11205.38
@@ -214,4 +223,53 @@ def test_filters_reset_and_chips_sync(qtbot):
     page.reset_filters()
     assert page.stock_combo.currentIndex() == 0
     assert page.search_edit.text() == ""
+
+
+def test_hover_dot_lies_exactly_on_curve_point(qtbot):
+    """验证鼠标悬停时圆点 Y 坐标精确落在曲线顶点上，而非画布垂直中点"""
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent, QPixmap
+
+    page = MonthlyRealtimePnlPage()
+    qtbot.addWidget(page)
+    page.resize(900, 600)
+    page.show()
+
+    points = [
+        ("2026-11-01T02:00:00Z", Decimal("0.00")),
+        ("2026-11-05T06:20:00Z", Decimal("12000.00")),
+        ("2026-11-09T08:50:00Z", Decimal("-8000.00")),
+    ]
+    chart = Chart(
+        id=1,
+        title="",
+        kind="line",
+        series=(Series("", tuple(points)),),
+        note="",
+    )
+    page._display_shared_chart(chart, {"baseline_state": "READY"}, year=False)
+    page.canvas.resize(800, 420)
+    # 触发一次离屏渲染以生成 hits 与 point_coords
+    pixmap = QPixmap(page.canvas.size())
+    page.canvas.render(pixmap)
+
+    target_key = "2026-11-05T06:20:00Z"
+    assert target_key in page.canvas.point_coords
+    exact_pt = page.canvas.point_coords[target_key]
+    hit_rect = next(r for r, k, _, _ in page.canvas.hits if k == target_key)
+    # 最高点 (12000) 的真实 Y 坐标应当显著高于画布垂直中点 hit_rect.center().y()
+    assert exact_pt.y() < hit_rect.center().y() - 30
+
+    move_ev = QMouseEvent(
+        QMouseEvent.Type.MouseMove,
+        QPointF(exact_pt.x(), hit_rect.center().y()),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    page.canvas.mouseMoveEvent(move_ev)
+    assert page.canvas.hover_point is not None
+    assert abs(page.canvas.hover_point["x"] - exact_pt.x()) < 0.01
+    assert abs(page.canvas.hover_point["y"] - exact_pt.y()) < 0.01
+
 

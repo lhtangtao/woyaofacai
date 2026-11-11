@@ -191,8 +191,13 @@ export const api = {
 
   // Charts
   derivedProgress: () => requestApi("/api/v1/system/derived-progress"),
-  historicalTrend: (filters: { kind: string; period: string; mode: string; channels: string[]; ticker: string; personId: number | null; search?: string; assetBroker?: string; assetTicker?: string }) => {
-    const query = new URLSearchParams({ kind: filters.kind, period: filters.period, mode: filters.mode });
+  historicalTrend: (filters: { kind: string; period: string; mode: string; zeroBase?: boolean; channels: string[]; ticker: string; personId: number | null; search?: string; assetBroker?: string; assetTicker?: string }) => {
+    const query = new URLSearchParams({
+      kind: filters.kind,
+      period: filters.period,
+      mode: filters.mode,
+      zero_base: filters.zeroBase === false ? "0" : "1",
+    });
     if (filters.personId != null) query.set("person_id", String(filters.personId));
     if (filters.ticker) query.set("ticker", filters.ticker);
     if (filters.search) query.set("search", filters.search);

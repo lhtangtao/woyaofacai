@@ -400,9 +400,10 @@ class ReportPage(QWidget):
                     and (not search_tk or search_tk in str(r.values[3]).upper())
                 ]
                 period_pnl = None
-                if tw is not None and getattr(tw, '_shared_period', None) == period_str and getattr(tw, '_shared_year', None) == is_year and tw.canvas.chart:
+                raw_chart = getattr(tw, '_shared_raw_chart', None) or (tw.canvas.chart if tw is not None else None)
+                if tw is not None and getattr(tw, '_shared_period', None) == period_str and getattr(tw, '_shared_year', None) == is_year and raw_chart:
                     latest_by_series = []
-                    for s in tw.canvas.chart.series:
+                    for s in raw_chart.series:
                         s_pts = [v for _, v in s.points if v is not None]
                         if s_pts:
                             latest_by_series.append(s_pts[-1])
