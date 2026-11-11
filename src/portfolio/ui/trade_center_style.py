@@ -285,11 +285,24 @@ class TradeCellDelegate(QStyledItemDelegate):
             opt.backgroundBrush=QColor('#F0F6FF')
         opt.state &= ~QStyle.StateFlag.State_MouseOver
         key=KEYS[index.column()]
+        multiline_text=None
         if key=='side':
             text=opt.text
             opt.text=''
+        elif key=='micro_tag' and '\n' in opt.text:
+            multiline_text=opt.text
+            opt.text=''
         opt.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem,opt,painter,opt.widget)
-        if key=='side':
+        if multiline_text is not None:
+            painter.save()
+            painter.setPen(QColor('#1E293B'))
+            painter.drawText(
+                opt.rect.adjusted(10,4,-10,-4),
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                multiline_text,
+            )
+            painter.restore()
+        elif key=='side':
             fill,color=side_tone(index.model().rows[index.row()])
             width=min(opt.rect.width()-10,opt.fontMetrics.horizontalAdvance(text)+16)
             x=opt.rect.x()+(opt.rect.width()-width)/2 if opt.displayAlignment & Qt.AlignmentFlag.AlignHCenter else opt.rect.x()+8

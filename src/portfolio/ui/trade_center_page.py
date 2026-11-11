@@ -52,9 +52,19 @@ def quote_text(row):
     return (row.get('quote_status') or '缺少有效行情')+' · '+(row.get('quote_time') or '无报价时间')
 
 
+def format_micro_tag(value):
+    text = str(value or '').strip()
+    if not text:
+        return '—'
+    parts = [part.strip() for part in text.split('/') if part.strip()]
+    return '\n'.join(parts) if parts else '—'
+
+
 def cell_text(row,key):
     if key=='trade_date':
         return time_text(row.get(key))
+    if key=='micro_tag':
+        return format_micro_tag(row.get(key))
     if key=='cost_change' and row.get('cost_change') in ('建仓','清仓'):
         return row['cost_change']
     if key=='cost_change' and row.get('cost_diff') is not None:
@@ -72,7 +82,7 @@ def cell_text(row,key):
 
 
 class CenterModel(FinanceModel):
-    preset='日常查看'
+    preset='完整字段'
 
     def columnCount(self,parent=None):return len(COLUMNS)
 
@@ -151,15 +161,33 @@ class CenterTable(FinanceTable):
         micro_column=KEYS.index('micro_tag')
         if not self.isColumnHidden(micro_column):
             metrics=self.fontMetrics()
-            longest=max((metrics.horizontalAdvance(row.get('micro_tag') or '') for row in self.finance_model.rows),default=0)
-            widths['micro_tag']=max(widths['micro_tag'],min(280,longest+28))
+            longest=max(
+                (
+                    metrics.horizontalAdvance(line)
+                    for row in self.finance_model.rows
+                    for line in format_micro_tag(row.get('micro_tag')).splitlines()
+                ),
+                default=0,
+            )
+            widths['micro_tag']=max(145,min(260,longest+28))
         if self.finance_model.preset=='成本分析':
             widths['cost_change']=120
         visible=[(i,widths.get(key,90)) for i,key in enumerate(KEYS) if not self.isColumnHidden(i)]
         extra=max(0,self.viewport().width()-sum(width for _,width in visible))
         for position,(column,width) in enumerate(visible):
             self.setColumnWidth(column,width+extra//len(visible)+(position<extra%len(visible)))
+        self.fit_row_heights()
         self._frozen_geometry()
+
+    def fit_row_heights(self):
+        metrics=self.fontMetrics()
+        line_height=max(18,metrics.lineSpacing())
+        for row_idx,row in enumerate(self.finance_model.rows):
+            tag_text=format_micro_tag(row.get('micro_tag'))
+            lines=tag_text.count('\n')+1 if tag_text and tag_text!='—' else 1
+            height=40 if lines<=1 else max(48,lines*line_height+14)
+            self.setRowHeight(row_idx,height)
+            self.frozen.setRowHeight(row_idx,height)
     def resizeEvent(self,event):
         super().resizeEvent(event)
         if self.model() is not None and self.model().columnCount()==len(KEYS):self.fit_columns()
@@ -191,7 +219,7 @@ class TradeCenterPage(QWidget):
         layout=QVBoxLayout(main)
         layout.setContentsMargins(0,0,0,0)
         layout.setSpacing(12)
-        self.preset='日常查看'
+        self.preset='完整字段'
         self.custom_columns={}
         stats=QHBoxLayout();stats.setSpacing(12);self.cards=[]
         for i,(title,icon,accent) in enumerate((('匹配交易总数','layers','#2563EB'),('买入记录','buy','#16A34A'),('卖出记录','sell','#DC2626'),('手续费合计','fees','#2563EB'),('待核查记录','review','#2563EB'))):
@@ -276,22 +304,6 @@ class TradeCenterPage(QWidget):
         table_head.addWidget(heading)
         self.table_count=QLabel()
         table_head.addWidget(self.table_count)
-        table_head.addStretch()
-        segments=QWidget()
-        segments.setObjectName('tradeSegments')
-        segment_layout=QHBoxLayout(segments)
-        segment_layout.setContentsMargins(2,2,2,2)
-        segment_layout.setSpacing(2)
-        self.presets=QButtonGroup(self)
-        for name in PRESETS:
-            button=QPushButton(name)
-            button.setObjectName('tradeSegment')
-            button.setCheckable(True)
-            button.setChecked(name==self.preset)
-            button.clicked.connect(lambda _,name=name:self.set_preset(name))
-            self.presets.addButton(button)
-            segment_layout.addWidget(button)
-        table_head.addWidget(segments)
         table_head.addStretch()
         self.columns=QPushButton('显示列')
         self.columns.clicked.connect(self.column_menu)

@@ -97,7 +97,8 @@ button.tc-stat:not(:disabled):hover, .tc-stat.active { border-color: #93B4F5; ba
 .tc-list th[aria-sort] { color: var(--tc-blue); }
 .tc-list .numeric { text-align: right; }
 .tc-table-scroll[data-preset='日常查看'] :is([data-column=symbol],[data-column=side],[data-column=current_price]) { text-align: center; }
-.tc-list [data-column=micro_tag] { min-width: 180px; }
+.tc-list [data-column=micro_tag] { min-width: 150px; }
+.tc-list td[data-column=micro_tag] { white-space: pre-line; line-height: 1.4; padding-top: 6px; padding-bottom: 6px; }
 .tc-list [data-column=cost_change] { width: 108px; }
 .tc-list td { background: white; }
 .tc-list td[data-column=trade_date], .tc-list th[data-column=trade_date] { position: sticky; left: 0; }

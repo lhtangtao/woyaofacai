@@ -363,14 +363,27 @@ def test_trade_center_page_pending_fee_display_and_tooltip(demo_path, qtbot):
         QueryScope(as_of=date.today(), ledger=Ledger.PERSON),
         {"page": 1, "size": 20},
     )
+    data["items"][0]["micro_tag"] = "微操4 (30.2股) / 微操5 (39.54股)"
     host = QWidget()
     page = TradeCenterPage(host)
     qtbot.addWidget(host)
     qtbot.addWidget(page)
     page.show_page(data)
 
-    fee_col = KEYS.index("fees")
+    # 默认直接展示完整字段且不保留方案切换 tab
+    assert page.preset == "完整字段"
+    assert not hasattr(page, "presets")
+    assert all(not page.table.isColumnHidden(i) for i in range(len(KEYS)))
+
+    # 微操标记中的斜杠转为换行展示，并同步放大主表与冻结列行高
+    micro_col = KEYS.index("micro_tag")
     model = page.table.finance_model
+    assert model.data(model.index(0, micro_col), Qt.ItemDataRole.DisplayRole) == "微操4 (30.2股)\n微操5 (39.54股)"
+    assert page.table.rowHeight(0) >= 48
+    assert page.table.frozen.rowHeight(0) == page.table.rowHeight(0)
+    assert page.table.rowHeight(1) == 40
+
+    fee_col = KEYS.index("fees")
     assert model.data(model.index(0, fee_col), Qt.ItemDataRole.DisplayRole) == "—"
     assert "次日结算" in model.data(model.index(0, fee_col), Qt.ItemDataRole.ToolTipRole)
     assert "1.16" in page.cards[3].value.text()

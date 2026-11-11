@@ -10,7 +10,6 @@ import {
 import './trades.css';
 
 type Filters = Record<string, any>;
-const presetNames = Object.keys(tradePresets) as TradePreset[];
 const bounds = ['quantity_min','quantity_max','price_min','price_max','amount_min','amount_max','cost_min','cost_max'];
 
 export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:any[]; personId?:number|null; refreshKey?:number}) {
@@ -23,7 +22,7 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [advanced, setAdvanced] = useState(false);
-  const [preset, setPreset] = useState<TradePreset>('日常查看');
+  const preset: TradePreset = '完整字段';
   const [custom, setCustom] = useState<Partial<Record<TradePreset, string[]>>>({});
   const [selected, setSelected] = useState<number|null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -112,8 +111,7 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
   const columnOrder = [...baseOrder, ...allKeys.filter(key => !baseOrder.includes(key))];
   const shown = custom[preset] || baseOrder;
   const visible = columnOrder.filter(key => shown.includes(key) && allKeys.includes(key));
-  const title = (key:string) => key === 'category' ? '股票分类'
-    : key === 'cost_change' && preset === '成本分析' ? '每股成本变化' : data.columns[allKeys.indexOf(key)];
+  const title = (key:string) => key === 'category' ? '股票分类' : data.columns[allKeys.indexOf(key)];
   const sortColumn = (key:string) => {
     const sort_col = tradeSortKey(key);
     setSort({sort_col, sort_dir:sort.sort_col === sort_col && sort.sort_dir === 'desc' ? 'asc' : 'desc'});
@@ -178,9 +176,6 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
       <div className="tc-list" aria-busy={loading}>
         <div className="tc-table-tools">
           <div><strong>交易记录</strong><span role="status">{loading ? '正在读取记录…' : `共 ${tradeCount(data?.total ?? 0)} 条`}</span></div>
-          <div className="tc-segments" role="group" aria-label="显示方案">
-            {presetNames.map(name => <button key={name} className="btn" aria-pressed={name === preset} onClick={() => setPreset(name)}>{name}</button>)}
-          </div>
           <details className="tc-columns"><summary><Settings2 size={14}/> 显示列</summary>
             <div className="tc-column-menu">
               {columnOrder.filter(key => allKeys.includes(key)).map(key => <label key={key}>

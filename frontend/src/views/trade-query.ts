@@ -20,6 +20,11 @@ export function tradeMoney(value:any,precision=2):string {
 }
 export function tradeCell(item:Record<string,any>,key:string):string {
   if(key==='trade_date')return tradeTimeDisplay(item.trade_date);
+  if(key==='micro_tag'){
+    const raw=String(item.micro_tag||'').trim();
+    if(!raw)return '—';
+    return raw.split('/').map(part=>part.trim()).filter(Boolean).join('\n')||'—';
+  }
   if(key==='cost_change'&&['建仓','清仓'].includes(item.cost_change))return item.cost_change;
   if(key==='cost_change'&&item.cost_diff!=null){
     const raw=String(item.cost_diff);
