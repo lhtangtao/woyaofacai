@@ -1,5 +1,17 @@
 [
   {
+    "title": "行情监控中心 新增股票星标重点关注功能，默认展示「星标股票」并保留「全部类型」筛选",
+    "time": "2026-11-11 19:51",
+    "author": "Antigravity",
+    "tag": "Mac 桌面端、React Web 端与 monitoring.sqlite3 持久化同步完成，测试通过",
+    "details": [
+      "修改者：Antigravity（新增股票星标关注与默认星标筛选）",
+      "【1. 股票后新增星标重点关注】在 Mac 端 `StockCellWidget` 与 Web 端 `MonitorView.tsx` 股票名称右侧紧邻增加可点击星标按钮（已加星显示金色 `★`，未加星显示 `☆`），点击直接切换重点关注状态且不影响行点击展开 K 线抽屉。",
+      "【2. 全局持久化存储】在 `MonitorStore`（`monitoring.sqlite3`）新增 `starred_targets` 表及 `starred_symbols()` / `set_starred()`，同步开放 `/api/v1/monitoring/watchlist/star` 接口，保证重启应用或切换筛选视野后星标关注状态不丢失。",
+      "【3. 默认展示「星标股票」并保留「全部类型」】在 Mac 桌面端与 Web 端观察列表右上角类型筛选下拉框新增「星标股票」作为默认选中项，同时完整保留「全部类型」及其他分类选项；当暂无星标股票时给出引导切换「全部类型」加星的提示。"
+    ]
+  },
+  {
     "title": "行情监控中心 「历史最高 / 回撤」双行合并展示并修复盘前/盘后/夜盘涨跌幅昨收基准 Bug",
     "time": "2026-11-11 19:21",
     "author": "Antigravity",

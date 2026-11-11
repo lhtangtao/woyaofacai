@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -241,6 +242,8 @@ class StockCellWidget(QWidget):
         row_idx: int,
         on_link_clicked,
         on_select_row,
+        starred: bool = False,
+        on_toggle_star=None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
@@ -248,6 +251,7 @@ class StockCellWidget(QWidget):
         self.row_idx = row_idx
         self.on_link_clicked = on_link_clicked
         self.on_select_row = on_select_row
+        self.on_toggle_star = on_toggle_star
 
         self.setStyleSheet("background: transparent;")
 
@@ -255,7 +259,7 @@ class StockCellWidget(QWidget):
         layout.setContentsMargins(4, 3, 2, 3)
         layout.setSpacing(1)
 
-        # 1. Hyperlink Row
+        # 1. Hyperlink + Star Row
         link_row = QHBoxLayout()
         link_row.setContentsMargins(0, 0, 0, 0)
         link_row.setSpacing(4)
@@ -274,6 +278,19 @@ class StockCellWidget(QWidget):
         self.link_lbl.setToolTip(f"点击直接进入【{clean_sym}】AI 股票深度研报分析页面")
         self.link_lbl.linkActivated.connect(self._on_link_activated)
         link_row.addWidget(self.link_lbl)
+
+        self.star_btn = QToolButton()
+        self.star_btn.setText("★" if starred else "☆")
+        self.star_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.star_btn.setFixedSize(18, 18)
+        self.star_btn.setToolTip("已设为星标重点关注（点击取消）" if starred else "点击加星标为重点关注股票")
+        self.star_btn.setStyleSheet(
+            f"QToolButton {{ border: none; background: transparent; padding: 0; font-size: 14px; "
+            f"color: {'#F59E0B' if starred else '#94A3B8'}; }}"
+            f"QToolButton:hover {{ color: #F59E0B; }}"
+        )
+        self.star_btn.clicked.connect(self._on_star_clicked)
+        link_row.addWidget(self.star_btn)
         link_row.addStretch()
         layout.addLayout(link_row)
 
@@ -288,6 +305,10 @@ class StockCellWidget(QWidget):
     def _on_link_activated(self, link: str):
         if self.on_link_clicked:
             self.on_link_clicked(link)
+
+    def _on_star_clicked(self):
+        if self.on_toggle_star:
+            self.on_toggle_star(self.symbol)
 
     def mousePressEvent(self, event):
         # Click on non-hyperlink area of the cell triggers row tap (toggle drawer)
@@ -439,7 +460,18 @@ class MonitoringPage(QWidget):
         filters.addWidget(self.search, 1)
 
         self.kind = QComboBox()
-        self.kind.addItems(["全部类型", "直接持有", "正股映射", "指数代理", "自选股票", "待确认", "已不再持有"])
+        for label_text, kind_key in (
+            ("星标股票", "STARRED"),
+            ("全部类型", "ALL"),
+            ("直接持有", "DIRECT"),
+            ("正股映射", "MAPPED"),
+            ("指数代理", "INDEX_PROXY"),
+            ("自选股票", "MANUAL"),
+            ("待确认", "PENDING"),
+            ("已不再持有", "NOT_HELD"),
+        ):
+            self.kind.addItem(label_text, kind_key)
+        self.kind.setCurrentIndex(0)
         filters.addWidget(self.kind)
         col.addLayout(filters)
 
@@ -485,9 +517,9 @@ class MonitoringPage(QWidget):
         self.mapping_button.clicked.connect(self.edit_mapping)
         table_actions.addWidget(self.mapping_button)
 
-        tip_lbl = label("提示：点击任意行弹出右侧 K 线与技术指标抽屉，再次点击该行即可自动收起。")
-        tip_lbl.setStyleSheet("color: #64748B; font-size: 11px; margin-left: 8px;")
-        table_actions.addWidget(tip_lbl)
+        self.watch_tip_lbl = label("提示：点击任意行弹出右侧 K 线与技术指标抽屉，再次点击该行即可自动收起。")
+        self.watch_tip_lbl.setStyleSheet("color: #64748B; font-size: 11px; margin-left: 8px;")
+        table_actions.addWidget(self.watch_tip_lbl)
 
         table_actions.addStretch()
         col.addLayout(table_actions)
@@ -1045,17 +1077,35 @@ class MonitoringPage(QWidget):
         self.rule_sym_filter.blockSignals(False)
 
     # --- WATCHLIST TABLE RENDERING ---
+    def _on_toggle_star(self, symbol: str):
+        if not symbol:
+            return
+        starred_now = False
+        if self.store:
+            starred_now = symbol in self.store.starred_symbols()
+            new_state = self.store.set_starred(symbol, not starred_now)
+        else:
+            current = any(t.get("analysis_symbol") == symbol and t.get("starred") for t in self.targets)
+            new_state = not current
+        for target in self.targets:
+            if target.get("analysis_symbol") == symbol:
+                target["starred"] = new_state
+        self.draw_table()
+
     def draw_table(self, *_):
         text = self.search.text().strip().upper()
-        kind = self.kind.currentIndex()
+        kind_key = self.kind.currentData() or "ALL"
         rows = []
         rule_counts = self.store.active_rule_count_by_symbol(self.scope_key) if self.store and self.scope_key else {}
+        starred_set = self.store.starred_symbols() if self.store else set()
 
         for target in self.targets:
             sources = target.get("sources", [])
             types = {s.get("relation_type") for s in sources}
             is_manual = (target.get("source_type") == "MANUAL")
             is_held = (target.get("archive_state") == "HELD")
+            is_starred = bool(target.get("starred")) or (target["analysis_symbol"] in starred_set)
+            target["starred"] = is_starred
 
             if (
                 text
@@ -1064,21 +1114,29 @@ class MonitoringPage(QWidget):
             ):
                 continue
 
-            if kind == 1 and ("DIRECT" not in types or is_manual):
+            if kind_key == "STARRED" and (not is_held or not is_starred):
                 continue
-            if kind == 2 and not types.intersection(("LEVERAGED_LONG", "LEVERAGED_SHORT")):
+            if kind_key == "DIRECT" and ("DIRECT" not in types or is_manual):
                 continue
-            if kind == 3 and "INDEX_PROXY" not in types:
+            if kind_key == "MAPPED" and not types.intersection(("LEVERAGED_LONG", "LEVERAGED_SHORT")):
                 continue
-            if kind == 4 and not is_manual:
+            if kind_key == "INDEX_PROXY" and "INDEX_PROXY" not in types:
                 continue
-            if kind == 5 and not any(s.get("status") == "PENDING" for s in sources):
+            if kind_key == "MANUAL" and not is_manual:
                 continue
-            if kind == 6 and is_held:
+            if kind_key == "PENDING" and not any(s.get("status") == "PENDING" for s in sources):
                 continue
-            if kind != 6 and not is_held:
+            if kind_key == "NOT_HELD" and is_held:
+                continue
+            if kind_key != "NOT_HELD" and not is_held:
                 continue
             rows.append(target)
+
+        if hasattr(self, "watch_tip_lbl"):
+            if kind_key == "STARRED" and not rows and not text:
+                self.watch_tip_lbl.setText("当前暂无星标股票，可先在右上角选择「全部类型」并在股票后点击 ☆ 加星标为重点关注。")
+            else:
+                self.watch_tip_lbl.setText("提示：点击任意行弹出右侧 K 线与技术指标抽屉，再次点击该行即可自动收起。")
 
         # 先构建每行的数值与排序键值
         prepared = []
@@ -1331,13 +1389,15 @@ class MonitoringPage(QWidget):
             actions.setStyleSheet("QPushButton { padding: 3px 4px; min-width: 0; min-height: 0; font-size: 11px; }")
             self.table.setCellWidget(row, 10, actions)
 
-            # Column 0: clickable hyperlink widget for AI analysis navigation
+            # Column 0: clickable hyperlink widget + focus star for AI analysis navigation
             stock_cell = StockCellWidget(
                 symbol=symbol,
                 source_label=source_label,
                 row_idx=row,
                 on_link_clicked=self.jump_to_stock_analysis,
                 on_select_row=self._on_row_tapped,
+                starred=bool(entry["target"].get("starred")),
+                on_toggle_star=self._on_toggle_star,
             )
             self.table.setCellWidget(row, 0, stock_cell)
             self.table.setRowHeight(row, 56)

@@ -40,6 +40,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   // Watchlist 3-state sorting: asc -> desc -> clear
   const [watchSortKey, setWatchSortKey] = useState<string>("");
   const [watchSortDir, setWatchSortDir] = useState<"" | "asc" | "desc">("");
+  const [kindFilter, setKindFilter] = useState<"STARRED" | "ALL">("STARRED");
 
   const toggleWatchSort = (key: string) => {
     if (watchSortKey !== key) {
@@ -69,7 +70,8 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
   };
 
   const sortedItems = React.useMemo(() => {
-    if (!watchSortKey || !watchSortDir) return items;
+    const filtered = kindFilter === "STARRED" ? items.filter((it) => Boolean(it.starred)) : items;
+    if (!watchSortKey || !watchSortDir) return filtered;
     const getSortVal = (r: WatchlistItem): number | string | null => {
       switch (watchSortKey) {
         case "symbol": return r.symbol || "";
@@ -94,7 +96,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
     };
     const valid: WatchlistItem[] = [];
     const missing: WatchlistItem[] = [];
-    items.forEach((it) => {
+    filtered.forEach((it) => {
       const v = getSortVal(it);
       if (v === null || v === undefined || (typeof v === "number" && Number.isNaN(v))) {
         missing.push(it);
@@ -110,7 +112,7 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
       return String(va).localeCompare(String(vb)) * dir;
     });
     return [...valid, ...missing];
-  }, [items, watchSortKey, watchSortDir]);
+  }, [items, kindFilter, watchSortKey, watchSortDir]);
 
   const fetchWatchlist = () => {
     setLoading(true);
@@ -191,6 +193,22 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
       fetchWatchlist();
     } catch (err: any) {
       alert(err.message || "删除标的失败");
+    }
+  };
+
+  const handleToggleStar = async (row: WatchlistItem) => {
+    if (!canWrite) return;
+    const nextStarred = !row.starred;
+    setItems((prev) =>
+      prev.map((it) => (it.full_symbol === row.full_symbol ? { ...it, starred: nextStarred } : it))
+    );
+    try {
+      await api.toggleWatchlistStar(row.full_symbol, nextStarred);
+    } catch (err: any) {
+      setItems((prev) =>
+        prev.map((it) => (it.full_symbol === row.full_symbol ? { ...it, starred: row.starred } : it))
+      );
+      alert(err.message || "更新星标失败");
     }
   };
 
@@ -364,6 +382,17 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
               <Bell size={14} />
               <span>预警规则</span>
             </button>
+
+            <select
+              aria-label="观察列表筛选类型"
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value as "STARRED" | "ALL")}
+              className="input-control"
+              style={{ width: "112px", height: "32px" }}
+            >
+              <option value="STARRED">星标股票</option>
+              <option value="ALL">全部类型</option>
+            </select>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -411,7 +440,13 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
               {sortedItems.length === 0 ? (
                 <tr>
                   <td colSpan={17} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
-                    {loading ? "正在读取观察标的…" : watchlistError ? "暂无可展示的观察标的" : "暂无观察标的"}
+                    {loading
+                      ? "正在读取观察标的…"
+                      : watchlistError
+                      ? "暂无可展示的观察标的"
+                      : kindFilter === "STARRED"
+                      ? "暂无星标股票，请先在右上方选择「全部类型」并为重点关注股票点击 ☆ 加星标"
+                      : "暂无观察标的"}
                   </td>
                 </tr>
               ) : (
@@ -421,11 +456,33 @@ export const MonitorView: React.FC<{ canWrite: boolean }> = ({ canWrite }) => {
 
                   return (
                     <tr key={row.full_symbol}>
-                      {/* 标的 */}
+                      {/* 标的 + 星标 */}
                       <td style={{ fontWeight: 700, color: "var(--text-heading)" }}>
-                        {row.symbol}
-                        <span style={{ fontSize: "11px", color: "var(--text-subtle)", marginLeft: "4px" }}>
-                          {row.full_symbol}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                          <span>{row.symbol}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleStar(row);
+                            }}
+                            disabled={!canWrite}
+                            title={row.starred ? "已设为星标重点关注（点击取消）" : "点击加星标为重点关注股票"}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              padding: "0 2px",
+                              cursor: canWrite ? "pointer" : "default",
+                              fontSize: "14px",
+                              lineHeight: 1,
+                              color: row.starred ? "#F59E0B" : "#94A3B8",
+                            }}
+                          >
+                            {row.starred ? "★" : "☆"}
+                          </button>
+                          <span style={{ fontSize: "11px", color: "var(--text-subtle)", fontWeight: 400 }}>
+                            {row.full_symbol}
+                          </span>
                         </span>
                       </td>
                       {/* 最新价 */}

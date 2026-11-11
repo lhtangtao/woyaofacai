@@ -66,6 +66,11 @@ class MonitorStore:
                     cooldown_until TEXT,
                     last_eval_state TEXT,
                     updated_at TEXT);
+                CREATE TABLE IF NOT EXISTS starred_targets(
+                    analysis_symbol TEXT NOT NULL,
+                    market TEXT NOT NULL DEFAULT 'US',
+                    starred_at TEXT,
+                    PRIMARY KEY(analysis_symbol, market));
             """)
 
             # 2. Check and migrate watch_targets if old CHECK constraint or missing source_type
@@ -267,6 +272,34 @@ class MonitorStore:
             )
         return True
 
+    def starred_symbols(self) -> set[str]:
+        with self.connect() as db:
+            return {
+                r["analysis_symbol"]
+                for r in db.execute("SELECT analysis_symbol FROM starred_targets")
+            }
+
+    def set_starred(self, analysis_symbol: str, starred: bool, market: str = "US") -> bool:
+        clean_symbol = analysis_symbol.strip().upper()
+        clean_market = (market or "US").strip().upper()
+        if not clean_symbol:
+            return False
+        with self.connect() as db:
+            if starred:
+                stamp = datetime.now(timezone.utc).isoformat()
+                db.execute(
+                    """INSERT INTO starred_targets (analysis_symbol, market, starred_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(analysis_symbol, market) DO UPDATE SET starred_at=excluded.starred_at""",
+                    (clean_symbol, clean_market, stamp),
+                )
+                return True
+            db.execute(
+                "DELETE FROM starred_targets WHERE analysis_symbol=? AND market=?",
+                (clean_symbol, clean_market),
+            )
+            return False
+
     def targets(self, scope_key: str) -> List[Dict[str, Any]]:
         with self.connect() as db:
             items = [
@@ -275,8 +308,13 @@ class MonitorStore:
                     "SELECT * FROM watch_targets WHERE scope_key=? ORDER BY analysis_symbol", (scope_key,)
                 )
             ]
+            starred_set = {
+                r["analysis_symbol"]
+                for r in db.execute("SELECT analysis_symbol FROM starred_targets")
+            }
             rule_counts = self.active_rule_count_by_symbol(scope_key)
             for item in items:
+                item["starred"] = item["analysis_symbol"] in starred_set
                 item["sources"] = [
                     json.loads(r[0])
                     for r in db.execute(

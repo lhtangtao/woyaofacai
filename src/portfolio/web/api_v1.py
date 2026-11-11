@@ -1332,6 +1332,7 @@ def api_monitoring_watchlist():
         path = str(get_analytics_service().path)
         symbols = {source["analysis_symbol"] for source in observation_sources(path, scope)}
         manual = set()
+        starred_set = store.starred_symbols() if store else set()
         market = {}
         metrics = {}
         if store:
@@ -1412,6 +1413,7 @@ def api_monitoring_watchlist():
                 "symbol": clean_sym,
                 "full_symbol": sym,
                 "manual": sym in manual,
+                "starred": sym in starred_set,
                 "price": price or "—",
                 "change": change_pct,
                 "day": ms.get("bar_date", "—"),
@@ -1485,6 +1487,29 @@ def api_monitoring_watchlist_delete():
     if not store.remove_manual_target("PORTFOLIO", symbol):
         return jsonify(status="error", message="该标的不在手动自选列表中。"), 404
     return jsonify(status="ok", message=f"标的 {symbol} 已移除手动自选")
+
+
+@api_v1.route("/monitoring/watchlist/star", methods=["POST"])
+@require_capability(CAP_MANAGE_RULES)
+def api_monitoring_watchlist_star():
+    """Toggle focus star on a watch symbol."""
+    from portfolio.services.monitor_mapping import normalize
+    from portfolio.web.app import get_monitor_store as open_monitor_store
+
+    store = open_monitor_store(create=True)
+    if not store:
+        return jsonify({"status": "error", "message": "监控数据库未配置"}), 404
+    data = request.get_json(silent=True) or {}
+    text = data.get("symbol") if isinstance(data, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(status="error", message="请输入股票代码。"), 400
+    try:
+        symbol = normalize(text, "US")
+    except ValueError as error:
+        return jsonify(status="error", message=str(error)), 400
+    starred = bool(data.get("starred"))
+    new_state = store.set_starred(symbol, starred)
+    return jsonify(status="ok", symbol=symbol, starred=new_state)
 
 
 @api_v1.route("/monitoring/rules", methods=["GET"])

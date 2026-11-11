@@ -482,6 +482,10 @@ def test_monitor_drawer_toggle_and_ath_drawdown_column(qtbot, tmp_path):
         {"analysis_symbol": "AAOI.US", "source_type": "MANUAL", "archive_state": "HELD", "sources": []},
         {"analysis_symbol": "MU.US", "source_type": "MANUAL", "archive_state": "HELD", "sources": []},
     ]
+    assert page.kind.currentText() == "星标股票"
+    assert page.kind.currentData() == "STARRED"
+    assert page.kind.findData("ALL") >= 0
+    page.kind.setCurrentIndex(page.kind.findData("ALL"))
     aaoi_date = (date.today() - timedelta(days=89)).isoformat()
     mu_date = (date.today() - timedelta(days=10)).isoformat()
     page.market = {
@@ -627,3 +631,63 @@ def test_longbridge_pre_market_uses_session_prev_close(tmp_path):
     out_cached = svc.load(targets, threading.Event(), network=False)
     assert out_cached["NVDA.US"]["change"] is not None
     assert abs(out_cached["NVDA.US"]["change"] - D("5.4650956")) < D("0.01")
+
+
+def test_monitor_star_persistence_and_default_starred_filter(qtbot, tmp_path):
+    """验证股票星标持久化、默认仅展示星标股票，以及「全部类型」选项保留。"""
+    from PySide6.QtCore import QThreadPool
+    from portfolio.ui.monitor_page import MonitoringPage
+
+    store = MonitorStore(tmp_path / "monitoring.sqlite3")
+    targets = store.sync(
+        "scope-star",
+        sources("AAOI.US") + [dict(resolve("NVDA.US").record(), market="US", account_id=1, person_id=1, quantity="5", holding_status="COMPLETE")],
+        NOW,
+    )
+    window = SimpleNamespace(pool=QThreadPool(), info=None)
+    page = MonitoringPage(window, store=store)
+    page.scope_key = "scope-star"
+    page.targets = targets
+    page.market = {
+        "AAOI.US": {"price": D("50"), "change": D("1.0"), "bars": [], "metrics": {}},
+        "NVDA.US": {"price": D("178"), "change": D("5.0"), "bars": [], "metrics": {}},
+    }
+    qtbot.addWidget(page)
+    page.show()
+    page.draw_table()
+
+    # 1. 打开页面默认选「星标股票」且「全部类型」保留
+    assert page.kind.currentData() == "STARRED"
+    assert page.kind.currentText() == "星标股票"
+    all_idx = page.kind.findData("ALL")
+    assert all_idx >= 0 and page.kind.itemText(all_idx) == "全部类型"
+    assert page.table.rowCount() == 0
+
+    # 2. 切到「全部类型」，对 NVDA 点击星标按钮加星
+    page.kind.setCurrentIndex(all_idx)
+    assert page.table.rowCount() == 2
+    nvda_cell = page.table.cellWidget(1, 0)
+    assert nvda_cell.star_btn.text() == "☆"
+    nvda_cell.star_btn.click()
+    assert "NVDA.US" in store.starred_symbols()
+    assert page.table.cellWidget(1, 0).star_btn.text() == "★"
+
+    # 3. 切回「星标股票」仅显示 NVDA.US，且新建页面读取同库依然默认只显示星标股票 NVDA.US
+    page.kind.setCurrentIndex(page.kind.findData("STARRED"))
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).data(256) == "NVDA.US"
+
+    page2 = MonitoringPage(window, store=store)
+    page2.scope_key = "scope-star"
+    page2.targets = store.targets("scope-star")
+    page2.market = page.market
+    qtbot.addWidget(page2)
+    page2.draw_table()
+    assert page2.kind.currentData() == "STARRED"
+    assert page2.table.rowCount() == 1
+    assert page2.table.item(0, 0).data(256) == "NVDA.US"
+
+    # 4. 取消星标后从「星标股票」列表中移除
+    page2.table.cellWidget(0, 0).star_btn.click()
+    assert "NVDA.US" not in store.starred_symbols()
+    assert page2.table.rowCount() == 0

@@ -245,6 +245,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol }),
     }),
+  toggleWatchlistStar: (symbol: string, starred: boolean) =>
+    requestApi<{ status: string; symbol: string; starred: boolean }>("/api/v1/monitoring/watchlist/star", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, starred }),
+    }),
   monitoringRules: () => requestApi("/api/v1/monitoring/rules"),
   toggleRule: (ruleId: string, enabled: boolean) =>
     requestApi(`/api/v1/monitoring/rules/${ruleId}/toggle`, {
