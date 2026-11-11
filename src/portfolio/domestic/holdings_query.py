@@ -110,6 +110,14 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             if generation and (not imported or generation[0] >= imported):
                 tiantian = {(r["account_id"], r["fund_code"]): dict(r)
                             for r in calc.execute("SELECT * FROM calc_tiantian_funds")}
+        statements = {}
+        if calc and calc.execute("SELECT 1 FROM sqlite_master WHERE name='calc_tiantian_statement_positions'").fetchone():
+            for row in calc.execute("""SELECT p.* FROM calc_tiantian_statement_positions p
+                WHERE as_of=(SELECT MAX(s.as_of) FROM calc_tiantian_statement_positions s
+                             WHERE s.account_id=p.account_id)"""):
+                key = row["account_id"], row["fund_code"]
+                statements[key] = dict(row)
+                records.setdefault(key, dict(row))
         for key, record in records.items():
             if account and key != (account, fund):
                 continue
@@ -120,6 +128,14 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             shares = (recent["observed_shares"] if not recent["issue"] else None) if recent else (
                 position["holding_shares"] if position else None)
             issue = recent["issue"] if recent else None
+            statement = statements.get(key)
+            if statement and (not as_of or statement["as_of"] >= as_of or not shares):
+                as_of, shares = statement["as_of"], statement["holding_shares"]
+                issue = "份额来自天天基金对账单期末快照"
+                if recent and recent["issue"]:
+                    issue += "；历史流水缺档"
+            else:
+                statement = None
             if not as_of:
                 issue = "交易已入库，持仓结果待更新"
             if as_of and record.get("confirmation_date") and record["confirmation_date"] > as_of:
@@ -128,6 +144,9 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                                 for day in split_dates.get(key[1], ())):
                 shares, issue = None, "支付宝拆分与账户份额变动待核对"
             nav_record = next(daily_nav(raw, tables, key[1], as_of or date.today().isoformat()), {})
+            if statement and not nav_record and statement["unit_nav"]:
+                nav_record = dict(unit_nav=statement["unit_nav"], nav_date=statement["nav_date"],
+                                  source="天天基金对账单期末快照")
             nav_date = nav_record.get("nav_date")
             nav = positive(nav_record.get("unit_nav"))
             qty = Decimal(shares) if shares is not None else None
@@ -203,4 +222,11 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                         history[month]["market_value"] = str(Decimal(qty) * nav)
                         history[month]["nav_date"] = day
                 result["history"] = list(history.values())
+            row = result["rows"][0]
+            statement = statements.get((account, fund))
+            if statement and row["shares"] is not None and row["as_of"] == statement["as_of"]:
+                month = statement["as_of"][:7]
+                result["history"] = [r for r in result["history"] if r["month"] != month]
+                result["history"].append(dict(month=month, holding_shares=row["shares"], market_value=row["market_value"],
+                                              nav_date=row["nav_date"]))
     return result
