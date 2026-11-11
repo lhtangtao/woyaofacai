@@ -57,6 +57,7 @@ class AskCodexWorker(QThread):
         channel_names: tuple[str, ...] | None = None,
         symbol: str | None = None,
         include_context: bool = True,
+        provider: str = "codex",
     ):
         super().__init__()
         self.prompt = prompt
@@ -68,6 +69,7 @@ class AskCodexWorker(QThread):
         self.channel_names = channel_names
         self.symbol = symbol
         self.include_context = include_context
+        self.provider = provider
         self.cancel_event = threading.Event()
 
     def run(self):
@@ -93,6 +95,7 @@ class AskCodexWorker(QThread):
                 self.prompt,
                 context=self.context,
                 model=self.model,
+                provider=self.provider,
                 cancel_event=self.cancel_event,
             )
             self.finished_signal.emit(result, self.session_key)
@@ -302,13 +305,22 @@ class AIAssistantPage(QWidget):
         title_lbl.setStyleSheet("font-size: 18px; font-weight: 700; color: #17253D;")
         title_box.addWidget(title_lbl)
 
+        self.provider_combo = QComboBox()
+        self.provider_combo.setMinimumWidth(112)
+        self.provider_combo.setToolTip("选择本地 AI 引擎（默认 Codex，支持切换 Gemini CLI）")
+        self.provider_combo.addItem("Codex", "codex")
+        self.provider_combo.addItem("Gemini", "gemini")
+        self.provider_combo.setCurrentIndex(0)  # 默认使用 Codex
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        title_box.addWidget(self.provider_combo)
+
         self.status_badge = QLabel("正在检测 Codex 状态...")
         self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #F1F5F9; color: #64748B;")
         title_box.addWidget(self.status_badge)
         title_box.addStretch()
         info_layout.addLayout(title_box)
 
-        desc_lbl = QLabel("基于本地 Codex CLI 官方驱动 · 免 API 密钥 · 各股票/人员/渠道独立多会话隔离")
+        desc_lbl = QLabel("支持本地 Codex / Gemini CLI 切换（默认 Codex）· 免 API 密钥 · 各股票/人员/渠道独立多会话隔离")
         desc_lbl.setStyleSheet("font-size: 12px; color: #64748B;")
         info_layout.addWidget(desc_lbl)
 
@@ -671,20 +683,36 @@ class AIAssistantPage(QWidget):
             self.save_sessions()
         self.switch_to_session(self.active_session_key)
 
+    def current_provider(self) -> str:
+        """返回当前选择的 AI 引擎标识（codex 或 gemini）"""
+        return str(self.provider_combo.currentData() or "codex")
+
+    @staticmethod
+    def _provider_label(provider: str) -> str:
+        return "Gemini" if provider == "gemini" else "Codex"
+
+    def _on_provider_changed(self):
+        self.refresh_codex_status(force=False)
+
     def refresh_codex_status(self, force: bool = False):
-        status = CodexAIService.check_login_status(force=force)
+        provider = self.current_provider()
+        label = self._provider_label(provider)
+        status = CodexAIService.check_login_status(force=force, provider=provider)
         is_running = bool(self.worker and self.worker.isRunning())
         if status["logged_in"]:
-            account = status["account_type"] or "ChatGPT"
-            self.status_badge.setText(f"🟢 已连接 Codex ({account} 订阅)")
+            account = status["account_type"] or ("Google OAuth" if provider == "gemini" else "ChatGPT")
+            suffix = " 订阅" if provider == "codex" else ""
+            self.status_badge.setText(f"🟢 已连接 {label} ({account}{suffix})")
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #DCFCE7; color: #166534; font-weight: 600;")
             self.send_btn.setEnabled(not is_running)
         elif status["installed"]:
-            self.status_badge.setText("🟡 未登录 (请在终端执行 codex login)")
+            hint = "请在终端执行 gemini 登录或配置 GEMINI_API_KEY" if provider == "gemini" else "请在终端执行 codex login"
+            self.status_badge.setText(f"🟡 未登录 ({hint})")
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEF9C3; color: #854D0E;")
             self.send_btn.setEnabled(False)
         else:
-            self.status_badge.setText("🔴 未安装 Codex CLI")
+            install_hint = " (npm i -g @google/gemini-cli)" if provider == "gemini" else ""
+            self.status_badge.setText(f"🔴 未安装 {label} CLI{install_hint}")
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEE2E2; color: #991B1B;")
             self.send_btn.setEnabled(False)
 
@@ -696,7 +724,8 @@ class AIAssistantPage(QWidget):
         self._thinking_seconds += 1
         self._thinking_dots = (self._thinking_dots + 1) % 4
         dots = "." * self._thinking_dots
-        self.status_hint.setText(f"🤖 Codex 正在思考并分析数据中... (已耗时 {self._thinking_seconds} 秒 · 运算中{dots})")
+        label = self._provider_label(getattr(self, "_active_worker_provider", self.current_provider()))
+        self.status_hint.setText(f"🤖 {label} 正在思考并分析数据中... (已耗时 {self._thinking_seconds} 秒 · 运算中{dots})")
         self.status_hint.repaint()
 
     def send_preset_prompt(self, prompt: str):
@@ -760,9 +789,12 @@ class AIAssistantPage(QWidget):
             self.cancel_btn.setVisible(True)
 
             # 启动秒级心跳耗时指示
+            provider = self.current_provider()
+            label = self._provider_label(provider)
+            self._active_worker_provider = provider
             self._thinking_seconds = 0
             self._thinking_dots = 0
-            self.status_hint.setText("🤖 Codex 正在思考并分析数据中... (已耗时 0 秒 · 运算中)")
+            self.status_hint.setText(f"🤖 {label} 正在思考并分析数据中... (已耗时 0 秒 · 运算中)")
             self._thinking_timer.start(1000)
 
             # 启动后台任务，带入 session_key 并支持后台穿透计算
@@ -775,6 +807,7 @@ class AIAssistantPage(QWidget):
                 channel_names=selected_channels,
                 symbol=target_symbol,
                 include_context=include_ctx,
+                provider=provider,
             )
             self.worker.finished_signal.connect(self._on_worker_finished)
             self.worker.error_signal.connect(self._on_worker_error)
@@ -826,7 +859,8 @@ class AIAssistantPage(QWidget):
     def _on_worker_error(self, err_msg: str, session_key: str):
         if self._thinking_timer.isActive():
             self._thinking_timer.stop()
-        error_reply = f"⚠️ **调用 Codex 遇到问题**：\n\n```\n{err_msg}\n```\n请检查本地 Codex 登录状态或网络连接。"
+        label = self._provider_label(getattr(self, "_active_worker_provider", self.current_provider()))
+        error_reply = f"⚠️ **调用 {label} 遇到问题**：\n\n```\n{err_msg}\n```\n请检查本地 {label} 登录状态或网络连接。"
         asst_msg = ChatMessage(role="assistant", content=error_reply, time_str=datetime.now().strftime("%H:%M:%S"))
         self.chat_sessions.setdefault(session_key, []).append(asst_msg)
         self.save_sessions()

@@ -5,6 +5,7 @@ without requiring manual API key configuration or extra token billing.
 Supports multi-dimensional contextual filtering across Person, Channel, and Ticker.
 """
 from decimal import Decimal
+import json
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +13,15 @@ import subprocess
 import tempfile
 import threading
 import time
+
+
+SUPPORTED_AI_PROVIDERS = ("codex", "gemini")
+
+
+def normalize_ai_provider(provider: str | None) -> str:
+    """规范化 AI 引擎名称，未知值默认回退为 codex。"""
+    val = (provider or "codex").strip().lower()
+    return val if val in SUPPORTED_AI_PROVIDERS else "codex"
 
 
 def _fmt(val, prefix="", suffix="", signed=False, as_percent=False, default="—") -> str:
@@ -40,36 +50,110 @@ class CodexAIService:
         found = shutil.which("codex")
         if found:
             return found
-        default_local = Path.home() / ".local/bin/codex"
-        if default_local.exists() and os.access(default_local, os.X_OK):
-            return str(default_local)
+        for candidate in (
+            Path.home() / ".local/bin/codex",
+            Path("/opt/homebrew/bin/codex"),
+            Path("/usr/local/bin/codex"),
+        ):
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                return str(candidate)
         return None
 
-    _login_status_cache: dict | None = None
-    _login_status_timestamp: float = 0.0
+    @staticmethod
+    def get_gemini_cli_path() -> str | None:
+        """获取本地 gemini 可执行文件的完整绝对路径"""
+        found = shutil.which("gemini")
+        if found:
+            return found
+        candidates = [
+            Path("/opt/homebrew/bin/gemini"),
+            Path("/usr/local/bin/gemini"),
+            Path.home() / ".local/bin/gemini",
+            Path.home() / ".npm-global/bin/gemini",
+        ]
+        nvm_dir = Path.home() / ".nvm/versions/node"
+        if nvm_dir.is_dir():
+            for node_ver in sorted(nvm_dir.iterdir(), reverse=True):
+                candidates.append(node_ver / "bin/gemini")
+        for candidate in candidates:
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        return None
+
+    _login_status_cache: dict[str, dict] = {}
+    _login_status_timestamp: dict[str, float] = {}
 
     @classmethod
-    def check_login_status(cls, force: bool = False, cache_ttl: float = 120.0) -> dict:
+    def _check_gemini_login_status(cls) -> dict:
+        cli = cls.get_gemini_cli_path()
+        if not cli:
+            return {
+                "installed": False,
+                "logged_in": False,
+                "account_type": "",
+                "message": "未检测到 gemini CLI，请在终端执行 npm install -g @google/gemini-cli",
+            }
+        gemini_dir = Path.home() / ".gemini"
+        oauth_file = gemini_dir / "oauth_creds.json"
+        accounts_file = gemini_dir / "google_accounts.json"
+        has_env_key = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        has_oauth = oauth_file.exists() and oauth_file.stat().st_size > 2
+        if has_oauth or has_env_key:
+            account_type = "API Key" if has_env_key and not has_oauth else "Google 账号"
+            if accounts_file.exists():
+                try:
+                    acct_data = json.loads(accounts_file.read_text(encoding="utf-8"))
+                    active = (acct_data.get("active") or "").strip()
+                    if active:
+                        account_type = active
+                except Exception:
+                    pass
+            return {
+                "installed": True,
+                "logged_in": True,
+                "account_type": account_type,
+                "message": f"Gemini CLI 已就绪 ({account_type})",
+            }
+        return {
+            "installed": True,
+            "logged_in": False,
+            "account_type": "",
+            "message": "未检测到 Gemini 登录凭证，请在终端执行 gemini 完成 Google 登录",
+        }
+
+    @classmethod
+    def check_login_status(cls, force: bool = False, cache_ttl: float = 120.0, provider: str = "codex") -> dict:
         """
-        检查 Codex CLI 安装与登录状态（带内存缓存与超时防卡死机制）
+        检查 AI CLI（codex / gemini）安装与登录状态（带按引擎缓存与超时防卡死机制）
         :param force: 是否强制重新检测外部进程（默认 False，复用有效缓存）
         :param cache_ttl: 缓存有效期（秒），默认 120 秒
-        :return: 包含 installed, logged_in, account_type, message 等状态字典
+        :param provider: AI 引擎标识（"codex" 或 "gemini"）
+        :return: 包含 installed, logged_in, account_type, message, provider 等状态字典
         """
+        prov = normalize_ai_provider(provider)
         now = time.time()
-        if not force and cls._login_status_cache is not None and (now - cls._login_status_timestamp < cache_ttl):
-            return cls._login_status_cache
+        cached = cls._login_status_cache.get(prov)
+        cached_at = cls._login_status_timestamp.get(prov, 0.0)
+        if not force and cached is not None and (now - cached_at < cache_ttl):
+            return cached
+
+        if prov == "gemini":
+            res_dict = {**cls._check_gemini_login_status(), "provider": "gemini"}
+            cls._login_status_cache[prov] = res_dict
+            cls._login_status_timestamp[prov] = now
+            return res_dict
 
         cli = cls.get_cli_path()
         if not cli:
             res_dict = {
+                "provider": "codex",
                 "installed": False,
                 "logged_in": False,
                 "account_type": "",
                 "message": "未检测到 codex CLI，请确认已安装到 PATH 或 ~/.local/bin/codex",
             }
-            cls._login_status_cache = res_dict
-            cls._login_status_timestamp = now
+            cls._login_status_cache[prov] = res_dict
+            cls._login_status_timestamp[prov] = now
             return res_dict
 
         try:
@@ -83,18 +167,19 @@ class CodexAIService:
                 account_type = "已认证"
 
             res_dict = {
+                "provider": "codex",
                 "installed": True,
                 "logged_in": is_logged_in,
                 "account_type": account_type,
                 "message": output if is_logged_in else "未登录或登录已失效，请在终端执行 codex login",
             }
-            cls._login_status_cache = res_dict
-            cls._login_status_timestamp = now
+            cls._login_status_cache[prov] = res_dict
+            cls._login_status_timestamp[prov] = now
             return res_dict
         except subprocess.TimeoutExpired:
-            return {"installed": True, "logged_in": False, "account_type": "", "message": "检查登录超时"}
+            return {"provider": "codex", "installed": True, "logged_in": False, "account_type": "", "message": "检查登录超时"}
         except Exception as e:
-            return {"installed": True, "logged_in": False, "account_type": "", "message": f"状态检查异常: {e}"}
+            return {"provider": "codex", "installed": True, "logged_in": False, "account_type": "", "message": f"状态检查异常: {e}"}
 
     @classmethod
     def build_portfolio_context(
@@ -298,25 +383,138 @@ class CodexAIService:
         return "\n".join(lines)
 
     @classmethod
+    def _run_cli_process(
+        cls,
+        cmd: list[str],
+        *,
+        provider_label: str,
+        stdout_path: str,
+        stderr_path: str | None = None,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        cancel_event: threading.Event | None = None,
+        max_timeout: float = 300.0,
+    ) -> int:
+        """统一执行外部 AI CLI 子进程并支持实时取消与超时保护，防止 PIPE 阻塞。"""
+        proc = None
+        start_time = time.time()
+        try:
+            with open(stdout_path, "w", encoding="utf-8") as out_f:
+                err_ctx = open(stderr_path, "w", encoding="utf-8") if stderr_path else None
+                try:
+                    proc = subprocess.Popen(
+                        cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=out_f,
+                        stderr=err_ctx if err_ctx else out_f,
+                        cwd=cwd,
+                        env=env,
+                        text=True,
+                    )
+                    while proc.poll() is None:
+                        if cancel_event and cancel_event.is_set():
+                            proc.kill()
+                            raise RuntimeError("用户已中止当前 AI 问答请求。")
+                        if time.time() - start_time > max_timeout:
+                            proc.kill()
+                            raise RuntimeError(
+                                f"{provider_label} 执行超时（超过 {int(max_timeout)} 秒未完成），已自动终止以防卡死。"
+                            )
+                        try:
+                            proc.wait(timeout=0.2)
+                        except subprocess.TimeoutExpired:
+                            continue
+                    return int(proc.returncode or 0)
+                finally:
+                    if err_ctx:
+                        err_ctx.close()
+        finally:
+            if proc and proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    @classmethod
+    def _ask_gemini(
+        cls,
+        full_prompt: str,
+        *,
+        model: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        """通过本地 Gemini CLI 非交互模式发起只读问答。"""
+        cli = cls.get_gemini_cli_path()
+        if not cli:
+            raise RuntimeError("未在系统中找到 gemini 命令，请先执行 npm install -g @google/gemini-cli。")
+
+        temp_out = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        out_path = temp_out.name
+        temp_out.close()
+        log_out = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
+        err_path = log_out.name
+        log_out.close()
+
+        env = os.environ.copy()
+        extra_bins = [os.path.dirname(cli), "/opt/homebrew/bin", "/usr/local/bin"]
+        existing_path = env.get("PATH", "")
+        env["PATH"] = os.pathsep.join(dict.fromkeys([*extra_bins, *(existing_path.split(os.pathsep) if existing_path else [])]))
+
+        cmd = [cli, "-p", full_prompt, "--output-format", "json"]
+        if model:
+            cmd.extend(["-m", model])
+
+        try:
+            rc = cls._run_cli_process(
+                cmd,
+                provider_label="Gemini CLI",
+                stdout_path=out_path,
+                stderr_path=err_path,
+                cwd=tempfile.gettempdir(),
+                env=env,
+                cancel_event=cancel_event,
+            )
+            stdout_text = Path(out_path).read_text(encoding="utf-8", errors="replace").strip() if Path(out_path).exists() else ""
+            stderr_text = Path(err_path).read_text(encoding="utf-8", errors="replace").strip() if Path(err_path).exists() else ""
+            if rc != 0:
+                err_msg = stderr_text[-2000:] or stdout_text[-2000:] or f"退出码 {rc}"
+                raise RuntimeError(f"Gemini CLI 执行失败: {err_msg.strip()}")
+            if stdout_text:
+                try:
+                    parsed = json.loads(stdout_text)
+                    if isinstance(parsed, dict):
+                        if parsed.get("error"):
+                            raise RuntimeError(str(parsed["error"]))
+                        resp = parsed.get("response")
+                        if isinstance(resp, str) and resp.strip():
+                            return resp.strip()
+                except json.JSONDecodeError:
+                    pass
+                return stdout_text
+            return stderr_text[-2000:] if stderr_text else "Gemini CLI 未返回有效内容。"
+        finally:
+            Path(out_path).unlink(missing_ok=True)
+            Path(err_path).unlink(missing_ok=True)
+
+    @classmethod
     def ask(
         cls,
         prompt: str,
         context: str = "",
         model: str | None = None,
         cancel_event: threading.Event | None = None,
+        provider: str = "codex",
     ) -> str:
         """
-        调用本地 Codex CLI 发起查询，安全且只读模式返回结果
+        调用本地 AI CLI（codex / gemini）发起查询，安全且只读模式返回结果
         :param prompt: 用户提问
         :param context: 结构化上下文背景
         :param model: 可选模型，缺省时使用系统默认模型
         :param cancel_event: 允许外部取消任务
+        :param provider: AI 引擎（"codex" 默认，或 "gemini"）
         :return: AI 最终文本回复
         """
-        cli = cls.get_cli_path()
-        if not cli:
-            raise RuntimeError("未在系统中找到 codex 命令，请先确保已安装并加入 PATH。")
-
+        prov = normalize_ai_provider(provider)
         full_prompt = prompt.strip()
         if context:
             full_prompt = (
@@ -330,6 +528,13 @@ class CodexAIService:
                 f"2. 请使用清晰规范的 Markdown 格式排版（支持加粗、列表、表格），风格客观犀利，聚焦投资风险与做T/风控策略，避免泛泛空话。"
             )
 
+        if prov == "gemini":
+            return cls._ask_gemini(full_prompt, model=model, cancel_event=cancel_event)
+
+        cli = cls.get_cli_path()
+        if not cli:
+            raise RuntimeError("未在系统中找到 codex 命令，请先确保已安装并加入 PATH。")
+
         temp_out = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
         temp_path = temp_out.name
         temp_out.close()
@@ -337,10 +542,6 @@ class CodexAIService:
         log_out = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
         log_path = log_out.name
         log_out.close()
-
-        proc = None
-        start_time = time.time()
-        max_timeout = 300.0  # 5分钟超时保护
 
         try:
             cmd = [
@@ -354,32 +555,17 @@ class CodexAIService:
                 cmd.extend(["-m", model])
             cmd.append(full_prompt)
 
-            # 将 stdout 和 stderr 直接重定向到文件流，并在有效 context 内等待，彻底杜绝 PIPE 满缓冲区造成的操作系统级死锁
-            with open(log_path, "w", encoding="utf-8") as log_file:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=log_file,
-                    stderr=log_file,
-                    text=True,
-                )
-
-                while proc.poll() is None:
-                    if cancel_event and cancel_event.is_set():
-                        proc.kill()
-                        raise RuntimeError("用户已中止当前 AI 问答请求。")
-                    if time.time() - start_time > max_timeout:
-                        proc.kill()
-                        raise RuntimeError(f"Codex 执行超时（超过 {int(max_timeout)} 秒未完成），已自动终止以防卡死。")
-                    try:
-                        proc.wait(timeout=0.2)
-                    except subprocess.TimeoutExpired:
-                        continue
-
+            rc = cls._run_cli_process(
+                cmd,
+                provider_label="Codex",
+                stdout_path=log_path,
+                cancel_event=cancel_event,
+            )
             log_p = Path(log_path)
             log_content = log_p.read_text(encoding="utf-8", errors="replace").strip() if log_p.exists() else ""
 
-            if proc.returncode != 0:
-                err_msg = log_content[-2000:] if log_content else f"退出码 {proc.returncode}"
+            if rc != 0:
+                err_msg = log_content[-2000:] if log_content else f"退出码 {rc}"
                 raise RuntimeError(f"Codex 执行失败: {err_msg.strip()}")
 
             out_p = Path(temp_path)
@@ -390,11 +576,6 @@ class CodexAIService:
 
             return log_content[-2000:] if log_content else "Codex 未返回有效内容。"
         finally:
-            if proc and proc.poll() is None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
             Path(temp_path).unlink(missing_ok=True)
             Path(log_path).unlink(missing_ok=True)
 
@@ -405,6 +586,7 @@ class CodexAIService:
         symbol: str | None = None,
         model: str | None = None,
         cancel_event: threading.Event | None = None,
+        provider: str = "codex",
     ) -> str:
         """
         纯粹针对标的股票本身进行基本面、财报、业务前景与竞争格局的分析问答，不依赖用户数据库账本。
@@ -429,4 +611,4 @@ class CodexAIService:
                 f"【回复要求】:\n"
                 f"请使用规范清晰的 Markdown 格式排版，观点明确、逻辑严谨。"
             )
-        return cls.ask(full_prompt, context="", model=model, cancel_event=cancel_event)
+        return cls.ask(full_prompt, context="", model=model, cancel_event=cancel_event, provider=provider)

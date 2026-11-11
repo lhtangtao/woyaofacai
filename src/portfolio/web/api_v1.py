@@ -1837,9 +1837,21 @@ def save_ai_sessions(filename: str, data: Dict[str, Any]):
 @api_v1.route("/ai/status", methods=["GET"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_status():
-    """Return Codex CLI login status and available models."""
-    status = AIService.check_login_status()
-    return jsonify({"status": "ok", "ai_status": status})
+    """Return local AI CLI login status and available providers."""
+    provider = (request.args.get("provider") or "codex").strip().lower()
+    if provider not in ("codex", "gemini"):
+        provider = "codex"
+    force = str(request.args.get("force") or "").lower() in ("1", "true", "yes")
+    providers = {
+        name: AIService.check_login_status(force=force, provider=name)
+        for name in ("codex", "gemini")
+    }
+    return jsonify({
+        "status": "ok",
+        "provider": provider,
+        "ai_status": providers[provider],
+        "providers": providers,
+    })
 
 
 @api_v1.route("/ai/history", methods=["GET"])
@@ -1884,7 +1896,11 @@ def api_ai_chat():
     except Exception:
         context_str = "当前投资组合处于离线状态。"
 
-    answer = AIService.ask(prompt, context=context_str)
+    provider = (data.get("provider") or "codex").strip().lower()
+    if provider not in ("codex", "gemini"):
+        provider = "codex"
+
+    answer = AIService.ask(prompt, context=context_str, provider=provider)
 
     sessions = load_ai_sessions("ai_chat_sessions.json")
     current_msgs = sessions.get(session_key, [])
@@ -1895,6 +1911,7 @@ def api_ai_chat():
 
     return jsonify({
         "status": "ok",
+        "provider": provider,
         "answer": answer,
         "reply": answer,
         "content": answer,
@@ -1945,8 +1962,12 @@ def api_ai_stock_chat():
         if st:
             tech_info = f"标的 {symbol} 当前行情与指标: {json.dumps(st, ensure_ascii=False)}"
 
+    provider = (data.get("provider") or "codex").strip().lower()
+    if provider not in ("codex", "gemini"):
+        provider = "codex"
+
     prompt_to_send = f"{prompt}\n\n附标的技术面信息：{tech_info}" if tech_info else prompt
-    answer = AIService.ask_stock(prompt_to_send, symbol=symbol)
+    answer = AIService.ask_stock(prompt_to_send, symbol=symbol, provider=provider)
 
     sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
     current_msgs = sessions.get(symbol, [])
@@ -1957,6 +1978,7 @@ def api_ai_stock_chat():
 
     return jsonify({
         "status": "ok",
+        "provider": provider,
         "answer": answer,
         "reply": answer,
         "content": answer,

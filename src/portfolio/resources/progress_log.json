@@ -1,5 +1,17 @@
 [
   {
+    "title": "AI 股票分析与 AI 投资问答接入本地 Gemini CLI，默认 Codex 并支持随时切换",
+    "time": "2026-11-11 20:08",
+    "author": "Antigravity",
+    "tag": "Mac 桌面端、React Web 端与 Flask AI 服务双引擎支持完成，测试通过",
+    "details": [
+      "修改者：Antigravity（新增本地 Gemini CLI 接入与 Codex/Gemini 双引擎切换）",
+      "【1. 后端统一支持双引擎且默认 Codex】在 `CodexAIService` 中新增 `SUPPORTED_AI_PROVIDERS = (\"codex\", \"gemini\")`、`normalize_ai_provider()`、`get_gemini_cli_path()`、按引擎隔离的登录状态检测缓存 `_check_gemini_login_status()`（复用本地 `~/.gemini/oauth_creds.json` / `~/.gemini/google_accounts.json` / `GEMINI_API_KEY`）以及非交互子进程封装 `_ask_gemini()`（调用 `gemini -p ... --output-format json` 并解析 `response` 字段，带纯文本兜底）。",
+      "【2. Mac 桌面端双页面均支持切换】在「AI 股票分析」与「AI 投资问答」页面顶部标题栏均新增引擎下拉框（`Codex` 默认 / `Gemini`），切换即刷新连接状态徽章，并在提问线程与耗时/报错提示中准确区分当前使用的引擎。",
+      "【3. React Web 端与 Flask API 双端打通】扩展 `/api/v1/ai/status`（返回各引擎状态）、`/api/v1/ai/chat` 与 `/api/v1/ai/stock/chat` 的 `provider` 参数（默认 `codex`），并在 Web 端 `AiViews.tsx` 顶部增加 `AI 引擎` 选择器（默认 `Codex (默认)`，可随时切换 `Gemini`）及实时状态提示。"
+    ]
+  },
+  {
     "title": "行情监控中心 新增股票星标重点关注功能，默认展示「星标股票」并保留「全部类型」筛选",
     "time": "2026-11-11 19:51",
     "author": "Antigravity",

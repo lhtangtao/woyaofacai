@@ -2,6 +2,8 @@ import React, { useEffect, useState, useRef } from "react";
 import { Bot, Send, Trash2, TrendingUp, Sparkles, User } from "lucide-react";
 import { api } from "../api/client";
 
+type AiProvider = "codex" | "gemini";
+
 interface AiViewsProps {
   mode: "chat" | "stock";
   personId: number | null;
@@ -17,6 +19,8 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [symbol, setSymbol] = useState("NVDA");
+  const [provider, setProvider] = useState<AiProvider>("codex");
+  const [providersStatus, setProvidersStatus] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -36,6 +40,19 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
   }, [mode, symbol]);
 
   useEffect(() => {
+    api
+      .aiStatus(provider)
+      .then((res) => {
+        if (res.status === "ok" && res.providers) {
+          setProvidersStatus(res.providers);
+        } else if (res.status === "ok" && res.ai_status) {
+          setProvidersStatus((prev) => ({ ...prev, [provider]: res.ai_status }));
+        }
+      })
+      .catch(() => {});
+  }, [provider]);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -51,9 +68,9 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
     try {
       let res: any;
       if (mode === "chat") {
-        res = await api.aiChat(userMsg, personId);
+        res = await api.aiChat(userMsg, personId, provider);
       } else {
-        res = await api.aiStockChat(symbol, userMsg);
+        res = await api.aiStockChat(symbol, userMsg, provider);
       }
       if (res.status === "ok") {
         setMessages((prev) => [
@@ -118,11 +135,49 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
           justifyContent: "space-between",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           {mode === "chat" ? <Bot size={18} color="var(--brand)" /> : <TrendingUp size={18} color="var(--brand)" />}
           <span style={{ fontSize: "14px", fontWeight: 700 }}>
             {mode === "chat" ? "AI 智能投资问答与组合顾问" : "AI 单标的深度技术与基本面研报"}
           </span>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "6px" }}>
+            <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>AI 引擎:</span>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value as AiProvider)}
+              aria-label="选择 AI 引擎"
+              className="input-control"
+              style={{ padding: "3px 8px", fontSize: "12px", fontWeight: 600 }}
+            >
+              <option value="codex">Codex (默认)</option>
+              <option value="gemini">Gemini</option>
+            </select>
+            {(() => {
+              const st = providersStatus[provider];
+              if (!st) return null;
+              const ok = Boolean(st.logged_in);
+              const inst = Boolean(st.installed);
+              const text = ok
+                ? `已连接 (${st.account_type || (provider === "gemini" ? "Google OAuth" : "ChatGPT")})`
+                : inst
+                  ? "未登录"
+                  : "未安装 CLI";
+              return (
+                <span
+                  style={{
+                    fontSize: "11px",
+                    padding: "2px 8px",
+                    borderRadius: "10px",
+                    background: ok ? "#DCFCE7" : inst ? "#FEF9C3" : "#FEE2E2",
+                    color: ok ? "#166534" : inst ? "#854D0E" : "#991B1B",
+                    fontWeight: 600,
+                  }}
+                >
+                  {text}
+                </span>
+              );
+            })()}
+          </div>
           {mode === "stock" && (
             <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "12px" }}>
               <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>研报标的:</span>
@@ -266,7 +321,7 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
               <Bot size={18} color="var(--brand)" />
             </div>
             <div style={{ padding: "12px 16px", borderRadius: "12px", background: "var(--table-alternate)", border: "1px solid var(--border-color)", color: "var(--brand)", fontSize: "13px" }}>
-              AI 正在穿透核算账本并生成研报...
+              {provider === "gemini" ? "Gemini" : "Codex"} 正在穿透核算账本并生成研报...
             </div>
           </div>
         )}

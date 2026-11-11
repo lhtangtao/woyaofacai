@@ -280,21 +280,23 @@ export const api = {
     requestApi(`/api/v1/monitoring/kline?symbol=${encodeURIComponent(symbol)}`),
 
   // AI Assistant
+  aiStatus: (provider?: "codex" | "gemini") =>
+    requestApi(provider ? `/api/v1/ai/status?provider=${encodeURIComponent(provider)}` : "/api/v1/ai/status"),
   aiChatHistory: () => requestApi("/api/v1/ai/history"),
-  aiChat: (message: string, personId?: number | null) =>
+  aiChat: (message: string, personId?: number | null, provider: "codex" | "gemini" = "codex") =>
     requestApi("/api/v1/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: message, message, person_id: personId }),
+      body: JSON.stringify({ prompt: message, message, person_id: personId, provider }),
     }),
   aiClear: () => requestApi("/api/v1/ai/clear", { method: "POST" }),
   aiStockHistory: (symbol?: string) =>
     requestApi(symbol ? `/api/v1/ai/stock/history?symbol=${encodeURIComponent(symbol)}` : "/api/v1/ai/stock/history"),
-  aiStockChat: (symbol: string, message: string) =>
+  aiStockChat: (symbol: string, message: string, provider: "codex" | "gemini" = "codex") =>
     requestApi("/api/v1/ai/stock/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, prompt: message, message }),
+      body: JSON.stringify({ symbol, prompt: message, message, provider }),
     }),
 
   // Unified Holdings Management
