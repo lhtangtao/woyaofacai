@@ -74,3 +74,17 @@ def rebuild_positions():
         return jsonify(status="ok", calculation=recalculate())
     except (ValueError, OSError, sqlite3.Error):
         return jsonify(status="error", message="重算未完成，请检查原始库与导入批次"), 400
+
+
+@domestic_api.get("/holdings")
+@require_capability(CAP_MANAGE_USERS)
+def domestic_holdings():
+    from portfolio.domestic.holdings_query import holdings
+
+    account, fund = request.args.get("account", ""), request.args.get("fund", "")
+    if bool(account) != bool(fund):
+        return jsonify(status="error", message="请同时提供账户和基金代码"), 400
+    try:
+        return jsonify(status="ok", **holdings(account, fund))
+    except (ValueError, ArithmeticError, sqlite3.Error):
+        return jsonify(status="error", message="无法读取国内资产持仓"), 400

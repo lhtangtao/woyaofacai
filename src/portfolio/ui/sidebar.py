@@ -8,7 +8,7 @@ from portfolio.ui.icons import icon
 GROUPS = (
     ("资产管理", (("资产总览", 2, "grid", None), ("今日盈亏", 3, "chart", "今日盈亏"), ("持仓管理", 22, "wallet", None),
               ("股票归属", 3, "pie", "股票归属"), ("持仓财报日历", 14, "calendar", None))),
-    ("国内资产", (("支付宝基金", 26, "wallet", None),)),
+    ("国内资产", (("持仓管理", 27, "wallet", None), ("支付宝基金", 26, "wallet", None),)),
     ("交易与收益", (("交易明细", 0, "trade", None), ("每日持仓收益", 23, "calendar", "每日持仓收益"),
                 ("每月持仓收益", 24, "calendar", "每月持仓收益"), ("每月微操收益", 25, "trade", "每月微操收益"))),
     ("AI 助手", (("AI 投资问答", 19, "robot", None),
