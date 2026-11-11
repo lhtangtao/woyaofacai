@@ -24,3 +24,8 @@
 .dh-paging { align-items: center; justify-content: flex-end; margin-top: 10px; }
 .dh-workspace .dh-summary { display: flex; width: 100%; justify-content: space-between; gap: 5px; margin: 4px 0; }
 @media (max-width: 760px) { .dh-detail { grid-template-columns: minmax(0,1fr); } }
+
+.dh-table th:first-child, .dh-table td:first-child { min-width: 155px; }
+.dh-table th, .dh-table td { padding-inline: 10px; }
+.dh-summary span { text-align: left; }
+.dh-summary small { line-height: 1.6; }

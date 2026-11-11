@@ -22,7 +22,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
   const [selected,setSelected] = useState<Row>();
   const [platform,setPlatform] = useState("");
   const [kind,setKind] = useState("");
-  const [status,setStatus] = useState("");
+  const [status,setStatus] = useState("持有中");
   const [search,setSearch] = useState("");
   const [sort,setSort] = useState(["market_value","desc"]);
   const [tradeSort,setTradeSort] = useState(["confirmation_date","desc"]);
@@ -65,11 +65,13 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
   }
 
   const all = base?.rows ?? [];
-  const rows = all.filter(r => (!platform || r.platform === platform) && (!kind || r.fund_type === kind) &&
-    (!status || r.status === status) && (!search || (r.fund_name + " " + r.fund_code).toLowerCase().includes(search.trim().toLowerCase())));
-  const priced = rows.filter(r => Number(r.market_value) > 0);
+  const scope = all.filter(r => (!platform || r.platform === platform) && (!kind || r.fund_type === kind) &&
+    (!search || (r.fund_name + " " + r.fund_code).toLowerCase().includes(search.trim().toLowerCase())));
+  const pending = (r:Row) => r.status !== "已清仓" && r.market_value == null;
+  const rows = scope.filter(r => !status || (status === "待估值" ? pending(r) : r.status === status));
+  const priced = scope.filter(r => Number(r.market_value) > 0);
   const total = priced.reduce((sum,r) => sum + Number(r.market_value),0);
-  const missing = rows.filter(r => r.market_value == null).length;
+  const missing = scope.filter(pending).length;
   const ordered = sort[0] === "market_value" || sort[0] === "weight"
     ? [...rows].sort((a,b) => a.market_value == null ? (b.market_value == null ? 0 : 1) :
       b.market_value == null ? -1 : (Number(a.market_value) - Number(b.market_value)) * (sort[1] === "asc" ? 1 : -1))
@@ -102,21 +104,21 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
       <button onClick={() => onSort([key,order[0] === key && order[1] === "desc" ? "asc" : "desc"])}>{label}
         {order[0] === key ? order[1] === "asc" ? " ↑" : " ↓" : ""}</button></th>)}{isHolding && <th />}</tr></thead>
       <tbody>{items.map(r => <tr key={r.id ?? r.account_id + ":" + r.fund_code} onClick={isHolding ? () => open(r) : undefined}>
-        {columns.map(([key]) => <td key={key} className={/shares|nav$|amount|fee|value|weight/.test(key) ? "dh-number" : ""}>
+        {columns.map(([key]) => <td key={key} title={r.issue ?? undefined} className={/shares|nav$|amount|fee|value|weight/.test(key) ? "dh-number" : ""}>
           {["market_value","confirmed_amount","fee"].includes(key) ? value(r[key]) :
             key === "weight" && total && r.market_value != null ? (100*Number(r.market_value)/total).toFixed(2)+"%" : r[key] ?? "—"}</td>)}
         {isHolding && <td><button aria-label={`查看 ${r.fund_name}`} onClick={e => { e.stopPropagation(); open(r); }}>›</button></td>}</tr>)}</tbody>
-      {isHolding && <tfoot><tr><td colSpan={7}>已估值合计</td><td className="dh-number">{rows.some(r=>r.market_value != null) ? money.format(total) : "—"}</td><td colSpan={5} /></tr></tfoot>}</table>
+      {isHolding && <tfoot><tr><td colSpan={7}>已估值合计</td><td className="dh-number">{rows.some(r=>r.market_value != null) ? money.format(rows.reduce((sum,r)=>sum+Number(r.market_value ?? 0),0)) : "—"}</td><td colSpan={5} /></tr></tfoot>}</table>
       {!items.length && <p>当前筛选没有记录。</p>}</div>;
   }
-  const groups = (key:string) => options(rows,key).map(name => {
-    const matches = rows.filter(r => r[key] === name);
+  const groups = (key:string) => options(scope,key).map(name => {
+    const matches = scope.filter(r => r[key] === name);
     const valued = matches.filter(r => r.market_value != null);
-    return { name, count: matches.length, value: valued.length ? valued.reduce((n,r)=>n+Number(r.market_value),0) : null };
+    return { name, count: new Set(matches.filter(r=>r.status==="持有中").map(r=>r.fund_code)).size, valued: valued.length, pending: matches.filter(pending).length, value: valued.length ? valued.reduce((n,r)=>n+Number(r.market_value),0) : null };
   });
   const summary = (key:string,title:string,setter:(v:string)=>void) => <section className="dh-card"><h3>{title}</h3>
     {groups(key).map(g => <button className="dh-summary" key={g.name} onClick={() => filter(setter,g.name)}>
-      <span>{g.name} · {g.count} 条</span><b>{g.value == null ? "未估值" : money.format(g.value)}</b>
+      <span>{g.name} · 持有 {g.count}<br/><small>已估值 {g.valued} · 待估值 {g.pending} · 盈亏待计算</small></span><b>{g.value == null ? "未估值" : money.format(g.value)}</b>
       <small>{total && g.value != null ? (100*g.value/total).toFixed(2)+"%" : "—"}</small></button>)}</section>;
   const chartRows = groups(group).filter(g => g.value != null && g.value > 0);
 
@@ -124,14 +126,14 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
     {error && <p role="alert">{error}</p>}{busy && <p role="status">正在读取国内资产…</p>}
     <div hidden={!!selected}>
       <div className="dh-cards">
-        {card("持仓总市值（CNY）",rows.some(r=>r.market_value != null) ? money.format(total) : "—", missing ? `${missing} 条未估值` : "已估值资产")}
-        {card("已确认持有基金数量",String(new Set(rows.filter(r=>r.status==="持有中").map(r=>r.fund_code)).size))}
-        {card("累计盈亏（含已清仓）","待计算")}{card("累计净投入（CNY）","暂无数据")}
+        {card(missing ? "已估值部分（CNY）" : "持仓总市值（CNY）",priced.length ? money.format(total) : "—")}
+        {card("已确认持有基金数量",String(new Set(scope.filter(r=>r.status==="持有中").map(r=>r.fund_code)).size))}
+        {card("累计盈亏（含已清仓）","待计算")}<section className="dh-card"><span>待估值记录</span><strong>{missing}</strong><button onClick={()=>filter(setStatus,"待估值")}>查看待估值</button></section>
       </div>
       <div className="dh-card dh-filters">
         {select("交易平台",platform,options(all,"platform"),v=>filter(setPlatform,v))}
         {select("基金类型",kind,options(all,"fund_type"),v=>filter(setKind,v))}
-        {select("持仓状态",status,["持有中","已清仓","待核对","交易数据已导入，持仓计算待接入"],v=>filter(setStatus,v))}
+        {select("持仓状态",status,["持有中","已清仓","待计算","待估值"],v=>filter(setStatus,v))}
         <label>基金搜索<input value={search} placeholder="基金名称或代码" onChange={e=>filter(setSearch,e.target.value)} /></label>
       </div>
       <section className="dh-card"><h3>基金持仓明细</h3>
@@ -162,7 +164,7 @@ export function DomesticHoldingsView({ refreshKey }: { refreshKey: number }) {
           {table(tx.slice((currentTradePage-1)*tradeSize,currentTradePage*tradeSize),trades,tradeSort,v=>{setTradeSort(v);setTradePage(1);})}
           {paging(tx.length,tradePage,tradeSize,setTradePage,setTradeSize)}</section>
         <section className="dh-card"><h3>持仓概览</h3><p>平台 {account.platform}</p><p>账户 {account.account_name}</p><p>基金代码 {account.fund_code}</p>
-          <p>当前份额 {account.shares ?? "—"}</p><p>市值 {value(account.market_value)}</p><p>累计买入份额 {account.buy_shares ?? "—"}</p><p>累计卖出份额 {account.sell_shares ?? "—"}</p><p>累计分红 —</p></section>
+          <p>当前份额 {account.shares ?? "—"}</p><p>市值 {value(account.market_value)}</p><p>累计买入份额 {account.buy_shares ?? "—"}</p><p>累计卖出份额 {account.sell_shares ?? "—"}</p><p>累计分红 {value(account.cash_dividend)}</p>{account.issue && <p>{account.issue}</p>}{account.last_confirmed_date && <p>最近可核对份额 {account.last_confirmed_shares} · {account.last_confirmed_date}</p>}<p>累计净值 {account.accumulated_nav ?? "—"} · 来源 {account.nav_source ?? "—"}</p></section>
       </div>
       <section className="dh-card"><h3>份额 / 市值变化</h3><select aria-label="趋势范围" value={trend} onChange={e=>setTrend(e.target.value)}>
         <option value="6">近6个月</option><option value="12">近1年</option><option value="">全部</option><option value="custom">自定义</option></select>

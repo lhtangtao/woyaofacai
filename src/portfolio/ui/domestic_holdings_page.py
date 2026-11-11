@@ -65,6 +65,8 @@ class FundTable(QWidget):
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().sectionClicked.connect(self.change_sort)
+        self.table.horizontalHeader().setMinimumSectionSize(72)
+        self.table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -111,6 +113,8 @@ class FundTable(QWidget):
                 item = QTableWidgetItem("›" if key == "arrow" else str(val) if val is not None else "—")
                 if key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if row.get("issue"):
+                    item.setToolTip(row["issue"])
                 self.table.setItem(i, j, item)
         self.note.setText(f"共 {len(self.rows)} 条 · 第 {self.page + 1} / {pages} 页")
         self.prev.setEnabled(self.page > 0)
@@ -140,7 +144,7 @@ class DomesticHoldingsPage(QWidget):
         filters = QHBoxLayout()
         self.platform = combo([("全部平台", "")])
         self.kind = combo([("全部基金类型", "")])
-        self.state = combo([("全部持仓状态", "")] + [(x, x) for x in ("持有中", "已清仓", "待核对", PENDING)])
+        self.state = combo([(x, x) for x in ("持有中", "已清仓", PENDING)] + [("待估值", "待估值"), ("全部", "")])
         self.search = QLineEdit(placeholderText="搜索基金代码 / 名称")
         for widget in (self.platform, self.kind, self.state, self.search):
             filters.addWidget(widget)
@@ -269,34 +273,48 @@ class DomesticHoldingsPage(QWidget):
         query = self.search.text().strip().casefold()
         rows = [dict(r) for r in self.data.get("rows", []) if
                 all(not w.currentData() or r[k] == w.currentData() for w, k in
-                    ((self.platform, "platform"), (self.kind, "fund_type"), (self.state, "status")))
+                    ((self.platform, "platform"), (self.kind, "fund_type")))
                 and query in (r["fund_code"] + " " + r["fund_name"]).casefold()]
-        valued = [Decimal(r["market_value"]) for r in rows if r["market_value"] is not None]
+        scope = rows
+        pending = [r for r in scope if r["status"] != "已清仓" and r["market_value"] is None]
+        state = self.state.currentData()
+        rows = pending if state == "待估值" else [r for r in scope if not state or r["status"] == state]
+        valued = [Decimal(r["market_value"]) for r in scope if r["market_value"] is not None]
         total = sum(valued, Decimal(0))
-        missing = len(rows) - len(valued)
+        missing = len(pending)
         for row in rows:
             row["weight"] = str(Decimal(row["market_value"]) / total * 100) if total and row["market_value"] is not None else None
         clear(self.over_cards)
-        for title, value in (("持仓总市值（CNY）", amount(total if valued else None)),
-                             ("已确认持有基金数量", str(len({r["fund_code"] for r in rows if r["status"] == "持有中"}))),
-                             ("累计盈亏（含已清仓）", "待计算"), ("累计净投入（CNY）", "暂无数据")):
-            self.over_cards.addWidget(card(title, value)[0], 1)
+        for title, value in ((("已估值部分（CNY）" if missing else "持仓总市值（CNY）"), amount(total if valued else None)),
+                             ("已确认持有基金数量", str(len({r["fund_code"] for r in scope if r["status"] == "持有中"}))),
+                             ("累计盈亏（含已清仓）", "待计算"), ("待估值记录", str(missing))):
+            box, body = card(title, value)
+            if title == "待估值记录":
+                action = QPushButton("查看待估值")
+                action.clicked.connect(lambda: self.state.setCurrentIndex(self.state.findData("待估值")))
+                body.addWidget(action)
+            self.over_cards.addWidget(box, 1)
         self.positions.rows = rows
         self.positions.set_page(0 if reset else self.positions.page)
-        self.total.setText(f"已估值合计 {amount(total if valued else None)} CNY · {missing} 条未估值")
+        visible_value = self.group_value(rows)
+        self.total.setText(f"列表已估值合计 {amount(visible_value)} CNY · {missing} 条待估值")
         for layout, key, widget in ((self.platform_box, "platform", self.platform), (self.kind_box, "fund_type", self.kind)):
             clear(layout)
-            for name, group in self.groups(rows, key).items():
+            for name, group in self.groups(scope, key).items():
                 val = self.group_value(group)
                 share = f"{val / total:.2%}" if total and val is not None else "—"
-                button = QPushButton(f"{name} · {len(group)} 条 · {amount(val)} · {share}")
+                count_valued = sum(r["market_value"] is not None for r in group)
+                count_pending = sum(r["status"] != "已清仓" and r["market_value"] is None for r in group)
+                fund_count = len({r["fund_code"] for r in group if r["status"] == "持有中"})
+                button = QPushButton(f"{name} · 持有 {fund_count} · {amount(val)} · {share}\n"
+                                     f"已估值 {count_valued} · 待估值 {count_pending} · 盈亏待计算")
                 button.clicked.connect(lambda _, w=widget, n=name: w.setCurrentIndex(w.findData(n)))
                 layout.addWidget(button)
         clear(self.pie_content)
         key = self.dimension.currentData()
         series = QPieSeries()
         series.setHoleSize(.55)
-        for name, group in self.groups(rows, key).items():
+        for name, group in self.groups(scope, key).items():
             val = self.group_value(group)
             if val is None or val <= 0:
                 continue
@@ -375,7 +393,10 @@ class DomesticHoldingsPage(QWidget):
             f"数据日期  {row['as_of'] or '—'}\n{row['status']}\n\n"
             f"当前份额  {row['shares'] or '—'}\n当前市值  {amount(row['market_value'])}\n"
             f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
-            "累计分红  —")
+            f"累计分红  {amount(row.get('cash_dividend'))}\n"
+            f"数据说明  {row.get('issue') or '—'}\n"
+            f"最近可核对份额  {row.get('last_confirmed_shares', '—')}  {row.get('last_confirmed_date', '')}\n"
+            f"累计净值  {row.get('accumulated_nav') or '—'}  ·  来源  {row.get('nav_source') or '—'}")
 
     def render_trades(self, *_):
         start, end = self.start.text().strip(), self.end.text().strip()

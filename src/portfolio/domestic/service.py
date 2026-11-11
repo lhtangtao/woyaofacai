@@ -3,6 +3,7 @@ import sqlite3
 from uuid import uuid4
 
 from .calculate import VERSION, rebuild
+from .tiantian_positions import rebuild_tiantian
 from .storage import CALC_FILE, CALC_SCHEMA, RAW_FILE, backup, connect, import_documents, insert, now, operation
 
 
@@ -19,7 +20,11 @@ def publish(documents, **options):
 def run_calculation(root, *, full=False):
     started = now()
     try:
-        return rebuild(root, full=full)
+        result = rebuild(root, full=full)
+        tiantian = rebuild_tiantian(root)
+        if tiantian:
+            result["tiantian"] = tiantian
+        return result
     except (OSError, ValueError, ArithmeticError, sqlite3.Error) as exc:
         with connect(root / CALC_FILE) as db:
             db.executescript(CALC_SCHEMA)
