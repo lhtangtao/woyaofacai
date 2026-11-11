@@ -3,8 +3,8 @@ from datetime import date
 from decimal import Decimal,localcontext,ROUND_HALF_UP
 from pathlib import Path
 import re
-from PySide6.QtCore import QDate,Qt,QEvent,QSize
-from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,QPushButton,QComboBox,QLineEdit,QDateEdit,QCheckBox,QButtonGroup,QListWidget,QListWidgetItem,QTabWidget,QFileDialog,QMenu,QAbstractItemView,QTableView,QApplication,QFrame,QSizePolicy)
+from PySide6.QtCore import QDate,Qt,QEvent,QSize,QStringListModel
+from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,QPushButton,QComboBox,QLineEdit,QDateEdit,QCheckBox,QButtonGroup,QListWidget,QListWidgetItem,QTabWidget,QFileDialog,QMenu,QAbstractItemView,QTableView,QApplication,QFrame,QSizePolicy,QCompleter)
 from portfolio.domain.models import QueryScope,Ledger,exact_text
 from portfolio.services.trade_center import TradeCenterService,COLUMNS,KEYS,SIDES,KINDS
 from portfolio.ui.workers import Worker
@@ -240,6 +240,13 @@ class TradeCenterPage(QWidget):
             else:widget.returnPressed.connect(self.query)
             self.fields[key]=widget
         self.fields['symbol'].setPlaceholderText('搜索 Ticker')
+        self.symbol_model=QStringListModel(self)
+        self.symbol_completer=QCompleter(self.symbol_model,self)
+        self.symbol_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.symbol_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.symbol_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.symbol_completer.activated.connect(self._on_symbol_completed)
+        self.fields['symbol'].setCompleter(self.symbol_completer)
         self.fields['search'].setPlaceholderText('搜索订单号、交易 ID、来源')
         self.local_search=self.fields['search']
         self.start=QDateEdit(QDate(2025,1,1));self.end=QDateEdit(QDate.currentDate())
@@ -460,6 +467,9 @@ class TradeCenterPage(QWidget):
         return QueryScope(as_of=end,ledger=Ledger.PERSON,person_ids=(p,) if p is not None else None,start_date=start,include_disabled=True,category=self.applied.get('category') or None,search=self.applied.get('search',''))
 
     def params(self):return {**self.applied,'page':self.page,'size':self.size,'sort_col':self.sort,'sort_dir':self.direction}
+    def _on_symbol_completed(self,text):
+        self.fields['symbol'].setText(str(text or '').strip())
+        self.query()
     def query(self):self.applied=self.values();self.page=1;self.clear_detail();self.render_chips();self.fetch()
     def fetch(self):
         if self.path is None:return
@@ -489,6 +499,7 @@ class TradeCenterPage(QWidget):
             if saved:options.add(saved)
             for v in sorted(options):w.addItem(OPTION_LABELS.get(v,v),v)
             w.setCurrentIndex(max(0,w.findData(saved)));w.blockSignals(False)
+        self.symbol_model.setStringList(sorted(data.get('symbols') or []))
         w=self.fields['link_status']
         if w.count()==1:
             for value in ('LINKED','LEGACY_UNLINKED','REVIEW_REQUIRED','NOT_APPLICABLE'):w.addItem(OPTION_LABELS[value],value)

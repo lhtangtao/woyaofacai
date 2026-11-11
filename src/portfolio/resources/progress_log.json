@@ -1,5 +1,17 @@
 [
   {
+    "title": "交易明细：Ticker 输入框支持下拉自动补全候选（输入 mu 弹出 MU 与 MUU 供选择）",
+    "time": "2026-11-11 23:38",
+    "author": "Antigravity",
+    "tag": "筛选体验增强",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 TradeCenterService.page() 返回的字典中新增当前账本去重后的全量候选股票列表 symbols。",
+      "Mac 桌面端（TradeCenterPage）为 Ticker 输入框挂载不区分大小写、支持包含匹配的 QCompleter 下拉补全器，输入 mu 时自动弹出 MU、MUU 等候选供点击或回车选择并立即触发精准筛选。",
+      "Web 端（TradesView.tsx）为 Ticker 输入框绑定 datalist 候选列表，同步支持输入提示与下拉选择。"
+    ]
+  },
+  {
     "title": "交易明细：Ticker 筛选改为精准匹配（避免 MU 误匹配 MUU）",
     "time": "2026-11-11 23:33",
     "author": "Antigravity",

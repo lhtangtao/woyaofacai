@@ -80,7 +80,8 @@ export function TradesView({persons, refreshKey=0}: {persons:any[]; accounts?:an
   );
   const input = (key:string, type='text') => (
     <label key={key}>{tradeLabels[key]}
-      <input type={type} step="any" value={draft[key] || ''} placeholder={key === 'symbol' ? '搜索 Ticker' : key === 'search' ? '订单号、交易 ID、来源' : undefined} onChange={e => set(key,e.target.value)}/>
+      <input type={type} step="any" list={key === 'symbol' ? 'tc-symbol-list' : undefined} value={draft[key] || ''} placeholder={key === 'symbol' ? '搜索 Ticker' : key === 'search' ? '订单号、交易 ID、来源' : undefined} onChange={e => set(key,e.target.value)}/>
+      {key === 'symbol' && <datalist id="tc-symbol-list">{(data?.symbols || []).map((s:string) => <option key={s} value={s} />)}</datalist>}
     </label>
   );
   const remove = (key:string) => {

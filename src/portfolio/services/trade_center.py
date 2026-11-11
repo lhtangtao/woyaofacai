@@ -98,7 +98,8 @@ class TradeCenterService:
             rows=tuple(enriched[r.record_id] for r in rows) if enriched else attach_post_trade_positions(c,batch,cancel=cancel).rows
             base,base_args=repo.base(c,replace(scope,search='',category=None),None)
             options=[dict(r) for r in c.execute('SELECT DISTINCT broker_code,category,kind,side,source_kind FROM ('+base+')',base_args)]
-            return dict(status='ok',persons=repo.people(c,(catalog_scope or scope).person_ids),columns=COLUMNS,keys=KEYS,items=[dto(r) for r in rows],total=stats['matched'],page=page,size=size,total_pages=total_pages,stats=stats,options=options,
+            symbols=sorted({str(r[0]).strip() for r in c.execute('SELECT DISTINCT symbol FROM ('+base+') WHERE symbol IS NOT NULL',base_args) if r[0] and str(r[0]).strip()})
+            return dict(status='ok',persons=repo.people(c,(catalog_scope or scope).person_ids),columns=COLUMNS,keys=KEYS,items=[dto(r) for r in rows],total=stats['matched'],page=page,size=size,total_pages=total_pages,stats=stats,options=options,symbols=symbols,
                         sort_col=p.get('sort_col','trade_time'),sort_dir=p.get('sort_dir','desc'),
                         note='统计覆盖全部匹配记录；人员权益操作账本不与券商真实成交账本混加，总数为操作记录数。金额和手续费按币种列示。交易时间展示数据库原账务时间（各渠道时区不同），详情保留真实UTC及时间说明。历史成本与净投入按现有引擎回放，包含划转对象与微操配对标记。',source=str(self.path))
 

@@ -402,3 +402,54 @@ def test_trade_center_ticker_filter_exact_match():
     rows = [r[0] for r in conn.execute(q, args).fetchall()]
     assert rows == ["MU", "MU.US"]
 
+
+
+def test_trade_center_symbol_autocomplete(qapp, demo_path):
+    """输入 mu 时，下拉候选应弹出 MU 与 MUU 供用户选择，且选中后触发精准筛选。"""
+    recent_day, _ = _setup_multi_person_longbridge_db(demo_path)
+    with sqlite3.connect(demo_path) as c:
+        c.execute(
+            "INSERT INTO instruments(id, market, symbol, name, currency, asset_type, category) VALUES (10, 'US', 'MU', 'Micron', 'USD', 'STOCK', '正股')"
+        )
+        c.execute(
+            "INSERT INTO instruments(id, market, symbol, name, currency, asset_type, category) VALUES (11, 'US', 'MUU', 'Direxion MU 2X', 'USD', 'ETF', '杠杆')"
+        )
+        c.execute(
+            """INSERT INTO person_operations
+               (id, operation_key, person_id, account_id, instrument_id, broker_trade_id,
+                operation_kind, side, business_date, book_time, sequence_no, quantity_e8,
+                price_e8, amount_e8, amount_basis, currency, link_status, source_record_id)
+               VALUES (100, 'op-mu', 1, 1, 10, NULL, 'MARKET_TRADE', 'BUY', ?, ?, 1, 1000000000, 10000000000, 100000000000, 'GROSS', 'USD', 'LINKED', 1)""",
+            (recent_day, recent_day + " 10:00:00"),
+        )
+        c.execute(
+            """INSERT INTO person_operations
+               (id, operation_key, person_id, account_id, instrument_id, broker_trade_id,
+                operation_kind, side, business_date, book_time, sequence_no, quantity_e8,
+                price_e8, amount_e8, amount_basis, currency, link_status, source_record_id)
+               VALUES (101, 'op-muu', 1, 1, 11, NULL, 'MARKET_TRADE', 'BUY', ?, ?, 2, 2000000000, 1500000000, 30000000000, 'GROSS', 'USD', 'LINKED', 1)""",
+            (recent_day, recent_day + " 10:05:00"),
+        )
+        c.commit()
+
+    scope = QueryScope(as_of=date.today(), ledger=Ledger.PERSON, start_date=date(2025, 1, 1), include_disabled=True)
+    service = TradeCenterService(demo_path)
+    data = service.page(scope, {"page": 1, "size": 50})
+    assert "MU" in data["symbols"]
+    assert "MUU" in data["symbols"]
+
+    host = QWidget()
+    host.info = SimpleNamespace(persons=[{"id": 1, "name": "个人", "enabled": True}])
+    host.service = SimpleNamespace(path=demo_path)
+    page = TradeCenterPage(host)
+    page.show_page(data)
+
+    page.symbol_completer.setCompletionPrefix("mu")
+    completions = [
+        page.symbol_completer.completionModel().data(
+            page.symbol_completer.completionModel().index(i, 0)
+        )
+        for i in range(page.symbol_completer.completionCount())
+    ]
+    assert "MU" in completions
+    assert "MUU" in completions
