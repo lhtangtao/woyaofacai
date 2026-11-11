@@ -1,5 +1,16 @@
 [
   {
+    "title": "AI 股票分析与 AI 投资问答接入本地 Gemini（支持 Antigravity CLI agy 与 Gemini CLI），默认 Codex 可切换",
+    "time": "2026-11-11 20:26",
+    "author": "Antigravity",
+    "tag": "已在本机完成免 root 安装与真实 Gemini 端到端问答验证，测试全通过",
+    "details": [
+      "修改者：Antigravity（修复个人 Google 账号被旧版 gemini-cli 拦截的问题并打通 agy）",
+      "【1. 优先对接本机 Antigravity CLI (agy) 驱动 Gemini】针对 Google 已将个人账户从独立 `gemini-cli`（`UNSUPPORTED_CLIENT`）迁移至 Antigravity 体系的情况，在 `CodexAIService` 新增 `get_agy_cli_path()`，当未显式配置 `GEMINI_API_KEY` 时优先通过本机 `~/.local/bin/agy` 调用 `gemini-4-argon-medium`（只读 `--mode plan --sandbox --output-format json`）并直接复用当前已登录的 Google 账号；若用户显式设置了 `GEMINI_API_KEY`，则通过 `gemini --skip-trust --approval-mode plan` 调用。",
+      "【2. 免 root 安装与端到端实测通过】将 `@google/gemini-cli` 免 root 安装至 `~/.npm-global`（避开 `/usr/local/lib/node_modules` 的 `EACCES` 权限错误），并实测 `CodexAIService.ask(..., provider='gemini')` 成功返回完整中文回复。"
+    ]
+  },
+  {
     "title": "AI 股票分析与 AI 投资问答接入本地 Gemini CLI，默认 Codex 并支持随时切换",
     "time": "2026-11-11 20:08",
     "author": "Antigravity",

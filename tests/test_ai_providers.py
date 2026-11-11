@@ -23,7 +23,7 @@ class TestAIServiceProviders(unittest.TestCase):
         self.assertEqual(normalize_ai_provider("CODEX"), "codex")
         self.assertEqual(normalize_ai_provider(" Gemini "), "gemini")
 
-    def test_check_login_status_gemini_with_oauth_file(self):
+    def test_check_login_status_gemini_with_agy_and_oauth(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp)
             gemini_dir = fake_home / ".gemini"
@@ -32,27 +32,34 @@ class TestAIServiceProviders(unittest.TestCase):
             (gemini_dir / "google_accounts.json").write_text(json.dumps({"active": "user@gmail.com"}), encoding="utf-8")
 
             with (
+                patch.object(CodexAIService, "get_agy_cli_path", return_value="/Users/test/.local/bin/agy"),
                 patch.object(CodexAIService, "get_gemini_cli_path", return_value="/usr/local/bin/gemini"),
                 patch("pathlib.Path.home", return_value=fake_home),
+                patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}),
             ):
                 status = CodexAIService.check_login_status(force=True, provider="gemini")
 
         self.assertEqual(status["provider"], "gemini")
         self.assertTrue(status["installed"])
         self.assertTrue(status["logged_in"])
-        self.assertEqual(status["account_type"], "user@gmail.com")
+        self.assertIn("user@gmail.com", status["account_type"])
         self.assertIn("user@gmail.com", status["message"])
 
     def test_check_login_status_gemini_missing_cli(self):
-        with patch.object(CodexAIService, "get_gemini_cli_path", return_value=None):
+        with (
+            patch.object(CodexAIService, "get_agy_cli_path", return_value=None),
+            patch.object(CodexAIService, "get_gemini_cli_path", return_value=None),
+        ):
             status = CodexAIService.check_login_status(force=True, provider="gemini")
         self.assertEqual(status["provider"], "gemini")
         self.assertFalse(status["installed"])
         self.assertFalse(status["logged_in"])
 
-    def test_ask_gemini_parses_json_response(self):
+    def test_ask_gemini_uses_agy_and_parses_json_response(self):
         def _fake_popen(cmd, **kwargs):
-            kwargs["stdout"].write(json.dumps({"response": "## NVDA 深度分析\n\n核心驱动稳健。"}))
+            kwargs["stdout"].write(
+                "warning: info\n" + json.dumps({"response": "## NVDA 深度分析\n\n核心驱动稳健。"})
+            )
             kwargs["stdout"].flush()
             proc = MagicMock()
             proc.poll.return_value = 0
@@ -60,19 +67,25 @@ class TestAIServiceProviders(unittest.TestCase):
             return proc
 
         with (
+            patch.object(CodexAIService, "get_agy_cli_path", return_value="/Users/test/.local/bin/agy"),
             patch.object(CodexAIService, "get_gemini_cli_path", return_value="/usr/local/bin/gemini"),
             patch("portfolio.services.ai_service.subprocess.Popen", side_effect=_fake_popen) as mock_popen,
+            patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}),
         ):
             reply = CodexAIService.ask_stock("分析 NVDA", symbol="NVDA", provider="gemini")
 
         self.assertIn("NVDA 深度分析", reply)
         cmd = mock_popen.call_args.args[0]
-        self.assertEqual(cmd[0], "/usr/local/bin/gemini")
+        self.assertEqual(cmd[0], "/Users/test/.local/bin/agy")
         self.assertIn("-p", cmd)
+        self.assertIn("--mode", cmd)
+        self.assertIn("plan", cmd)
+        self.assertIn("--sandbox", cmd)
         self.assertIn("--output-format", cmd)
         self.assertIn("json", cmd)
+        self.assertIn("--model", cmd)
 
-    def test_ask_gemini_plain_text_fallback(self):
+    def test_ask_gemini_cli_with_api_key_uses_skip_trust(self):
         def _fake_popen(cmd, **kwargs):
             kwargs["stdout"].write("直接返回的纯文本研报")
             kwargs["stdout"].flush()
@@ -82,12 +95,18 @@ class TestAIServiceProviders(unittest.TestCase):
             return proc
 
         with (
+            patch.object(CodexAIService, "get_agy_cli_path", return_value=None),
             patch.object(CodexAIService, "get_gemini_cli_path", return_value="/usr/local/bin/gemini"),
-            patch("portfolio.services.ai_service.subprocess.Popen", side_effect=_fake_popen),
+            patch("portfolio.services.ai_service.subprocess.Popen", side_effect=_fake_popen) as mock_popen,
+            patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}),
         ):
             reply = CodexAIService.ask("我的组合风险如何？", context="NVDA 50%", provider="gemini")
 
         self.assertEqual(reply, "直接返回的纯文本研报")
+        cmd = mock_popen.call_args.args[0]
+        self.assertEqual(cmd[0], "/usr/local/bin/gemini")
+        self.assertIn("--skip-trust", cmd)
+        self.assertIn("--approval-mode", cmd)
 
     def test_ask_defaults_to_codex(self):
         with (

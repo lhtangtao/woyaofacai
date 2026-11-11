@@ -61,7 +61,7 @@ class CodexAIService:
 
     @staticmethod
     def get_gemini_cli_path() -> str | None:
-        """获取本地 gemini 可执行文件的完整绝对路径"""
+        """获取本地 gemini-cli 可执行文件的完整绝对路径"""
         found = shutil.which("gemini")
         if found:
             return found
@@ -80,45 +80,88 @@ class CodexAIService:
                 return str(candidate)
         return None
 
+    @staticmethod
+    def get_agy_cli_path() -> str | None:
+        """获取本地 Antigravity CLI (agy) 可执行文件的完整绝对路径"""
+        found = shutil.which("agy")
+        if found:
+            return found
+        for candidate in (
+            Path.home() / ".local/bin/agy",
+            Path("/opt/homebrew/bin/agy"),
+            Path("/usr/local/bin/agy"),
+            Path.home() / ".gemini/antigravity-cli/agy",
+        ):
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        return None
+
     _login_status_cache: dict[str, dict] = {}
     _login_status_timestamp: dict[str, float] = {}
 
+    @staticmethod
+    def _read_active_google_account(gemini_dir: Path) -> str:
+        accounts_file = gemini_dir / "google_accounts.json"
+        if accounts_file.exists():
+            try:
+                acct_data = json.loads(accounts_file.read_text(encoding="utf-8"))
+                active = (acct_data.get("active") or "").strip()
+                if active:
+                    return active
+            except Exception:
+                pass
+        return ""
+
     @classmethod
     def _check_gemini_login_status(cls) -> dict:
-        cli = cls.get_gemini_cli_path()
-        if not cli:
-            return {
-                "installed": False,
-                "logged_in": False,
-                "account_type": "",
-                "message": "未检测到 gemini CLI，请在终端执行 npm install -g @google/gemini-cli",
-            }
+        agy_cli = cls.get_agy_cli_path()
+        gemini_cli = cls.get_gemini_cli_path()
         gemini_dir = Path.home() / ".gemini"
         oauth_file = gemini_dir / "oauth_creds.json"
-        accounts_file = gemini_dir / "google_accounts.json"
         has_env_key = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         has_oauth = oauth_file.exists() and oauth_file.stat().st_size > 2
-        if has_oauth or has_env_key:
-            account_type = "API Key" if has_env_key and not has_oauth else "Google 账号"
-            if accounts_file.exists():
-                try:
-                    acct_data = json.loads(accounts_file.read_text(encoding="utf-8"))
-                    active = (acct_data.get("active") or "").strip()
-                    if active:
-                        account_type = active
-                except Exception:
-                    pass
+        has_agy_state = (gemini_dir / "antigravity").is_dir() or has_oauth
+        active_account = cls._read_active_google_account(gemini_dir)
+
+        # Google 已将个人账户从旧版 gemini-cli 迁移至 Antigravity CLI (agy)；仅在显式使用 API Key 时优先走 gemini-cli
+        if gemini_cli and has_env_key:
             return {
                 "installed": True,
                 "logged_in": True,
-                "account_type": account_type,
-                "message": f"Gemini CLI 已就绪 ({account_type})",
+                "account_type": "Gemini API Key",
+                "message": "Gemini CLI 已就绪 (API Key)",
             }
+
+        if agy_cli and (has_agy_state or active_account):
+            acct_label = f"{active_account} · Antigravity" if active_account else "Antigravity"
+            return {
+                "installed": True,
+                "logged_in": True,
+                "account_type": acct_label,
+                "message": f"Gemini (Antigravity CLI) 已就绪 ({active_account or '已认证'})",
+            }
+
+        if agy_cli:
+            return {
+                "installed": True,
+                "logged_in": False,
+                "account_type": "",
+                "message": "未检测到 Google 登录凭证，请在终端或 Antigravity 中完成账号登录",
+            }
+
+        if gemini_cli:
+            return {
+                "installed": True,
+                "logged_in": False,
+                "account_type": "",
+                "message": "Google 个人账号已不再支持旧版 gemini-cli，请安装 agy 或配置 GEMINI_API_KEY",
+            }
+
         return {
-            "installed": True,
+            "installed": False,
             "logged_in": False,
             "account_type": "",
-            "message": "未检测到 Gemini 登录凭证，请在终端执行 gemini 完成 Google 登录",
+            "message": "未检测到 Gemini / Antigravity CLI，请安装 agy 或配置 GEMINI_API_KEY",
         }
 
     @classmethod
@@ -435,6 +478,29 @@ class CodexAIService:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _extract_gemini_json_response(stdout_text: str) -> str | None:
+        """解析 agy / gemini CLI 输出中的 JSON response 字段（容错前后日志或警告行）。"""
+        candidates = [stdout_text.strip()]
+        for line in reversed(stdout_text.splitlines()):
+            s = line.strip()
+            if s.startswith("{") and s.endswith("}"):
+                candidates.append(s)
+        for cand in candidates:
+            if not cand:
+                continue
+            try:
+                parsed = json.loads(cand)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                if parsed.get("error"):
+                    raise RuntimeError(str(parsed["error"]))
+                resp = parsed.get("response")
+                if isinstance(resp, str) and resp.strip():
+                    return resp.strip()
+        return None
+
     @classmethod
     def _ask_gemini(
         cls,
@@ -443,10 +509,15 @@ class CodexAIService:
         model: str | None = None,
         cancel_event: threading.Event | None = None,
     ) -> str:
-        """通过本地 Gemini CLI 非交互模式发起只读问答。"""
-        cli = cls.get_gemini_cli_path()
+        """通过本地 Antigravity CLI (agy) 或 Gemini CLI 非交互模式发起只读问答。"""
+        has_env_key = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        gemini_cli = cls.get_gemini_cli_path()
+        agy_cli = cls.get_agy_cli_path()
+
+        use_gemini_cli = bool(gemini_cli and (has_env_key or not agy_cli))
+        cli = gemini_cli if use_gemini_cli else agy_cli
         if not cli:
-            raise RuntimeError("未在系统中找到 gemini 命令，请先执行 npm install -g @google/gemini-cli。")
+            raise RuntimeError("未在系统中找到 agy 或 gemini 命令，请先安装 Antigravity CLI 或配置 GEMINI_API_KEY。")
 
         temp_out = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
         out_path = temp_out.name
@@ -460,14 +531,31 @@ class CodexAIService:
         existing_path = env.get("PATH", "")
         env["PATH"] = os.pathsep.join(dict.fromkeys([*extra_bins, *(existing_path.split(os.pathsep) if existing_path else [])]))
 
-        cmd = [cli, "-p", full_prompt, "--output-format", "json"]
-        if model:
-            cmd.extend(["-m", model])
+        if use_gemini_cli:
+            cmd = [cli, "--skip-trust", "--approval-mode", "plan", "-p", full_prompt, "--output-format", "json"]
+            if model:
+                cmd.extend(["-m", model])
+            provider_label = "Gemini CLI"
+        else:
+            chosen_model = model or "gemini-4-argon-medium"
+            cmd = [
+                cli,
+                "-p",
+                full_prompt,
+                "--mode",
+                "plan",
+                "--sandbox",
+                "--output-format",
+                "json",
+                "--model",
+                chosen_model,
+            ]
+            provider_label = "Gemini (Antigravity CLI)"
 
         try:
             rc = cls._run_cli_process(
                 cmd,
-                provider_label="Gemini CLI",
+                provider_label=provider_label,
                 stdout_path=out_path,
                 stderr_path=err_path,
                 cwd=tempfile.gettempdir(),
@@ -478,20 +566,17 @@ class CodexAIService:
             stderr_text = Path(err_path).read_text(encoding="utf-8", errors="replace").strip() if Path(err_path).exists() else ""
             if rc != 0:
                 err_msg = stderr_text[-2000:] or stdout_text[-2000:] or f"退出码 {rc}"
-                raise RuntimeError(f"Gemini CLI 执行失败: {err_msg.strip()}")
+                if "UNSUPPORTED_CLIENT" in err_msg or "IneligibleTierError" in err_msg:
+                    raise RuntimeError(
+                        "Google 个人账号已不再支持旧版 gemini-cli；请改用本机 Antigravity CLI (agy) 或配置 GEMINI_API_KEY。"
+                    )
+                raise RuntimeError(f"{provider_label} 执行失败: {err_msg.strip()}")
             if stdout_text:
-                try:
-                    parsed = json.loads(stdout_text)
-                    if isinstance(parsed, dict):
-                        if parsed.get("error"):
-                            raise RuntimeError(str(parsed["error"]))
-                        resp = parsed.get("response")
-                        if isinstance(resp, str) and resp.strip():
-                            return resp.strip()
-                except json.JSONDecodeError:
-                    pass
+                extracted = cls._extract_gemini_json_response(stdout_text)
+                if extracted:
+                    return extracted
                 return stdout_text
-            return stderr_text[-2000:] if stderr_text else "Gemini CLI 未返回有效内容。"
+            return stderr_text[-2000:] if stderr_text else f"{provider_label} 未返回有效内容。"
         finally:
             Path(out_path).unlink(missing_ok=True)
             Path(err_path).unlink(missing_ok=True)

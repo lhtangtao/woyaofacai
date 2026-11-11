@@ -631,12 +631,12 @@ class AIStockAnalysisPage(QWidget):
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #DCFCE7; color: #166534; font-weight: 600;")
             self.send_btn.setEnabled(not is_running)
         elif status["installed"]:
-            hint = "请在终端执行 gemini 登录或配置 GEMINI_API_KEY" if provider == "gemini" else "请在终端执行 codex login"
+            hint = "请在 Antigravity 中登录或配置 GEMINI_API_KEY" if provider == "gemini" else "请在终端执行 codex login"
             self.status_badge.setText(f"🟡 未登录 ({hint})")
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEF9C3; color: #854D0E;")
             self.send_btn.setEnabled(False)
         else:
-            install_hint = " (npm i -g @google/gemini-cli)" if provider == "gemini" else ""
+            install_hint = " (请安装 agy 或 gemini CLI)" if provider == "gemini" else ""
             self.status_badge.setText(f"🔴 未安装 {label} CLI{install_hint}")
             self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEE2E2; color: #991B1B;")
             self.send_btn.setEnabled(False)
