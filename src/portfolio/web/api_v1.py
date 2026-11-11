@@ -1063,9 +1063,11 @@ def api_stock_ownership():
         status,session,quotes=get_today_service().quote_snapshot(bundle.aggregate,instruments,True,now)
         identifier=request.args.get('instrument_id',type=int)
         if request.args.get('instrument_id') and identifier is None:raise ValueError('股票标识无效，请重新选择。')
-        data=analyze(bundle,identifier,instruments,quotes,session,now,request.args.get('person_search',''))
+        holding_status=request.args.get('holding_status','holding')
+        data=analyze(bundle,identifier,instruments,quotes,session,now,request.args.get('person_search',''),status=holding_status)
         data['quote_status']=status
-        data['source']=dict(path=str(DATABASE_PATH),as_of=str(cutoff),scope='全部历史人员／全部渠道')
+        status_label={'holding':'持仓中','closed':'已清仓','all':'全部'}.get(holding_status,'持仓中')
+        data['source']=dict(path=str(DATABASE_PATH),as_of=str(cutoff),scope=f'{status_label} · 全部历史人员／全部渠道')
         if request.args.get('export')=='csv':
             from flask import Response
             return Response(export_csv(data).encode('utf-8-sig'),mimetype='text/csv; charset=utf-8',
