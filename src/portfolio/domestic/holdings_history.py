@@ -1,6 +1,8 @@
 """Read-only daily valuation inputs for the Mac domestic holdings dashboard."""
 from bisect import bisect_right
 from datetime import date, timedelta
+from importlib.resources import files
+import json
 from decimal import Decimal, localcontext
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
@@ -15,6 +17,7 @@ class HistoricalValues(dict):
         self.nav_sources = {}
         self.missing = {}
         self.money_funds = set()
+        self.calendar_incomplete = False
 
 
 def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
@@ -93,12 +96,33 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                             navs[key[1]][nav_day] = (price, "天天基金对账单")
             nav_dates[key[1]] = sorted(navs[key[1]])
             days.update(navs[key[1]])
-        if days:
-            first_day = date.fromisoformat(min(days))
-            last_day = date.fromisoformat(cutoff)
-            days = [(first_day + timedelta(days=i)).isoformat()
-                    for i in range((last_day - first_day).days + 1)]
         result = HistoricalValues()
+        if days:
+            first_day = min(days)
+            try:
+                calendar = json.loads(files("portfolio").joinpath("resources/china_market_sessions.json").read_text(encoding="utf-8"))
+                sessions = set(calendar["sessions"])
+                # Beyond the bundled calendar, retain known NAV dates and weekdays
+                # as candidates so that an unknown holiday cannot hide missing data.
+                result.calendar_incomplete = first_day < calendar["start"] or cutoff > calendar["end"]
+                current = date.fromisoformat(first_day)
+                end = date.fromisoformat(cutoff)
+                selected = []
+                while current <= end:
+                    day = current.isoformat()
+                    if day in sessions or ((day < calendar["start"] or day > calendar["end"]) and current.weekday() < 5):
+                        selected.append(day)
+                    current += timedelta(days=1)
+                days = selected
+            except (OSError, KeyError, ValueError):
+                result.calendar_incomplete = True
+                current = date.fromisoformat(first_day)
+                end = date.fromisoformat(cutoff)
+                days = []
+                while current <= end:
+                    if current.weekday() < 5:
+                        days.append(current.isoformat())
+                    current += timedelta(days=1)
         if "raw_fund_nav_daily" in raw_tables:
             result.money_funds = {r[0] for r in raw.execute("""
                 SELECT DISTINCT fund_code FROM raw_fund_nav_daily

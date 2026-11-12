@@ -491,6 +491,10 @@ class DomesticHoldingsPage(QWidget):
                 dates = sorted({day for day in dates if day})
                 details[day] = "、".join(dates) if dates else "当日无持仓"
         self.history_plot.render(points, details)
+        if getattr(history, "calendar_incomplete", False):
+            self.message.setText("部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。")
+        elif self.message.text() == "部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。":
+            self.message.clear()
 
     def open_fund(self, row):
         self.selected = row["account_id"], row["fund_code"]

@@ -1,12 +1,11 @@
 """Presentation and aggregation for the Mac domestic fund holdings dashboard."""
-from bisect import bisect_left
 from calendar import monthrange
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, localcontext
 
-from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QDateTimeAxis, QLineSeries, QPieSeries, QValueAxis
-from PySide6.QtCore import QDateTime, QMargins, QRect, Qt
+from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
+from PySide6.QtCore import QMargins, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QVBoxLayout, QWidget
 
@@ -232,9 +231,6 @@ class HoldingsDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-def timestamp(day):
-    return (day - date(1970, 1, 1)).days * 86400000
-
 
 class TrendView(QChartView):
     def __init__(self):
@@ -257,7 +253,7 @@ class TrendView(QChartView):
         chart.setBackgroundVisible(False)
         chart.setMargins(QMargins())
         chart.legend().hide()
-        self.days = [timestamp(day) for day, _ in points]
+        self.days = list(range(len(points)))
         self.values = points
         self.x_axis = None
         self.nav_dates = nav_dates or {}
@@ -267,11 +263,14 @@ class TrendView(QChartView):
         low, high = min(values), max(values)
         pad = max(1, (high - low) * .10, high * .015)
         base = max(0, low - pad)
-        x = QDateTimeAxis()
-        x.setFormat("MM-dd" if self.days[-1] - self.days[0] < 365 * 86400000 else "yy-MM")
-        x.setTickCount(min(6, max(2, len(points))))
-        x.setRange(QDateTime.fromMSecsSinceEpoch(self.days[0], Qt.TimeSpec.UTC),
-                   QDateTime.fromMSecsSinceEpoch(max(self.days[0] + 86400000, self.days[-1]), Qt.TimeSpec.UTC))
+        x = QCategoryAxis()
+        x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
+        x.setStartValue(-1)
+        step = max(1, (len(points) + 4) // 5)
+        for index, (day, _) in enumerate(points):
+            if index % step == 0 or index == len(points) - 1:
+                x.append(day.isoformat(), index)
+        x.setRange(-0.2, max(1, len(points) - 1) + 0.2)
         y = QValueAxis()
         y.setRange(base, high + pad)
         y.setLabelFormat("%.0f")
@@ -314,12 +313,10 @@ class TrendView(QChartView):
         pos = self.chart().mapFromScene(self.mapToScene(event.position().toPoint()))
         plot = self.chart().plotArea()
         if self.x_axis and plot.contains(pos):
-            start = self.x_axis.min().toMSecsSinceEpoch()
-            end = self.x_axis.max().toMSecsSinceEpoch()
+            start = self.x_axis.min()
+            end = self.x_axis.max()
             target = start + (pos.x() - plot.left()) / plot.width() * (end - start)
-            i = bisect_left(self.days, target)
-            candidates = range(max(0, i - 1), min(len(self.days), i + 1))
-            index = min(candidates, key=lambda k: abs(self.days[k] - target))
+            index = max(0, min(len(self.values) - 1, round(target)))
             day, value = self.values[index]
             if value is not None:
                 dates = self.nav_dates.get(day, "—")
