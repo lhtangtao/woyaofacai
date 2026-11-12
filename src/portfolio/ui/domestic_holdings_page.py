@@ -15,7 +15,7 @@ from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Distribution, HoldingsDelegate, ResponsiveGrid, TrendView,
-    holding_metrics, money, panel, percent, trend_points, partial_trend_points,
+    holding_metrics, money, panel, percent, trend_points,
 )
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
@@ -475,23 +475,27 @@ class DomesticHoldingsPage(QWidget):
         cutoff = self.history_scope[0]["valuation_date"] if self.history_scope else None
         points = trend_points(self.data.get("daily_values", {}), self.history_scope,
                               self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff)) if cutoff else []
-        partial = partial_trend_points(self.data.get("daily_values", {}), self.history_scope,
-                                       self.history_periods[self.history_ranges.checkedId()],
-                                       date.fromisoformat(cutoff)) if cutoff else []
-        self.history_plot.render(points, partial)
-        count = sum(value is not None for _, value in points)
-        partial_count = sum(value is not None for _, value, _ in partial)
-        no_data = len(points) - count - partial_count
-        reason_map = self.data.get("daily_values", {})
+        history = self.data.get("daily_values", {})
+        keys = {(row["account_id"], row["fund_code"]) for row in self.history_scope}
+        details = {}
         reasons = {}
-        for day, _, missing in partial:
-            for key in missing:
-                reason = getattr(reason_map, "missing", {}).get((day, key), "历史数据缺失")
-                reasons.setdefault(reason, set()).add(key[1])
-        explanations = "；".join(f"{reason}（{len(codes)}只：{'、'.join(sorted(codes)[:5])}）"
+        for day, value in points:
+            if value is None:
+                for key in keys:
+                    if history.get(day, {}).get(key) is None:
+                        reason = getattr(history, "missing", {}).get((day, key), "历史数据缺失")
+                        reasons.setdefault(reason, set()).add(key[1])
+            else:
+                dates = [history.nav_dates.get((day, key)) for key in keys
+                         if history.get(day, {}).get(key) not in (None, 0)]
+                dates = sorted({day for day in dates if day})
+                details[day] = "、".join(dates) if dates else "当日无持仓"
+        self.history_plot.render(points, details)
+        count = sum(value is not None for _, value in points)
+        explanations = "；".join(f"{reason}（{'、'.join(sorted(codes))}）"
                                 for reason, codes in reasons.items())
         self.history_note.setText(
-            f"蓝线完整 {count} 日 · 橙色虚线为已核算部分 {partial_count} 日 · 无法估值 {no_data} 日"
+            f"完整估值 {count} 日 · 缺口 {len(points) - count} 日"
             + (f" · {explanations}" if explanations else "")
             if points else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
             else "当前范围暂无历史估值。")

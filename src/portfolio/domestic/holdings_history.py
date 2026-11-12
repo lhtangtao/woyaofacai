@@ -1,6 +1,6 @@
 """Read-only daily valuation inputs for the Mac domestic holdings dashboard."""
 from bisect import bisect_right
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, localcontext
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
@@ -31,6 +31,15 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
         days = set()
         beginnings = {}
         nav_dates = {}
+        periods = {}
+        if "raw_fund_source_files" in raw_tables:
+            for account, start, end in raw.execute("""SELECT account_id,period_start,period_end
+                    FROM raw_fund_source_files WHERE source_platform='TIANTIAN'
+                    AND period_start IS NOT NULL AND period_end IS NOT NULL"""):
+                periods.setdefault(account, []).append((date.fromisoformat(start), date.fromisoformat(end)))
+        if "calc_tiantian_no_trade_periods" in calc_tables:
+            for account, start, end in calc.execute("SELECT account_id,start_date,end_date FROM calc_tiantian_no_trade_periods"):
+                periods.setdefault(account, []).append((date.fromisoformat(start), date.fromisoformat(end)))
         for row in rows:
             key = row["account_id"], row["fund_code"]
             table = "calc_tiantian_positions" if row["platform"] == "天天基金" else "calc_fund_positions_daily"
@@ -42,22 +51,51 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
             quantities[key] = {r[0]: Decimal(r[1]) if r[1] is not None else None for r in balances}
             if quantities[key]:
                 first = min(quantities[key])
-                # A zero opening proves the fund was not held before its first recorded day.
-                if quantities[key][first] == 0:
-                    beginnings[key] = first
-                elif row["platform"] == "天天基金" and not row.get("observed_shares"):
+                if row["platform"] == "天天基金" and not row.get("observed_shares"):
                     first_trade = raw.execute("""SELECT confirmation_date,transaction_type_raw,parse_status,
                         confirmation_status FROM raw_fund_transactions WHERE account_id=? AND fund_code=?
                         ORDER BY confirmation_date,id LIMIT 1""", key).fetchone()
                     if first_trade and first_trade[0] == first and first_trade[1] in (
                             "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功":
-                        beginnings[key] = first
+                        covered_from = date.fromisoformat(first)
+                        for start, end in sorted(periods.get(key[0], []), reverse=True):
+                            if start <= covered_from and end + timedelta(days=1) >= covered_from:
+                                covered_from = min(covered_from, start)
+                        beginnings[key] = (covered_from.isoformat(), first)
             if key[1] not in navs:
                 navs[key[1]] = {r["nav_date"]: (positive(r["unit_nav"]), r["source"])
                                 for r in daily_nav(raw, raw_tables, key[1], cutoff, history=True)}
+                if "raw_fund_nav" in raw_tables:
+                    for nav_day, value, source in raw.execute("""SELECT nav_date,unit_nav,source FROM raw_fund_nav
+                            WHERE fund_code=? AND nav_date<=?""", (key[1], cutoff)):
+                        price = positive(value)
+                        if price is None:
+                            continue
+                        existing = navs[key[1]].get(nav_day)
+                        if existing and existing[0] != price:
+                            navs[key[1]][nav_day] = (None, "净值来源冲突")
+                        elif not existing:
+                            navs[key[1]][nav_day] = (price, source)
+                if "calc_tiantian_statement_positions" in calc_tables:
+                    for snapshot in calc.execute("""SELECT nav_date,unit_nav FROM calc_tiantian_statement_positions
+                            WHERE fund_code=? AND as_of<=? AND nav_date IS NOT NULL
+                            AND nav_date<=as_of AND unit_nav IS NOT NULL""", (key[1], cutoff)):
+                        nav_day, value = snapshot
+                        price = positive(value)
+                        if price is None:
+                            continue
+                        existing = navs[key[1]].get(nav_day)
+                        if existing and existing[0] != price:
+                            navs[key[1]][nav_day] = (None, "净值来源冲突")
+                        elif not existing:
+                            navs[key[1]][nav_day] = (price, "天天基金对账单")
             nav_dates[key[1]] = sorted(navs[key[1]])
             days.update(navs[key[1]])
-        days = sorted(days)
+        if days:
+            first_day = date.fromisoformat(min(days))
+            last_day = date.fromisoformat(cutoff)
+            days = [(first_day + timedelta(days=i)).isoformat()
+                    for i in range((last_day - first_day).days + 1)]
         result = HistoricalValues()
         with localcontext() as precision:
             precision.prec = 60
@@ -65,8 +103,10 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                 prices = navs.get(key[1], {})
                 for day in days:
                     quantity = balances.get(day)
-                    if day not in balances and key in beginnings and day < beginnings[key]:
-                        quantity = Decimal(0)
+                    if day not in balances and key in beginnings:
+                        coverage_start, first = beginnings[key]
+                        if coverage_start and coverage_start <= day < first:
+                            quantity = Decimal(0)
                     dates = nav_dates.get(key[1], [])
                     index = bisect_right(dates, day) - 1
                     price_day = dates[index] if index >= 0 else None
