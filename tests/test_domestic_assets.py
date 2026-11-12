@@ -204,3 +204,49 @@ def test_holdings_valuation_uses_query_date_and_distinguishes_uncovered_position
     pending = holdings("ALIPAY_FUND", "000001", root=tmp_path, valuation_date="2026-11-12")["rows"][0]
     assert pending["shares"] is None and pending["market_value"] is None
     assert pending["last_confirmed_shares"] == "87.70"
+
+
+def test_holdings_preserve_confirmed_close_across_gap_and_reopen(tmp_path):
+    from portfolio.domestic.holdings_query import holdings
+    from portfolio.domestic.fund_transactions import SCHEMA as RAW_SCHEMA
+    from portfolio.domestic.tiantian_positions import SCHEMA
+    from portfolio.domestic.tiantian_snapshot import SCHEMA as SNAPSHOT_SCHEMA
+
+    proof, transactions = docs()
+    publish([proof, transactions], root=tmp_path)
+    account = "TIANTIAN_TEST"
+    code = "000001"
+    with connect(tmp_path / RAW_FILE) as raw:
+        raw.executescript(RAW_SCHEMA)
+        raw.execute("INSERT INTO raw_asset_accounts VALUES (?,?,?,?,?,?)",
+                    (account, "对账账户", "天天基金", "FUND", "CNY", "2026-11-12"))
+    with connect(tmp_path / CALC_FILE) as calc:
+        calc.executescript(SCHEMA)
+        calc.execute("INSERT INTO calc_tiantian_run VALUES (1,'test','test','2026-11-12')")
+        calc.execute("INSERT INTO calc_tiantian_funds VALUES (?,?,?,?,?,?,?,?)",
+                     (account, code, "2026-11-06", "2", "对账单缺档 2026-11-04", "2", "0", "0"))
+        calc.executemany("INSERT INTO calc_tiantian_positions VALUES (?,?,?,?)", (
+            (account, code, "2026-11-01", "3"),
+            (account, code, "2026-11-02", "0.00"),
+            (account, code, "2026-11-03", "0"),
+            (account, code, "2026-11-04", None),
+            (account, code, "2026-11-05", "1"),
+            (account, code, "2026-11-06", "2"),
+        ))
+        calc.executescript(SNAPSHOT_SCHEMA)
+        calc.executemany("INSERT INTO calc_tiantian_statement_positions VALUES (?,?,?,'测试基金',NULL,?,NULL,NULL,'test')",
+                         ((account, "2026-11-02", code, "0"), (account, "2026-11-05", code, "1")))
+
+    def row(day):
+        return holdings(account, code, root=tmp_path, valuation_date=day)["rows"][0]
+
+    closed = row("2026-11-03")
+    assert closed["current_position_status"] == "已清仓" and closed["market_value"] == "0"
+    assert closed["last_confirmed_close_date"] == "2026-11-02" and closed["review_reason"] is None
+    gap = row("2026-11-04")
+    assert gap["status"] == "历史已清仓 · 当前待核对"
+    assert gap["position_status"] == "历史交易缺档"
+    assert gap["shares"] is None and gap["market_value"] is None and gap["last_confirmed_shares"] == "0"
+    reopened = row("2026-11-06")
+    assert reopened["current_position_status"] == "持有中" and reopened["shares"] == "2"
+    assert reopened["last_confirmed_close_date"] is None and reopened["nav_status"] == "净值缺失"

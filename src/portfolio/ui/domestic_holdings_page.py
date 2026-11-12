@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from portfolio.domestic.holdings_query import PENDING, holdings
+from portfolio.domestic.holdings_query import REVIEW, holdings
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
                  shares="持有份额", nav="最新净值", nav_date="净值日期", market_value="持仓市值（CNY）",
@@ -145,7 +145,7 @@ class DomesticHoldingsPage(QWidget):
         filters = QHBoxLayout()
         self.platform = combo([("全部平台", "")])
         self.kind = combo([("全部基金类型", "")])
-        self.state = combo([(x, x) for x in ("持有中", "已清仓", PENDING)] + [("待估值", "待估值"), ("全部", "")])
+        self.state = combo([(x, x) for x in ("持有中", "已清仓", REVIEW)] + [("全部", "")])
         self.search = QLineEdit(placeholderText="搜索基金代码 / 名称")
         for widget in (self.platform, self.kind, self.state, self.search):
             filters.addWidget(widget)
@@ -281,9 +281,9 @@ class DomesticHoldingsPage(QWidget):
                     ((self.platform, "platform"), (self.kind, "fund_type")))
                 and query in (r["fund_code"] + " " + r["fund_name"]).casefold()]
         scope = rows
-        pending = [r for r in scope if r["status"] != "已清仓" and r["market_value"] is None]
+        pending = [r for r in scope if bool(r["review_reason"])]
         state = self.state.currentData()
-        rows = pending if state == "待估值" else [r for r in scope if not state or r["status"] == state]
+        rows = pending if state == REVIEW else [r for r in scope if not state or r["current_position_status"] == state]
         valued = [Decimal(r["market_value"]) for r in scope if r["market_value"] is not None]
         total = sum(valued, Decimal(0))
         missing = len(pending)
@@ -292,29 +292,29 @@ class DomesticHoldingsPage(QWidget):
         returns = [Decimal(r["pnl"]) for r in scope if r.get("pnl") is not None]
         pnl_label = "累计盈亏（含已清仓）" if len(returns) == len(scope) else "累计盈亏（已核算部分）"
         clear(self.over_cards)
-        for title, value in ((("已估值部分（CNY）" if missing else "持仓总市值（CNY）"), amount(total if valued else None)),
-                             ("已确认持有基金数量", str(len({r["fund_code"] for r in scope if r["status"] == "持有中"}))),
-                             (pnl_label, amount(sum(returns)) if returns else "待计算"), ("待估值记录", str(missing))):
+        for title, value in ((("已估值部分（CNY）" if any(r["market_value"] is None for r in scope) else "持仓总市值（CNY）"), amount(total if valued else None)),
+                             ("已确认持有基金数量", str(len({r["fund_code"] for r in scope if r["current_position_status"] == "持有中"}))),
+                             (pnl_label, amount(sum(returns)) if returns else "待计算"), ("待核对记录", str(missing))):
             box, body = card(title, value)
-            if title == "待估值记录":
-                action = QPushButton("查看待估值")
-                action.clicked.connect(lambda: self.state.setCurrentIndex(self.state.findData("待估值")))
+            if title == "待核对记录":
+                action = QPushButton("查看待核对")
+                action.clicked.connect(lambda: self.state.setCurrentIndex(self.state.findData(REVIEW)))
                 body.addWidget(action)
             self.over_cards.addWidget(box, 1)
         self.positions.rows = rows
         self.positions.set_page(0 if reset else self.positions.page)
         visible_value = self.group_value(rows)
-        self.total.setText(f"列表已估值合计 {amount(visible_value)} CNY · {missing} 条待估值")
+        self.total.setText(f"列表已估值合计 {amount(visible_value)} CNY · {missing} 条待核对")
         for layout, key, widget in ((self.platform_box, "platform", self.platform), (self.kind_box, "fund_type", self.kind)):
             clear(layout)
             for name, group in self.groups(scope, key).items():
                 val = self.group_value(group)
                 share = f"{val / total:.2%}" if total and val is not None else "—"
                 count_valued = sum(r["market_value"] is not None for r in group)
-                count_pending = sum(r["status"] != "已清仓" and r["market_value"] is None for r in group)
-                fund_count = len({r["fund_code"] for r in group if r["status"] == "持有中"})
+                count_pending = sum(bool(r["review_reason"]) for r in group)
+                fund_count = len({r["fund_code"] for r in group if r["current_position_status"] == "持有中"})
                 button = QPushButton(f"{name} · 持有 {fund_count} · {amount(val)} · {share}\n"
-                                     f"已估值 {count_valued} · 待估值 {count_pending} · 盈亏待计算")
+                                     f"已估值 {count_valued} · 待核对 {count_pending} · 盈亏待计算")
                 button.clicked.connect(lambda _, w=widget, n=name: w.setCurrentIndex(w.findData(n)))
                 layout.addWidget(button)
         clear(self.pie_content)
@@ -397,11 +397,14 @@ class DomesticHoldingsPage(QWidget):
             self.detail_cards.addWidget(card(label, value)[0], 1)
         self.fund_overview.setText(
             f"平台  {row['platform']}\n账户  {row['account_name']}\n基金代码  {row['fund_code']}\n"
-            f"数据日期  {row['as_of'] or '—'}\n{row['status']}\n\n"
+            f"交易资料覆盖截至  {row['coverage_through'] or '—'}\n{row['status']}\n"
+            f"净值状态  {row['nav_status']}\n"
+            f"最近确认清仓日  {row['last_confirmed_close_date'] or '—'}\n\n"
             f"当前份额  {row['shares'] or '—'}\n当前市值  {amount(row['market_value'])}\n"
             f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
             f"剩余持仓成本  {amount(row.get('cost'))}\n已实现盈亏  {amount(row.get('realized_pnl'))}\n"
-            f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
+            + (f"最近确认已实现盈亏  {amount(row['last_confirmed_realized_pnl'])}\n" if row.get("last_confirmed_realized_pnl") is not None else "")
+            + f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
             f"累计分红  {amount(row.get('cash_dividend'))}\n"
             f"数据说明  {row.get('issue') or '—'}\n"
             f"最近可核对份额  {row.get('last_confirmed_shares', '—')}  {row.get('last_confirmed_date', '')}\n"
