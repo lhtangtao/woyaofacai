@@ -6,7 +6,7 @@ import json
 from decimal import Decimal, localcontext
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
-from .holdings_query import daily_nav, positive
+from .holdings_query import ESTIMATED_NAV_SOURCES, daily_nav, positive
 from .storage import CALC_FILE, RAW_FILE, connect
 
 
@@ -85,7 +85,7 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         if price is None:
                             continue
                         existing = navs[key[1]].get(nav_day)
-                        if existing and existing[1] == "用户指定周净值沿用":
+                        if existing and existing[1] in ESTIMATED_NAV_SOURCES:
                             navs[key[1]][nav_day] = (price, source, nav_day)
                         elif existing and existing[0] != price:
                             navs[key[1]][nav_day] = (None, "净值来源冲突", nav_day)
@@ -100,7 +100,7 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         if price is None:
                             continue
                         existing = navs[key[1]].get(nav_day)
-                        if existing and existing[1] == "用户指定周净值沿用":
+                        if existing and existing[1] in ESTIMATED_NAV_SOURCES:
                             navs[key[1]][nav_day] = (price, "天天基金对账单", nav_day)
                         elif existing and existing[0] != price:
                             navs[key[1]][nav_day] = (None, "净值来源冲突", nav_day)

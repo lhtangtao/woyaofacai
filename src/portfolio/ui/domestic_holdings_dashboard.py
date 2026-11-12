@@ -295,11 +295,21 @@ class TrendView(QChartView):
                 bottom.append(run[-1][0], base)
                 series = QAreaSeries(line, bottom)
                 self.area_boundaries.append((line, bottom))
-                series.setPen(QPen(QColor(BLUE), 1.6))
+                # QAreaSeries outlines the entire polygon, including vertical
+                # edges at missing-data gaps; draw only the actual upper line.
+                series.setPen(QPen(Qt.PenStyle.NoPen))
                 series.setBrush(QColor(37, 99, 235, 28))
             chart.addSeries(series)
             series.attachAxis(x)
             series.attachAxis(y)
+            if len(run) > 1:
+                outline = QLineSeries()
+                for day, value in run:
+                    outline.append(day, float(value))
+                outline.setPen(QPen(QColor(BLUE), 1.6))
+                chart.addSeries(outline)
+                outline.attachAxis(x)
+                outline.attachAxis(y)
 
         for day, (_, value) in zip(self.days, points):
             if value is None:

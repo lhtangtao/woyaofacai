@@ -13,6 +13,7 @@ from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 
 REVIEW = "待核对"
 SOURCE_PRIORITY = {"AKShare/Eastmoney": 0, "AKShare/Eastmoney Hong Kong": 0}
+ESTIMATED_NAV_SOURCES = {"用户指定周净值沿用", "用户规则推定认购净值"}
 
 
 def positive(value):
@@ -33,7 +34,7 @@ def daily_nav(raw, tables, code, cutoff, *, history=False):
                 continue
             # An explicitly carried weekly value is an estimate, not an
             # independent formal NAV; a subsequently collected NAV wins.
-            formal = [row for row in valid if row["source"] != "用户指定周净值沿用"]
+            formal = [row for row in valid if row["source"] not in ESTIMATED_NAV_SOURCES]
             if formal:
                 valid = formal
             valid.sort(key=lambda row: (SOURCE_PRIORITY.get(row["source"], 1), row["source"]))
