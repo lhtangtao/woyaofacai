@@ -344,7 +344,7 @@ class DomesticHoldingsPage(QWidget):
                 if not account:
                     active = [row for row in data["rows"] if row["current_position_status"] == "持有中"]
                     try:
-                        data["daily_values"] = daily_values(active)
+                        data["daily_values"] = daily_values(data["rows"])
                     except (ValueError, ArithmeticError, OSError, sqlite3.Error):
                         data["history_error"] = True
                 return data
@@ -435,7 +435,10 @@ class DomesticHoldingsPage(QWidget):
         self.open_title.setText(f"基金持仓明细（{len(shown)} 条）")
         self.open_positions.rows = shown
         self.open_positions.set_page(0 if reset else self.open_positions.page)
-        self.history_scope = rows
+        self.history_scope = [row for row in all_rows
+                              if all(not control.currentData() or row[key] == control.currentData()
+                                     for control, key in ((self.platform, "platform"), (self.kind, "fund_type")))
+                              and query in (row["fund_code"] + " " + row["fund_name"]).casefold()]
         self.by_platform.render(prepared, "platform", summary["market"])
         self.by_type.render(prepared, "fund_type", summary["market"])
         self.render_history()
@@ -464,10 +467,18 @@ class DomesticHoldingsPage(QWidget):
                               self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff)) if cutoff else []
         self.history_plot.render(points)
         count = sum(value is not None for _, value in points)
-        note = (f"当前筛选基金 · {count} 个有效净值日" +
-                (f" · {len(points) - count} 日缺份额或净值，曲线留空" if count < len(points) else ""))
+        note = (f"当前筛选范围历史基金 · {count} 个有效估值日" +
+                (f" · {len(points) - count} 日缺少可信份额或七天内有效单位净值，曲线留空" if count < len(points) else ""))
+        if points and count < len(points):
+            missing_codes = sorted({row["fund_code"] for day, value in points if value is None
+                                    for row in self.history_scope
+                                    if self.data["daily_values"].get(day, {}).get(
+                                        (row["account_id"], row["fund_code"])) is None})
+            note += " · 涉及基金 " + "、".join(missing_codes[:8])
+            if len(missing_codes) > 8:
+                note += f" 等 {len(missing_codes)} 只"
         self.history_note.setText(note if count else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
-                                  else "当前范围暂无完整的历史份额与单位净值。")
+                                  else "当前范围缺少可信历史份额或七天内有效单位净值。")
 
     def open_fund(self, row):
         self.selected = row["account_id"], row["fund_code"]
