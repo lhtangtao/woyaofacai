@@ -102,6 +102,22 @@ def trend_points(values, rows, period, today):
     return result
 
 
+
+def partial_trend_points(values, rows, period, today):
+    keys = {(row["account_id"], row["fund_code"]) for row in rows}
+    complete = trend_points(values, rows, period, today)
+    result = []
+    for day, value in complete:
+        amounts = [values[day].get(key) for key in keys]
+        known = [amount for amount in amounts if amount is not None]
+        missing = [(key, getattr(values, "missing", {}).get((day, key), "历史数据缺失"))
+                   for key in keys if values[day].get(key) is None]
+        # A zero balance alone does not establish a meaningful partial valuation.
+        partial = sum(known, Decimal(0)) if value is None and any(v > 0 for v in known) else None
+        result.append((day, partial, missing))
+    return result
+
+
 def panel(title=None):
     frame = QFrame(objectName="domesticPanel")
     layout = QVBoxLayout(frame)
@@ -246,7 +262,7 @@ class TrendView(QChartView):
         self.x_axis = None
         self.area_boundaries = []
 
-    def render(self, points):
+    def render(self, points, partial=None):
         chart = self.chart()
         chart.removeAllSeries()
         self.area_boundaries.clear()
@@ -259,7 +275,10 @@ class TrendView(QChartView):
         self.days = [timestamp(day) for day, _ in points]
         self.values = points
         self.x_axis = None
+        partial = partial or []
+        self.partial_values = partial
         values = [float(value) for _, value in points if value is not None]
+        values.extend(float(value) for _, value, _ in partial if value is not None)
         if not values:
             return
         low, high = min(values), max(values)
@@ -278,7 +297,7 @@ class TrendView(QChartView):
         self.x_axis = x
         run = []
 
-        def draw_run():
+        def draw_run(is_partial=False):
             if not run:
                 return
             line = QLineSeries()
@@ -286,8 +305,11 @@ class TrendView(QChartView):
                 line.append(day, float(value))
             if len(run) == 1:
                 series = line
-                line.setColor(QColor(BLUE))
+                line.setColor(QColor("#D97706" if is_partial else BLUE))
                 line.setPointsVisible(True)
+            elif is_partial:
+                series = line
+                series.setPen(QPen(QColor("#D97706"), 1.8, Qt.PenStyle.DashLine))
             else:
                 bottom = QLineSeries()
                 bottom.append(run[0][0], base)
@@ -307,6 +329,14 @@ class TrendView(QChartView):
             else:
                 run.append((day, value))
         draw_run()
+        run = []
+        for day, value, _ in partial:
+            if value is None:
+                draw_run(True)
+                run = []
+            else:
+                run.append((timestamp(day), value))
+        draw_run(True)
 
     def mouseMoveEvent(self, event):
         pos = self.chart().mapFromScene(self.mapToScene(event.position().toPoint()))
@@ -319,8 +349,13 @@ class TrendView(QChartView):
             candidates = range(max(0, i - 1), min(len(self.days), i + 1))
             index = min(candidates, key=lambda k: abs(self.days[k] - target))
             day, value = self.values[index]
+            partial = self.partial_values[index] if self.partial_values else None
             if value is not None:
-                QToolTip.showText(event.globalPosition().toPoint(), f"{day} · {money(value)} CNY", self)
+                QToolTip.showText(event.globalPosition().toPoint(), f"{day} · 完整市值 {money(value)} CNY", self)
+            elif partial and partial[1] is not None:
+                codes = "、".join(sorted({f"{key[1]}（{reason}）" for key, reason in partial[2]}))
+                QToolTip.showText(event.globalPosition().toPoint(),
+                                  f"{day} · 已核算部分 {money(partial[1])} CNY\n未核算 {len(partial[2])} 条：{codes}", self)
             else:
                 QToolTip.hideText()
         else:

@@ -15,7 +15,7 @@ from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Distribution, HoldingsDelegate, ResponsiveGrid, TrendView,
-    holding_metrics, money, panel, percent, trend_points,
+    holding_metrics, money, panel, percent, trend_points, partial_trend_points,
 )
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
@@ -475,20 +475,26 @@ class DomesticHoldingsPage(QWidget):
         cutoff = self.history_scope[0]["valuation_date"] if self.history_scope else None
         points = trend_points(self.data.get("daily_values", {}), self.history_scope,
                               self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff)) if cutoff else []
-        self.history_plot.render(points)
+        partial = partial_trend_points(self.data.get("daily_values", {}), self.history_scope,
+                                       self.history_periods[self.history_ranges.checkedId()],
+                                       date.fromisoformat(cutoff)) if cutoff else []
+        self.history_plot.render(points, partial)
         count = sum(value is not None for _, value in points)
-        note = (f"当前筛选范围历史基金 · {count} 个有效估值日" +
-                (f" · {len(points) - count} 日缺少可信份额或七天内有效单位净值，曲线留空" if count < len(points) else ""))
-        if points and count < len(points):
-            missing_codes = sorted({row["fund_code"] for day, value in points if value is None
-                                    for row in self.history_scope
-                                    if self.data["daily_values"].get(day, {}).get(
-                                        (row["account_id"], row["fund_code"])) is None})
-            note += " · 涉及基金 " + "、".join(missing_codes[:8])
-            if len(missing_codes) > 8:
-                note += f" 等 {len(missing_codes)} 只"
-        self.history_note.setText(note if count else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
-                                  else "当前范围缺少可信历史份额或七天内有效单位净值。")
+        partial_count = sum(value is not None for _, value, _ in partial)
+        no_data = len(points) - count - partial_count
+        reason_map = self.data.get("daily_values", {})
+        reasons = {}
+        for day, _, missing in partial:
+            for key in missing:
+                reason = getattr(reason_map, "missing", {}).get((day, key), "历史数据缺失")
+                reasons.setdefault(reason, set()).add(key[1])
+        explanations = "；".join(f"{reason}（{len(codes)}只：{'、'.join(sorted(codes)[:5])}）"
+                                for reason, codes in reasons.items())
+        self.history_note.setText(
+            f"蓝线完整 {count} 日 · 橙色虚线为已核算部分 {partial_count} 日 · 无法估值 {no_data} 日"
+            + (f" · {explanations}" if explanations else "")
+            if points else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
+            else "当前范围暂无历史估值。")
 
     def open_fund(self, row):
         self.selected = row["account_id"], row["fund_code"]

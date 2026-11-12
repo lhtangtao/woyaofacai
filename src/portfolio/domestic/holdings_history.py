@@ -12,6 +12,8 @@ class HistoricalValues(dict):
     def __init__(self):
         super().__init__()
         self.nav_dates = {}
+        self.nav_sources = {}
+        self.missing = {}
 
 
 def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
@@ -51,7 +53,7 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                             "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功":
                         beginnings[key] = first
             if key[1] not in navs:
-                navs[key[1]] = {r["nav_date"]: positive(r["unit_nav"])
+                navs[key[1]] = {r["nav_date"]: (positive(r["unit_nav"]), r["source"])
                                 for r in daily_nav(raw, raw_tables, key[1], cutoff, history=True)}
             nav_dates[key[1]] = sorted(navs[key[1]])
             days.update(navs[key[1]])
@@ -68,9 +70,16 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                     dates = nav_dates.get(key[1], [])
                     index = bisect_right(dates, day) - 1
                     price_day = dates[index] if index >= 0 else None
-                    price = prices.get(price_day) if price_day and (
-                        date.fromisoformat(day) - date.fromisoformat(price_day)).days <= 7 else None
-                    result.nav_dates[(date.fromisoformat(day), key)] = price_day if price is not None else None
+                    price_entry = prices.get(price_day) if price_day and (
+                        date.fromisoformat(day) - date.fromisoformat(price_day )).days <= 7 else None
+                    price = price_entry[0] if price_entry else None
+                    item = (date.fromisoformat(day), key)
+                    result.nav_dates[item] = price_day if price is not None else None
+                    result.nav_sources[item] = price_entry[1] if price is not None else None
+                    if quantity is None or quantity < 0:
+                        result.missing[item] = "历史份额缺失或覆盖不足"
+                    elif quantity > 0 and price is None:
+                        result.missing[item] = "单位净值缺失、冲突或超过7天"
                     result.setdefault(date.fromisoformat(day), {})[key] = (
                         Decimal(0) if quantity == 0 else
                         quantity * price if quantity is not None and quantity > 0 and price is not None else None
