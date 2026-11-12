@@ -1,24 +1,41 @@
 """Domestic holdings and account-scoped fund detail."""
+from datetime import date
 from decimal import Decimal
 import sqlite3
 
-from PySide6.QtCharts import QChart, QChartView, QLineSeries, QPieSeries, QValueAxis, QCategoryAxis
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QCategoryAxis
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
     QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from portfolio.domestic.holdings_query import REVIEW, holdings
+from portfolio.domestic.holdings_history import daily_values
+from portfolio.domestic.holdings_query import holdings
+from portfolio.ui.domestic_holdings_dashboard import (
+    BLUE, GREEN, RED, STYLE, Distribution, HoldingsDelegate, ResponsiveGrid, TrendView,
+    holding_metrics, money, panel, percent, trend_points,
+)
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
                  shares="持有份额", nav="最新净值", nav_date="净值日期", market_value="持仓市值（CNY）",
                  pnl="累计盈亏", rate="收益率", weight="持仓占比", status="状态", arrow="详情")
+OPEN_POSITIONS = dict(
+    fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型", shares="持有份额",
+    average="持仓均价", nav="最新单位净值\n（净值日期）", market_value="持仓市值（CNY）",
+    cost="持仓成本（CNY）", floating="浮动盈亏（CNY）", floating_rate="收益率",
+    weight="持仓占比", arrow="详情",
+)
+METRICS = (
+    ("market", "持仓总市值（CNY）", money), ("cost", "持仓总成本（CNY）", money),
+    ("floating", "浮动盈亏（CNY）", money), ("rate", "持仓收益率", percent),
+    ("count", "持有基金数量", lambda count: f"{count} 只"), ("top", "前五大基金集中度", percent),
+)
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
               confirmed_amount="确认金额", fee="手续费", confirmed_nav="确认净值", confirmation_status="确认状态",
               parse_error="备注")
-NUMERIC = {"pnl", "rate", "shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav"}
+NUMERIC = {"pnl", "rate", "shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate"}
 
 
 def amount(value):
@@ -56,6 +73,7 @@ class FundTable(QWidget):
     def __init__(self, columns, default_sort):
         super().__init__()
         self.columns, self.sort = columns, default_sort
+        self.open_positions = columns is OPEN_POSITIONS
         self.descending = True
         self.rows = []
         self.visible_rows = []
@@ -68,13 +86,19 @@ class FundTable(QWidget):
         self.table.horizontalHeader().setMinimumSectionSize(72)
         self.table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
         self.table.setAlternatingRowColors(True)
+        if self.open_positions:
+            self.table.verticalHeader().setDefaultSectionSize(44)
+            self.table.horizontalHeader().setMinimumHeight(39)
+            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            self.table.setColumnWidth(0, 226)
+            self.table.setItemDelegate(HoldingsDelegate(self.table))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
         footer = QHBoxLayout()
         self.note = QLabel()
         self.size = combo([(f"{n} 条/页", n) for n in (10, 20, 50, 100)])
-        self.size.setCurrentIndex(1)
+        self.size.setCurrentIndex(2 if self.open_positions else 1)
         self.size.currentIndexChanged.connect(lambda: self.set_page(0))
         self.prev, self.next = QPushButton("上一页"), QPushButton("下一页")
         self.prev.clicked.connect(lambda: self.set_page(self.page - 1))
@@ -106,14 +130,26 @@ class FundTable(QWidget):
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
-                if key in ("market_value", "confirmed_amount", "fee", "pnl"):
+                if key in ("market_value", "confirmed_amount", "fee", "pnl", "cost", "floating"):
                     val = amount(val)
-                elif key in ("weight", "rate") and val is not None:
+                elif key in ("weight", "rate", "floating_rate") and val is not None:
                     val = f"{Decimal(val):.2f}%"
-                item = QTableWidgetItem("›" if key == "arrow" else str(val) if val is not None else "—")
+                if self.open_positions:
+                    if key == "fund_name":
+                        val = f"{val}\n{row['fund_code']}"
+                    elif key == "nav":
+                        val = f"{money(Decimal(val), 4)}\n{row['nav_date']}" if val is not None else "—"
+                    elif key in ("average", "shares"):
+                        val = money(val, 4 if key == "average" else 2)
+                item = QTableWidgetItem(("查看 ›" if self.open_positions else "›") if key == "arrow" else str(val) if val is not None else "—")
+                if self.open_positions:
+                    if key in ("floating", "floating_rate") and row.get(key) is not None and row[key]:
+                        item.setForeground(QBrush(QColor(GREEN if row[key] > 0 else RED)))
+                    elif key == "arrow":
+                        item.setForeground(QBrush(QColor(BLUE)))
                 if key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tooltip = row.get("return_issue") if key in ("pnl", "rate") else row.get("issue")
+                tooltip = row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate") else row.get("issue")
                 if tooltip:
                     item.setToolTip(tooltip)
                 self.table.setItem(i, j, item)
@@ -132,7 +168,7 @@ class DomesticHoldingsPage(QWidget):
         self.setStyleSheet("""
             QFrame#domesticCard { background: white; border: 1px solid #e2e8f0; border-radius: 10px; }
             QLabel#domesticValue { font-size: 21px; font-weight: 700; color: #1e293b; }
-        """)
+        """ + STYLE)
         layout = QVBoxLayout(self)
         self.message = QLabel()
         self.message.setWordWrap(True)
@@ -140,40 +176,102 @@ class DomesticHoldingsPage(QWidget):
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
         overview = self.scroll_page()
-        self.over_cards = QHBoxLayout()
-        overview.addLayout(self.over_cards)
-        filters = QHBoxLayout()
+        overview.setSpacing(9)
+        overview.parentWidget().setObjectName("domesticDashboard")
+        mode_bar = QHBoxLayout()
+        self.modes = QButtonGroup(self)
+        for i, name in enumerate(("持有中", "已清仓")):
+            button = QPushButton(name, objectName="domesticMode", checkable=True)
+            self.modes.addButton(button, i)
+            mode_bar.addWidget(button)
+        self.modes.button(0).setChecked(True)
+        self.modes.idClicked.connect(lambda _: self.render_overview(reset=True))
+        mode_bar.addStretch()
+        overview.addLayout(mode_bar)
+
+        self.metric_area = QWidget()
+        self.metric_labels = {}
+        cards = []
+        for key, title, _ in METRICS:
+            frame, body = panel()
+            caption = QLabel(title, objectName="domesticCaption", wordWrap=True)
+            value = QLabel("—", objectName="domesticMetric")
+            note = QLabel(objectName="domesticCaption", wordWrap=True)
+            for widget in (caption, value, note):
+                body.addWidget(widget)
+            cards.append(frame)
+            self.metric_labels[key] = value, note
+        self.metric_grid = ResponsiveGrid(cards, 183, 6)
+        self.metric_grid.setContentsMargins(0, 0, 0, 0)
+        self.metric_area.setLayout(self.metric_grid)
+        overview.addWidget(self.metric_area)
+
+        filter_box, filter_body = panel()
         self.platform = combo([("全部平台", "")])
         self.kind = combo([("全部基金类型", "")])
-        self.state = combo([(x, x) for x in ("持有中", "已清仓", REVIEW)] + [("全部", "")])
-        self.search = QLineEdit(placeholderText="搜索基金代码 / 名称")
-        for widget in (self.platform, self.kind, self.state, self.search):
-            filters.addWidget(widget)
-            signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
+        self.search = QLineEdit(placeholderText="搜索基金名称 / 基金代码")
+        reset = QPushButton("重置筛选")
+        reset.clicked.connect(self.reset_filters)
+        self.filter_grid = ResponsiveGrid([self.platform, self.kind, self.search, reset], 140, 4)
+        filter_body.addLayout(self.filter_grid)
+        for widget in (self.platform, self.kind, self.search):
+            signal = widget.textChanged if widget is self.search else widget.currentIndexChanged
             signal.connect(lambda *_: self.render_overview(reset=True))
-        overview.addLayout(filters)
-        box, body = card("基金持仓明细")
+        overview.addWidget(filter_box)
+
+        self.graph_area = QWidget()
+        self.by_platform = Distribution("按平台分布", lambda name: self.apply_distribution(self.platform, name))
+        self.by_type = Distribution("按基金类型分布", lambda name: self.apply_distribution(self.kind, name))
+        trend, trend_body = panel()
+        trend_header = QHBoxLayout()
+        trend_header.addWidget(QLabel("持仓市值趋势", objectName="domesticSection"), 1)
+        self.history_periods = (1, 3, 6, "year", 0)
+        self.history_ranges = QButtonGroup(self)
+        for i, label in enumerate(("近1月", "近3月", "近6月", "今年", "全部")):
+            button = QPushButton(label, checkable=True)
+            self.history_ranges.addButton(button, i)
+            trend_header.addWidget(button)
+        self.history_ranges.button(3).setChecked(True)
+        self.history_ranges.idClicked.connect(lambda _: self.render_history())
+        trend_body.addLayout(trend_header)
+        self.history_plot = TrendView()
+        trend_body.addWidget(self.history_plot, 1)
+        self.history_note = QLabel(objectName="domesticCaption", wordWrap=True)
+        trend_body.addWidget(self.history_note)
+        self.graph_grid = ResponsiveGrid([self.by_platform, self.by_type, trend], 345, 3)
+        self.graph_grid.setContentsMargins(0, 0, 0, 0)
+        self.graph_area.setLayout(self.graph_grid)
+        overview.addWidget(self.graph_area)
+        self.history_scope = []
+
+        self.open_box, body = panel()
+        table_header = QHBoxLayout()
+        self.open_title = QLabel("基金持仓明细", objectName="domesticSection")
+        table_header.addWidget(self.open_title, 1)
+        self.profit_filters = QButtonGroup(self)
+        for i, name in enumerate(("全部", "盈利", "亏损")):
+            button = QPushButton(name, checkable=True)
+            self.profit_filters.addButton(button, i)
+            table_header.addWidget(button)
+        self.profit_filters.button(0).setChecked(True)
+        self.profit_filters.idClicked.connect(lambda _: self.render_overview(reset=True))
+        body.addLayout(table_header)
+        self.open_positions = FundTable(OPEN_POSITIONS, "market_value")
+        self.open_positions.table.setMinimumHeight(280)
+        self.open_positions.table.cellClicked.connect(
+            lambda row, _: self.open_fund(self.open_positions.visible_rows[row]))
+        body.addWidget(self.open_positions, 1)
+        self.open_total = QLabel(wordWrap=True)
+        body.addWidget(self.open_total)
+        overview.addWidget(self.open_box, 1)
+
+        self.closed_box, body = panel("已清仓基金明细")
         self.positions = FundTable(POSITIONS, "market_value")
         self.positions.table.cellClicked.connect(lambda row, _: self.open_fund(self.positions.visible_rows[row]))
-        body.addWidget(self.positions)
-        self.total = QLabel()
-        body.addWidget(self.total)
-        overview.addWidget(box)
-        bottom = QHBoxLayout()
-        for title, name in (("平台持仓汇总", "platform_box"), ("基金类型汇总", "kind_box"), ("资产分布", "pie_box")):
-            box, body = card(title)
-            container = QVBoxLayout()
-            body.addLayout(container)
-            setattr(self, name, container)
-            bottom.addWidget(box, 1)
-        overview.addLayout(bottom)
-        self.dimension = combo([("按基金", "fund_name"), ("按平台", "platform"), ("按基金类型", "fund_type")])
-        self.pie_box.addWidget(self.dimension)
-        self.pie_content = QVBoxLayout()
-        self.pie_box.addLayout(self.pie_content)
-        self.dimension.currentIndexChanged.connect(lambda: self.render_overview())
-        self.sources = QLabel()
-        self.sources.setWordWrap(True)
+        body.addWidget(self.positions, 1)
+        overview.addWidget(self.closed_box, 1)
+        self.closed_box.hide()
+        self.sources = QLabel(objectName="domesticCaption", wordWrap=True)
         overview.addWidget(self.sources)
 
         detail = self.scroll_page()
@@ -242,11 +340,20 @@ class DomesticHoldingsPage(QWidget):
 
         def read(_cancel):
             try:
-                return holdings(account, fund)
+                data = holdings(account, fund)
+                if not account:
+                    active = [row for row in data["rows"] if row["current_position_status"] == "持有中"]
+                    try:
+                        data["daily_values"] = daily_values(active)
+                    except (ValueError, ArithmeticError, OSError, sqlite3.Error):
+                        data["history_error"] = True
+                return data
             except (ValueError, ArithmeticError, OSError, sqlite3.Error):
                 return None
 
         def ready(data):
+            if (account, fund) != (self.selected or ("", "")):
+                return
             if data is None:
                 self.message.setText("无法读取国内资产，请刷新重试。")
                 return
@@ -256,7 +363,8 @@ class DomesticHoldingsPage(QWidget):
                 self.render_detail()
             else:
                 self.data = data
-                self.sources.setText(f"只读数据源 {data['raw_path']} · {data['calc_path']}")
+                as_of = next((row["valuation_date"] for row in data["rows"]), "—")
+                self.sources.setText(f"估值日期 {as_of} · 只读数据源 {data['raw_path']} · {data['calc_path']}")
                 self.choices(self.platform, "全部平台", data["rows"], "platform")
                 self.choices(self.kind, "全部基金类型", data["rows"], "fund_type")
                 self.render_overview()
@@ -274,90 +382,92 @@ class DomesticHoldingsPage(QWidget):
         widget.setCurrentIndex(max(0, widget.findData(current)))
         widget.blockSignals(False)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "graph_grid"):
+            available = max(0, event.size().width() - 50)
+            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
+                grid.reflow(available)
+
+    def reset_filters(self):
+        for control in (self.platform, self.kind, self.search):
+            control.blockSignals(True)
+        self.platform.setCurrentIndex(0)
+        self.kind.setCurrentIndex(0)
+        self.search.clear()
+        for control in (self.platform, self.kind, self.search):
+            control.blockSignals(False)
+        self.profit_filters.button(0).setChecked(True)
+        self.render_overview(reset=True)
+
+    def apply_distribution(self, control, name):
+        control.setCurrentIndex(0 if control.currentData() == name else control.findData(name))
+
     def render_overview(self, reset=False):
+        all_rows = self.data.get("rows", [])
+        opened = self.modes.checkedId() == 0
+        for i, status in enumerate(("持有中", "已清仓")):
+            count = sum(row["current_position_status"] == status for row in all_rows)
+            self.modes.button(i).setText(f"{status}（{count}）")
+        for widget in (self.metric_area, self.graph_area, self.open_box):
+            widget.setVisible(opened)
+        self.closed_box.setVisible(not opened)
         query = self.search.text().strip().casefold()
-        rows = [dict(r) for r in self.data.get("rows", []) if
-                all(not w.currentData() or r[k] == w.currentData() for w, k in
-                    ((self.platform, "platform"), (self.kind, "fund_type")))
-                and query in (r["fund_code"] + " " + r["fund_name"]).casefold()]
-        scope = rows
-        pending = [r for r in scope if bool(r["review_reason"])]
-        state = self.state.currentData()
-        rows = pending if state == REVIEW else [r for r in scope if not state or r["current_position_status"] == state]
-        valued = [Decimal(r["market_value"]) for r in scope if r["market_value"] is not None]
-        total = sum(valued, Decimal(0))
-        missing = len(pending)
-        for row in rows:
-            row["weight"] = str(Decimal(row["market_value"]) / total * 100) if total and row["market_value"] is not None else None
-        returns = [Decimal(r["pnl"]) for r in scope if r.get("pnl") is not None]
-        pnl_label = "累计盈亏（含已清仓）" if len(returns) == len(scope) else "累计盈亏（已核算部分）"
-        clear(self.over_cards)
-        for title, value in ((("已估值部分（CNY）" if any(r["market_value"] is None for r in scope) else "持仓总市值（CNY）"), amount(total if valued else None)),
-                             ("已确认持有基金数量", str(len({r["fund_code"] for r in scope if r["current_position_status"] == "持有中"}))),
-                             (pnl_label, amount(sum(returns)) if returns else "待计算"), ("待核对记录", str(missing))):
-            box, body = card(title, value)
-            if title == "待核对记录":
-                action = QPushButton("查看待核对")
-                action.clicked.connect(lambda: self.state.setCurrentIndex(self.state.findData(REVIEW)))
-                body.addWidget(action)
-            self.over_cards.addWidget(box, 1)
-        self.positions.rows = rows
-        self.positions.set_page(0 if reset else self.positions.page)
-        visible_value = self.group_value(rows)
-        self.total.setText(f"列表已估值合计 {amount(visible_value)} CNY · {missing} 条待核对")
-        for layout, key, widget in ((self.platform_box, "platform", self.platform), (self.kind_box, "fund_type", self.kind)):
-            clear(layout)
-            for name, group in self.groups(scope, key).items():
-                val = self.group_value(group)
-                share = f"{val / total:.2%}" if total and val is not None else "—"
-                count_valued = sum(r["market_value"] is not None for r in group)
-                count_pending = sum(bool(r["review_reason"]) for r in group)
-                fund_count = len({r["fund_code"] for r in group if r["current_position_status"] == "持有中"})
-                button = QPushButton(f"{name} · 持有 {fund_count} · {amount(val)} · {share}\n"
-                                     f"已估值 {count_valued} · 待核对 {count_pending} · 盈亏待计算")
-                button.clicked.connect(lambda _, w=widget, n=name: w.setCurrentIndex(w.findData(n)))
-                layout.addWidget(button)
-        clear(self.pie_content)
-        key = self.dimension.currentData()
-        series = QPieSeries()
-        series.setHoleSize(.55)
-        for name, group in self.groups(scope, key).items():
-            val = self.group_value(group)
-            if val is None or val <= 0:
-                continue
-            segment = series.append(f"{name} · {amount(val)} · {val / total:.2%}", float(val))
-            segment.clicked.connect(lambda n=name, k=key: self.apply_distribution(k, n))
-            button = QPushButton(segment.label())
-            button.clicked.connect(lambda _, n=name, k=key: self.apply_distribution(k, n))
-            self.pie_content.addWidget(button)
-        if series.count():
-            chart = QChart()
-            chart.addSeries(series)
-            chart.legend().hide()
-            self.add_chart(self.pie_content, chart)
-        else:
-            self.pie_content.addWidget(QLabel("暂无已估值资产可绘制。"))
-        if missing:
-            self.pie_content.addWidget(QLabel(f"{missing} 条未估值记录未计入分布。"))
+        rows = [row for row in all_rows
+                if row["current_position_status"] == ("持有中" if opened else "已清仓")
+                and all(not control.currentData() or row[key] == control.currentData()
+                        for control, key in ((self.platform, "platform"), (self.kind, "fund_type")))
+                and query in (row["fund_code"] + " " + row["fund_name"]).casefold()]
+        if not opened:
+            prepared, _ = holding_metrics(rows)
+            self.positions.rows = prepared
+            self.positions.set_page(0 if reset else self.positions.page)
+            return
 
-    @staticmethod
-    def groups(rows, key):
-        groups = {}
-        for row in rows:
-            groups.setdefault(row[key], []).append(row)
-        return groups
+        prepared, summary = holding_metrics(rows)
+        profits = [row for row in prepared if row["floating"] is not None and row["floating"] > 0]
+        losses = [row for row in prepared if row["floating"] is not None and row["floating"] < 0]
+        for i, (name, group) in enumerate(zip(("全部", "盈利", "亏损"), (prepared, profits, losses))):
+            self.profit_filters.button(i).setText(f"{name}（{len(group)}）")
+        # The profit/loss switch applies to the table; portfolio cards and distributions
+        # continue to describe the selected platform, fund type and search scope.
+        shown = (prepared, profits, losses)[self.profit_filters.checkedId()]
+        self.open_title.setText(f"基金持仓明细（{len(shown)} 条）")
+        self.open_positions.rows = shown
+        self.open_positions.set_page(0 if reset else self.open_positions.page)
+        self.history_scope = rows
+        self.by_platform.render(prepared, "platform", summary["market"])
+        self.by_type.render(prepared, "fund_type", summary["market"])
+        self.render_history()
+        for key, _, formatter in METRICS:
+            value, note = self.metric_labels[key]
+            metric = summary[key]
+            value.setText(formatter(metric))
+            sign = ("positive" if metric > 0 else "negative") if key in ("floating", "rate") and metric else ""
+            value.setProperty("sign", sign)
+            value.style().unpolish(value)
+            value.style().polish(value)
+            covered = summary["valued"] if key in ("market", "top") else summary["matched"]
+            partial = key != "count" and covered < len(rows)
+            note.setText(f"部分数据未核算 · {covered}/{len(rows)} 条" if partial else "")
+            note.setVisible(partial)
+        _, totals = holding_metrics(shown)
+        self.open_total.setText(
+            f"合计　持仓市值 {money(totals['market'])}　持仓成本 {money(totals['cost'])}　"
+            f"浮动盈亏 {money(totals['floating'])}　收益率 {percent(totals['rate'])}"
+            + ("　· 部分数据未核算" if totals["matched"] < len(shown) else "")
+        )
 
-    @staticmethod
-    def group_value(rows):
-        amounts = [Decimal(r["market_value"]) for r in rows if r["market_value"] is not None]
-        return sum(amounts, Decimal(0)) if amounts else None
-
-    def apply_distribution(self, key, name):
-        if key == "fund_name":
-            self.search.setText(name)
-        else:
-            widget = self.platform if key == "platform" else self.kind
-            widget.setCurrentIndex(widget.findData(name))
+    def render_history(self):
+        cutoff = self.history_scope[0]["valuation_date"] if self.history_scope else None
+        points = trend_points(self.data.get("daily_values", {}), self.history_scope,
+                              self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff)) if cutoff else []
+        self.history_plot.render(points)
+        count = sum(value is not None for _, value in points)
+        note = (f"当前筛选基金 · {count} 个有效净值日" +
+                (f" · {len(points) - count} 日缺份额或净值，曲线留空" if count < len(points) else ""))
+        self.history_note.setText(note if count else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
+                                  else "当前范围暂无完整的历史份额与单位净值。")
 
     def open_fund(self, row):
         self.selected = row["account_id"], row["fund_code"]
@@ -376,7 +486,7 @@ class DomesticHoldingsPage(QWidget):
     def back(self):
         self.selected = None
         self.stack.setCurrentIndex(0)
-        self.reload()
+        self.message.clear()
 
     def render_detail(self):
         clear(self.detail_cards)

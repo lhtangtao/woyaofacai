@@ -354,7 +354,7 @@ class InteractionMixin:
                 self.monthly_scalping_page.update_data(self.analytics)
             self.update_history_buttons();return
         if page == 27:
-            self.description.setText("按平台、基金类型和持仓状态查看国内基金。")
+            self.description.setText("查看支付宝与天天基金的持仓、市值及收益情况。")
             for widget in (self.filters_widget, self.stat_widget, self.live_panel, self.banner,
                            self.side, self.export_button, self.asset_reset_button):
                 widget.hide()
