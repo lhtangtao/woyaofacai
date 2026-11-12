@@ -57,7 +57,8 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         confirmation_status FROM raw_fund_transactions WHERE account_id=? AND fund_code=?
                         ORDER BY confirmation_date,id LIMIT 1""", key).fetchone()
                     if first_trade and first_trade[0] == first and first_trade[1] in (
-                            "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功":
+                            "买新基金", "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功" and (
+                            first_trade[1] != "买新基金" or quantities[key][first] == 0):
                         covered_from = date.fromisoformat(first)
                         for start, end in sorted(periods.get(key[0], []), reverse=True):
                             if start <= covered_from and end + timedelta(days=1) >= covered_from:
