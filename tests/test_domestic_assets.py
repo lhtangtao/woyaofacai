@@ -180,3 +180,27 @@ def test_tiantian_deduplicates_repeat_and_overlap_with_source_trace(tmp_path):
         assert raw.execute("SELECT COUNT(*) FROM raw_fund_transaction_sources").fetchone()[0] == 6
         assert raw.execute("SELECT COUNT(*) FROM raw_import_batches").fetchone()[0] == 2
     assert not (tmp_path / CALC_FILE).exists()
+
+
+def test_holdings_valuation_uses_query_date_and_distinguishes_uncovered_position(tmp_path):
+    from portfolio.domestic.holdings_query import holdings
+    from portfolio.domestic.nav_collection import SCHEMA
+
+    proof, transactions = docs()
+    publish([proof, transactions], root=tmp_path)
+    with connect(tmp_path / CALC_FILE) as calc:
+        calc.execute("INSERT INTO calc_alipay_statement_coverage VALUES (?,?,?)",
+                     (transactions.digest, "2021-11-11", "2026-11-11"))
+    with connect(tmp_path / RAW_FILE) as raw:
+        raw.executescript(SCHEMA)
+        raw.execute("""INSERT INTO raw_fund_nav_daily
+            (fund_code,nav_date,source,unit_nav,accumulated_nav,fetched_at,raw_payload,field_status)
+            VALUES ('000001','2026-11-10','AKShare/Eastmoney','1.5','99','x','{}','{}')""")
+    rebuild(tmp_path)
+    row = holdings("ALIPAY_FUND", "000001", root=tmp_path, valuation_date="2026-11-11")["rows"][0]
+    assert (row["position_as_of"], row["valuation_date"], row["nav_date"]) == (
+        "2026-11-11", "2026-11-11", "2026-11-10")
+    assert Decimal(row["market_value"]) == Decimal("87.70") * Decimal("1.5")
+    pending = holdings("ALIPAY_FUND", "000001", root=tmp_path, valuation_date="2026-11-12")["rows"][0]
+    assert pending["shares"] is None and pending["market_value"] is None
+    assert pending["last_confirmed_shares"] == "87.70"

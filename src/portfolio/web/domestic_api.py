@@ -85,6 +85,6 @@ def domestic_holdings():
     if bool(account) != bool(fund):
         return jsonify(status="error", message="请同时提供账户和基金代码"), 400
     try:
-        return jsonify(status="ok", **holdings(account, fund))
+        return jsonify(status="ok", **holdings(account, fund, valuation_date=request.args.get("as_of")))
     except (ValueError, ArithmeticError, sqlite3.Error):
         return jsonify(status="error", message="无法读取国内资产持仓"), 400

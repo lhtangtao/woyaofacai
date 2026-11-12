@@ -1,7 +1,7 @@
 """Rebuild confirmed-share history from the independent raw ledger."""
 from collections import defaultdict
 from datetime import date, timedelta
-from decimal import Decimal, localcontext
+from decimal import Decimal, InvalidOperation, localcontext
 from itertools import groupby
 from pathlib import Path
 from uuid import uuid4
@@ -9,7 +9,7 @@ from uuid import uuid4
 from .alipay import record_id
 from .storage import ACCOUNT, CALC_FILE, CALC_SCHEMA, RAW_FILE, connect, insert, now
 
-VERSION = "2"
+VERSION = "3"
 ZERO = Decimal(0)
 # 用户确认这三只支付宝基金在该期初日尚未持有。
 ALIPAY_ZERO_OPENINGS = {date(2021, 11, 11): frozenset({"002611", "012414", "019172"})}
@@ -66,6 +66,31 @@ def classify(row, pair):
     return "UNKNOWN", None, None
 
 
+ALIPAY_COVERAGE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS calc_alipay_statement_coverage (
+    file_sha256 TEXT PRIMARY KEY, period_start TEXT NOT NULL, period_end TEXT NOT NULL
+);
+"""
+
+
+def split_quantity(quantity, ratios, reported_delta=None):
+    if quantity is None or not quantity:
+        return quantity
+    try:
+        if len(ratios) != 1:
+            return None
+        left, right = map(Decimal, ratios[0].replace("：", ":").split(":"))
+        if min(left, right) <= 0:
+            return None
+        expected = quantity * right / left
+        if reported_delta is not None:
+            # An exactly reconciled account adjustment will be applied in the ledger loop.
+            return quantity if quantity + reported_delta == expected else None
+        return expected
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def read_raw(root):
     with connect(root / RAW_FILE, readonly=True) as raw:
         raw.execute("BEGIN")
@@ -82,19 +107,34 @@ def rebuild(root, *, full=False):
     if not openings:
         raise ValueError("请先导入期初资产证明")
     manifest = {row["id"]: (row["fund_code"], record_id(row)) for row in (*openings, *trades, *nav)}
-    version = record_id(batches, sorted(manifest.items()))
+    with connect(root / RAW_FILE, readonly=True) as raw:
+        action_table = raw.execute("SELECT 1 FROM sqlite_master WHERE name='raw_fund_corporate_actions'").fetchone()
+        splits = [tuple(row) for row in raw.execute("""SELECT DISTINCT fund_code,event_date,conversion_ratio
+            FROM raw_fund_corporate_actions WHERE event_type='SPLIT' AND conversion_ratio IS NOT NULL
+            ORDER BY 1,2,3""")] if action_table else []
+    for code, day, ratio in splits:
+        manifest[record_id("split", code, day, ratio)] = (code, record_id(code, day, ratio))
     started = now()
     run = uuid4().hex
     pairs = match_transfers(trades)
     with connect(root / CALC_FILE) as db:
-        db.executescript(CALC_SCHEMA)
+        db.executescript(CALC_SCHEMA + ALIPAY_COVERAGE_SCHEMA)
         db.execute("BEGIN IMMEDIATE")
+        digests = {digest for kind, digest in batches if kind == "transaction"}
+        periods = [(start, end) for digest, start, end in db.execute(
+            "SELECT * FROM calc_alipay_statement_coverage ORDER BY period_start") if digest in digests]
+        version = record_id(batches, sorted(manifest.items()), periods)
         previous = db.execute("SELECT raw_version,calculation_version FROM calc_runs WHERE status='完成' ORDER BY completed_at DESC LIMIT 1").fetchone()
         if not full and previous and tuple(previous) == (version, VERSION):
             return {"status": "unchanged"}
         effective_dates = [row["confirmation_date"] for row in trades if row["confirmation_date"]]
         first = date.fromisoformat(openings[0]["snapshot_date"])
         last = max(first, date.fromisoformat(max(effective_dates))) if effective_dates else first
+        if periods:
+            last = first
+        for start, end in periods:
+            if date.fromisoformat(start) <= last + timedelta(days=1):
+                last = max(last, date.fromisoformat(end))
         old = {row[0]: (row[1], row[2]) for row in db.execute("SELECT * FROM calc_raw_manifest")}
         all_funds = {value[0] for value in (*old.values(), *manifest.values())}
         changed_ids = {key for key in old.keys() | manifest.keys() if old.get(key) != manifest.get(key)}
@@ -114,7 +154,7 @@ def rebuild(root, *, full=False):
         with localcontext() as context:
             context.prec = 60
             for fund in sorted(changed):
-                rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, started)
+                rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, started, splits=splits)
         db.execute("DELETE FROM calc_fund_transfer_matches")
         db.executemany("INSERT INTO calc_fund_transfer_matches VALUES (?,?,?,?,?)", (
             (group, sell["order_id"], sell["id"], buy["id"], sell["confirmation_date"])
@@ -138,7 +178,7 @@ def rebuild(root, *, full=False):
                 "transfers": len(pairs) // 2, "through": last.isoformat()}
 
 
-def rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, calculated):
+def rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, calculated, *, splits=()):
     for table in ("calc_fund_master", "calc_fund_transactions", "calc_fund_share_movements",
                   "calc_fund_positions_daily", "calc_fund_positions_monthly", "calc_fund_monthly_summary"):
         db.execute(f"DELETE FROM {table} WHERE fund_code=?", (fund,))
@@ -183,6 +223,10 @@ def rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, ca
     nav_by_date = defaultdict(set)
     for row in (*snapshots, *(r for r in nav if r["fund_code"] == fund)):
         nav_by_date[row.get("nav_date") or row["unit_nav_date"]].add(amount(row["unit_nav"]))
+    split_dates = defaultdict(list)
+    for code, day, ratio in splits:
+        if code == fund and day > first.isoformat():
+            split_dates[day].append(ratio)
     negative = None
     start_quantity = quantity
     amounts_by_type = {"BUY": (0, 2), "SELL": (1, 3)}
@@ -191,6 +235,11 @@ def rebuild_fund(db, fund, openings, trades, nav, pairs, first, last, checks, ca
         totals = [ZERO] * 7
         for day in days:
             key = day.isoformat()
+            if key in split_dates:
+                before = quantity
+                quantity = split_quantity(quantity, split_dates[key])
+                if before is not None and quantity is None:
+                    checks.append(("SPLIT_REVIEW", fund, key))
             for kind, signed, row in movements.get(key, ()):
                 quantity = quantity + signed if quantity is not None and signed is not None else None
                 if kind == "UNKNOWN":

@@ -4,9 +4,10 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
 
 from .alipay import record_id
+from .calculate import split_quantity
 from .storage import CALC_FILE, RAW_FILE, connect, now
 
-VERSION = "3"
+VERSION = "4"
 BUY = {"买基金", "定时定额投资", "认购结果"}
 SELL = {"卖基金", "卖基金回活期宝", "活期宝转入—赎回", "活期宝即充即用", "活期宝即充即用调减", "快速取现", "普通取现"}
 INCREASE = {"份额调增", "超级转换-转入", "超级转换份额调增", "卖基金充值", "红利再投资"}
@@ -73,7 +74,7 @@ def movement(row, confirmations):
     return None
 
 
-def replay(rows, periods, splits, as_of, *, establishment=None):
+def replay(rows, periods, splits, as_of, *, establishment=None, anchors=None):
     """Retain the observed balance after a gap, without presenting it as a confirmed position."""
     confirmed = Counter(subscription_key(r) for r in rows if r["transaction_type_raw"] == "认购结果"
                         and r["confirmation_status"] == "成功" and r["parse_status"] == "正常")
@@ -86,7 +87,8 @@ def replay(rows, periods, splits, as_of, *, establishment=None):
             issues.append((row["id"], f"{day or '日期缺失'} {row['transaction_type_raw']} 待核对"))
         if day:
             daily[date.fromisoformat(day)].append((row, delta))
-    first = min(daily, default=as_of)
+    anchors = anchors or {}
+    first = min((*daily, *anchors), default=as_of)
     preceding = sorted((date.fromisoformat(start), date.fromisoformat(end)) for start, end in periods)
     latest_period = next(((start, end) for start, end in reversed(preceding) if start <= first <= end), None)
     if latest_period and latest_period == preceding[-1]:
@@ -101,31 +103,26 @@ def replay(rows, periods, splits, as_of, *, establishment=None):
         covered.update(start + timedelta(days=i) for i in range((end - start).days + 1))
     current = first
     quantity = buy = sell = dividend = Decimal(0)
-    reliable = not any(raw_id is None or "日期缺失" in detail for raw_id, detail in issues)
+    reliable = bool(rows) and not any(raw_id is None or "日期缺失" in detail for raw_id, detail in issues)
     historical = []
     uncovered = []
+    gap_since_anchor = not rows or any(raw_id is None for raw_id, _ in issues)
     while current <= as_of:
         trades = daily.get(current, ())
         if current not in covered:
             uncovered.append(current)
             reliable = False
+            gap_since_anchor = True
         if current.isoformat() in splits:
-            # No double entry: a broker-side split confirmation requires reconciliation first.
-            if any(r["transaction_type_raw"] in DECREASE | {"份额调增"} for r, _ in trades):
+            adjustments = [delta for r, delta in trades
+                           if r["transaction_type_raw"] in {"强减", "份额调增"}]
+            adjusted = split_quantity(quantity, splits[current.isoformat()],
+                                      sum(adjustments, Decimal(0)) if adjustments and None not in adjustments else None)
+            if adjusted is None or None in adjustments:
                 reliable = False
-                issues.append((None, f"{current} 拆分与账户份额调整重叠，待核对"))
-            elif quantity:
-                ratios = splits[current.isoformat()]
-                try:
-                    if len(ratios) != 1:
-                        raise ValueError
-                    left, right = map(Decimal, ratios[0].replace("：", ":").split(":"))
-                    if min(left, right) <= 0:
-                        raise ValueError
-                    quantity = quantity * right / left
-                except (InvalidOperation, ValueError):
-                    reliable = False
-                    issues.append((None, f"{current} 拆分比例无效或存在冲突"))
+                issues.append((None, f"{current} 拆分比例或账户份额调整待核对"))
+            else:
+                quantity = adjusted
         for row, delta in trades:
             if delta is None:
                 reliable = False
@@ -141,6 +138,17 @@ def replay(rows, periods, splits, as_of, *, establishment=None):
         if quantity < 0 and reliable:
             reliable = False
             issues.append((None, f"{current} 观察到负份额，期初或历史交易待核对"))
+        if current in anchors:
+            stated = anchors[current]
+            if quantity != stated:
+                issues.append((None, f"{current} 快照差异：重建 {quantity}；对账单 {stated}；差异 {stated - quantity}"))
+                if reliable:
+                    reliable = False
+                elif gap_since_anchor:
+                    quantity, reliable = stated, True
+            elif not reliable and gap_since_anchor:
+                quantity, reliable = stated, True
+            gap_since_anchor = False
         historical.append((current.isoformat(), format(quantity, "f") if reliable else None))
         current += timedelta(days=1)
     if uncovered:
@@ -185,7 +193,14 @@ def rebuild_tiantian(root):
         for account, start, end in db.execute("SELECT * FROM calc_tiantian_no_trade_periods"):
             if not any(r["account_id"] == account and start <= (r["confirmation_date"] or "") <= end for r in rows):
                 periods[account].append((start, end))
-        version = record_id(rows, dict(periods), split_rows, established)
+        snapshot_rows = [tuple(r) for r in db.execute("""SELECT account_id,fund_code,as_of,holding_shares
+            FROM calc_tiantian_statement_positions ORDER BY 1,2,3""")] if db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='calc_tiantian_statement_positions'").fetchone() else []
+        anchors = defaultdict(dict)
+        for account, fund, day, shares in snapshot_rows:
+            anchors[account, fund][date.fromisoformat(day)] = Decimal(shares)
+            groups.setdefault((account, fund), [])
+        version = record_id(rows, dict(periods), split_rows, established, snapshot_rows)
         if db.execute("SELECT 1 FROM calc_tiantian_run WHERE version=? AND raw_version=?", (VERSION, version)).fetchone():
             return {"status": "unchanged"}
         for table in ("calc_tiantian_positions", "calc_tiantian_funds", "calc_tiantian_issues"):
@@ -197,10 +212,10 @@ def rebuild_tiantian(root):
                 db.executemany("INSERT INTO calc_tiantian_issues VALUES (?,?,?,?)",
                                ((account, fund or "", r["id"], "基金代码或确认日期缺失") for r in trades))
                 continue
-            last = max(ends)
+            last = max((*ends, *anchors[account, fund]))
             inception = date.fromisoformat(established[fund]) if established.get(fund) else None
             history, observed, buy, sell, dividend, issues = replay(
-                trades, periods[account], splits[fund], last, establishment=inception)
+                trades, periods[account], splits[fund], last, establishment=inception, anchors=anchors[account, fund])
             db.executemany("INSERT INTO calc_tiantian_positions VALUES (?,?,?,?)",
                            ((account, fund, day, shares) for day, shares in history))
             issue = "；".join(dict.fromkeys(detail for _, detail in issues)) or None

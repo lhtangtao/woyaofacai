@@ -1,8 +1,9 @@
 """Read-only account-scoped data for the domestic holdings workspace."""
 from contextlib import ExitStack
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, localcontext
 from itertools import groupby
+from zoneinfo import ZoneInfo
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .calculate import ALIPAY_ZERO_OPENINGS
@@ -58,7 +59,9 @@ def daily_nav(raw, tables, code, cutoff, *, history=False):
 
 
 
-def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
+def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=None):
+    target = date.fromisoformat(valuation_date) if valuation_date else datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    cutoff = target.isoformat()
     result = dict(rows=[], transactions=[], history=[], raw_path=str(root / RAW_FILE),
                   calc_path=str(root / CALC_FILE))
     if not (root / RAW_FILE).exists():
@@ -97,14 +100,12 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             if run and (not latest_import or run >= latest_import):
                 positions = {(r["account_id"], r["fund_code"]): r for r in calc.execute("""
                     SELECT * FROM calc_fund_positions_daily
-                    WHERE trade_date=(SELECT MAX(trade_date) FROM calc_fund_positions_daily)""")}
+                    WHERE trade_date=(SELECT MAX(trade_date) FROM calc_fund_positions_daily WHERE trade_date<=?)""",
+                    (cutoff,))}
         metadata = ({r["fund_code"]: dict(r) for r in raw.execute("SELECT * FROM raw_fund_info")}
                     if "raw_fund_info" in tables else {})
         tiantian = {}
-        split_dates = {}
-        if "raw_fund_corporate_actions" in tables:
-            for code, day in raw.execute("SELECT fund_code,event_date FROM raw_fund_corporate_actions WHERE event_type='SPLIT'"):
-                split_dates.setdefault(code, []).append(day)
+        tt_positions = {}
         if calc and calc.execute("SELECT 1 FROM sqlite_master WHERE name='calc_tiantian_run'").fetchone():
             generation = calc.execute("SELECT completed_at FROM calc_tiantian_run").fetchone()
             imported = raw.execute("""SELECT MAX(b.created_at) FROM raw_fund_source_files f
@@ -112,11 +113,16 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             if generation and (not imported or generation[0] >= imported):
                 tiantian = {(r["account_id"], r["fund_code"]): dict(r)
                             for r in calc.execute("SELECT * FROM calc_tiantian_funds")}
+                tt_positions = {(r["account_id"], r["fund_code"]): dict(r) for r in calc.execute("""
+                    SELECT p.* FROM calc_tiantian_positions p JOIN (
+                        SELECT account_id,fund_code,MAX(trade_date) AS trade_date FROM calc_tiantian_positions
+                        WHERE trade_date<=? GROUP BY account_id,fund_code
+                    ) latest USING(account_id,fund_code,trade_date)""", (cutoff,))}
         statements = {}
         if calc and calc.execute("SELECT 1 FROM sqlite_master WHERE name='calc_tiantian_statement_positions'").fetchone():
             for row in calc.execute("""SELECT p.* FROM calc_tiantian_statement_positions p
                 WHERE as_of=(SELECT MAX(s.as_of) FROM calc_tiantian_statement_positions s
-                             WHERE s.account_id=p.account_id)"""):
+                             WHERE s.account_id=p.account_id AND s.as_of<=?)""", (cutoff,)):
                 key = row["account_id"], row["fund_code"]
                 statements[key] = dict(row)
                 records.setdefault(key, dict(row))
@@ -126,27 +132,24 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             position = positions.get(key)
             opening = openings.get(key)
             recent = tiantian.get(key)
-            as_of = recent["as_of"] if recent else position["trade_date"] if position else None
-            shares = (recent["observed_shares"] if not recent["issue"] else None) if recent else (
-                position["holding_shares"] if position else None)
+            position = tt_positions.get(key) or position
+            as_of = position["trade_date"] if position else None
+            shares = position["holding_shares"] if position else None
             issue = recent["issue"] if recent else None
             statement = statements.get(key)
-            if statement and (not as_of or statement["as_of"] >= as_of or not shares):
-                as_of, shares = statement["as_of"], statement["holding_shares"]
-                issue = "份额来自天天基金对账单期末快照"
-                if recent and recent["issue"]:
-                    issue += "；历史流水缺档"
-            else:
-                statement = None
+            if statement and statement["as_of"] == as_of and shares is not None and Decimal(shares) != Decimal(statement["holding_shares"]):
+                difference = Decimal(statement["holding_shares"]) - Decimal(shares)
+                issue = f"{as_of} 快照差异：重建 {shares}；对账单 {statement['holding_shares']}；差异 {difference}"
+                shares = None
+            last_confirmed_shares = shares
+            last_confirmed_date = as_of if shares is not None else None
             if not as_of:
-                issue = "交易已入库，持仓结果待更新"
-            if as_of and record.get("confirmation_date") and record["confirmation_date"] > as_of:
-                shares, issue = None, "有尚未纳入计算的确认交易"
-            if position and any((opening["snapshot_date"] if opening else "2021-11-11") < day <= as_of
-                                for day in split_dates.get(key[1], ())):
-                shares, issue = None, "支付宝拆分与账户份额变动待核对"
-            nav_record = next(daily_nav(raw, tables, key[1], as_of or date.today().isoformat()), {})
-            if statement and not nav_record and statement["unit_nav"]:
+                issue = issue or "无可用的份额计算结果"
+            elif as_of < cutoff:
+                shares = None
+                issue = "；".join(filter(None, (issue, f"流水覆盖截至 {as_of}，此后份额待核对")))
+            nav_record = next(daily_nav(raw, tables, key[1], cutoff), {})
+            if statement and not nav_record and statement["unit_nav"] and statement["nav_date"] <= cutoff:
                 nav_record = dict(unit_nav=statement["unit_nav"], nav_date=statement["nav_date"],
                                   source="天天基金对账单期末快照")
             nav_date = nav_record.get("nav_date")
@@ -159,9 +162,9 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                 issue = "；".join(filter(None, (issue, nav_record["nav_issue"])))
             if qty is not None and qty > 0 and nav is None:
                 issue = "；".join(filter(None, (issue, "缺少有效单位净值")))
-            if nav_date and (date.today() - date.fromisoformat(nav_date)).days > 7:
-                issue = "；".join(filter(None, (issue, "净值日期距今超过 7 天")))
-            value = str(qty * nav) if status == "持有中" and nav is not None else None
+            if nav_date and (target - date.fromisoformat(nav_date)).days > 7:
+                issue = "；".join(filter(None, (issue, "净值日期距估值日超过 7 天")))
+            value = "0" if status == "已清仓" else str(qty * nav) if status == "持有中" and nav is not None else None
             info = metadata.get(key[1], {})
             meta = accounts.get(key[0], {})
             returns = {}
@@ -185,26 +188,31 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
             result["rows"].append(dict(**returns, return_issue=return_issue, account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
                 fund_type=info.get("fund_type") or record.get("fund_type") or "待分类", platform=meta.get("platform", "—"),
                 account_name=meta.get("account_name", "—"), shares=shares, nav=str(nav) if nav is not None else None,
-                nav_date=nav_date, market_value=value, as_of=as_of, status=status, issue=issue,
+                nav_date=nav_date, market_value=value, as_of=as_of, position_as_of=as_of, valuation_date=cutoff,
+                last_confirmed_shares=last_confirmed_shares, last_confirmed_date=last_confirmed_date,
+                status=status, position_status="已确认" if status != PENDING else "待核对",
+                valuation_status="已清仓" if status == "已清仓" else "净值缺失" if nav is None else
+                "净值过期" if (target - date.fromisoformat(nav_date)).days > 7 else
+                "份额待核对" if status == PENDING else "已估值", issue=issue,
                 accumulated_nav=nav_record.get("accumulated_nav"), daily_return_rate=nav_record.get("daily_return_rate"),
                 nav_source=nav_record.get("source"), nav_status=nav_record.get("field_status"),
                 observed_shares=recent["observed_shares"] if recent and recent["issue"] else None))
         if account and result["rows"]:
             result["transactions"] = [dict(r) for r in raw.execute(
-                f"SELECT * FROM ({source}) WHERE account_id=? AND fund_code=? ORDER BY confirmation_date DESC,id",
-                (account, fund))]
+                f"SELECT * FROM ({source}) WHERE account_id=? AND fund_code=? AND (confirmation_date IS NULL OR confirmation_date<=?) ORDER BY confirmation_date DESC,id",
+                (account, fund, cutoff))]
             if (account, fund) in positions:
                 totals = {"BUY": Decimal(0), "SELL": Decimal(0)}
                 for move in calc.execute("""SELECT m.movement_type,m.signed_shares
                     FROM calc_fund_share_movements m JOIN calc_fund_transactions t
                     ON t.raw_transaction_id=m.raw_transaction_id
-                    WHERE t.account_id=? AND m.fund_code=? AND m.movement_type IN ('BUY','SELL')""",
-                    (account, fund)):
+                    WHERE t.account_id=? AND m.fund_code=? AND m.effective_date<=? AND m.movement_type IN ('BUY','SELL')""",
+                    (account, fund, cutoff)):
                     totals[move[0]] += abs(Decimal(move[1]))
                 result["rows"][0].update(buy_shares=str(totals["BUY"]), sell_shares=str(totals["SELL"]))
             recent = tiantian.get((account, fund))
             if recent:
-                if not recent["issue"]:
+                if not recent["issue"] and cutoff >= recent["as_of"]:
                     result["rows"][0].update(buy_shares=recent["buy_shares"], sell_shares=recent["sell_shares"],
                                              cash_dividend=recent["cash_dividend"])
                 table = "calc_tiantian_positions"
@@ -214,20 +222,14 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                 table = None
             if table:
                 snapshots = {r["trade_date"]: r["holding_shares"] for r in calc.execute(
-                    f"SELECT trade_date,holding_shares FROM {table} WHERE account_id=? AND fund_code=?",
-                    (account, fund))}
+                    f"SELECT trade_date,holding_shares FROM {table} WHERE account_id=? AND fund_code=? AND trade_date<=?",
+                    (account, fund, cutoff))}
                 if recent and recent["issue"]:
                     confirmed_day = max((day for day, qty in snapshots.items() if qty is not None), default=None)
                     if confirmed_day:
                         result["rows"][0].update(last_confirmed_date=confirmed_day,
                                                  last_confirmed_shares=snapshots[confirmed_day])
                 history = {}
-                if not recent and split_dates.get(fund):
-                    baseline = openings.get((account, fund))
-                    start = baseline["snapshot_date"] if baseline else "2021-11-11"
-                    first_split = min((day for day in split_dates[fund] if day > start), default=None)
-                    if first_split:
-                        snapshots = {day: qty if day < first_split else None for day, qty in snapshots.items()}
                 for day, qty in sorted(snapshots.items()):
                     history[day[:7]] = dict(month=day[:7], holding_shares=qty, market_value=None)
                 seen_months = set()
@@ -242,11 +244,4 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR):
                         history[month]["market_value"] = str(Decimal(qty) * nav)
                         history[month]["nav_date"] = day
                 result["history"] = list(history.values())
-            row = result["rows"][0]
-            statement = statements.get((account, fund))
-            if statement and row["shares"] is not None and row["as_of"] == statement["as_of"]:
-                month = statement["as_of"][:7]
-                result["history"] = [r for r in result["history"] if r["month"] != month]
-                result["history"].append(dict(month=month, holding_shares=row["shares"], market_value=row["market_value"],
-                                              nav_date=row["nav_date"]))
     return result

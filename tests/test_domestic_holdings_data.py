@@ -69,3 +69,30 @@ def test_tiantian_returns_use_net_cash_with_sub_cent_fee_ambiguity():
     assert Decimal(result["cost"]) == Decimal("10.00")
     assert Decimal(result["pnl"]) == 2
     assert tiantian_returns([dict(purchase, confirmed_amount="8")], Decimal("4.64"), Decimal("12")) == {}
+
+
+def test_replay_carries_shares_and_applies_split_once():
+    from portfolio.domestic.calculate import split_quantity
+
+    buy = dict(id="buy", confirmation_date="2024-01-01", transaction_type_raw="买基金",
+               confirmed_shares="1000", confirmed_amount="1000", confirmation_status="成功", parse_status="正常")
+    periods = [("2024-01-01", "2026-01-02")]
+    horizon = date(2026, 1, 2)
+    assert replay([buy], periods, {}, horizon)[0][-1] == ("2026-01-02", "1000")
+    assert replay([buy], periods, {"2026-01-01": ["1:2"]}, horizon)[0][-1] == ("2026-01-02", "2000")
+    adjustment = dict(buy, id="adjust", confirmation_date="2026-01-01", transaction_type_raw="份额调增")
+    assert replay([buy, adjustment], periods, {"2026-01-01": ["1:2"]}, horizon)[0][-1] == ("2026-01-02", "2000")
+    assert split_quantity(Decimal("1000"), ["1:2"], Decimal("900")) is None
+
+
+def test_same_day_snapshot_difference_and_gap_anchor():
+    buy = dict(id="buy", confirmation_date="2025-01-01", transaction_type_raw="买基金",
+               confirmed_shares="1180", confirmed_amount="1000", confirmation_status="成功", parse_status="正常")
+    snapshot = date(2025, 1, 3)
+    horizon = date(2025, 1, 4)
+    anchors = {snapshot: Decimal("1200")}
+    history, observed, *_, issues = replay([buy], [("2025-01-01","2025-01-04")], {}, horizon, anchors=anchors)
+    assert observed == 1180 and history[-1][1] is None and "差异 20" in issues[0][1]
+    history, *_ = replay([buy], [("2025-01-01","2025-01-01"),("2025-01-03","2025-01-04")],
+                         {}, horizon, anchors=anchors)
+    assert history[-3:] == [("2025-01-02", None), ("2025-01-03", "1200"), ("2025-01-04", "1200")]
