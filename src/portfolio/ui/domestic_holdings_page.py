@@ -404,6 +404,7 @@ class DomesticHoldingsPage(QWidget):
             f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
             f"剩余持仓成本  {amount(row.get('cost'))}\n已实现盈亏  {amount(row.get('realized_pnl'))}\n"
             + (f"最近确认已实现盈亏  {amount(row['last_confirmed_realized_pnl'])}\n" if row.get("last_confirmed_realized_pnl") is not None else "")
+            + (f"{row['confirmation_note']}\n" if row.get("confirmation_note") else "")
             + f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
             f"累计分红  {amount(row.get('cash_dividend'))}\n"
             f"数据说明  {row.get('issue') or '—'}\n"

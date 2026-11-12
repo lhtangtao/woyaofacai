@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .calculate import ALIPAY_ZERO_OPENINGS
 from .fund_returns import confirmed_returns, tiantian_returns
+from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 
 REVIEW = "待核对"
@@ -115,7 +116,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             parse_status,parse_error,id,source_page FROM raw_alipay_fund_transactions"""
         records = {}
         for row in raw.execute(f"""SELECT * FROM ({source}) WHERE fund_code IS NOT NULL
-            AND fund_code<>'' ORDER BY confirmation_date,id"""):
+            AND fund_code<>'' AND (confirmation_date IS NULL OR confirmation_date<=?)
+            ORDER BY confirmation_date,id""", (cutoff,)):
             records[(row["account_id"], row["fund_code"])] = dict(row)
         openings = {}
         for row in raw.execute("SELECT * FROM raw_fund_opening_positions ORDER BY snapshot_date"):
@@ -164,6 +166,7 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 key = row["account_id"], row["fund_code"]
                 statements[key] = dict(row)
                 records.setdefault(key, dict(row))
+        confirmations = read_confirmations(calc, cutoff)
         for key, record in records.items():
             if account and key != (account, fund):
                 continue
@@ -215,6 +218,35 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                     status = "历史持有 · 当前待核对"
                 else:
                     status = "份额待核对"
+            confirmation = confirmations.get(key)
+            latest_trade = record.get("confirmation_date") or ""
+            # New dated transactions return control to the ledger. Historical queries
+            # before the confirmation date never receive the user's current status.
+            if confirmation:
+                day = confirmation["confirmed_date"]
+                if (latest_trade > day
+                        or (latest_trade == day and record.get("id") != confirmation["latest_transaction_id"])
+                        or (statement and statement["as_of"] > day and qty is not None)):
+                    confirmation = None
+            user_closed = bool(confirmation and confirmation["status"] == "已清仓")
+            user_held = bool(confirmation and confirmation["status"] == "持有中"
+                             and confidence == "后续交易资料待核对"
+                             and last_confirmed_status == "持有中"
+                             and latest_trade <= last_confirmed_date)
+            if user_closed:
+                if qty is not None and qty > 0:
+                    position_issue = "用户确认已清仓；账本仍有正份额"
+                    confidence = "份额异常"
+                    qty = None
+                if confidence == "后续交易资料待核对":
+                    position_issue = None
+                    confidence = "用户确认当前状态"
+                status = current_status = "已清仓"
+            elif user_held:
+                qty = Decimal(last_confirmed_shares)
+                position_issue = None
+                confidence = "用户确认当前状态"
+                status = current_status = "持有中"
             nav_record = next(daily_nav(raw, tables, key[1], cutoff), {})
             if statement and not nav_record and statement["unit_nav"] and statement["nav_date"] and statement["nav_date"] <= cutoff:
                 nav_record = dict(unit_nav=statement["unit_nav"], nav_date=statement["nav_date"],
@@ -231,7 +263,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 nav_status = "净值尚未更新"
             if qty is not None and qty > 0 and nav_status != "净值有效":
                 nav_issue = nav_issue or nav_status
-                status = "净值待更新" if nav_status == "净值尚未更新" else nav_status
+                if not user_held:
+                    status = "净值待更新" if nav_status == "净值尚未更新" else nav_status
             review_reason = "；".join(filter(None, (position_issue, nav_issue if qty and qty > 0 else None))) or None
             value = "0" if qty == 0 else str(qty * nav) if qty is not None and nav is not None else None
             info = metadata.get(key[1], {})
@@ -260,15 +293,22 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             return_issue = None if "pnl" in returns else (
                 "天天基金历史流水或成本基准待核对" if meta.get("platform") == "天天基金" else
                 "期初成本、交易或估值尚未完整核对")
+            confirmation_note = None
+            if user_closed and (qty is None or return_issue):
+                confirmation_note = "用户确认；历史交易或收益尚未完整核算"
+            elif user_held:
+                confirmation_note = f"用户确认当前持有；估值份额及成本沿用 {last_confirmed_date} 的账本结果"
             result["rows"].append(dict(**returns, return_issue=return_issue, account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
                 fund_type=info.get("fund_type") or record.get("fund_type") or "待分类", platform=meta.get("platform", "—"),
-                account_name=meta.get("account_name", "—"), shares=shares if qty is not None else None,
+                account_name=meta.get("account_name", "—"), shares=str(qty) if qty is not None else None,
                 nav=str(nav) if nav is not None else None, nav_date=nav_date, market_value=value,
                 as_of=as_of, position_as_of=as_of, coverage_through=coverage_through, valuation_date=cutoff,
                 last_confirmed_shares=last_confirmed_shares, last_confirmed_date=last_confirmed_date,
                 last_confirmed_status=last_confirmed_status, last_confirmed_close_date=closed_date,
                 current_position_status=current_status, position_status=confidence, position_issue=position_issue,
-                status=status, review_reason=review_reason,
+                status=status, review_reason=review_reason, confirmation_note=confirmation_note,
+                user_confirmation_date=confirmation["confirmed_date"] if confirmation else None,
+                latest_transaction_id=record.get("id"),
                 valuation_status="已清仓" if qty == 0 else "份额待核对" if qty is None else
                 nav_status if nav_status != "净值有效" else "已估值",
                 issue=review_reason, accumulated_nav=nav_record.get("accumulated_nav"),

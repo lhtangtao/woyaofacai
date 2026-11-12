@@ -205,6 +205,24 @@ def test_holdings_valuation_uses_query_date_and_distinguishes_uncovered_position
     assert pending["shares"] is None and pending["market_value"] is None
     assert pending["last_confirmed_shares"] == "87.70"
 
+    from portfolio.domestic.position_confirmation import SCHEMA as CONFIRMATION_SCHEMA
+
+    with connect(tmp_path / CALC_FILE) as calc:
+        calc.execute(CONFIRMATION_SCHEMA)
+        calc.executemany("INSERT INTO calc_fund_position_confirmations VALUES (?,?,?,?,NULL)", (
+            ("ALIPAY_FUND", "000001", "2026-11-12", "持有中"),
+            ("ALIPAY_FUND", "000002", "2026-11-12", "已清仓"),
+        ))
+    rows = {r["fund_code"]: r for r in holdings(root=tmp_path, valuation_date="2026-11-12")["rows"]}
+    assert rows["000001"]["status"] == "持有中" and rows["000001"]["shares"] == "87.70"
+    assert Decimal(rows["000001"]["market_value"]) == Decimal("87.70") * Decimal("1.5")
+    closed = rows["000002"]
+    assert closed["status"] == "已清仓" and closed["market_value"] is None and closed["shares"] is None
+    assert closed["last_confirmed_status"] == "无法确认" and closed["review_reason"]
+    assert closed["confirmation_note"] == "用户确认；历史交易或收益尚未完整核算"
+    historical = holdings("ALIPAY_FUND", "000002", root=tmp_path, valuation_date="2026-11-11")["rows"][0]
+    assert historical["status"] == "份额待核对" and historical["user_confirmation_date"] is None
+
 
 def test_holdings_preserve_confirmed_close_across_gap_and_reopen(tmp_path):
     from portfolio.domestic.holdings_query import holdings
@@ -247,6 +265,15 @@ def test_holdings_preserve_confirmed_close_across_gap_and_reopen(tmp_path):
     assert gap["status"] == "历史已清仓 · 当前待核对"
     assert gap["position_status"] == "历史交易缺档"
     assert gap["shares"] is None and gap["market_value"] is None and gap["last_confirmed_shares"] == "0"
+    from portfolio.domestic.position_confirmation import SCHEMA as CONFIRMATION_SCHEMA
+
+    with connect(tmp_path / CALC_FILE) as calc:
+        calc.execute(CONFIRMATION_SCHEMA)
+        calc.execute("INSERT INTO calc_fund_position_confirmations VALUES (?,?,?,'已清仓',NULL)",
+                     (account, code, "2026-11-04"))
+    acknowledged = row("2026-11-04")
+    assert acknowledged["status"] == "已清仓" and acknowledged["market_value"] is None
+    assert acknowledged["last_confirmed_shares"] == "0" and "缺档" in acknowledged["review_reason"]
     reopened = row("2026-11-06")
     assert reopened["current_position_status"] == "持有中" and reopened["shares"] == "2"
     assert reopened["last_confirmed_close_date"] is None and reopened["nav_status"] == "净值缺失"

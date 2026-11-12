@@ -36,7 +36,17 @@ def main():
     nav.add_argument("--attempts", type=int, choices=range(1, 6), default=3)
     nav.add_argument("--confirm", action="store_true", required=True)
     commands.add_parser("check-recent-nav", help="检查并补齐最近 30 天的历史基金净值")
+    confirm = commands.add_parser("confirm-current-positions", help="按最近确认的持仓登记当前持有及历史清仓状态")
+    confirm.add_argument("--confirm", action="store_true", required=True)
     args = parser.parse_args()
+    if args.command == "confirm-current-positions":
+        from .position_confirmation import confirm_current_positions
+
+        try:
+            print(json.dumps(confirm_current_positions(args.directory), ensure_ascii=False))
+        except ValueError as exc:
+            parser.error(str(exc))
+        return
     if args.command == "check-recent-nav":
         from contextlib import redirect_stdout
         from .nav_recent import check
