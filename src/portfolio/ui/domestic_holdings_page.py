@@ -246,8 +246,6 @@ class DomesticHoldingsPage(QWidget):
         trend_body.addLayout(trend_header)
         self.history_plot = TrendView()
         trend_body.addWidget(self.history_plot, 1)
-        self.history_note = QLabel(objectName="domesticCaption", wordWrap=True)
-        trend_body.addWidget(self.history_note)
         self.graph_grid = ResponsiveGrid([self.by_platform, self.by_type, trend], 345, 3)
         self.graph_grid.setContentsMargins(0, 0, 0, 0)
         self.graph_area.setLayout(self.graph_grid)
@@ -493,14 +491,6 @@ class DomesticHoldingsPage(QWidget):
                 dates = sorted({day for day in dates if day})
                 details[day] = "、".join(dates) if dates else "当日无持仓"
         self.history_plot.render(points, details)
-        count = sum(value is not None for _, value in points)
-        explanations = "；".join(f"{reason}（{'、'.join(sorted(codes))}）"
-                                for reason, codes in reasons.items())
-        self.history_note.setText(
-            f"历史市值（不含货币基金）· 完整估值 {count} 日 · 缺口 {len(points) - count} 日"
-            + (f" · {explanations}" if explanations else "")
-            if points else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
-            else "当前范围暂无历史估值。")
 
     def open_fund(self, row):
         self.selected = row["account_id"], row["fund_code"]
