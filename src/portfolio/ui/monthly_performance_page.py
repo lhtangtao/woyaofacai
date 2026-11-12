@@ -770,6 +770,11 @@ class MonthlyPerformancePage(QWidget):
         self.ticker_input.setStyleSheet("padding: 4px 8px; border: 1px solid #E2E8F0; border-radius: 4px; font-size: 12px;")
         filter_layout.addWidget(self.ticker_input)
 
+        if hasattr(self.parent(), "global_asset_filter") or hasattr(self.window(), "global_asset_filter"):
+            self.person_combo.hide()
+            self.broker_combo.hide()
+            self.ticker_input.hide()
+
         self.month_combo = QComboBox()
         self.month_combo.setMinimumWidth(115)
         self.month_combo.setAccessibleName("月份")
@@ -1586,6 +1591,37 @@ class MonthlyPerformancePage(QWidget):
         self.populate_months()
 
         self.recalculate_and_refresh()
+
+    def sync_from_global_filter(self, state):
+        """从主窗口唯一 GlobalAssetFilter 同步人员、渠道与股票代码，不触发反向回环。"""
+        if getattr(self, "_syncing_person", False) or getattr(self, "_syncing_broker", False):
+            return
+        self._syncing_person = True
+        self._syncing_broker = True
+        try:
+            self.selected_person_id = state.person
+            if self.person_combo.count() <= 1:
+                self._populate_persons()
+            self.person_combo.blockSignals(True)
+            idx = self.person_combo.findData(state.person)
+            self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.person_combo.blockSignals(False)
+
+            self.selected_broker = ""
+            self.broker_combo.blockSignals(True)
+            self.broker_combo.setCurrentIndex(0)
+            self.broker_combo.blockSignals(False)
+
+            self.search_ticker = ""
+            self.ticker_input.blockSignals(True)
+            self.ticker_input.clear()
+            self.ticker_input.blockSignals(False)
+
+            self.table_model.page = 1
+            self.recalculate_and_refresh()
+        finally:
+            self._syncing_person = False
+            self._syncing_broker = False
 
     def sync_person_from_main(self, person_id: Any):
         if getattr(self, "_syncing_person", False):
@@ -2908,29 +2944,31 @@ class MonthlyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def on_reset_clicked(self):
+        main_win = getattr(self, "main_window", None) or self.parent() or self.window()
+        has_global = hasattr(main_win, "global_asset_filter")
         self.month_combo.setCurrentIndex(0)
         self.start_month, self.end_month = "2025-01", ""
-        person_changed = (self.selected_person_id is not None)
-        self.ticker_input.clear()
-        self.search_ticker = ""
         self.category_combo.setCurrentIndex(0)
         self.selected_category = ""
-        self.broker_combo.setCurrentIndex(0)
-        self.selected_broker = ""
-        self.person_combo.setCurrentIndex(0)
-        self.selected_person_id = None
         self.active_kpi_filter = None
         self.stock_pnl_filter = "all"
         self.table_model.page = 1
         for c in self.kpi_cards.values():
             c.set_selected(False)
 
-        main_win = getattr(self, "main_window", None) or self.parent() or self.window()
-        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
-            self._syncing_person = True
-            try:
-                main_win.sync_person_from_holdings(None)
-            finally:
-                self._syncing_person = False
+        if not has_global:
+            person_changed = (self.selected_person_id is not None)
+            self.ticker_input.clear()
+            self.search_ticker = ""
+            self.broker_combo.setCurrentIndex(0)
+            self.selected_broker = ""
+            self.person_combo.setCurrentIndex(0)
+            self.selected_person_id = None
+            if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+                self._syncing_person = True
+                try:
+                    main_win.sync_person_from_holdings(None)
+                finally:
+                    self._syncing_person = False
 
         self.recalculate_and_refresh()

@@ -46,6 +46,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.jobs = {}
         self.restore_state = None
         self._filter_batch = False
+        self._syncing_global_filter = False
         self._analytics_scope = None
         self._route = (0, None)
         self._history = []
@@ -254,6 +255,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.info = None
         self.restore_state = restore
         self.filters_widget.setEnabled(False)
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.setEnabled(False)
         self.source_label.setText("正在只读连接…")
         from portfolio.paths import derived_path
         self.source_label.setToolTip(f"事实库：{self.service.path}\n派生库：{derived_path(self.service.path)}")
@@ -347,6 +350,15 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.apply_extra_state(state)
         self._filter_batch = False
         self.search_timer.stop()
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.populate(
+                info.persons,
+                info.accounts,
+                info.instruments,
+                include_disabled=self.disabled.isChecked(),
+            )
+            self._sync_global_filter_from_legacy()
+            self.global_asset_filter.setEnabled(True)
         self.filters_widget.setEnabled(True)
         self.page_number = state.get("page_number", 0)
         if self.restore_state:
@@ -435,6 +447,8 @@ class MainWindow(InteractionMixin, QMainWindow):
         index = self.person.findData(selected)
         self.person.setCurrentIndex(max(0, index))
         self.person.blockSignals(False)
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.populate_persons(self.info.persons, include_disabled=self.disabled.isChecked())
 
     @staticmethod
     def filter_settings_key(path):
@@ -451,29 +465,118 @@ class MainWindow(InteractionMixin, QMainWindow):
         self.person.setToolTip("券商真实账本独立于人员份额；如需看人员交易，请切回人员权益账本。" if not is_person else "")
         self.filters_changed()
 
+    def _sync_global_filter_from_legacy(self):
+        if not hasattr(self, "global_asset_filter") or self._syncing_global_filter:
+            return
+        from portfolio.ui.global_asset_filter import GlobalAssetFilterState
+        self._syncing_global_filter = True
+        try:
+            self.global_asset_filter.set_state(
+                GlobalAssetFilterState.normalized(
+                    self.person.currentData(),
+                    self.accounts.selected_ids(),
+                    self.stock.currentData(),
+                ),
+                emit=False,
+            )
+        finally:
+            self._syncing_global_filter = False
+
+    def _sync_legacy_controls_from_global(self, state):
+        self._syncing_global_filter = True
+        prev_batch = self._filter_batch
+        self._filter_batch = True
+        try:
+            self.person.blockSignals(True)
+            self.person.set_person_id(state.person)
+            self.person.blockSignals(False)
+
+            self.accounts.blockSignals(True)
+            selected_acc = set(state.account_ids or ())
+            for aid, action in self.accounts.actions_by_id.items():
+                action.blockSignals(True)
+                action.setChecked(aid in selected_acc)
+                action.blockSignals(False)
+            ids = self.accounts.selected_ids()
+            self.accounts.setText(
+                self.accounts.actions_by_id[ids[0]].text()
+                if ids and len(ids) == 1
+                else f"已选 {len(ids)} 个渠道" if ids else "全部渠道"
+            )
+            self.accounts.blockSignals(False)
+
+            self.stock.blockSignals(True)
+            if state.instrument_id is None:
+                self.stock.setCurrentIndex(0)
+            else:
+                self.stock.setCurrentIndex(max(0, self.stock.findData(state.instrument_id)))
+            self.stock.blockSignals(False)
+        finally:
+            self._filter_batch = prev_batch
+            self._syncing_global_filter = False
+
+    def on_global_asset_filter_changed(self, state):
+        if self._syncing_global_filter or self._filter_batch:
+            return
+        self._sync_legacy_controls_from_global(state)
+        self.filters_changed()
+
+    def reset_global_asset_filters(self):
+        if not hasattr(self, "global_asset_filter"):
+            self.reset_filters()
+            return
+        self._filter_batch = True
+        self._syncing_global_filter = True
+        try:
+            self.global_asset_filter.reset_to_default(emit=False)
+            self._sync_legacy_controls_from_global(self.global_asset_filter.state())
+        finally:
+            self._syncing_global_filter = False
+            self._filter_batch = False
+        self.search_timer.stop()
+        self.filters_changed()
+
     def filters_changed(self, *_):
         if self._filter_batch:
             return
+        if not self._syncing_global_filter:
+            self._sync_global_filter_from_legacy()
         self.update_filter_chips()
         self.page_number = 0
         if hasattr(self, "monthly_realtime_page"):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
         if hasattr(self, "daily_performance_page"):
-            self.daily_performance_page.sync_person_from_main(self.person.currentData())
-            self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+            if hasattr(self.daily_performance_page, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+                self.daily_performance_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.daily_performance_page.sync_person_from_main(self.person.currentData())
+                self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
         if hasattr(self, "monthly_performance_page"):
-            self.monthly_performance_page.sync_person_from_main(self.person.currentData())
-            self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+            if hasattr(self.monthly_performance_page, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+                self.monthly_performance_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.monthly_performance_page.sync_person_from_main(self.person.currentData())
+                self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
         if hasattr(self, "charts_page") and hasattr(self.charts_page, "sync_person_from_main"):
             self.charts_page.sync_person_from_main(self.person.currentData())
             self.charts_page.sync_broker_from_main(self.accounts.current_broker_name())
-        if hasattr(self, "earnings_page") and self.pages.currentIndex() == 14:
-            self.earnings_page.activate()
+        if hasattr(self, "asset_trend") and self.asset_trend.isVisible():
+            self.asset_trend.sync_person_from_main(self.person.currentData())
+        if hasattr(self, "holdings_page"):
+            if hasattr(self.holdings_page, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+                self.holdings_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.holdings_page.sync_person_from_main(self.person.currentData())
         self.refresh()
 
     def sync_person_from_holdings(self, person_id):
         """持仓管理切换人员时，反向同步主窗口全局人员筛选器。"""
         if getattr(self, "_filter_batch", False):
+            return
+        if hasattr(self, "global_asset_filter"):
+            if self.global_asset_filter.state().person == person_id:
+                return
+            self.global_asset_filter.set_person(person_id, emit=True)
             return
         curr = self.person.currentData()
         if curr == person_id:
@@ -484,15 +587,34 @@ class MainWindow(InteractionMixin, QMainWindow):
         """持仓管理切换渠道时，反向同步主窗口全局渠道筛选器。"""
         if getattr(self, "_filter_batch", False):
             return
-        curr = self.accounts.current_broker_name()
         clean = (broker_name or "").strip()
+        if hasattr(self, "global_asset_filter"):
+            if self.global_asset_filter.account_filter.current_broker_name() == clean:
+                return
+            self.global_asset_filter.set_broker_name(clean, emit=True)
+            return
+        curr = self.accounts.current_broker_name()
         if curr == clean:
             return
         self.accounts.set_broker_name(clean)
 
+    def sync_ticker_from_holdings(self, ticker):
+        """持仓管理下钻到指定股票时，反向同步主窗口全局股票筛选器。"""
+        if getattr(self, "_filter_batch", False):
+            return
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.set_ticker_symbol(ticker, emit=True)
+
     def make_scope(self):
-        person = self.person.currentData()
-        stock = self.stock.currentData()
+        if hasattr(self, "global_asset_filter") and self.is_global_asset_page():
+            gstate = self.global_asset_filter.state()
+            person = gstate.person
+            stock = gstate.instrument_id
+            account_ids = gstate.account_ids
+        else:
+            person = self.person.currentData()
+            stock = self.stock.currentData()
+            account_ids = self.accounts.selected_ids()
         ledger = Ledger(self.ledger.currentData())
         if self.broker_people_view():
             person, ledger = None, Ledger.PERSON
@@ -513,7 +635,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         return QueryScope(
             as_of=end.toPython(), ledger=ledger,
             person_ids=person_ids,
-            account_ids=self.accounts.selected_ids(), instrument_ids=(stock,) if stock is not None else None,
+            account_ids=account_ids, instrument_ids=(stock,) if stock is not None else None,
             category=self.category.currentData(),
             start_date=effective_start,
             search=self.search.text().strip(), include_disabled=self.disabled.isChecked(), audit=self.audit.isChecked(),
@@ -539,7 +661,11 @@ class MainWindow(InteractionMixin, QMainWindow):
         except ValueError as exc:
             self._error(str(exc))
             return
-        self.banner.show_status("正在读取当前筛选的交易…", "loading")
+        if self.pages.currentIndex() == 22 and hasattr(self, "holdings_page"):
+            self.banner.hide()
+            self.holdings_page.set_inline_status("正在读取当前筛选的交易…")
+        else:
+            self.banner.show_status("正在读取当前筛选的交易…", "loading")
         filters = self.make_trade_filters()
         for card in self.trade_cards:
             card.set_value(None)
@@ -699,6 +825,7 @@ class MainWindow(InteractionMixin, QMainWindow):
                 logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
         self.preload_people_bundle()
         if self.pages.currentIndex() == 22:
+            self.holdings_page.set_inline_status("")
             self.holdings_page.set_analytics(analytics)
         if hasattr(self, "daily_performance_page"):
             self.daily_performance_page.update_data(analytics)

@@ -133,7 +133,7 @@ class DashboardPage(QWidget):
         annual_note.setWordWrap(True)
         yearly_layout.addWidget(annual_note)
         daily_layout.addStretch()
-        self.summaries = ReportPage(("渠道汇总", "分类汇总", "季度矩阵", "月度趋势"))
+        self.summaries = ReportPage(("渠道汇总", "分类汇总", "季度矩阵", "月度趋势"), show_details=False)
         self.summaries.setMinimumHeight(480)
         body.addWidget(self.summaries)
         scroll.setWidget(content)

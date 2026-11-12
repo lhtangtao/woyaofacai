@@ -94,7 +94,8 @@ def test_person_closing_values_and_special_cases(closed_ledger):
     assert (win["avg_buy_price"],win["avg_sell_price"]) == (8.75,13.75)
     assert win["orig_close_price"] == 30 and win["close_price"] == 15 and win["is_split_adjusted"]
     assert win["first_buy_date"] == "2026-01-02" and win["last_close_date"] == "2026-01-05"
-    assert win["post_close_change"] == pytest.approx((110-15)/15)
+    # 清仓后涨跌幅 = (当前价 - 平均清仓价折算值) / 平均清仓价折算值
+    assert win["post_close_change"] == pytest.approx((110 - (13.75 / 2)) / (13.75 / 2))
     assert keyed[1,1,2]["current_price"] is None and keyed[1,1,2]["post_close_change"] is None
     assert keyed[1,1,3]["sell_quantity"] == .7 and (1,1,4) not in keyed
     assert keyed[2,1,4]["realized_pnl"] == 1
@@ -150,11 +151,29 @@ def test_mac_modes_filter_sort_export_and_drawer(closed_ledger, qtbot, monkeypat
     page.set_analytics(analytics)
     page.open_closed_positions()
     assert page.closed_mode.currentIndex() == 0
-    assert "历史总买入数量" in page.detail_model.columns
+    assert page.closed_person_lbl.isHidden() and page.closed_person_combo.isHidden()
+    assert "历史总交易数量" in page.detail_model.columns
+    assert "历史总买入数量" not in page.detail_model.columns
+    assert "历史总卖出数量" not in page.detail_model.columns
+    cols_p = list(page.detail_model.columns)
+    assert cols_p.index("最后清仓价") == cols_p.index("当前价") - 1
+    assert cols_p.index("清仓后涨跌幅") == cols_p.index("当前价") + 1
+    assert page.detail_model.sort_column == cols_p.index("最终清仓时间")
+    assert page.detail_model.sort_order == Qt.SortOrder.DescendingOrder
+
     page.search_input.setText("DEMO")
     assert len(page.detail_model.rows) == 3
     page.closed_mode.setCurrentIndex(1)
+    assert page.closed_person_lbl.isHidden() and page.closed_person_combo.isHidden()
+    cols_a = list(page.detail_model.columns)
+    assert "历史总交易数量" in cols_a
+    assert "历史总买入数量" not in cols_a and "历史总卖出数量" not in cols_a
+    assert cols_a.index("最后清仓价") == cols_a.index("当前价") - 1
+    assert cols_a.index("清仓后涨跌幅") == cols_a.index("当前价") + 1
+    assert page.detail_model.sort_column == cols_a.index("最终清仓时间")
+    assert page.detail_model.sort_order == Qt.SortOrder.DescendingOrder
     assert page.search_input.text() == "DEMO" and len(page.detail_model.rows) == 2
+
     page.detail_model.toggle_sort(page.detail_model.columns.index("清仓收益"))
     assert page.detail_model.rows[0].metadata["account_id"] == 2
     page.closed_mode.setCurrentIndex(0)
@@ -165,13 +184,24 @@ def test_mac_modes_filter_sort_export_and_drawer(closed_ledger, qtbot, monkeypat
     assert not page.drawer.isHidden()
     assert page.drawer.trade_model.rowCount() == 2
     assert page.drawer.trade_model.rows[0].values[2:4] == ("长桥", "卖出")
+
+    # 点击抽屉内部保持展开，点击抽屉外部区域应自动收起
+    qtbot.mouseClick(page.drawer.name_title, Qt.MouseButton.LeftButton)
+    assert not page.drawer.isHidden()
+    qtbot.mouseClick(page.detail_info, Qt.MouseButton.LeftButton)
+    assert page.drawer.isHidden()
+    # 验证账户汇总模式下同样生成「最后清仓价」与基于「卖出均价」对比的「清仓后涨跌幅」
+    acc_1_row = next(r for r in page.detail_model.rows if r.metadata["account_id"] == 1)
+    assert acc_1_row.metadata["close_price"] == 10  # day6 SELL@20 经过 2:1 折算 = 10
+    assert float(acc_1_row.metadata["post_close_change"]) == pytest.approx((110 - (12.5 / 2)) / (12.5 / 2))
+
     out=tmp_path/"closed.csv"
     monkeypatch.setattr(QFileDialog,"getSaveFileName",lambda *a:(str(out),""))
     page._export_detail()
     with out.open(encoding="utf-8-sig",newline="") as stream:
         rows=list(csv.reader(stream))
     assert rows[0] == [label for _,label,_ in closed_columns("account")]
-    assert rows[1][0].endswith("#2")
+    assert rows[1][0] == "长桥"
     page.sync_person_from_main(1)
     assert next(r for r in page.detail_model.rows if r.metadata["account_id"] == 1).metadata["realized_pnl"] == 40
     assert all(label != "清仓收益" for _,entries in GROUPS for label,*_ in entries)

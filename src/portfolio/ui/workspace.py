@@ -27,6 +27,7 @@ from portfolio.ui.components import FilterChips, MetricCard, StatusLabel
 from portfolio.ui.dashboard_page import DashboardPage
 from portfolio.ui.date_picker import DatePicker
 from portfolio.ui.filters import AccountFilter, PersonFilter, TickerSearch
+from portfolio.ui.global_asset_filter import GlobalAssetFilter
 from portfolio.ui.icons import icon
 from portfolio.ui.live_quotes import LiveQuotesPanel
 from portfolio.ui.report_page import ReportPage
@@ -129,12 +130,16 @@ def build_workspace(self):
     for card in self.trade_cards:
         stats.addWidget(card, 1)
     layout.addWidget(self.stat_widget)
+    self.global_asset_filter = GlobalAssetFilter(self)
+    self.global_asset_filter.setEnabled(False)
+    self.global_asset_filter.hide()
+    layout.addWidget(self.global_asset_filter)
     self.filters_widget = QFrame()
     self.filters_widget.setObjectName("filterCard")
     filters = QVBoxLayout(self.filters_widget)
     filters.setContentsMargins(12, 12, 12, 12)
     filters.setSpacing(10)
-    common = QHBoxLayout()
+    common = self.filters_common_layout = QHBoxLayout()
     common.setSpacing(8)
     self.person = PersonFilter()
     self.person.addItem("全部启用人员", None)
@@ -246,7 +251,13 @@ def build_workspace(self):
     self.filters_widget.setEnabled(False)
     layout.addWidget(self.filters_widget)
     self.live_panel = LiveQuotesPanel(self)
-    layout.addWidget(self.live_panel)
+    self.live_panel_host = QWidget()
+    lph_layout = QVBoxLayout(self.live_panel_host)
+    lph_layout.setContentsMargins(0, 0, 0, 0)
+    lph_layout.setSpacing(0)
+    lph_layout.addWidget(self.live_panel)
+    self.live_panel_host_layout = lph_layout
+    layout.addWidget(self.live_panel_host)
     self.banner = StatusLabel("选择数据源后开始查看；所有查询均为只读。")
     layout.addWidget(self.banner)
     self.ownership_alert = StatusLabel()
@@ -461,6 +472,8 @@ def build_workspace(self):
         combo.currentIndexChanged.connect(self.filters_changed)
     self.ledger.currentIndexChanged.connect(self.ledger_changed)
     self.accounts.changed.connect(self.filters_changed)
+    self.global_asset_filter.filterChanged.connect(self.on_global_asset_filter_changed)
+    self.global_asset_filter.resetRequested.connect(self.reset_global_asset_filters)
     self.disabled.toggled.connect(self.disabled_changed)
     for checkbox in (self.audit, self.include_reversed, self.include_reference):
         checkbox.toggled.connect(self.filters_changed)

@@ -44,10 +44,10 @@ def serialize_val(val: Any) -> Any:
 # One column contract for the table and CSV on both clients.
 CLOSED_PERSON_COLUMNS = (
     ("person_name", "归属人员", "text"), ("channel", "券商渠道", "text"), ("ticker", "Ticker", "text"),
-    ("first_buy_date", "首次买入日期", "text"), ("last_close_date", "最后清仓日期", "text"),
-    ("buy_quantity", "历史总买入数量", "quantity"), ("sell_quantity", "历史总卖出数量", "quantity"),
+    ("first_buy_date", "首次买入日期", "text"), ("last_close_date", "最终清仓时间", "text"),
+    ("sell_quantity", "历史总交易数量", "quantity"),
     ("avg_buy_price", "买入均价", "money"), ("avg_sell_price", "卖出均价", "money"),
-    ("close_price", "清仓价", "money"), ("current_price", "当前价", "money"),
+    ("close_price", "最后清仓价", "money"), ("current_price", "当前价", "money"),
     ("post_close_change", "清仓后涨跌幅", "rate"), ("total_buy_amount", "买入总额", "money"),
     ("total_sell_amount", "卖出总额", "money"), ("realized_pnl", "已实现盈亏", "gain"),
     ("realized_pnl_rate", "已实现收益率", "rate"), ("buy_count", "买入次数", "count"),
@@ -55,11 +55,12 @@ CLOSED_PERSON_COLUMNS = (
 )
 CLOSED_ACCOUNT_COLUMNS = (
     ("channel", "券商渠道", "text"), ("ticker", "Ticker", "text"),
-    ("buy_quantity", "历史总买入数量", "quantity"), ("sell_quantity", "历史总卖出数量", "quantity"),
+    ("sell_quantity", "历史总交易数量", "quantity"),
     ("total_buy_amount", "历史总买入金额", "money"), ("total_sell_amount", "历史总卖出金额", "money"),
     ("realized_pnl", "清仓收益", "gain"), ("operation_count", "操作笔数", "count"),
     ("avg_buy_price", "买入均价", "money"), ("avg_sell_price", "卖出均价", "money"),
-    ("current_price", "当前价", "money"), ("first_buy_date", "首次买入时间", "text"),
+    ("close_price", "最后清仓价", "money"), ("current_price", "当前价", "money"),
+    ("post_close_change", "清仓后涨跌幅", "rate"), ("first_buy_date", "首次买入时间", "text"),
     ("last_close_date", "最终清仓时间", "text"), ("category", "股票分类", "text"),
 )
 CHANNEL_LABELS = {
@@ -108,14 +109,57 @@ def closed_columns(mode):
     return CLOSED_ACCOUNT_COLUMNS if mode == "account" else CLOSED_PERSON_COLUMNS
 
 
-def closed_account_rows(report, *, broker=None, ticker=None, search=None, account_ids=None):
+def _compute_split_adjustment(
+    inst_id: int | None,
+    acc_id: int | None,
+    last_close_date: str | None,
+    as_of_iso: str | None,
+    actions_map: dict[int, list[dict[str, Any]]],
+    accounts_map: dict[int, str],
+) -> tuple[Decimal, bool, str | None]:
+    """计算清仓日之后的累计拆并股折算系数与说明。"""
+    split_factor = Decimal(1)
+    split_notes_list: list[str] = []
+    if last_close_date and as_of_iso and inst_id in actions_map:
+        broker_code = accounts_map.get(acc_id, "")
+        for act in actions_map[inst_id]:
+            if last_close_date < act["effective_date"] <= as_of_iso:
+                if act["broker_scope"] in ("ALL", broker_code):
+                    split_factor *= act["factor"]
+                    split_notes_list.append(act["desc"])
+    is_split_adjusted = split_factor != Decimal(1) and split_factor > ZERO
+    split_notes = "; ".join(split_notes_list) if is_split_adjusted else None
+    return split_factor, is_split_adjusted, split_notes
+
+
+def closed_account_rows(report, *, broker=None, ticker=None, search=None, account_ids=None, analytics=None, db_path: str | Path | None = None):
     """Project the already scoped legacy report, keeping one row per account/security."""
     broker = (broker or "").strip().casefold()
     ticker = (ticker or "").strip().casefold()
     search = (search or "").strip().casefold()
+
+    # 从交易回放提取按账户+标的最新一次卖出成交价作为「最后清仓价」
+    closing_prices: dict[tuple[int, int], tuple[str | None, Decimal]] = {}
+    replay = analytics.reports.get("交易回放") if (analytics and hasattr(analytics, "reports")) else None
+    if replay is not None:
+        for replay_row in reversed(replay.rows):
+            meta = replay_row.metadata
+            if meta.get("kind") == "MARKET_TRADE" and meta.get("side") == "SELL":
+                price = replay_row.values[6]
+                if price is not None and price > ZERO:
+                    day = meta.get("business_date") or str(replay_row.values[0])[:10]
+                    closing_prices[(meta.get("account_id"), meta.get("instrument_id"))] = (day, price)
+
+    actions_map: dict[int, list[dict[str, Any]]] = {}
+    accounts_map: dict[int, str] = {}
+    if db_path and closing_prices:
+        actions_map, accounts_map = HoldingsManagementService.get_corporate_actions_map(db_path=db_path)
+    as_of_iso = analytics.scope.as_of.isoformat() if (analytics and getattr(analytics, "scope", None)) else None
+
     rows = []
     for row in report.rows:
         account_id = row.metadata["account_id"]
+        instrument_id = row.metadata["instrument_id"]
         if account_ids is not None and account_id not in account_ids:
             continue
         code, category, symbol, buy_qty, sell_qty, buy, sell, pnl, count, avg_buy, avg_sell, quote, first, last = row.values
@@ -126,14 +170,40 @@ def closed_account_rows(report, *, broker=None, ticker=None, search=None, accoun
             continue
         if search and search not in f"{channel} {code} {symbol} {category} #{account_id}".casefold():
             continue
+
+        close_entry = closing_prices.get((account_id, instrument_id))
+        orig_close_price = close_entry[1] if close_entry else None
+        close_day = (close_entry[0] if close_entry else None) or (str(last)[:10] if last else None)
+        split_factor, is_split_adjusted, split_notes = _compute_split_adjustment(
+            instrument_id, account_id, close_day, as_of_iso, actions_map, accounts_map
+        )
+        close_price = (orig_close_price / split_factor) if (orig_close_price is not None and is_split_adjusted) else orig_close_price
+
+        # 若发生过除权，avg_sell（原币）按折算系数换算后与现价对比；当前无除权则直接使用当前价与平均清仓价对比
+        currency = row.metadata.get("currency") or "USD"
+        fx = row.metadata.get("fx_rate")
+        if currency == "CNY" and fx is not None:
+            if close_price is not None:
+                close_price = close_price * fx
+            if orig_close_price is not None:
+                orig_close_price = orig_close_price * fx
+        adj_avg_sell = (avg_sell / split_factor) if (avg_sell is not None and is_split_adjusted) else avg_sell
+        if quote is not None and adj_avg_sell is not None and adj_avg_sell > ZERO:
+            post_close_change = (quote - adj_avg_sell) / adj_avg_sell
+        else:
+            post_close_change = None
+
         rows.append({
-            "account_id": account_id, "instrument_id": row.metadata["instrument_id"],
-            "channel": f"{channel} · #{account_id}", "ticker": symbol, "category": category,
+            "account_id": account_id, "instrument_id": instrument_id,
+            "channel": channel, "ticker": symbol, "category": category,
             "buy_quantity": buy_qty, "sell_quantity": sell_qty, "total_buy_amount": buy,
             "total_sell_amount": sell, "realized_pnl": pnl, "operation_count": count,
-            "avg_buy_price": avg_buy, "avg_sell_price": avg_sell, "current_price": quote,
+            "avg_buy_price": avg_buy, "avg_sell_price": avg_sell,
+            "close_price": close_price, "orig_close_price": orig_close_price,
+            "is_split_adjusted": is_split_adjusted, "split_notes": split_notes,
+            "current_price": quote, "post_close_change": post_close_change,
             "first_buy_date": first or None, "last_close_date": last or None,
-            "currency": row.metadata.get("currency") or "USD",
+            "currency": currency,
             "quote_status": row.metadata.get("current_price_status"),
             "quote_time": row.metadata.get("current_price_time"),
         })
@@ -533,7 +603,7 @@ class HoldingsManagementService:
             - accounts_map: mapping account_id -> broker_code
         """
         start_t = time.monotonic()
-        target_path = Path(db_path) if db_path else DATABASE_PATH
+        target_path = Path(db_path).expanduser().resolve() if db_path else DATABASE_PATH
         if not target_path.exists():
             return {}, {}
         try:
@@ -602,7 +672,7 @@ class HoldingsManagementService:
             or None if the query fails.
         """
         start_t = time.monotonic()
-        target_path = Path(db_path) if db_path else DATABASE_PATH
+        target_path = Path(db_path).expanduser().resolve() if db_path else DATABASE_PATH
         if not target_path.exists():
             logger.warning(f"[交易统计查询] 数据库路径不存在: {target_path}")
             return None
@@ -822,31 +892,25 @@ class HoldingsManagementService:
                 orig_close_price = None
 
             # 清仓后拆股/并股折算逻辑：
-            # 若清仓后发生了除权拆股/并股事件，需将历史成交清仓价折算至当前口径，以与当前市价进行可比的涨跌幅对比
-            split_factor = Decimal(1)
-            split_notes_list = []
-            if st == "已清仓" and orig_close_price is not None and last_close_date and inst_id in actions_map:
-                broker_code = accounts_map.get(acc_id, "")
-                for act in actions_map[inst_id]:
-                    if last_close_date < act["effective_date"] <= analytics.scope.as_of.isoformat():
-                        scope = act["broker_scope"]
-                        if scope in ("ALL", broker_code):
-                            split_factor *= act["factor"]
-                            split_notes_list.append(act["desc"])
-
-            is_split_adjusted = (split_factor != Decimal(1))
-            if is_split_adjusted and split_factor > ZERO:
+            # 若清仓后发生了除权拆股/并股事件，需将历史成交价/均价折算至当前口径，以与当前市价进行可比的涨跌幅对比
+            split_factor, is_split_adjusted, split_notes = (
+                _compute_split_adjustment(
+                    inst_id, acc_id, last_close_date, analytics.scope.as_of.isoformat(), actions_map, accounts_map
+                )
+                if (st == "已清仓" and (orig_close_price is not None or avg_sell_price is not None))
+                else (Decimal(1), False, None)
+            )
+            if is_split_adjusted and orig_close_price is not None:
                 adj_close_price = orig_close_price / split_factor
-                split_notes = "; ".join(split_notes_list)
             else:
                 adj_close_price = orig_close_price
-                split_notes = None
 
             close_price = adj_close_price
 
-            # 清仓后涨跌幅 = (当前价 - 清仓价) ÷ 清仓价（清仓价采用除权折算后价格，避免拆股引起失真）
-            if curr_p is not None and close_price is not None and close_price > ZERO:
-                post_close_change = (curr_p - close_price) / close_price
+            # 清仓后涨跌幅 = (当前价 - 平均清仓价) ÷ 平均清仓价（如有清仓后拆股，按除权折算平均清仓价后再比较）
+            adj_avg_sell = (avg_sell_price / split_factor) if (avg_sell_price is not None and is_split_adjusted) else avg_sell_price
+            if curr_p is not None and adj_avg_sell is not None and adj_avg_sell > ZERO:
+                post_close_change = (curr_p - adj_avg_sell) / adj_avg_sell
             else:
                 post_close_change = None
 
@@ -1143,6 +1207,8 @@ class HoldingsManagementService:
         trade_records.sort(key=lambda x: str(x["trade_time"]), reverse=True)
 
         # 3. 聚合「每日持仓收益」用于持仓分析 (Tab 2) 与收益分析 (Tab 3) 及未结当月表现补充
+        actions_map, accounts_map = HoldingsManagementService.get_corporate_actions_map(db_path=source_path)
+        as_of_iso = as_of.isoformat()
         daily_rep = analytics.reports.get("每日持仓收益") if analytics else None
         daily_by_date: dict[str, dict[str, Any]] = {}
         if daily_rep:
@@ -1158,23 +1224,50 @@ class HoldingsManagementService:
                 if broker and not _match_broker(broker, r.values[1], r.metadata.get("broker_code") or r.values[1]):
                     continue
                 dt = str(r.values[0])[:10]
+                r_inst_id = r.metadata.get("instrument_id") or instrument_id
+                r_acc_id = r.metadata.get("account_id") or account_id
+                split_factor, is_split_adjusted, _ = _compute_split_adjustment(
+                    r_inst_id, r_acc_id, dt, as_of_iso, actions_map, accounts_map
+                )
+                raw_qty = r.values[8] if isinstance(r.values[8], Decimal) else Decimal(0)
+                adj_qty = (raw_qty * split_factor) if is_split_adjusted else raw_qty
+                raw_cost = r.values[9] if isinstance(r.values[9], Decimal) else None
+                adj_cost = (raw_cost / split_factor) if (is_split_adjusted and raw_cost is not None) else raw_cost
+
                 rec = daily_by_date.setdefault(dt, {
                     "qty": Decimal(0),
                     "mv": Decimal(0),
+                    "mv_valid": True,
                     "net": Decimal(0),
+                    "rem_cost": Decimal(0),
+                    "has_rem_cost": True,
                     "pnl": Decimal(0),
+                    "pnl_valid": True,
                     "init_mv": Decimal(0),
                     "buy": Decimal(0),
                     "cost_list": [],
                 })
-                rec["qty"] += (r.values[8] if isinstance(r.values[8], Decimal) else Decimal(0))
-                rec["mv"] += (r.values[11] if isinstance(r.values[11], Decimal) else Decimal(0))
+                rec["qty"] += adj_qty
+                mv_cell = r.values[11] if isinstance(r.values[11], Decimal) else None
+                if mv_cell is not None:
+                    rec["mv"] += mv_cell
+                elif raw_qty > 0:
+                    rec["mv_valid"] = False
                 rec["net"] += (r.values[22] if isinstance(r.values[22], Decimal) else Decimal(0))
-                rec["pnl"] += (r.values[19] if isinstance(r.values[19], Decimal) else Decimal(0))
+                if raw_qty > 0:
+                    if raw_cost is not None:
+                        rec["rem_cost"] += raw_qty * raw_cost
+                    else:
+                        rec["has_rem_cost"] = False
+                pnl_cell = r.values[19] if isinstance(r.values[19], Decimal) else None
+                if pnl_cell is not None:
+                    rec["pnl"] += pnl_cell
+                else:
+                    rec["pnl_valid"] = False
                 rec["init_mv"] += (r.values[15] if isinstance(r.values[15], Decimal) else Decimal(0))
                 rec["buy"] += (r.values[16] if isinstance(r.values[16], Decimal) else Decimal(0))
-                if isinstance(r.values[9], Decimal):
-                    rec["cost_list"].append(r.values[9])
+                if adj_cost is not None:
+                    rec["cost_list"].append(adj_cost)
 
         sorted_daily_dates = sorted(daily_by_date.keys())
 
@@ -1184,41 +1277,82 @@ class HoldingsManagementService:
             for dt in sorted_daily_dates:
                 rec = daily_by_date[dt]
                 qty_val = rec["qty"]
-                if qty_val > 0 and rec["net"] > 0:
-                    c_per_share = rec["net"] / qty_val
-                elif len(rec["cost_list"]) == 1:
-                    c_per_share = rec["cost_list"][0]
-                else:
-                    c_per_share = Decimal(0)
+                c_per_share = None
+                if qty_val > 0:
+                    if rec["net"] > 0:
+                        c_per_share = rec["net"] / qty_val
+                    else:
+                        valid_costs = [c for c in rec["cost_list"] if c is not None and c > 0]
+                        if valid_costs:
+                            c_per_share = sum(valid_costs) / Decimal(len(valid_costs))
                 holding_analysis["dates"].append(dt)
-                holding_analysis["quantities"].append(serialize_val(qty_val) or 0)
-                holding_analysis["costs"].append(serialize_val(c_per_share) or 0)
+                holding_analysis["quantities"].append(serialize_val(qty_val) if qty_val is not None else 0)
+                holding_analysis["costs"].append(serialize_val(c_per_share) if c_per_share is not None else None)
         else:
+            # 无每日持仓收益记录时，按交易日期聚合当日最终状态（绝不用当前成本价覆盖历史成本）
+            by_trade_day: dict[str, dict[str, Any]] = {}
             for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
                 dt = str(t["trade_time"])[:10]
+                by_trade_day[dt] = t
+            for dt in sorted(by_trade_day.keys()):
+                t = by_trade_day[dt]
+                q = t.get("post_quantity")
                 holding_analysis["dates"].append(dt)
-                holding_analysis["quantities"].append(t["post_quantity"] or 0)
-                holding_analysis["costs"].append(serialize_val(cost_price) or 0)
+                holding_analysis["quantities"].append(q if q is not None else 0)
+                holding_analysis["costs"].append(None)
 
-        # 4. Tab 3: 收益分析 (PnL Analysis)
+        # 4. Tab 3: 收益分析 (PnL Analysis - 真实每日盈亏、累计盈亏、剩余持仓浮动盈亏与三类收益率)
         chart_dates = []
-        cumulative_rates = []
+        daily_pnls = []
         cumulative_pnls = []
+        floating_pnls = []
+        daily_rates = []
+        cumulative_rates = []
         floating_rates = []
         cum_pnl_acc = Decimal(0)
         max_base_acc = Decimal(0)
         for dt in sorted_daily_dates:
             rec = daily_by_date[dt]
-            cum_pnl_acc += rec["pnl"]
-            day_base = rec["net"] if rec["net"] > 0 else (rec["init_mv"] + rec["buy"])
+            day_pnl = rec["pnl"] if rec["pnl_valid"] else None
+            if day_pnl is not None:
+                cum_pnl_acc += day_pnl
+
+            # 当日收益率分母：期初市值 + 当日买入金额（遵循系统标准当日资金基数）
+            daily_denom = rec["init_mv"] + rec["buy"]
+            day_rate = ratio(day_pnl, daily_denom) if (day_pnl is not None and daily_denom > 0) else None
+
+            # 累计收益率分母：历史峰值投入资金基数（避免清仓或净投入转负时分母归零失真）
+            day_base = rec["net"] if rec["net"] > 0 else daily_denom
             if day_base > max_base_acc:
                 max_base_acc = day_base
-            cum_rate = ratio(cum_pnl_acc, max_base_acc) if max_base_acc > 0 else Decimal(0)
-            flt_rate = ratio(rec["mv"] - rec["net"], rec["net"]) if (rec["qty"] > 0 and rec["net"] > 0) else None
+            cum_rate = ratio(cum_pnl_acc, max_base_acc) if (day_pnl is not None and max_base_acc > 0) else None
+
+            # 历史持仓浮动盈亏与浮动收益率：严格以当日实际剩余持仓成本为基础；清仓未持仓时置为 None 使黄线自然断开
+            if rec["qty"] <= 0:
+                flt_pnl = None
+                flt_rate = None
+            elif rec["mv_valid"] and rec["has_rem_cost"] and rec["rem_cost"] > 0:
+                flt_pnl = rec["mv"] - rec["rem_cost"]
+                flt_rate = ratio(flt_pnl, rec["rem_cost"])
+            else:
+                flt_pnl = None
+                flt_rate = None
+
             chart_dates.append(dt)
+            daily_pnls.append(serialize_val(day_pnl))
+            cumulative_pnls.append(serialize_val(cum_pnl_acc) if day_pnl is not None else None)
+            floating_pnls.append(serialize_val(flt_pnl))
+            daily_rates.append(serialize_val(day_rate))
             cumulative_rates.append(serialize_val(cum_rate))
-            cumulative_pnls.append(serialize_val(cum_pnl_acc))
             floating_rates.append(serialize_val(flt_rate))
+
+        last_hist_date = chart_dates[-1] if chart_dates else None
+        if live_p is not None and current_quantity > 0 and last_hist_date:
+            valuation_note = f"历史曲线截至收盘价 ({last_hist_date})；顶部卡片含最新有效报价"
+        elif last_hist_date:
+            valuation_note = f"估值口径一致（截至 {last_hist_date} 收盘）"
+        else:
+            valuation_note = "暂无每日持仓收益历史快照"
 
         pnl_analysis = {
             "floating_pnl": serialize_val(floating_pnl),
@@ -1226,9 +1360,13 @@ class HoldingsManagementService:
             "realized_pnl": serialize_val(total_pnl - floating_pnl),
             "cumulative_pnl": serialize_val(total_pnl),
             "cumulative_rate": serialize_val(total_pnl_rate),
+            "valuation_note": valuation_note,
             "chart_dates": chart_dates,
-            "cumulative_rates": cumulative_rates,
+            "daily_pnls": daily_pnls,
             "cumulative_pnls": cumulative_pnls,
+            "floating_pnls": floating_pnls,
+            "daily_rates": daily_rates,
+            "cumulative_rates": cumulative_rates,
             "floating_rates": floating_rates,
             "markers": [],
         }

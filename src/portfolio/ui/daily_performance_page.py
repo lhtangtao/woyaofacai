@@ -764,6 +764,11 @@ class DailyPerformancePage(QWidget):
         self.ticker_input.returnPressed.connect(self.apply_filter)
         filter_h.addWidget(self.ticker_input)
 
+        if hasattr(self.main_window, "global_asset_filter"):
+            self.person_combo.hide()
+            self.broker_combo.hide()
+            self.ticker_input.hide()
+
         # Date Range
         self.start_date_edit = QDateEdit()
         self.start_date_edit.setCalendarPopup(True)
@@ -1479,6 +1484,39 @@ class DailyPerformancePage(QWidget):
 
         self.recalculate_and_refresh()
 
+    def sync_from_global_filter(self, state):
+        """从主窗口唯一 GlobalAssetFilter 同步人员、渠道与股票代码，不触发反向回环。"""
+        if getattr(self, "_syncing_person", False) or getattr(self, "_syncing_broker", False):
+            return
+        self._syncing_person = True
+        self._syncing_broker = True
+        try:
+            self.selected_person_id = state.person
+            if self.person_combo.count() <= 1:
+                self._populate_persons()
+            self.person_combo.blockSignals(True)
+            idx = self.person_combo.findData(state.person)
+            self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.person_combo.blockSignals(False)
+
+            # analytics.scope 已按 GlobalAssetFilter 的 account_ids 与 instrument_ids 过滤，
+            # 局部 selected_broker/search_ticker 保持空串以避免重复/多选冲突。
+            self.selected_broker = ""
+            self.broker_combo.blockSignals(True)
+            self.broker_combo.setCurrentIndex(0)
+            self.broker_combo.blockSignals(False)
+
+            self.search_ticker = ""
+            self.ticker_input.blockSignals(True)
+            self.ticker_input.clear()
+            self.ticker_input.blockSignals(False)
+
+            self.table_model.page = 1
+            self.recalculate_and_refresh()
+        finally:
+            self._syncing_person = False
+            self._syncing_broker = False
+
     def sync_person_from_main(self, person_id: Any):
         """主窗口全局人员切换时，同步更新本地下拉框。"""
         if getattr(self, "_syncing_person", False):
@@ -1548,35 +1586,34 @@ class DailyPerformancePage(QWidget):
         self.recalculate_and_refresh()
 
     def reset_filters(self):
-        self.person_combo.setCurrentIndex(0)
-        self.broker_combo.setCurrentIndex(0)
-        self.ticker_input.clear()
+        main_win = getattr(self, "main_window", None) or self.parent()
+        has_global = hasattr(main_win, "global_asset_filter")
         self.category_combo.setCurrentIndex(0)
         self.start_date_edit.setDate(QDate(2025, 1, 1))
         if self.max_as_of_date:
             self.end_date_edit.setDate(QDate.fromString(self.max_as_of_date, "yyyy-MM-dd"))
         else:
             self.end_date_edit.setDate(QDate.currentDate())
-        
-        person_changed = (self.selected_person_id is not None)
-        self.selected_person_id = None
-        self.selected_broker = ""
-        self.search_ticker = ""
         self.selected_category = ""
+        if not has_global:
+            self.person_combo.setCurrentIndex(0)
+            self.broker_combo.setCurrentIndex(0)
+            self.ticker_input.clear()
+            person_changed = (self.selected_person_id is not None)
+            self.selected_person_id = None
+            self.selected_broker = ""
+            self.search_ticker = ""
+            if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
+                self._syncing_person = True
+                try:
+                    main_win.sync_person_from_holdings(None)
+                finally:
+                    self._syncing_person = False
         self.start_date = "2025-01-01"
         self.end_date = self.max_as_of_date
         self.active_kpi_filter = None
         self.stock_pnl_filter = "all"
         self.table_model.page = 1
-
-        main_win = getattr(self, "main_window", None) or self.parent()
-        if person_changed and hasattr(main_win, "sync_person_from_holdings") and not getattr(self, "_syncing_person", False):
-            self._syncing_person = True
-            try:
-                main_win.sync_person_from_holdings(None)
-            finally:
-                self._syncing_person = False
-
         self.recalculate_and_refresh()
 
     def recalculate_and_refresh(self):

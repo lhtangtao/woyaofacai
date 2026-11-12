@@ -153,13 +153,26 @@ def live_summaries(analytics, report, total, session=None, now=None):
             orig_rep = analytics.reports.get(name)
             cash = None
             annual_gain = None
+            is_live_overlay = str(getattr(orig_rep, "note", "") or "").startswith("长桥实时估值") if orig_rep else False
             if orig_rep:
                 for orig_row in orig_rep.rows:
                     if orig_row.values[0] == category:
                         if '当前现金' in orig_rep.columns:
                             cash = orig_row.values[orig_rep.columns.index('当前现金')]
-                        if '本年盈亏' in orig_rep.columns:
+                        # 防止盘中每10秒刷新把上一轮实时增量重复累加进「本年盈亏」
+                        if "baseline_annual_gain" in orig_row.metadata:
+                            annual_gain = orig_row.metadata["baseline_annual_gain"]
+                        elif not is_live_overlay and '本年盈亏' in orig_rep.columns:
                             annual_gain = orig_row.values[orig_rep.columns.index('本年盈亏')]
+            if annual_gain is None and is_live_overlay and '每日持仓收益' in analytics.reports:
+                year_prefix = str(analytics.scope.as_of.year)
+                year_rows = [
+                    r.values[19]
+                    for r in analytics.reports['每日持仓收益'].rows
+                    if str(r.values[0]).startswith(year_prefix) and r.values[dimension + 1] == category
+                ]
+                annual_gain = strict_sum(year_rows) if year_rows else None
+            baseline_annual_gain = annual_gain
             if dimension == 0 and cash is None and hasattr(analytics, "extras"):
                 from portfolio.domain.models import Ledger
                 is_personal_or_all = (analytics.scope.ledger == Ledger.PERSON and (analytics.scope.person_ids is None or 1 in analytics.scope.person_ids))
@@ -184,7 +197,9 @@ def live_summaries(analytics, report, total, session=None, now=None):
                                      fp + cp if fp is not None and cp is not None else None,
                                      sum(v is not None and v > ZERO for v in profits), sum(v is not None and v < ZERO for v in profits),
                                      strict_sum(max(-v, ZERO) if v is not None else None for v in profits), *([cash] if dimension == 0 else [])),
-                                    {"current_principal_basis": "当前+清仓净投入" if dimension == 0 else "仅当前持仓净投入", "cash_note": "无可信现金期初余额时不显示现金余额"}))
+                                    {"current_principal_basis": "当前+清仓净投入" if dimension == 0 else "仅当前持仓净投入",
+                                     "cash_note": "无可信现金期初余额时不显示现金余额",
+                                     "baseline_annual_gain": baseline_annual_gain}))
         summaries[name] = Report(name, SUMMARY_COLUMNS if dimension == 0 else ("分类", *SUMMARY_COLUMNS[1:-1]), tuple(result),
                                  note="长桥实时估值：按最新盘中报价动态汇总。")
     if '人员资产' in analytics.reports:

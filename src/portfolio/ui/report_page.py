@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from portfolio.domain.analytics import ReportRow
 from portfolio.domain.models import exact_text
 from portfolio.engine.today_holdings import lifetime_total, today_summary, today_summary_row
+from portfolio.services.holdings_management_service import channel_label
 from portfolio.ui.channel_overview import ChannelOverview
 from portfolio.ui.finance_table import FinanceModel
 from portfolio.ui.metric_card import MetricCard
@@ -68,6 +69,8 @@ class ReportModel(FinanceModel):
                 if "ID" in column:
                     return exact_text(value)
                 return f"{value:,.2f}"
+            if column in ("渠道", "券商渠道") and value is not None:
+                return channel_label(value)
             return exact_text(value)
         if role == Qt.ItemDataRole.ToolTipRole:
             if column.startswith('当前价(') and row.metadata.get('current_price_status'):
@@ -92,7 +95,7 @@ class ReportPage(QWidget):
     export_requested = Signal(object, object)
     provenance_requested = Signal(object, object)
 
-    def __init__(self, names=(), parent=None, *, broker_people=False, show_selector=True):
+    def __init__(self, names=(), parent=None, *, broker_people=False, show_selector=True, show_details=True):
         super().__init__(parent)
         self.reports, self.report, self.page, self.descending = {}, None, 0, False
         self.sorted_rows = ()
@@ -211,7 +214,12 @@ class ReportPage(QWidget):
         self.details.setReadOnly(True)
         self.details.setPlaceholderText("点击记录查看精确原值、估值日期、完整性和原始记录。")
         split.addWidget(self.details)
-        split.setSizes([490, 110])
+        if not show_details:
+            # 资产总览下方的明细表不需要底部 JSON 原值详情框
+            self.details.hide()
+            split.setSizes([1, 0])
+        else:
+            split.setSizes([490, 110])
         layout.addWidget(split)
         footer = QHBoxLayout()
         self.total = QLabel()
@@ -624,7 +632,7 @@ class ReportPage(QWidget):
         menu.exec(self.table.horizontalHeader().mapToGlobal(point))
 
     def show_details(self, current, previous):
-        if not current.isValid() or current.row() >= len(self.table.finance_model.rows):
+        if self.details.isHidden() or not current.isValid() or current.row() >= len(self.table.finance_model.rows):
             return
         row = self.table.finance_model.rows[current.row()]
         self.details.setPlainText(json.dumps({"原值": dict(zip(self.report.columns, row.values)), "元信息": row.metadata}, ensure_ascii=False, indent=2, default=exact_text))

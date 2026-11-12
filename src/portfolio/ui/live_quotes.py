@@ -23,11 +23,12 @@ class LiveQuotesPanel(QWidget):
         self.universe_key, self.universe_symbols = None, set()
         self.observation_symbols = set()
         self.history_signature = None
+        self._historical_reports = None
         self.intraday_busy = False
         self.intraday_requests = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        row = QHBoxLayout()
+        row = self.row_layout = QHBoxLayout()
         self.enabled = QCheckBox('长桥实时行情 · 10秒')
         self.choose = QPushButton('行情配置')
         self.choose.setObjectName('quiet')
@@ -141,6 +142,7 @@ class LiveQuotesPanel(QWidget):
         self.observation_symbols = set()
         self.stop()
         self.analytics = None
+        self._historical_reports = None
         self.universe_key, self.universe_symbols = None, set()
         self.history_signature = None
         self.source_path = info.path
@@ -171,6 +173,8 @@ class LiveQuotesPanel(QWidget):
         else:
             self.stop()
             if self.analytics:
+                if self._historical_reports is not None:
+                    self.analytics.reports = dict(self._historical_reports)
                 dash_sum = self.window.dashboard.summaries
                 dash_sum.reports = self.analytics.reports
                 if dash_sum.selector.currentText() in dash_sum.reports:
@@ -184,6 +188,8 @@ class LiveQuotesPanel(QWidget):
 
     def bind(self, analytics):
         self.analytics = analytics
+        # 保留历史快照副本，避免盘中切换开关时残留实时叠加结果
+        self._historical_reports = dict(analytics.reports)
         now = datetime.now(UTC)
         if not self.enabled.isChecked() or analytics.scope.as_of != QDate.currentDate().toPython() or analytics.scope.reporting_currency != 'USD' or getattr(self, 'is_demo', True):
             reference, *_ = live_holdings(analytics, self.instruments, {}, None, now)
@@ -225,6 +231,7 @@ class LiveQuotesPanel(QWidget):
 
     def invalidate(self):
         self.analytics = None
+        self._historical_reports = None
         pending = self.window.jobs.get('intraday_history')
         if pending:
             pending.cancel.set()

@@ -323,6 +323,14 @@ export const api = {
     asset_ticker?: string;
     status?: string;
     search?: string;
+    stock_type?: string;
+    industry?: string;
+    currency?: string;
+    pnl_filter?: string;
+    close_date?: string;
+    pnl_status?: string;
+    trend_window?: string;
+    include_closed_dashboard?: number | string;
     page?: number;
     page_size?: number;
   }) => {

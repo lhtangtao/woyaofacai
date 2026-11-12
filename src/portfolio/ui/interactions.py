@@ -34,13 +34,16 @@ class InteractionMixin:
         return self.pages.currentIndex() == 4 and self.performance_page.selector.currentText() in ('每月持仓收益', '每月微操收益', '月度净投入明细')
 
     def fixed_asset_period(self):
-        return self.pages.currentIndex() in (2, 3, 14, 15, 16, 17, 18, 22)
+        return self.pages.currentIndex() in (2, 3, 14, 15, 16, 17, 18, 22, 23, 24)
 
     def shared_asset_page(self):
         return self.pages.currentIndex() in (2, 14, 22) or self.today_snapshot()
 
     def today_snapshot(self):
         return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '今日盈亏'
+
+    def is_global_asset_page(self):
+        return self.pages.currentIndex() in (2, 22, 23, 24) or self.today_snapshot()
 
     def ownership_view(self):
         return self.pages.currentIndex()==3 and self.asset_page.selector.currentText()=='股票归属'
@@ -49,7 +52,31 @@ class InteractionMixin:
         return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '渠道汇总'
 
     def sync_date_granularity(self, *_):
-        self.holding_date.setVisible(self.today_snapshot() or self.broker_people_view())
+        is_today = self.today_snapshot()
+        if hasattr(self, "live_panel") and hasattr(self.live_panel, "row_layout") and hasattr(self, "filters_common_layout"):
+            if is_today:
+                if self.live_panel.row_layout.indexOf(self.holding_date) < 0:
+                    idx = self.live_panel.row_layout.indexOf(self.live_panel.trend_tabs)
+                    self.live_panel.row_layout.insertWidget(max(0, idx), self.holding_date)
+            else:
+                if self.filters_common_layout.indexOf(self.holding_date) < 0:
+                    idx = self.filters_common_layout.indexOf(self.stock)
+                    self.filters_common_layout.insertWidget(max(0, idx), self.holding_date)
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.setVisible(self.is_global_asset_page())
+            if hasattr(self, "live_panel") and hasattr(self, "live_panel_host_layout"):
+                in_overview = self.pages.currentIndex() == 2
+                if in_overview:
+                    if self.global_asset_filter.inline_layout.indexOf(self.live_panel) < 0:
+                        self.global_asset_filter.inline_layout.addWidget(self.live_panel)
+                    self.global_asset_filter.inline_host.setVisible(True)
+                    self.live_panel_host.setVisible(False)
+                else:
+                    if self.live_panel_host_layout.indexOf(self.live_panel) < 0:
+                        self.live_panel_host_layout.addWidget(self.live_panel)
+                    self.global_asset_filter.inline_host.setVisible(False)
+                    self.live_panel_host.setVisible(self.pages.currentIndex() == 3)
+        self.holding_date.setVisible(is_today or self.broker_people_view())
         overview = self.pages.currentIndex() == 2
         only_overview = self.shared_asset_page() and not overview
         self.person.setVisible(not (only_overview or self.broker_people_view()))
@@ -225,6 +252,20 @@ class InteractionMixin:
             page.selector.setCurrentText(report)
         self._filter_batch = False
         self.search_timer.stop()
+        if hasattr(self, "global_asset_filter"):
+            from portfolio.ui.global_asset_filter import GlobalAssetFilterState
+            self._syncing_global_filter = True
+            try:
+                self.global_asset_filter.set_state(
+                    GlobalAssetFilterState.normalized(
+                        self.person.currentData(),
+                        self.accounts.selected_ids(),
+                        self.stock.currentData(),
+                    ),
+                    emit=False,
+                )
+            finally:
+                self._syncing_global_filter = False
         self.update_filter_chips()
 
     def route_changed(self, page, target):
@@ -265,7 +306,7 @@ class InteractionMixin:
         self.description.setVisible(not trade_page)
         self.trade_refresh_button.setVisible(trade_page)
         if hasattr(self, "holdings_page") and hasattr(self.holdings_page, "mode_box"):
-            self.holdings_page.mode_box.setVisible(page == 22)
+            self.holdings_page.mode_box.hide()
         self.refresh_button.setText("重连数据源" if trade_page else "刷新")
         self.refresh_button.setToolTip("重新打开当前数据库并检查结构 · ⌘R" if trade_page else "刷新当前数据源 · ⌘R")
         self.heading.setToolTip(str(self.info.path) if trade_page and self.info else "")
@@ -307,11 +348,15 @@ class InteractionMixin:
         if self.ownership_view():
             self.heading.setText('股票归属与成本分析')
             self.description.setText('查看单只股票在不同人员名下的持仓分布、成本与收益表现。')
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.hide()
             self.filters_widget.hide();self.live_panel.hide();self.banner.hide()
             self.asset_reset_button.show();self.asset_page.ownership_page.activate()
             self.update_history_buttons();return
         if page == 0 and hasattr(self, "trade_center"):
             self.heading.setText("交易明细")
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.hide()
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.show();self.asset_reset_button.hide()
             self.export_button.setToolTip("导出当前筛选的全部匹配交易")
@@ -319,30 +364,44 @@ class InteractionMixin:
         if page == 23 and hasattr(self, "daily_performance_page"):
             self.heading.setText("每日持仓收益")
             self.description.setText("查看历史每日的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.show()
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
-            self.daily_performance_page.sync_person_from_main(self.person.currentData())
-            self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+            if hasattr(self.daily_performance_page, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+                self.daily_performance_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.daily_performance_page.sync_person_from_main(self.person.currentData())
+                self.daily_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
             self.daily_performance_page.activate()
-            if self.analytics:
+            self.ensure_analytics()
+            if self.analytics and getattr(self.analytics, "scope", None) == self.make_scope():
                 self.daily_performance_page.update_data(self.analytics)
             self.update_history_buttons();return
         if page == 24 and hasattr(self, "monthly_performance_page"):
             self.heading.setText("每月持仓收益")
             self.description.setText("查看历史每月的持仓市值变化与收益表现，支持按人员、券商渠道、股票等维度下钻分析。")
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.show()
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
-            self.monthly_performance_page.sync_person_from_main(self.person.currentData())
-            self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
+            if hasattr(self.monthly_performance_page, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+                self.monthly_performance_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.monthly_performance_page.sync_person_from_main(self.person.currentData())
+                self.monthly_performance_page.sync_broker_from_main(self.accounts.current_broker_name())
             self.monthly_performance_page.activate()
             if legacy_cash_tab:
                 self.monthly_performance_page.tab_bar.setCurrentIndex(3)
-            if self.analytics:
+            self.ensure_analytics()
+            if self.analytics and getattr(self.analytics, "scope", None) == self.make_scope():
                 self.monthly_performance_page.update_data(self.analytics)
             self.update_history_buttons();return
         if page == 25 and hasattr(self, "monthly_scalping_page"):
             self.heading.setText("每月微操收益")
             self.description.setText("跟踪每月通过短线微操（同月买卖配对）获得的收益，评估你的短线交易表现。")
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.hide()
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.hide();self.asset_reset_button.hide()
             if hasattr(self.monthly_scalping_page, "sync_person_from_main"):
@@ -355,6 +414,8 @@ class InteractionMixin:
             self.update_history_buttons();return
         if page == 27:
             self.description.setText("查看支付宝与天天基金的持仓、市值及收益情况。")
+            if hasattr(self, "global_asset_filter"):
+                self.global_asset_filter.hide()
             for widget in (self.filters_widget, self.stat_widget, self.live_panel, self.banner,
                            self.side, self.export_button, self.asset_reset_button):
                 widget.hide()
@@ -379,10 +440,13 @@ class InteractionMixin:
                 self.asset_page.selector.currentText() in ('今日盈亏', '当前持仓', '实时持仓', '股票汇总', '人员资产', '券商资产', '渠道汇总', '股票归属')
             )
         )
-        self.asset_reset_button.setVisible(is_asset and not (page == 14 or self.today_snapshot()))
+        show_global = self.is_global_asset_page()
+        if hasattr(self, "global_asset_filter"):
+            self.global_asset_filter.setVisible(show_global)
+        self.asset_reset_button.setVisible(is_asset and not (page == 14 or self.today_snapshot() or show_global))
         if hasattr(self.live_panel, 'trend_tabs'):
             self.live_panel.trend_tabs.setVisible(self.today_snapshot())
-        self.filters_widget.setVisible(page in range(2, 11) or page in (0, 17))
+        self.filters_widget.setVisible((page in range(2, 11) or page in (0, 17)) and not show_global and page != 14)
         if page == 0 and self.current_page:
             self.banner.setText(getattr(self, "_trade_notice", ""))
             self.banner.setVisible(not self.current_page.rows or self.include_reversed.isChecked() or self.include_reference.isChecked())
@@ -397,6 +461,11 @@ class InteractionMixin:
         if page == 18 and hasattr(self, 'monthly_realtime_page'):
             self.monthly_realtime_page.sync_person_from_main(self.person.currentData())
             self.monthly_realtime_page.set_analytics(self.analytics)
+        if page == 22 and hasattr(self, 'holdings_page'):
+            if hasattr(self.holdings_page, 'sync_from_global_filter') and hasattr(self, 'global_asset_filter'):
+                self.holdings_page.sync_from_global_filter(self.global_asset_filter.state())
+            else:
+                self.holdings_page.sync_person_from_main(self.person.currentData())
         self.ensure_analytics()
         if page == 0 and self.info is not None and (self.current_page is None or self.current_page.scope != self.make_scope()):
             self.refresh()
@@ -418,7 +487,7 @@ class InteractionMixin:
         self._history_index = index
         route, state = self._history[index]
         self._restoring_history = True
-        if route[0] in (2, 14, 22) or route in ((3, "今日盈亏"), (3, "股票归属")):
+        if route[0] in (2, 14, 22, 23, 24) or route in ((3, "今日盈亏"), (3, "股票归属")):
             current = self.capture_state()
             state = {**state, **{key: current[key] for key in ("person", "stock", "accounts")}}
         self.apply_state(state)
@@ -447,7 +516,7 @@ class InteractionMixin:
         if not self._filter_batch and self.pages.currentIndex() == 14:
             self.earnings_page.activate()
             return
-        if self._filter_batch or self.info is None or not self.filters_widget.isEnabled() or self.pages.currentIndex() not in (*range(2, 11), 15, 16, 17, 18, 22):
+        if self._filter_batch or self.info is None or not self.filters_widget.isEnabled() or self.pages.currentIndex() not in (*range(2, 11), 15, 16, 17, 18, 22, 23, 24):
             return
         scope = self.make_scope()
         if self.broker_people_view():
@@ -474,7 +543,11 @@ class InteractionMixin:
                 self.monthly_realtime_page.set_analytics(self.analytics)
             return
         self._analytics_scope = scope
-        self.banner.show_status("正在计算当前范围的持仓与收益…", "loading")
+        if self.pages.currentIndex() == 22 and hasattr(self, "holdings_page"):
+            self.banner.hide()
+            self.holdings_page.set_inline_status("正在计算当前范围的持仓与收益…")
+        else:
+            self.banner.show_status("正在计算当前范围的持仓与收益…", "loading")
         service = self.analytics_service
         self._submit("analytics", lambda cancel: service.calculate(scope, cancel=cancel), self._analytics_ready)
 

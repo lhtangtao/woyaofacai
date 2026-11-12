@@ -211,7 +211,17 @@ class EarningsCalendarPage(QWidget):
         window = self.window
         if window.info is None or window.analytics_service is None:
             return
-        scope = window.make_scope()
+        from portfolio.domain.models import Ledger, QueryScope
+        # 持仓财报日历不受全局人员/渠道/股票筛选影响，始终查询权限范围内全部启用人员的有效持仓。
+        scope = QueryScope(
+            as_of=date.today(),
+            ledger=Ledger.PERSON,
+            person_ids=None,
+            account_ids=None,
+            instrument_ids=None,
+            include_disabled=False,
+            reporting_currency="USD",
+        )
         signature = (window.analytics_service.identity(), scope)
         if signature == self.signature:
             if self.analytics is not None:

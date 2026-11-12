@@ -486,7 +486,20 @@ def api_holdings_dashboard():
 def api_holdings_detail():
     """Retrieve unified holdings detail rows supporting person, broker, and stock dimensions."""
     try:
-        from portfolio.services.holdings_management_service import HoldingsManagementService, closed_account_rows, closed_columns
+        from portfolio.services.closed_analytics_service import (
+            build_closed_dashboard_analytics,
+            filter_closed_rows,
+            resolve_close_date_bounds,
+        )
+        from portfolio.services.holdings_management_service import (
+            HoldingsManagementService,
+            channel_label,
+            closed_account_rows,
+            closed_columns,
+        )
+        from portfolio.services.open_holdings_analytics_service import (
+            build_open_holdings_dashboard,
+        )
         svc = get_analytics_service()
         dimension = request.args.get("dimension", "person")
         person_id = request.args.get("person_id", type=int)
@@ -494,7 +507,17 @@ def api_holdings_detail():
         ticker = request.args.get("ticker") or None
         status = request.args.get("status") or None
         search = request.args.get("search") or None
+        stock_type = request.args.get("stock_type") or None
+        industry = request.args.get("industry") or None
+        currency = request.args.get("currency") or None
+        pnl_filter = request.args.get("pnl_filter", "all")
         closed_mode = request.args.get("closed_mode", "person")
+        close_date = request.args.get("close_date", "all")
+        close_start = request.args.get("close_start") or None
+        close_end = request.args.get("close_end") or None
+        pnl_status = request.args.get("pnl_status") or None
+        trend_window = request.args.get("trend_window") or ("all" if status == "已清仓" else "ytd")
+        include_dashboard = request.args.get("include_closed_dashboard", "") == "1"
         page = request.args.get("page", 1, type=int)
         page_size = request.args.get("page_size", 50, type=int)
         if page < 1 or page_size < 1 or closed_mode not in ("person", "account"):
@@ -503,18 +526,73 @@ def api_holdings_detail():
         scope = asset_filter_scope(svc, get_user_query_scope(person_id=person_id),
                                    broker_param="asset_broker", ticker_param="asset_ticker")
         analytics = svc.calculate(scope)
+        open_dashboard = None
         if status == "已清仓" and closed_mode == "account":
             report = get_today_service().closed_report(analytics)
-            rows = closed_account_rows(report, broker=broker, ticker=ticker, search=search)
+            all_broker_rows = closed_account_rows(report, analytics=analytics, db_path=svc.path) if include_dashboard else []
+            rows = closed_account_rows(report, broker=broker, ticker=ticker, search=search, analytics=analytics, db_path=svc.path)
+        elif status in ("持有中", "当前持仓"):
+            all_open_rows = HoldingsManagementService.get_holdings_detail_rows(
+                analytics, dimension=dimension, person_id=person_id, broker=None, ticker=ticker, status="持有中",
+                search=None, db_path=svc.path,
+            )
+            open_dashboard = build_open_holdings_dashboard(
+                analytics,
+                all_open_rows,
+                db_path=svc.path,
+                person_id=person_id,
+                broker=broker,
+                stock_type=stock_type,
+                industry=industry,
+                currency=currency,
+                search=search,
+                pnl_filter=pnl_filter,
+                trend_window=trend_window,
+            )
+            rows = open_dashboard.get("rows", [])
+            all_broker_rows = []
         else:
             rows = HoldingsManagementService.get_holdings_detail_rows(
                 analytics, dimension=dimension, person_id=person_id, broker=broker, ticker=ticker, status=status,
                 search=search, db_path=svc.path,
             )
+            all_broker_rows = (
+                rows if (status == "已清仓" and include_dashboard and not broker and not ticker and not search)
+                else HoldingsManagementService.get_holdings_detail_rows(
+                    analytics, dimension=dimension, person_id=person_id, broker=None, ticker=None, status="已清仓",
+                    search=None, db_path=svc.path,
+                ) if (status == "已清仓" and include_dashboard) else []
+            )
+        closed_dashboard = None
+        available_brokers = []
+        if status == "已清仓":
+            start_d, end_d = resolve_close_date_bounds(close_date, custom_start=close_start, custom_end=close_end)
+            scoped_rows = filter_closed_rows(rows, start_date=start_d, end_date=end_d)
+            if include_dashboard or page == 1:
+                closed_dashboard = build_closed_dashboard_analytics(
+                    analytics,
+                    scoped_rows,
+                    mode=closed_mode,
+                    trend_window=trend_window,
+                )
+                available_brokers = sorted({
+                    channel_label(str(r.get("channel") or "").split(" · #")[0].strip())
+                    for r in (all_broker_rows or scoped_rows)
+                    if r.get("channel")
+                })
+            rows = filter_closed_rows(scoped_rows, pnl_status=pnl_status)
         start = (page - 1) * page_size
         columns = closed_columns(closed_mode) if status == "已清仓" else ()
-        return jsonify(status="ok", rows=rows[start:start + page_size], total=len(rows), page=page,
-                       page_size=page_size, columns=columns)
+        payload: dict[str, Any] = dict(
+            status="ok", rows=rows[start:start + page_size], total=len(rows), page=page,
+            page_size=page_size, columns=columns,
+        )
+        if closed_dashboard is not None:
+            payload["closed_dashboard"] = closed_dashboard
+            payload["available_brokers"] = available_brokers
+        if open_dashboard is not None:
+            payload["open_dashboard"] = open_dashboard
+        return jsonify(payload)
     except Exception as e:
         logger.exception("Holdings detail error")
         return jsonify(status="error", message=str(e)), 500
