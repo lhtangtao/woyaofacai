@@ -31,6 +31,11 @@ def daily_nav(raw, tables, code, cutoff, *, history=False):
             valid = [dict(row) for row in entries if positive(row["unit_nav"]) is not None]
             if not valid:
                 continue
+            # An explicitly carried weekly value is an estimate, not an
+            # independent formal NAV; a subsequently collected NAV wins.
+            formal = [row for row in valid if row["source"] != "用户指定周净值沿用"]
+            if formal:
+                valid = formal
             valid.sort(key=lambda row: (SOURCE_PRIORITY.get(row["source"], 1), row["source"]))
             preferred = valid[0]
             conflict = len({positive(row["unit_nav"]) for row in valid}) > 1

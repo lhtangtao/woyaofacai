@@ -43,6 +43,18 @@ def test_nav_cutoff_keeps_actual_date_and_flags_disagreement():
         assert price["nav_issue"]
 
 
+def test_formal_nav_takes_precedence_over_carried_estimate():
+    with sqlite3.connect(":memory:") as db:
+        db.row_factory = sqlite3.Row
+        db.executescript(SCHEMA)
+        db.executemany("""INSERT INTO raw_fund_nav_daily
+            (fund_code,nav_date,source,unit_nav,fetched_at,raw_payload,field_status)
+            VALUES ('010340','2022-02-07',?,?,'x','{}','{}')""", [
+                ("用户指定周净值沿用", "0.9"), ("AKShare/Eastmoney", "0.95")])
+        price = next(daily_nav(db, {"raw_fund_nav_daily"}, "010340", "2022-02-07"))
+        assert (price["unit_nav"], price["source"], price["nav_issue"]) == ("0.95", "AKShare/Eastmoney", None)
+
+
 def test_alipay_returns_use_confirmed_cash_and_reinvest_without_new_cost():
     from portfolio.domestic.fund_returns import confirmed_returns
 

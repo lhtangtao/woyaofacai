@@ -68,8 +68,16 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                                 covered_from = min(covered_from, start)
                         beginnings[key] = (covered_from.isoformat(), first)
             if key[1] not in navs:
-                navs[key[1]] = {r["nav_date"]: (positive(r["unit_nav"]), r["source"])
-                                for r in daily_nav(raw, raw_tables, key[1], cutoff, history=True)}
+                navs[key[1]] = {}
+                for r in daily_nav(raw, raw_tables, key[1], cutoff, history=True):
+                    disclosed = r["nav_date"]
+                    if r["source"] == "用户指定周净值沿用":
+                        try:
+                            disclosed = json.loads(r["raw_payload"])["原净值日期"]
+                            date.fromisoformat(disclosed)
+                        except (KeyError, TypeError, ValueError):
+                            disclosed = r["nav_date"]
+                    navs[key[1]][r["nav_date"]] = (positive(r["unit_nav"]), r["source"], disclosed)
                 if "raw_fund_nav" in raw_tables:
                     for nav_day, value, source in raw.execute("""SELECT nav_date,unit_nav,source FROM raw_fund_nav
                             WHERE fund_code=? AND nav_date<=?""", (key[1], cutoff)):
@@ -77,10 +85,12 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         if price is None:
                             continue
                         existing = navs[key[1]].get(nav_day)
-                        if existing and existing[0] != price:
-                            navs[key[1]][nav_day] = (None, "净值来源冲突")
+                        if existing and existing[1] == "用户指定周净值沿用":
+                            navs[key[1]][nav_day] = (price, source, nav_day)
+                        elif existing and existing[0] != price:
+                            navs[key[1]][nav_day] = (None, "净值来源冲突", nav_day)
                         elif not existing:
-                            navs[key[1]][nav_day] = (price, source)
+                            navs[key[1]][nav_day] = (price, source, nav_day)
                 if "calc_tiantian_statement_positions" in calc_tables:
                     for snapshot in calc.execute("""SELECT nav_date,unit_nav FROM calc_tiantian_statement_positions
                             WHERE fund_code=? AND as_of<=? AND nav_date IS NOT NULL
@@ -90,10 +100,12 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         if price is None:
                             continue
                         existing = navs[key[1]].get(nav_day)
-                        if existing and existing[0] != price:
-                            navs[key[1]][nav_day] = (None, "净值来源冲突")
+                        if existing and existing[1] == "用户指定周净值沿用":
+                            navs[key[1]][nav_day] = (price, "天天基金对账单", nav_day)
+                        elif existing and existing[0] != price:
+                            navs[key[1]][nav_day] = (None, "净值来源冲突", nav_day)
                         elif not existing:
-                            navs[key[1]][nav_day] = (price, "天天基金对账单")
+                            navs[key[1]][nav_day] = (price, "天天基金对账单", nav_day)
             nav_dates[key[1]] = sorted(navs[key[1]])
             days.update(navs[key[1]])
         result = HistoricalValues()
@@ -148,7 +160,7 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                         date.fromisoformat(day) - date.fromisoformat(price_day )).days <= 7 else None
                     price = price_entry[0] if price_entry else None
                     item = (date.fromisoformat(day), key)
-                    result.nav_dates[item] = price_day if price is not None else None
+                    result.nav_dates[item] = price_entry[2] if price is not None else None
                     result.nav_sources[item] = price_entry[1] if price is not None else None
                     if quantity is None or quantity < 0:
                         result.missing[item] = "历史份额缺失或覆盖不足"
