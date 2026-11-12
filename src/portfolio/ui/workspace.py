@@ -420,9 +420,8 @@ def build_workspace(self):
     self.monthly_scalping_page = MonthlyScalpingPage(self)
     self.pages.addWidget(self.monthly_scalping_page)
     self.monthly_scalping_page.drill.connect(self.drill_chart)
-    from portfolio.ui.domestic_assets_page import DomesticAssetsPage
-    self.domestic_assets_page = DomesticAssetsPage(self)
-    self.pages.addWidget(self.domestic_assets_page)
+    # Reserve the former Alipay page index for saved navigation state.
+    self.pages.addWidget(QWidget())
     from portfolio.ui.domestic_holdings_page import DomesticHoldingsPage
     self.domestic_holdings_page = DomesticHoldingsPage(self)
     self.pages.addWidget(self.domestic_holdings_page)

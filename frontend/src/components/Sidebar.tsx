@@ -43,7 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "earnings", label: "持仓财报日历", icon: <Calendar size={16} /> },
     ],
   },
-  { title: "国内资产", entries: [{ id: "domestic:holdings", label: "持仓管理", icon: <Wallet size={16} /> }, { id: "domestic", label: "支付宝基金", icon: <Wallet size={16} /> }] },
+  { title: "国内资产", entries: [{ id: "domestic:holdings", label: "持仓管理", icon: <Wallet size={16} /> }] },
   {
     title: "交易与收益",
     entries: [
