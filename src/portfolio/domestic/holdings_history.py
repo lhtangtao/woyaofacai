@@ -14,6 +14,7 @@ class HistoricalValues(dict):
         self.nav_dates = {}
         self.nav_sources = {}
         self.missing = {}
+        self.money_funds = set()
 
 
 def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
@@ -97,6 +98,14 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
             days = [(first_day + timedelta(days=i)).isoformat()
                     for i in range((last_day - first_day).days + 1)]
         result = HistoricalValues()
+        if "raw_fund_nav_daily" in raw_tables:
+            result.money_funds = {r[0] for r in raw.execute("""
+                SELECT DISTINCT fund_code FROM raw_fund_nav_daily
+                WHERE unit_nav IS NULL AND (income_per_10k IS NOT NULL OR yield_7d IS NOT NULL)
+            """)}
+        result.money_funds.update(row["fund_code"] for row in rows
+                                  if "货币" in (row.get("fund_type") or "")
+                                  or "货币" in (row.get("fund_name") or ""))
         with localcontext() as precision:
             precision.prec = 60
             for key, balances in quantities.items():

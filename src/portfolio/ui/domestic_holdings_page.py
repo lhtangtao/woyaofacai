@@ -445,8 +445,10 @@ class DomesticHoldingsPage(QWidget):
         self.open_title.setText(f"基金持仓明细（{len(shown)} 条）")
         self.open_positions.rows = shown
         self.open_positions.set_page(0 if reset else self.open_positions.page)
+        money_funds = getattr(self.data.get("daily_values", {}), "money_funds", set())
         self.history_scope = [row for row in all_rows
-                              if all(not control.currentData() or row[key] == control.currentData()
+                              if row["fund_code"] not in money_funds
+                              and all(not control.currentData() or row[key] == control.currentData()
                                      for control, key in ((self.platform, "platform"), (self.kind, "fund_type")))
                               and query in (row["fund_code"] + " " + row["fund_name"]).casefold()]
         self.by_platform.render(prepared, "platform", summary["market"])
@@ -495,7 +497,7 @@ class DomesticHoldingsPage(QWidget):
         explanations = "；".join(f"{reason}（{'、'.join(sorted(codes))}）"
                                 for reason, codes in reasons.items())
         self.history_note.setText(
-            f"完整估值 {count} 日 · 缺口 {len(points) - count} 日"
+            f"历史市值（不含货币基金）· 完整估值 {count} 日 · 缺口 {len(points) - count} 日"
             + (f" · {explanations}" if explanations else "")
             if points else "历史市值读取失败，请刷新重试。" if self.data.get("history_error")
             else "当前范围暂无历史估值。")
