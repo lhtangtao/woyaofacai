@@ -124,8 +124,13 @@ class FundTable(QWidget):
         known.sort(key=lambda row: Decimal(row[self.sort]) if self.sort in NUMERIC else row[self.sort],
                    reverse=self.descending)
         self.visible_rows = (known + missing)[self.page * size:(self.page + 1) * size]
-        self.table.setHorizontalHeaderLabels([label + (" ↓" if self.descending else " ↑") if key == self.sort
-                                               else label for key, label in self.columns.items()])
+        nav_date = max((row["nav_date"] for row in self.rows if row.get("nav_date")), default=None) if self.open_positions else None
+        headers = []
+        for key, label in self.columns.items():
+            if self.open_positions and key == "nav":
+                label = f"最新单位净值\n（{nav_date or '日期未知'}）"
+            headers.append(label + (" ↓" if self.descending else " ↑") if key == self.sort else label)
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.visible_rows))
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
@@ -138,7 +143,12 @@ class FundTable(QWidget):
                     if key == "fund_name":
                         val = f"{val}\n{row['fund_code']}"
                     elif key == "nav":
-                        val = f"{money(Decimal(val), 4)}\n{row['nav_date']}" if val is not None else "—"
+                        if val is not None:
+                            val = money(Decimal(val), 4)
+                            if row.get("nav_date") != nav_date:
+                                val += f"\n{row.get('nav_date') or '日期未知'}"
+                        else:
+                            val = "—"
                     elif key in ("average", "shares"):
                         val = money(val, 4 if key == "average" else 2)
                 item = QTableWidgetItem(("查看 ›" if self.open_positions else "›") if key == "arrow" else str(val) if val is not None else "—")
