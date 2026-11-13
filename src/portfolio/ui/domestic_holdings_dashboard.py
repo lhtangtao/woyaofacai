@@ -7,7 +7,7 @@ from decimal import Decimal, localcontext
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
 from PySide6.QtCore import QMargins, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
 GREEN = "#15803D"
@@ -159,7 +159,7 @@ class Distribution(QWidget):
         self.legend.setSpacing(3)
         row.addLayout(self.legend, 1)
 
-    def render(self, rows, key, market):
+    def render(self, rows, key, market, value_key="market_value", absolute=False):
         self.chart.removeAllSeries()
         while self.legend.count():
             item = self.legend.takeAt(0)
@@ -172,10 +172,15 @@ class Distribution(QWidget):
         series = QPieSeries()
         series.setHoleSize(.69)
         series.setPieSize(.98)
-        self.center.setText(f"<b>{money(market)}</b><br>持仓市值")
+        self.center.setText(f"<b>{money(market)}</b><br>{'盈亏绝对值' if absolute else '持仓市值'}")
+        if absolute and market is None:
+            self.legend.addWidget(QLabel("暂无已核算收益\n无法计算分布"))
+            self.legend.addStretch()
+            self.chart.addSeries(series)
+            return
         for i, (name, group) in enumerate(sorted(groups.items())):
             color = PLATFORM_COLORS.get(name, COLORS[i % len(COLORS)])
-            value = total(row["market_value"] for row in group)
+            value = total(abs(row[value_key]) if absolute and row.get(value_key) is not None else row.get(value_key) for row in group)
             portion = percent(value / market * 100) if market and value is not None else "—"
             count = len({row["fund_code"] for row in group})
             if value is not None and value > 0:
@@ -191,6 +196,92 @@ class Distribution(QWidget):
         if not groups:
             self.legend.addWidget(QLabel("暂无持仓"))
         self.legend.addStretch()
+
+
+class PlatformList(QWidget):
+    """Account distribution as a clickable list rather than another donut."""
+    def __init__(self, selected):
+        super().__init__()
+        self.selected = selected
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame, self.body = panel("按交易平台分布")
+        outer.addWidget(frame)
+
+    def render(self, rows, closed=False):
+        while self.body.count() > 1:
+            item = self.body.takeAt(1)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        value_key = "realized" if closed else "market_value"
+        groups = defaultdict(list)
+        for row in rows:
+            groups[row["platform"]].append(row)
+        self.body.addWidget(QLabel("平台　　已核算盈亏 / 基金数" if closed else "平台　　市值 / 成本 / 浮动盈亏 / 基金数", objectName="domesticCaption"))
+        for name, group in sorted(groups.items()):
+            values = [row.get(value_key) for row in group]
+            value = total(values)
+            incomplete = sum(v is None for v in values)
+            if closed:
+                summary = f"已实现 {money(value)} CNY"
+            else:
+                matched = [r for r in group if r.get("floating") is not None]
+                summary = f"市值 {money(value)}　成本 {money(total(r.get('cost') for r in matched))}　盈亏 {money(total(r.get('floating') for r in matched))}"
+                incomplete = sum(r.get("floating") is None for r in group)
+            button = QPushButton(f"{name}　{summary}　{len({r['fund_code'] for r in group})} 只" + (f"　· {incomplete} 条未核算" if incomplete else ""))
+            button.setStyleSheet("text-align:left; padding:9px;")
+            button.clicked.connect(lambda _, name=name: self.selected(name))
+            self.body.addWidget(button)
+        if not groups:
+            self.body.addWidget(QLabel("暂无数据"))
+        self.body.addStretch()
+
+
+class Contribution(QWidget):
+    def __init__(self, selected):
+        super().__init__()
+        self.selected = selected
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame, self.body = panel()
+        outer.addWidget(frame)
+
+    def render(self, rows, closed=False):
+        while self.body.count():
+            item = self.body.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        self.body.addWidget(QLabel(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top 5", objectName="domesticSection"))
+        key = "realized" if closed else "floating"
+        columns = QWidget()
+        columns_layout = QHBoxLayout(columns)
+        columns_layout.setContentsMargins(0, 0, 0, 0)
+        self.body.addWidget(columns)
+        for sign, title, color in ((-1, "亏损贡献", RED), (1, "盈利贡献", GREEN)):
+            side = QWidget()
+            side_layout = QVBoxLayout(side)
+            side_layout.setContentsMargins(0, 0, 0, 0)
+            columns_layout.addWidget(side, 1)
+            group = sorted((r for r in rows if r.get(key) is not None and r[key] * sign > 0),
+                           key=lambda r: abs(r[key]), reverse=True)[:5]
+            side_layout.addWidget(QLabel(f"{title} Top 5" + (f"　· 已核算 {len(group)} 条" if group else "　· 暂无已核算数据")))
+            maximum = max((abs(r[key]) for r in group), default=Decimal(1))
+            for row in group:
+                button = QPushButton(f"{row['fund_code']}　{row['fund_name']}　{money(row[key])}")
+                button.setStyleSheet(f"text-align:left; color:{color};")
+                button.setToolTip(f"{row['fund_name']}　{row['platform']}　{money(row[key])} CNY")
+                button.clicked.connect(lambda _, row=row: self.selected(row))
+                side_layout.addWidget(button)
+                bar = QProgressBar()
+                bar.setTextVisible(False)
+                bar.setFixedHeight(5)
+                bar.setInvertedAppearance(sign < 0)
+                bar.setValue(int(abs(row[key]) / maximum * 100))
+                bar.setStyleSheet(f"QProgressBar::chunk {{ background:{color}; }}")
+                side_layout.addWidget(bar)
+            side_layout.addStretch()
 
 
 class HoldingsDelegate(QStyledItemDelegate):
@@ -248,6 +339,7 @@ class TrendView(QChartView):
         chart.removeAllSeries()
         self.area_boundaries.clear()
         for axis in chart.axes():
+            axis.setVisible(False)
             chart.removeAxis(axis)
             axis.deleteLater()
         chart.setBackgroundVisible(False)
@@ -259,6 +351,7 @@ class TrendView(QChartView):
         self.nav_dates = nav_dates or {}
         values = [float(value) for _, value in points if value is not None]
         if not values:
+            chart.update()
             return
         low, high = min(values), max(values)
         pad = max(1, (high - low) * .10, high * .015)
@@ -269,7 +362,7 @@ class TrendView(QChartView):
         step = max(1, (len(points) + 4) // 5)
         for index, (day, _) in enumerate(points):
             if index % step == 0 or index == len(points) - 1:
-                x.append(day.isoformat(), index)
+                x.append(day.strftime("%m-%d" if len(points) < 300 else "%y-%m"), index)
         x.setRange(-0.2, max(1, len(points) - 1) + 0.2)
         y = QValueAxis()
         y.setRange(base, high + pad)
