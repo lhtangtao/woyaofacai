@@ -49,6 +49,14 @@ def amount(value):
     return f"{Decimal(value):,.2f}" if value is not None else "—"
 
 
+def show_in_overview(row):
+    """Hide confirmed sub-yuan holdings without assuming missing values are zero."""
+    value = row.get("market_value")
+    if row.get("current_position_status") != "持有中" or value is None:
+        return True
+    return Decimal(str(value)) >= Decimal("1")
+
+
 def clear(layout):
     while layout.count():
         item = layout.takeAt(0)
@@ -531,7 +539,8 @@ class DomesticHoldingsPage(QWidget):
         control.setCurrentIndex(0 if control.currentData() == name else control.findData(name))
 
     def render_overview(self, reset=False):
-        all_rows = self.data.get("rows", [])
+        history_rows = self.data.get("rows", [])
+        all_rows = [row for row in history_rows if show_in_overview(row)]
         opened = self.modes.checkedId() == 0
         self.close_dates.setVisible(not opened)
         for i, status in enumerate(("持有中", "已清仓")):
@@ -601,7 +610,7 @@ class DomesticHoldingsPage(QWidget):
         self.open_positions.rows = shown
         self.open_positions.set_page(0 if reset else self.open_positions.page)
         money_funds = getattr(self.data.get("daily_values", {}), "money_funds", set())
-        self.history_scope = [row for row in all_rows
+        self.history_scope = [row for row in history_rows
                               if row["fund_code"] not in money_funds
                               and all(not control.currentData() or row[key] == control.currentData()
                                      for control, key in ((self.platform, "platform"), (self.kind, "fund_type")))

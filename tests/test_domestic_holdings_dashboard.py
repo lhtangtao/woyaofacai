@@ -4,6 +4,15 @@ from decimal import Decimal
 from portfolio.ui.domestic_holdings_dashboard import holding_metrics, trend_points
 
 
+def test_sub_yuan_filter_only_hides_known_current_holdings():
+    from portfolio.ui.domestic_holdings_page import show_in_overview
+
+    assert not show_in_overview(dict(current_position_status="持有中", market_value="0.72"))
+    assert show_in_overview(dict(current_position_status="持有中", market_value="1"))
+    assert show_in_overview(dict(current_position_status="持有中", market_value=None))
+    assert show_in_overview(dict(current_position_status="已清仓", market_value="0"))
+
+
 def test_domestic_dashboard_aggregates_matched_costs_and_preserves_history_gaps():
     rows = [
         dict(account_id="a", fund_code="000001", shares="10", market_value="100", cost="50"),
