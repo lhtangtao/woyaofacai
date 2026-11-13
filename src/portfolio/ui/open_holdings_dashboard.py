@@ -25,6 +25,7 @@ from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -809,6 +810,7 @@ class RatioProgressBarCell(QWidget):
 
         self.pbar = QProgressBar(self)
         self.pbar.setFixedHeight(5)
+        self.pbar.setMinimumWidth(20)
         self.pbar.setTextVisible(False)
         self.pbar.setRange(0, 1000)
         clamped = max(0.0, min(1.0, float(ratio_val or 0.0)))
@@ -827,13 +829,15 @@ class RatioProgressBarCell(QWidget):
         """)
         layout.addWidget(self.pbar, 1)
 
-        # 展示百分比标签（拉宽后空间充裕，合计行与普通行均展示）
+        # 展示百分比标签（使用 QFontMetrics 动态计算实际文字宽度并预留内边距，确保 100.0% 和各类文字完整显示）
         if percent_text:
             self.lbl = QLabel(percent_text, self)
             self.lbl.setFont(numeric_font(10))
             txt_color = "#2563EB" if (is_selected or is_total) else "#0F172A"
             self.lbl.setStyleSheet(f"color: {txt_color}; background: transparent; border: none;")
-            self.lbl.setFixedWidth(40)
+            fm = QFontMetrics(self.lbl.font())
+            text_w = fm.horizontalAdvance(percent_text)
+            self.lbl.setFixedWidth(text_w + 6)
             self.lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             layout.addWidget(self.lbl)
         else:
@@ -892,7 +896,10 @@ class OpenHoldingsChartsRow(QWidget):
         for c in range(6):
             it = self.broker_table.horizontalHeaderItem(c)
             if it:
-                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if c in (2, 3, 4):
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                else:
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.broker_table.verticalHeader().setVisible(False)
         self.broker_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.broker_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -900,6 +907,8 @@ class OpenHoldingsChartsRow(QWidget):
         self.broker_table.setShowGrid(False)
         self.broker_table.setAlternatingRowColors(False)
         self.broker_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.broker_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.broker_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.broker_table.setStyleSheet("""
             QTableWidget {
                 border: none;
@@ -917,24 +926,33 @@ class OpenHoldingsChartsRow(QWidget):
                 border: none;
                 border-bottom: 1px solid #E2E8F0;
                 padding: 5px 4px;
-                text-align: center;
             }
             QTableWidget::item {
                 border-bottom: 1px solid #F1F5F9;
                 padding: 4px 4px;
             }
+            QScrollBar:horizontal {
+                height: 6px;
+                background: transparent;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #CBD5E1;
+                border-radius: 3px;
+                min-width: 20px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #94A3B8;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                height: 0px;
+            }
         """)
         b_hdr_view = self.broker_table.horizontalHeader()
-        b_hdr_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        b_hdr_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        b_hdr_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        b_hdr_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        b_hdr_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        b_hdr_view.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.broker_table.setColumnWidth(0, 64)
-        self.broker_table.setColumnWidth(2, 74)
-        self.broker_table.setColumnWidth(3, 74)
-        self.broker_table.setColumnWidth(4, 76)
+        for i in range(6):
+            b_hdr_view.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        b_hdr_view.setStretchLastSection(False)
         self.broker_table.cellClicked.connect(self._on_broker_row_clicked)
         b_layout.addWidget(self.broker_table, 1)
 
@@ -1108,6 +1126,96 @@ class OpenHoldingsChartsRow(QWidget):
 
         layout.addWidget(self.trend_card, 36)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._adjust_broker_table_layout()
+
+    def _adjust_broker_table_layout(self):
+        """根据当前表格文本内容与可用视口宽度动态分配列宽，确保金额与百分比绝不截断。"""
+        if not hasattr(self, "broker_table") or self.broker_table.columnCount() < 6:
+            return
+
+        hdr_view = self.broker_table.horizontalHeader()
+        hdr_fm = QFontMetrics(hdr_view.font())
+        bold_fm = QFontMetrics(numeric_font(11, bold=True))
+        num_fm = QFontMetrics(numeric_font(11))
+
+        # 1. 计算各列根据内容所需的基础安全最小宽度
+        w0 = hdr_fm.horizontalAdvance("券商渠道") + 16
+        for r in range(self.broker_table.rowCount()):
+            it = self.broker_table.item(r, 0)
+            if it and it.text():
+                w0 = max(w0, QFontMetrics(it.font()).horizontalAdvance(it.text()) + 18)
+        col0_min = max(64, w0)
+
+        # Col 1: 市值占比（进度条允许缩短，给金额列更多空间，基础最小预留约 76px）
+        col1_min = 76
+
+        # Col 2: 持仓成本
+        w2 = hdr_fm.horizontalAdvance("持仓成本") + 16
+        for r in range(self.broker_table.rowCount()):
+            it = self.broker_table.item(r, 2)
+            if it and it.text():
+                w2 = max(w2, QFontMetrics(it.font()).horizontalAdvance(it.text()) + 16)
+        col2_min = max(76, w2)
+
+        # Col 3: 持仓市值
+        w3 = hdr_fm.horizontalAdvance("持仓市值") + 16
+        for r in range(self.broker_table.rowCount()):
+            it = self.broker_table.item(r, 3)
+            if it and it.text():
+                w3 = max(w3, QFontMetrics(it.font()).horizontalAdvance(it.text()) + 16)
+        col3_min = max(76, w3)
+
+        # Col 4: 浮动盈亏（包含正负号）
+        w4 = hdr_fm.horizontalAdvance("浮动盈亏") + 16
+        for r in range(self.broker_table.rowCount()):
+            it = self.broker_table.item(r, 4)
+            if it and it.text():
+                w4 = max(w4, QFontMetrics(it.font()).horizontalAdvance(it.text()) + 16)
+        col4_min = max(76, w4)
+
+        # Col 5: 持仓数量
+        w5 = hdr_fm.horizontalAdvance("持仓数量") + 14
+        for r in range(self.broker_table.rowCount()):
+            it = self.broker_table.item(r, 5)
+            if it and it.text():
+                w5 = max(w5, QFontMetrics(it.font()).horizontalAdvance(it.text()) + 14)
+        col5_min = max(52, w5)
+
+        total_min = col0_min + col1_min + col2_min + col3_min + col4_min + col5_min
+
+        # 2. 获取表格视口可用宽度
+        viewport_w = self.broker_table.viewport().width()
+        if viewport_w <= 10:
+            viewport_w = max(self.broker_card.width() - 30, total_min)
+
+        # 3. 动态分配：
+        # 视口充裕时金额列留有舒适右边距，剩余空间分配给占比进度条；
+        # 视口紧凑时优先压缩占比进度条，金额列严格保留最小安全宽度（绝不压缩截断重要财务金额），允许横向滚动
+        if viewport_w > total_min:
+            extra = viewport_w - total_min
+            extra_money = extra * 0.12
+            c2_w = int(col2_min + extra_money)
+            c3_w = int(col3_min + extra_money)
+            c4_w = int(col4_min + extra_money)
+            c1_w = int(viewport_w - (col0_min + c2_w + c3_w + c4_w + col5_min))
+            c1_w = max(col1_min, c1_w)
+
+            self.broker_table.setColumnWidth(0, int(col0_min))
+            self.broker_table.setColumnWidth(1, int(c1_w))
+            self.broker_table.setColumnWidth(2, int(c2_w))
+            self.broker_table.setColumnWidth(3, int(c3_w))
+            self.broker_table.setColumnWidth(4, int(c4_w))
+            self.broker_table.setColumnWidth(5, int(col5_min))
+        else:
+            self.broker_table.setColumnWidth(0, int(col0_min))
+            self.broker_table.setColumnWidth(1, int(col1_min))
+            self.broker_table.setColumnWidth(2, int(col2_min))
+            self.broker_table.setColumnWidth(3, int(col3_min))
+            self.broker_table.setColumnWidth(4, int(col4_min))
+            self.broker_table.setColumnWidth(5, int(col5_min))
+
     def _on_broker_row_clicked(self, row: int, _col: int):
         item = self.broker_table.item(row, 0)
         if not item:
@@ -1254,28 +1362,28 @@ class OpenHoldingsChartsRow(QWidget):
             )
             self.broker_table.setCellWidget(r_idx, 1, p_cell)
 
-            # Col 2: 持仓成本（居中）
+            # Col 2: 持仓成本（右对齐）
             it2 = QTableWidgetItem(f"{b_cost:,.2f}")
-            it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it2.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it2.setFont(num_font)
             it2.setBackground(bg)
             it2.setForeground(QColor(fg))
             it2.setToolTip(tip)
             self.broker_table.setItem(r_idx, 2, it2)
 
-            # Col 3: 持仓市值（居中）
+            # Col 3: 持仓市值（右对齐）
             it3 = QTableWidgetItem(f"{b_mv:,.2f}")
-            it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it3.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it3.setFont(num_font)
             it3.setBackground(bg)
             it3.setForeground(QColor(fg))
             it3.setToolTip(tip)
             self.broker_table.setItem(r_idx, 3, it3)
 
-            # Col 4: 浮动盈亏（居中，带正负号与盈亏颜色）
+            # Col 4: 浮动盈亏（右对齐，带正负号与盈亏颜色）
             pnl_fg = _pnl_color(b_pnl)
             it4 = QTableWidgetItem(f"{b_pnl:+,.2f}")
-            it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it4.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it4.setFont(num_font)
             it4.setBackground(bg)
             it4.setForeground(QColor(pnl_fg))
@@ -1313,15 +1421,28 @@ class OpenHoldingsChartsRow(QWidget):
             it0.setToolTip(tot_tip)
             self.broker_table.setItem(tot_idx, 0, it0)
 
-            # 合计行展示满额 100.0% 进度条与数字
+            # 验证当前渠道市值是否完整覆盖有效总市值；有有效且完整数据时显示 100.0%，无有效市值时显示 —，不能无条件硬编码
+            sum_broker_mv = sum(float(b.get("market_value") or 0.0) for b in sorted_brokers)
+            if total_mv > 0 and len(sorted_brokers) > 0 and sum_broker_mv > 0:
+                coverage = sum_broker_mv / total_mv
+                if coverage >= 0.999:
+                    tot_percent_text = "100.0%"
+                    tot_ratio = 1.0
+                else:
+                    tot_percent_text = f"{coverage * 100.0:.1f}%"
+                    tot_ratio = min(1.0, max(0.0, coverage))
+            else:
+                tot_percent_text = "—"
+                tot_ratio = 0.0
+
             it1 = QTableWidgetItem("")
-            it1.setData(Qt.ItemDataRole.UserRole, "100.0%")
+            it1.setData(Qt.ItemDataRole.UserRole, tot_percent_text)
             it1.setBackground(tot_bg)
             it1.setToolTip(tot_tip)
             self.broker_table.setItem(tot_idx, 1, it1)
             tot_p_cell = RatioProgressBarCell(
-                1.0,
-                "100.0%",
+                tot_ratio,
+                tot_percent_text,
                 is_total=True,
                 is_selected=False,
                 tooltip=tot_tip,
@@ -1330,7 +1451,7 @@ class OpenHoldingsChartsRow(QWidget):
             self.broker_table.setCellWidget(tot_idx, 1, tot_p_cell)
 
             it2 = QTableWidgetItem(f"{total_cost:,.2f}")
-            it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it2.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it2.setFont(bold_num_font)
             it2.setBackground(tot_bg)
             it2.setForeground(QColor("#0F172A"))
@@ -1338,7 +1459,7 @@ class OpenHoldingsChartsRow(QWidget):
             self.broker_table.setItem(tot_idx, 2, it2)
 
             it3 = QTableWidgetItem(f"{total_mv:,.2f}")
-            it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it3.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it3.setFont(bold_num_font)
             it3.setBackground(tot_bg)
             it3.setForeground(QColor("#0F172A"))
@@ -1347,7 +1468,7 @@ class OpenHoldingsChartsRow(QWidget):
 
             tot_pnl_fg = _pnl_color(total_pnl)
             it4 = QTableWidgetItem(f"{total_pnl:+,.2f}")
-            it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it4.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             it4.setFont(bold_num_font)
             it4.setBackground(tot_bg)
             it4.setForeground(QColor(tot_pnl_fg))
@@ -1393,6 +1514,7 @@ class OpenHoldingsChartsRow(QWidget):
         self.trend_chart.set_data(mv_trend.get("series") or mv_trend.get("points") or [])
         self.incomplete_lbl.setText("")
         self.incomplete_lbl.hide()
+        self._adjust_broker_table_layout()
 
 
 class OpenTop10Chart(QWidget):

@@ -557,10 +557,10 @@ def test_middle_analytics_unified_layout_and_broker_summary_table(closed_dashboa
     # 验证列表至少有数据行与合计行
     row_count = open_row.broker_table.rowCount()
     assert row_count >= 2
-    # 末行是合计行
+    # 末行是合计行：当前环境无有效行情（total_mv=0）时，验证合计占比按规则显示 "—"（不硬编码100.0%）
     tot_row = row_count - 1
     assert open_row.broker_table.item(tot_row, 0).text() == "合计"
-    assert open_row.broker_table.item(tot_row, 1).data(Qt.ItemDataRole.UserRole) == "100.0%"
+    assert open_row.broker_table.item(tot_row, 1).data(Qt.ItemDataRole.UserRole) == "—"
     assert open_row.broker_table.item(tot_row, 4) is not None  # 浮动盈亏合计单元格存在
 
     # 验证单元格内嵌的进度条组件
@@ -571,7 +571,7 @@ def test_middle_analytics_unified_layout_and_broker_summary_table(closed_dashboa
 
     tot_widget = open_row.broker_table.cellWidget(tot_row, 1)
     assert isinstance(tot_widget, RatioProgressBarCell)
-    assert tot_widget.pbar.value() == 1000
+    assert tot_widget.pbar.value() == 0
 
     # 2. 点击券商渠道行联动测试
     first_broker = open_row.broker_table.item(0, 0).text()
