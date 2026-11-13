@@ -317,3 +317,35 @@ def test_10_default_detail_view_and_status_tabs(real_analytics, qtbot):
     assert not page.open_kpi_bar.isHidden()
     assert page.closed_dashboard.isHidden()
 
+    # 验证「持仓中」盈亏贡献 Top 10 卡片存在、可见并可交互联动
+    assert page.open_top10_card is not None
+    assert not page.open_top10_card.isHidden()
+    assert page.open_top10_card.top_n_spin.value() == 5
+
+    # 折叠与展开
+    page.open_top10_card.toggle_btn.click()
+    assert page.open_top10_card.content_widget.isHidden()
+    page.open_top10_card.toggle_btn.click()
+    assert not page.open_top10_card.content_widget.isHidden()
+
+    # 动态参数调整（如设为 2）
+    page.open_top10_card.top_n_spin.setValue(2)
+    assert len(page.open_top10_card.chart.winners) <= 2
+    assert "Top 2" in page.open_top10_card.win_pill.text()
+    page.open_top10_card.top_n_spin.setValue(5)
+
+    # 点击 Top 榜单股票联动筛选持仓明细表
+    if page.open_top10_card.chart.winners:
+        test_tk = page.open_top10_card.chart.winners[0]["ticker"]
+        page.open_top10_card.ticker_clicked.emit(test_tk)
+        assert page._open_ticker_filter == test_tk
+        assert not page.open_ticker_chip.isHidden()
+        assert test_tk in page.open_ticker_chip.text()
+        assert all(r.metadata.get("ticker") == test_tk for r in page.detail_model.rows)
+
+        # 点击芯片清除筛选
+        page.open_ticker_chip.click()
+        assert page._open_ticker_filter == ""
+        assert page.open_ticker_chip.isHidden()
+
+

@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from portfolio.paths import DATABASE_PATH
 from portfolio.ui.icons import icon
+from portfolio.ui.performance_metrics import UnifiedPerformanceMetrics
 from portfolio.ui.theme import numeric_font, tokens
 
 logger = logging.getLogger(__name__)
@@ -862,27 +863,11 @@ class DailyPerformancePage(QWidget):
 
         main_layout.addWidget(filter_card)
 
-        # 2. Seven KPI Cards Grid
-        kpi_grid = QGridLayout()
-        kpi_grid.setSpacing(8)
-        self.kpi_cards: Dict[str, KpiMetricCard] = {}
-
-        kpi_defs = [
-            ("total", "期间总收益"),
-            ("days", "交易日数"),
-            ("avg", "日均收益"),
-            ("up", "上涨天数"),
-            ("down", "下跌天数"),
-            ("avg_profit", "平均收益"),
-            ("avg_loss", "平均亏损"),
-        ]
-        for col_idx, (key, title) in enumerate(kpi_defs):
-            card = KpiMetricCard(key, title, self)
-            card.clicked.connect(self.handle_kpi_clicked)
-            self.kpi_cards[key] = card
-            kpi_grid.addWidget(card, 0, col_idx)
-
-        main_layout.addLayout(kpi_grid)
+        # 2. 统一指标区域：7 项核心收益指标 + 可折叠 5 项资金与交易指标
+        self.metrics_panel = UnifiedPerformanceMetrics(period_unit="day", parent=self)
+        self.metrics_panel.cardClicked.connect(self.handle_kpi_clicked)
+        self.kpi_cards = self.metrics_panel.kpi_cards
+        main_layout.addWidget(self.metrics_panel)
 
         # 3. Middle Section: Trend Chart (Left) + Broker Cumulative Overview (Right)
         self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1443,6 +1428,8 @@ class DailyPerformancePage(QWidget):
         self.apply_filter()
 
     def activate(self):
+        if hasattr(self, "metrics_panel"):
+            self.metrics_panel.sync_shared_expansion()
         self.show()
 
     def update_data(self, analytics):
@@ -1735,44 +1722,26 @@ class DailyPerformancePage(QWidget):
             ])
 
         total_days = len(dates_asc)
-        avg_pnl = (total_pnl / total_days) if total_days > 0 else 0.0
-        avg_up_pnl = (up_pnl_sum / up_days) if up_days > 0 else 0.0
-        avg_down_pnl = (down_pnl_sum / down_days) if down_days > 0 else 0.0
+        buy_total = sum(float(r[16] or 0) for r in filtered) if filtered else None
+        sell_total = sum(float(r[17] or 0) for r in filtered) if filtered else None
+        net_inflow = (buy_total - sell_total) if (buy_total is not None and sell_total is not None) else None
+        end_cum_net = sum(float(r[22] or 0) for r in filtered if r[0] == dates_asc[-1]) if dates_asc else None
+        op_count = sum(int(r[18] or 0) for r in filtered) if filtered else None
 
-        # Update 7 KPI Cards
-        self.kpi_cards["total"].set_data(
-            fmt_signed_money(total_pnl),
-            "",
-            "profit" if total_pnl >= 0 else "loss",
-        )
-        self.kpi_cards["days"].set_data(
-            f"{total_days} 天",
-            f"{dates_asc[0] if dates_asc else '—'} 至 {dates_asc[-1] if dates_asc else '—'}",
-        )
-        self.kpi_cards["avg"].set_data(
-            fmt_signed_money(avg_pnl),
-            "日均净现金额",
-            "profit" if avg_pnl >= 0 else "loss",
-        )
-        self.kpi_cards["up"].set_data(
-            f"{up_days} 天",
-            f"占比 {(up_days / total_days * 100):.1f}%" if total_days > 0 else "—",
-            "profit",
-        )
-        self.kpi_cards["down"].set_data(
-            f"{down_days} 天",
-            f"占比 {(down_days / total_days * 100):.1f}%" if total_days > 0 else "—",
-            "loss",
-        )
-        self.kpi_cards["avg_profit"].set_data(
-            fmt_signed_money(avg_up_pnl),
-            f"上涨日均值 ({up_days}天)",
-            "profit",
-        )
-        self.kpi_cards["avg_loss"].set_data(
-            fmt_signed_money(avg_down_pnl),
-            f"下跌日均值 ({down_days}天)",
-            "loss",
+        self.metrics_panel.update_metrics(
+            total_pnl=total_pnl if total_days > 0 else None,
+            period_count=total_days,
+            first_period=dates_asc[0] if dates_asc else None,
+            last_period=dates_asc[-1] if dates_asc else None,
+            up_count=up_days,
+            down_count=down_days,
+            up_pnl_sum=up_pnl_sum,
+            down_pnl_sum=down_pnl_sum,
+            buy_total=buy_total,
+            sell_total=sell_total,
+            net_inflow=net_inflow,
+            end_cum_net=end_cum_net,
+            op_count=op_count,
         )
 
         # Update Trend Canvas

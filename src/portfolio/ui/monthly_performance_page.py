@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 from portfolio.paths import DATABASE_PATH
 from portfolio.ui.icons import icon
 from portfolio.ui.monthly_cash_flow import CASH_COLUMNS, NET_QUANTITY_COLUMN, cash_flow_rows, sum_column
+from portfolio.ui.performance_metrics import UnifiedPerformanceMetrics
 from portfolio.ui.theme import numeric_font, tokens
 
 logger = logging.getLogger(__name__)
@@ -849,33 +850,11 @@ class MonthlyPerformancePage(QWidget):
 
         content_layout.addWidget(filter_card)
 
-        # 3. Seven KPI Metric Cards
-        kpi_grid = QGridLayout()
-        kpi_grid.setContentsMargins(0, 0, 0, 0)
-        kpi_grid.setSpacing(10)
-
-        self.kpi_cards: Dict[str, KpiMetricCard] = {
-            "total": KpiMetricCard("total", "期间总收益"),
-            "months": KpiMetricCard("months", "交易月数"),
-            "avg": KpiMetricCard("avg", "月均收益"),
-            "up": KpiMetricCard("up", "上涨月数"),
-            "down": KpiMetricCard("down", "下跌月数"),
-            "avg_profit": KpiMetricCard("avg_profit", "平均盈利月"),
-            "avg_loss": KpiMetricCard("avg_loss", "平均亏损月"),
-        }
-
-        period_cards = QHBoxLayout()
-        period_cards.addWidget(self.kpi_cards["total"], 1)
-        for key, card in self.kpi_cards.items():
-            card.clicked.connect(self.handle_kpi_clicked)
-            if key != "total":
-                kpi_grid.addWidget(card, 0, kpi_grid.count())
-        self.period_cards = self.add_metric_cards(period_cards, (
-            "期间收益率", "累计净投入", "期间买入金额", "期间卖出金额", "交易笔数（账本操作）",
-        ))
-        self.period_cards[0].setToolTip("现有报表没有提供期间收益率")
-        content_layout.addLayout(period_cards)
-        content_layout.addLayout(kpi_grid)
+        # 3. 统一指标区域：7 项核心收益指标 + 可折叠 5 项资金与交易指标
+        self.metrics_panel = UnifiedPerformanceMetrics(period_unit="month", parent=self)
+        self.metrics_panel.cardClicked.connect(self.handle_kpi_clicked)
+        self.kpi_cards = self.metrics_panel.kpi_cards
+        content_layout.addWidget(self.metrics_panel)
 
         # 4. Middle Section: Monthly Trend Chart (Left) + Broker Overview (Right)
         self.mid_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1540,6 +1519,8 @@ class MonthlyPerformancePage(QWidget):
     # -------------------------------------------------------------------------
     def activate(self):
         """Called when sidebar navigates to this page."""
+        if hasattr(self, "metrics_panel"):
+            self.metrics_panel.sync_shared_expansion()
         if not self.raw_rows and self.analytics:
             self.update_data(self.analytics)
         self.adjust_current_table_columns()
@@ -1738,10 +1719,6 @@ class MonthlyPerformancePage(QWidget):
             f"当前筛选合计　买入 {fmt_money(flow_totals[0])}　卖出 {fmt_money(flow_totals[1])}"
             f"　净投入 {fmt_signed_money(flow_totals[2])}　月末累计 {fmt_money(end_balance)}"
         )
-        for card, value, digits in zip(self.period_cards,
-                [None, end_balance, sum_column(filtered, 16), sum_column(filtered, 17), sum_column(filtered, 19)],
-                [2, 2, 2, 2, 0]):
-            card.set_data(fmt_money(value, digits), "")
 
         # Group by Month
         month_map: Dict[str, Dict[str, Any]] = {}
@@ -1819,44 +1796,26 @@ class MonthlyPerformancePage(QWidget):
             ])
 
         total_months = len(months_asc)
-        avg_pnl = (total_pnl / total_months) if total_months > 0 else 0.0
-        avg_up_pnl = (up_pnl_sum / up_months) if up_months > 0 else 0.0
-        avg_down_pnl = (down_pnl_sum / down_months) if down_months > 0 else 0.0
+        buy_total = sum_column(filtered, 16)
+        sell_total = sum_column(filtered, 17)
+        net_inflow = (buy_total - sell_total) if (buy_total is not None and sell_total is not None) else None
+        end_cum_net = sum_column([r for r in filtered if r[0] == months_asc[-1]], 23) if months_asc else end_balance
+        op_count = sum_column(filtered, 19)
 
-        # Update 7 KPI Cards
-        self.kpi_cards["total"].set_data(
-            fmt_signed_money(total_pnl),
-            "",
-            "profit" if total_pnl >= 0 else "loss",
-        )
-        self.kpi_cards["months"].set_data(
-            f"{total_months} 个月",
-            f"{months_asc[0] if months_asc else '—'} 至 {months_asc[-1] if months_asc else '—'}",
-        )
-        self.kpi_cards["avg"].set_data(
-            fmt_signed_money(avg_pnl),
-            "月均净现金额",
-            "profit" if avg_pnl >= 0 else "loss",
-        )
-        self.kpi_cards["up"].set_data(
-            f"{up_months} 个月",
-            f"占比 {(up_months / total_months * 100):.1f}%" if total_months > 0 else "—",
-            "profit",
-        )
-        self.kpi_cards["down"].set_data(
-            f"{down_months} 个月",
-            f"占比 {(down_months / total_months * 100):.1f}%" if total_months > 0 else "—",
-            "loss",
-        )
-        self.kpi_cards["avg_profit"].set_data(
-            fmt_signed_money(avg_up_pnl),
-            f"盈利月份均值 ({up_months}月)",
-            "profit",
-        )
-        self.kpi_cards["avg_loss"].set_data(
-            fmt_signed_money(avg_down_pnl),
-            f"亏损月份均值 ({down_months}月)",
-            "loss",
+        self.metrics_panel.update_metrics(
+            total_pnl=total_pnl if total_months > 0 else None,
+            period_count=total_months,
+            first_period=months_asc[0] if months_asc else None,
+            last_period=months_asc[-1] if months_asc else None,
+            up_count=up_months,
+            down_count=down_months,
+            up_pnl_sum=up_pnl_sum,
+            down_pnl_sum=down_pnl_sum,
+            buy_total=float(buy_total) if buy_total is not None else None,
+            sell_total=float(sell_total) if sell_total is not None else None,
+            net_inflow=float(net_inflow) if net_inflow is not None else None,
+            end_cum_net=float(end_cum_net) if end_cum_net is not None else None,
+            op_count=int(op_count) if op_count is not None else None,
         )
 
         # Update Trend Canvas

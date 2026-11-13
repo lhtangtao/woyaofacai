@@ -61,15 +61,228 @@ from portfolio.services.open_holdings_analytics_service import (
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.holding_cost_chart import HoldingCostDualAxisChart
 from portfolio.ui.pnl_analysis_charts import PnlAnalysisChartsWidget
-from portfolio.ui.closed_dashboard import ClosedDashboardWidget
+from portfolio.ui.closed_dashboard import ClosedDashboardWidget, ClosedHoldingsKpiBar
 from portfolio.ui.filters import PersonFilter
 from portfolio.ui.finance_table import FinanceModel, FinanceTable
 from portfolio.ui.icons import icon
 from portfolio.ui.open_holdings_dashboard import (
     OpenHoldingsChartsRow,
     OpenHoldingsKpiBar,
+    OpenTop10Card,
 )
 from portfolio.ui.theme import numeric_font, tokens
+
+
+class HoldingsLocalFilterBar(QFrame):
+    """持有中与已清仓两个页面统一共用的局部筛选栏。
+
+    规格与交互规范：
+    1. 嵌入顶部操作栏右侧（在 status_tabs 之后、导出明细之前），充分节约纵向空间。
+    2. 控件尺寸、字体与边框统一紧凑设计（高度 32px）。
+    3. 搜索框位于筛选条件之后，「重置筛选」按钮位于搜索框之后。
+    4. 持有中：股票类型 + 搜索框 + 重置筛选。
+    5. 已清仓：清仓日期 + 搜索框 + 重置筛选。
+    6. 彻底清理已不再需要的「币种」筛选条件。
+    7. 两种模式分别记忆自己的局部筛选状态，切回时自动恢复。
+    """
+
+    filter_changed = Signal()
+    reset_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("HoldingsLocalFilterBar")
+        self.setStyleSheet("""
+            QFrame#HoldingsLocalFilterBar {
+                background: transparent;
+                border: none;
+            }
+            QLabel.FilterLabel {
+                color: #475569;
+                font-size: 12px;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+            }
+            QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 3px 8px;
+                font-size: 12px;
+                color: #0F172A;
+                min-height: 24px;
+            }
+            QComboBox:hover {
+                border-color: #93C5FD;
+            }
+            QComboBox:focus {
+                border-color: #2563EB;
+            }
+            QLineEdit {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 3px 8px;
+                font-size: 12px;
+                color: #0F172A;
+                min-height: 24px;
+            }
+            QLineEdit:hover {
+                border-color: #93C5FD;
+            }
+            QLineEdit:focus {
+                border-color: #2563EB;
+            }
+            QPushButton.ResetBtn {
+                background: #F8FAFC;
+                color: #475569;
+                font-size: 12px;
+                font-weight: 600;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 3px 12px;
+                min-height: 24px;
+            }
+            QPushButton.ResetBtn:hover {
+                background: #F1F5F9;
+                color: #1E293B;
+                border-color: #94A3B8;
+            }
+        """)
+        self.setFixedHeight(32)
+        self._mode = "open"
+
+        # 模式独立状态缓存
+        self._open_type = ""
+        self._open_search = ""
+        self._closed_date = "all"
+        self._closed_search = ""
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # 1. 持有中：股票类型
+        self.lbl_stock_type = QLabel("股票类型")
+        self.lbl_stock_type.setProperty("class", "FilterLabel")
+        self.lbl_stock_type.setStyleSheet("color: #475569; font-size: 12px; font-weight: 600;")
+        layout.addWidget(self.lbl_stock_type)
+
+        self.open_industry_combo = QComboBox(self)
+        self.open_industry_combo.setMinimumWidth(95)
+        self.open_industry_combo.addItem("全部", "")
+        layout.addWidget(self.open_industry_combo)
+
+        # 2. 已清仓：清仓日期
+        self.lbl_close_date = QLabel("清仓日期")
+        self.lbl_close_date.setProperty("class", "FilterLabel")
+        self.lbl_close_date.setStyleSheet("color: #475569; font-size: 12px; font-weight: 600;")
+        layout.addWidget(self.lbl_close_date)
+
+        self.close_date_combo = QComboBox(self)
+        self.close_date_combo.setMinimumWidth(110)
+        for label, key in (
+            ("全部时间", "all"),
+            ("近 6 个月", "6m"),
+            ("近 12 个月", "12m"),
+            ("近 24 个月", "24m"),
+            ("今年以来", "ytd"),
+            ("去年", "last_year"),
+        ):
+            self.close_date_combo.addItem(label, key)
+        layout.addWidget(self.close_date_combo)
+
+        # 3. 搜索框（紧跟在筛选条件之后）
+        self.search_input = QLineEdit(self)
+        self.search_input.setPlaceholderText("搜索股票名称 / Ticker")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumWidth(200)
+        self.open_search_input = self.search_input
+        layout.addWidget(self.search_input)
+
+        # 4. 重置筛选按钮（固定在最右侧）
+        self.reset_btn = QPushButton("重置筛选", self)
+        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_btn.setProperty("class", "ResetBtn")
+        self.reset_btn.setStyleSheet("""
+            QPushButton {
+                background: #F8FAFC; color: #475569; font-size: 12px; font-weight: 600;
+                border: 1px solid #CBD5E1; border-radius: 6px; padding: 3px 12px; min-height: 24px;
+            }
+            QPushButton:hover { background: #F1F5F9; color: #1E293B; border-color: #94A3B8; }
+        """)
+        layout.addWidget(self.reset_btn)
+
+        self._apply_mode_visibility()
+
+    def set_mode(self, mode: str):
+        if mode == self._mode:
+            self._apply_mode_visibility()
+            return
+
+        # 1. 记忆当前模式状态
+        if self._mode == "open":
+            self._open_type = str(self.open_industry_combo.currentData() or "")
+            self._open_search = self.search_input.text()
+        else:
+            self._closed_date = str(self.close_date_combo.currentData() or "all")
+            self._closed_search = self.search_input.text()
+
+        self._mode = mode
+        self._apply_mode_visibility()
+
+        # 2. 恢复切入模式状态（阻断信号避免冗余触发）
+        b_search = self.search_input.blockSignals(True)
+        if mode == "open":
+            self.search_input.setPlaceholderText("搜索股票名称 / Ticker")
+            self.search_input.setText(self._open_search)
+            b_type = self.open_industry_combo.blockSignals(True)
+            self._select_combo_data(self.open_industry_combo, self._open_type)
+            self.open_industry_combo.blockSignals(b_type)
+        else:
+            self.search_input.setPlaceholderText("搜索股票名称、Ticker、人员、券商或账号…")
+            self.search_input.setText(self._closed_search)
+            b_date = self.close_date_combo.blockSignals(True)
+            self._select_combo_data(self.close_date_combo, self._closed_date)
+            self.close_date_combo.blockSignals(b_date)
+        self.search_input.blockSignals(b_search)
+
+    def _apply_mode_visibility(self):
+        is_open = self._mode == "open"
+        self.lbl_stock_type.setVisible(is_open)
+        self.open_industry_combo.setVisible(is_open)
+        self.lbl_close_date.setVisible(not is_open)
+        self.close_date_combo.setVisible(not is_open)
+
+    @staticmethod
+    def _select_combo_data(combo: QComboBox, target_data: str):
+        if not target_data:
+            combo.setCurrentIndex(0)
+            return
+        for i in range(combo.count()):
+            if str(combo.itemData(i) or "").casefold() == str(target_data).casefold():
+                combo.setCurrentIndex(i)
+                return
+        combo.setCurrentIndex(0)
+
+    def reset_current_mode(self):
+        """仅重置当前模式的局部筛选条件。"""
+        b_s = self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(b_s)
+        if self._mode == "open":
+            self._open_type = ""
+            self._open_search = ""
+            b_t = self.open_industry_combo.blockSignals(True)
+            self.open_industry_combo.setCurrentIndex(0)
+            self.open_industry_combo.blockSignals(b_t)
+        else:
+            self._closed_date = "all"
+            self._closed_search = ""
+            b_d = self.close_date_combo.blockSignals(True)
+            self.close_date_combo.setCurrentIndex(0)
+            self.close_date_combo.blockSignals(b_d)
 
 OPEN_HOLDINGS_COLUMNS = (
     "归属人员",
@@ -1055,11 +1268,13 @@ class HoldingsPage(QWidget):
         self._detail_states = {}
         self._detail_mode = None
         self._closed_pnl_filter = ""
+        self._closed_ticker_filter = ""
         self._closed_trend_window = "all"
         self._open_stock_type = ""
         self._open_industry = ""
         self._open_currency = ""
         self._open_pnl_filter = "all"
+        self._open_ticker_filter = ""
         self._open_person_drill_id: int | None = None
         self._open_person_drill_name: str = ""
         self._open_trend_window = "ytd"
@@ -1067,48 +1282,16 @@ class HoldingsPage(QWidget):
         self._open_page_size = 50
         self._open_all_rows: list[ReportRow] = []
 
-        # Broker filter
-        self.closed_broker_lbl = QLabel("渠道：")
-        detail_bar.addWidget(self.closed_broker_lbl)
+        # 虚拟保留兼容对象（不加入顶部 detail_bar，避免重复冗余）
+        self.closed_broker_lbl = QLabel()
         self.closed_broker_lbl.hide()
         self.broker_combo = QComboBox()
         self.broker_combo.addItem("全部渠道", "")
-        self.broker_combo.addItem("长桥", "长桥")
-        self.broker_combo.addItem("BBAE", "BBAE")
-        self.broker_combo.addItem("第一证券", "第一证券")
-        self.broker_combo.addItem("嘉信", "嘉信")
-        self.broker_combo.currentIndexChanged.connect(self._on_broker_combo_changed)
-        detail_bar.addWidget(self.broker_combo)
+        self.broker_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.broker_combo.hide()
-
-        # Close date range filter (仅已清仓页面展示)
-        self.close_date_lbl = QLabel("清仓日期：")
-        detail_bar.addWidget(self.close_date_lbl)
-        self.close_date_lbl.hide()
-        self.close_date_combo = QComboBox()
-        for label, key in (
-            ("全部时间", "all"),
-            ("近 6 个月", "6m"),
-            ("近 12 个月", "12m"),
-            ("近 24 个月", "24m"),
-            ("今年以来", "ytd"),
-            ("去年", "last_year"),
-        ):
-            self.close_date_combo.addItem(label, key)
-        self.close_date_combo.currentIndexChanged.connect(self._on_filter_changed)
-        detail_bar.addWidget(self.close_date_combo)
-        self.close_date_combo.hide()
-
-        # Person filter (仅已清仓页面工具栏展示，与全局 person_filter 联动)
-        self.closed_person_lbl = QLabel("归属人员：")
-        detail_bar.addWidget(self.closed_person_lbl)
+        self.closed_person_lbl = QLabel()
         self.closed_person_lbl.hide()
         self.closed_person_combo = PersonFilter(self)
-        self.closed_person_combo.setMinimumWidth(120)
-        self.closed_person_combo.addItem("全部启用人员", None)
-        self.closed_person_combo.addItem("他人", "OTHERS")
-        self.closed_person_combo.changed.connect(self._on_closed_person_changed)
-        detail_bar.addWidget(self.closed_person_combo)
         self.closed_person_combo.hide()
 
         # Active broker filter chip (shown when filtered by a specific broker channel)
@@ -1156,20 +1339,64 @@ class HoldingsPage(QWidget):
         detail_bar.addWidget(self.structure_chip)
         self.structure_chip.hide()
 
-        # Search input
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索人员、券商或股票代码…")
-        self.search_input.setClearButtonEnabled(True)
-        self.search_input.setMinimumWidth(180)
-        self.search_input.textChanged.connect(self._on_search_input_changed)
-        detail_bar.addWidget(self.search_input)
-        self.search_input.hide()
+        self.closed_ticker_chip = QPushButton("排行筛选: — ✕")
+        self.closed_ticker_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.closed_ticker_chip.setToolTip("点击清除 Top 10 股票筛选，恢复全部已清仓记录")
+        self.closed_ticker_chip.setStyleSheet("""
+            QPushButton {
+                background: #EFF6FF; color: #1D4ED8; font-weight: 600; font-size: 12px;
+                border: 1px solid #BFDBFE; border-radius: 6px; padding: 5px 10px;
+            }
+            QPushButton:hover { background: #DBEAFE; }
+        """)
+        self.closed_ticker_chip.clicked.connect(lambda: self._on_closed_ticker_clicked(""))
+        detail_bar.addWidget(self.closed_ticker_chip)
+        self.closed_ticker_chip.hide()
+
+        self.open_ticker_chip = QPushButton("股票筛选: — ✕")
+        self.open_ticker_chip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_ticker_chip.setToolTip("点击清除 Top 股票筛选，恢复全部持仓")
+        self.open_ticker_chip.setStyleSheet("""
+            QPushButton {
+                background: #EFF6FF; color: #1D4ED8; font-weight: 600; font-size: 12px;
+                border: 1px solid #BFDBFE; border-radius: 6px; padding: 5px 10px;
+            }
+            QPushButton:hover { background: #DBEAFE; }
+        """)
+        self.open_ticker_chip.clicked.connect(lambda: self._on_open_ticker_clicked(""))
+        detail_bar.addWidget(self.open_ticker_chip)
+        self.open_ticker_chip.hide()
 
         self.inline_status_lbl = QLabel("")
         self.inline_status_lbl.setStyleSheet("color: #2563EB; font-size: 12px; font-weight: 500; padding: 0 8px; background: transparent; border: none;")
         detail_bar.addWidget(self.inline_status_lbl)
 
         detail_bar.addStretch()
+
+        # -----------------------------------------------------------------
+        # 局部筛选栏：嵌入顶部操作栏右侧，节约纵向空间，紧邻导出明细按钮
+        # -----------------------------------------------------------------
+        self.local_filter_bar = HoldingsLocalFilterBar(self)
+        self.open_filter_bar = self.local_filter_bar  # 兼容旧属性
+        self.close_date_lbl = self.local_filter_bar.lbl_close_date
+        self.close_date_combo = self.local_filter_bar.close_date_combo
+        self.open_industry_combo = self.local_filter_bar.open_industry_combo
+        self.search_input = self.local_filter_bar.search_input
+        self.open_search_input = self.local_filter_bar.search_input
+        self.open_reset_btn = self.local_filter_bar.reset_btn
+        self.open_type_combo = QComboBox()
+        self.open_type_combo.hide()
+        self.open_broker_combo = QComboBox()
+        self.open_broker_combo.hide()
+        self.open_broker_combo.currentIndexChanged.connect(self._on_open_broker_combo_changed)
+        self.open_currency_combo = QComboBox()
+        self.open_currency_combo.hide()
+
+        self.local_filter_bar.open_industry_combo.currentIndexChanged.connect(self._on_open_industry_combo_changed)
+        self.local_filter_bar.close_date_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.local_filter_bar.search_input.textChanged.connect(self._on_search_input_changed)
+        self.local_filter_bar.reset_btn.clicked.connect(self._on_local_reset_clicked)
+        detail_bar.addWidget(self.local_filter_bar)
 
         self.export_btn = QPushButton("导出明细…")
         self.export_btn.setIcon(icon("download", self))
@@ -1206,99 +1433,13 @@ class HoldingsPage(QWidget):
         lt_layout.setSpacing(10)
 
         # -----------------------------------------------------------------
-        # 持有中 (Open Holdings) 专属看板与筛选区 (1. 统计卡片 -> 2. 筛选区 -> 3/4/5. 图表 -> 6. 持仓明细)
+        # 1. 顶部六张统计卡片（持有中与已清仓各自独立，高度均为 60px）
         # -----------------------------------------------------------------
-        # 1. 顶部六张统计卡片
         self.open_kpi_bar = OpenHoldingsKpiBar(self)
+        self.closed_kpi_bar = ClosedHoldingsKpiBar(self)
+        self.closed_kpi_bar.hide()
         lt_layout.addWidget(self.open_kpi_bar)
-
-        # 2. 持有中筛选区域（不包含重复的人员筛选控件，人员筛选读取全局）
-        self.open_filter_bar = QFrame(self)
-        self.open_filter_bar.setObjectName("OpenFilterBar")
-        self.open_filter_bar.setStyleSheet("""
-            QFrame#OpenFilterBar {
-                background: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 10px;
-            }
-            QLabel#OpenFilterLabel {
-                color: #475569;
-                font-size: 12px;
-                font-weight: 600;
-                background: transparent;
-                border: none;
-            }
-        """)
-        of_layout = QHBoxLayout(self.open_filter_bar)
-        of_layout.setContentsMargins(14, 10, 14, 10)
-        of_layout.setSpacing(10)
-
-        lbl_ob = self.open_broker_lbl = QLabel("券商渠道")
-        lbl_ob.setObjectName("OpenFilterLabel")
-        of_layout.addWidget(lbl_ob)
-        self.open_broker_combo = QComboBox(self.open_filter_bar)
-        self.open_broker_combo.setMinimumWidth(110)
-        self.open_broker_combo.addItem("全部", "")
-        self.open_broker_combo.addItem("长桥", "长桥")
-        self.open_broker_combo.addItem("BBAE", "BBAE")
-        self.open_broker_combo.addItem("第一证券", "第一证券")
-        self.open_broker_combo.addItem("嘉信", "嘉信")
-        self.open_broker_combo.currentIndexChanged.connect(self._on_open_broker_combo_changed)
-        of_layout.addWidget(self.open_broker_combo)
-        if hasattr(self.main_window, "global_asset_filter"):
-            self.open_broker_lbl.hide()
-            self.open_broker_combo.hide()
-
-        lbl_ot = QLabel("股票类型")
-        lbl_ot.setObjectName("OpenFilterLabel")
-        lbl_ot.hide()
-        of_layout.addWidget(lbl_ot)
-        self.open_type_combo = QComboBox(self.open_filter_bar)
-        self.open_type_combo.setMinimumWidth(100)
-        self.open_type_combo.addItem("全部", "")
-        self.open_type_combo.hide()
-        self.open_type_combo.currentIndexChanged.connect(self._on_open_type_combo_changed)
-        of_layout.addWidget(self.open_type_combo)
-
-        lbl_oi = QLabel("类型")
-        lbl_oi.setObjectName("OpenFilterLabel")
-        of_layout.addWidget(lbl_oi)
-        self.open_industry_combo = QComboBox(self.open_filter_bar)
-        self.open_industry_combo.setMinimumWidth(110)
-        self.open_industry_combo.addItem("全部", "")
-        self.open_industry_combo.currentIndexChanged.connect(self._on_open_industry_combo_changed)
-        of_layout.addWidget(self.open_industry_combo)
-
-        lbl_oc = QLabel("币种")
-        lbl_oc.setObjectName("OpenFilterLabel")
-        of_layout.addWidget(lbl_oc)
-        self.open_currency_combo = QComboBox(self.open_filter_bar)
-        self.open_currency_combo.setMinimumWidth(90)
-        self.open_currency_combo.addItem("全部", "")
-        self.open_currency_combo.addItem("USD", "USD")
-        self.open_currency_combo.currentIndexChanged.connect(self._on_open_currency_combo_changed)
-        of_layout.addWidget(self.open_currency_combo)
-
-        self.open_search_input = QLineEdit(self.open_filter_bar)
-        self.open_search_input.setPlaceholderText("搜索股票名称 / Ticker")
-        self.open_search_input.setClearButtonEnabled(True)
-        self.open_search_input.setMinimumWidth(200)
-        self.open_search_input.textChanged.connect(self._on_open_search_input_changed)
-        of_layout.addWidget(self.open_search_input, 1)
-
-        self.open_reset_btn = QPushButton("重置筛选", self.open_filter_bar)
-        self.open_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.open_reset_btn.setStyleSheet("""
-            QPushButton {
-                background: #F8FAFC; color: #475569; font-size: 12px; font-weight: 600;
-                border: 1px solid #CBD5E1; border-radius: 6px; padding: 5px 12px;
-            }
-            QPushButton:hover { background: #F1F5F9; color: #1E293B; }
-        """)
-        self.open_reset_btn.clicked.connect(self._reset_open_filters)
-        of_layout.addWidget(self.open_reset_btn)
-
-        lt_layout.addWidget(self.open_filter_bar)
+        lt_layout.addWidget(self.closed_kpi_bar)
 
         # 3/4/5. 券商持仓分布 + 类型持仓分布 + 持仓市值趋势
         self.open_charts_row = OpenHoldingsChartsRow(self)
@@ -1351,6 +1492,11 @@ class HoldingsPage(QWidget):
         self.open_person_card.hide()
         lt_layout.addWidget(self.open_person_card)
 
+        # 5.6 持有中股票盈亏贡献 Top N
+        self.open_top10_card = OpenTop10Card(self)
+        self.open_top10_card.ticker_clicked.connect(self._on_open_ticker_clicked)
+        lt_layout.addWidget(self.open_top10_card)
+
         # 6. 持仓明细列表顶部标题与 全部 / 盈利 / 亏损 状态切换栏
         self.open_table_header = QFrame(self)
         self.open_table_header.setObjectName("OpenTableHeader")
@@ -1386,10 +1532,11 @@ class HoldingsPage(QWidget):
         # -----------------------------------------------------------------
         # 已清仓 (Closed Holdings) 专属看板
         # -----------------------------------------------------------------
-        self.closed_dashboard = ClosedDashboardWidget(self)
+        self.closed_dashboard = ClosedDashboardWidget(self, kpi_bar=self.closed_kpi_bar)
         self.closed_dashboard.broker_clicked.connect(self._on_closed_dashboard_broker_clicked)
         self.closed_dashboard.structure_clicked.connect(self._on_structure_clicked)
         self.closed_dashboard.trend_window_changed.connect(self._on_closed_trend_window_changed)
+        self.closed_dashboard.ticker_clicked.connect(self._on_closed_ticker_clicked)
         self.closed_dashboard.hide()
         lt_layout.addWidget(self.closed_dashboard)
 
@@ -1562,6 +1709,18 @@ class HoldingsPage(QWidget):
         self._sync_combo_by_data(self.broker_combo, broker_name)
         self._sync_combo_by_data(self.open_broker_combo, broker_name)
 
+    def _get_global_ticker(self) -> str:
+        if not self._has_global_filter():
+            return ""
+        g = self.main_window.global_asset_filter
+        if not hasattr(g, "ticker_search"):
+            return ""
+        data = g.ticker_search.currentData()
+        if data is None:
+            return ""
+        txt = str(g.ticker_search.currentText() or "").split(" · ")[0].strip().upper()
+        return "" if txt in ("", "全部股票") else txt
+
     def sync_from_global_filter(self, state):
         """从主窗口唯一 GlobalAssetFilter 同步人员、券商渠道、股票状态。"""
         if self._selected_person_filter != state.person:
@@ -1580,6 +1739,8 @@ class HoldingsPage(QWidget):
             self.main_window.sync_broker_from_holdings("")
         else:
             self.broker_combo.setCurrentIndex(0)
+            self._close_drawer()
+            self.refresh_detail()
 
     def sync_person_from_main(self, person_id: Any):
         """接收主窗口全局人员筛选状态，并统一同步到本地查询作用域。"""
@@ -1637,6 +1798,16 @@ class HoldingsPage(QWidget):
         self._close_drawer()
         self.refresh_detail()
 
+    def _on_closed_ticker_clicked(self, ticker: str):
+        self._closed_ticker_filter = (ticker or "").strip().upper()
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _on_open_ticker_clicked(self, ticker: str):
+        self._open_ticker_filter = (ticker or "").strip().upper()
+        self._close_drawer()
+        self.refresh_detail()
+
     def _on_closed_trend_window_changed(self, window: str):
         self._closed_trend_window = window or "all"
         self.refresh_detail()
@@ -1689,52 +1860,44 @@ class HoldingsPage(QWidget):
         self.refresh_detail()
 
     def _on_open_currency_combo_changed(self, *_):
-        self._open_currency = str(self.open_currency_combo.currentData() or "")
+        self._open_currency = ""
         self._open_page = 1
         self._close_drawer()
         self.refresh_detail()
 
     def _on_search_input_changed(self, text: str):
-        blocked = self.open_search_input.blockSignals(True)
-        if self.open_search_input.text() != text:
-            self.open_search_input.setText(text)
-        self.open_search_input.blockSignals(blocked)
         self._open_page = 1
         self._on_filter_changed()
 
     def _on_open_search_input_changed(self, text: str):
-        blocked = self.search_input.blockSignals(True)
-        if self.search_input.text() != text:
-            self.search_input.setText(text)
-        self.search_input.blockSignals(blocked)
-        self._open_page = 1
-        self._on_filter_changed()
+        self._on_search_input_changed(text)
+
+    def _on_local_reset_clicked(self):
+        closed = self.status_tabs.currentIndex() == 1
+        self.local_filter_bar.reset_current_mode()
+        if closed:
+            self._closed_pnl_filter = ""
+            self._closed_ticker_filter = ""
+            self.structure_chip.hide()
+            self.closed_ticker_chip.hide()
+            self._on_filter_changed()
+        else:
+            self._open_stock_type = ""
+            self._open_industry = ""
+            self._open_currency = ""
+            self._open_pnl_filter = "all"
+            self._open_ticker_filter = ""
+            self._open_person_drill_id = None
+            self._open_person_drill_name = ""
+            self.active_industry_chip.hide()
+            self.open_ticker_chip.hide()
+            self._update_open_pnl_btn_styles()
+            self._open_page = 1
+            self._close_drawer()
+            self.refresh_detail()
 
     def _reset_open_filters(self):
-        self._open_stock_type = ""
-        self._open_industry = ""
-        self._open_currency = ""
-        self._open_pnl_filter = "all"
-        self._open_person_drill_id = None
-        self._open_person_drill_name = ""
-        self._open_page = 1
-        for combo in (
-            self.broker_combo,
-            self.open_broker_combo,
-            self.open_type_combo,
-            self.open_industry_combo,
-            self.open_currency_combo,
-        ):
-            b = combo.blockSignals(True)
-            combo.setCurrentIndex(0)
-            combo.blockSignals(b)
-        for line_edit in (self.search_input, self.open_search_input):
-            b = line_edit.blockSignals(True)
-            line_edit.clear()
-            line_edit.blockSignals(b)
-        self._update_open_pnl_btn_styles()
-        self._close_drawer()
-        self.refresh_detail()
+        self._on_local_reset_clicked()
 
     def _on_open_broker_donut_clicked(self, broker_name: str):
         current_b = channel_label(self.broker_combo.currentData() or "").casefold()
@@ -2091,6 +2254,8 @@ class HoldingsPage(QWidget):
     def clear_detail_filters(self):
         self._selected_person_filter = None
         self._closed_pnl_filter = ""
+        self._closed_ticker_filter = ""
+        self._open_ticker_filter = ""
         self._open_stock_type = ""
         self._open_industry = ""
         self._open_currency = ""
@@ -2274,6 +2439,7 @@ class HoldingsPage(QWidget):
         status_filter = status
         broker_filter = self.broker_combo.currentData() or None
         search_filter = self.search_input.text().strip() or None
+        global_ticker = self._get_global_ticker()
         src_path = str(DATABASE_PATH)
         if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
             src_path = str(self.main_window.service.path)
@@ -2284,29 +2450,27 @@ class HoldingsPage(QWidget):
         self.status_tabs.blockSignals(blocked_t)
         self.closed_sep.setVisible(closed)
         self.closed_mode.setVisible(closed)
-        show_local_closed_broker = closed and not self._has_global_filter()
-        self.closed_broker_lbl.setVisible(show_local_closed_broker)
-        self.broker_combo.setVisible(show_local_closed_broker)
-        self.close_date_lbl.setVisible(closed)
-        self.close_date_combo.setVisible(closed)
-        # 归属人员统一由全局人员筛选控制，不再在局部工具栏重复展示
+        self.closed_broker_lbl.hide()
+        self.broker_combo.hide()
         self.closed_person_lbl.hide()
         self.closed_person_combo.hide()
-        self.search_input.setVisible(closed)
-        self.closed_dashboard.setVisible(closed)
+
+        # 顶部 KPI 栏与局部筛选栏
         self.open_kpi_bar.setVisible(not closed)
-        self.open_filter_bar.setVisible(not closed)
+        self.closed_kpi_bar.setVisible(closed)
+        self.local_filter_bar.setVisible(True)
+        self.local_filter_bar.set_mode("closed" if closed else "open")
+
+        # 图表切换
+        self.closed_dashboard.setVisible(closed)
         self.open_charts_row.setVisible(not closed)
+        self.open_top10_card.setVisible(not closed)
         if closed:
             self.open_person_card.hide()
         self.open_table_header.setVisible(not closed)
         self.open_table_footer.setVisible(not closed)
         self.detail_info.setVisible(closed)
         self.detail_table.setMinimumHeight(360 if closed else 340)
-        self.search_input.setPlaceholderText(
-            "搜索股票名称 / Ticker、券商或账号…" if closed and self.closed_mode.currentIndex() == 1
-            else "搜索股票名称 / Ticker、人员或券商…"
-        )
         mode = ("account" if self.closed_mode.currentIndex() == 1 else "person") if closed else "open"
         account_ids = self.main_window.accounts.selected_ids() if closed and self.main_window else None
         open_payload = None
@@ -2323,7 +2487,7 @@ class HoldingsPage(QWidget):
                                                    now, currency=account_analytics.scope.reporting_currency)
                 if closed and report:
                     self._sync_closed_broker_options(closed_account_rows(report, account_ids=account_ids, analytics=account_analytics, db_path=src_path))
-                raw_rows = closed_account_rows(report, broker=broker_filter, search=search_filter,
+                raw_rows = closed_account_rows(report, broker=broker_filter, ticker=global_ticker or None, search=search_filter,
                                                account_ids=account_ids, analytics=account_analytics, db_path=src_path) if report else []
             except Exception:
                 logger.exception("读取已清仓账户汇总失败")
@@ -2333,7 +2497,7 @@ class HoldingsPage(QWidget):
         elif closed:
             raw_rows = HoldingsManagementService.get_holdings_detail_rows(
                 self.analytics, dimension=self.dimension, person_id=self._closed_person_ids(),
-                broker=broker_filter, status=status_filter, search=search_filter, db_path=src_path,
+                broker=broker_filter, ticker=global_ticker or None, status=status_filter, search=search_filter, db_path=src_path,
                 account_ids=account_ids,
             )
             if not broker_filter and not search_filter:
@@ -2374,6 +2538,8 @@ class HoldingsPage(QWidget):
 
         if closed:
             self.active_industry_chip.hide()
+            self.open_top10_card.hide()
+            self.open_ticker_chip.hide()
             date_key = self.close_date_combo.currentData() or "all"
             start_d, end_d = resolve_close_date_bounds(date_key)
             scoped_closed_rows = filter_closed_rows(raw_rows, start_date=start_d, end_date=end_d)
@@ -2389,8 +2555,18 @@ class HoldingsPage(QWidget):
                 active_broker=channel_label(broker_filter) if broker_filter else "",
                 active_structure=self._closed_pnl_filter,
                 trend_window=self._closed_trend_window,
+                active_ticker=self._closed_ticker_filter,
             )
             raw_rows = filter_closed_rows(scoped_closed_rows, pnl_status=self._closed_pnl_filter)
+            if self._closed_ticker_filter:
+                raw_rows = [
+                    r for r in raw_rows
+                    if str(r.get("ticker") or "").strip().upper() == self._closed_ticker_filter
+                ]
+                self.closed_ticker_chip.setText(f"股票筛选: {self._closed_ticker_filter} ✕")
+                self.closed_ticker_chip.show()
+            else:
+                self.closed_ticker_chip.hide()
             if self._closed_pnl_filter:
                 lbl_map = {"win": "盈利股票", "flat": "持平股票", "loss": "亏损股票"}
                 self.structure_chip.setText(f"盈亏筛选: {lbl_map.get(self._closed_pnl_filter, self._closed_pnl_filter)} ✕")
@@ -2399,6 +2575,7 @@ class HoldingsPage(QWidget):
                 self.structure_chip.hide()
         else:
             self.structure_chip.hide()
+            self.closed_ticker_chip.hide()
             if open_payload is not None:
                 self.open_kpi_bar.set_cards_data(open_payload.get("cards", {}))
                 self.open_charts_row.set_charts_data(
@@ -2407,6 +2584,19 @@ class HoldingsPage(QWidget):
                     active_industry=self._open_industry,
                     trend_window=self._open_trend_window,
                 )
+                self.open_top10_card.set_data(
+                    open_payload.get("ticker_top10") or {},
+                    active_ticker=self._open_ticker_filter,
+                )
+                if self._open_ticker_filter:
+                    raw_rows = [
+                        r for r in raw_rows
+                        if str(r.get("ticker") or "").strip().upper() == self._open_ticker_filter
+                    ]
+                    self.open_ticker_chip.setText(f"股票筛选: {self._open_ticker_filter} ✕")
+                    self.open_ticker_chip.show()
+                else:
+                    self.open_ticker_chip.hide()
                 t_counts = open_payload.get("table_counts", {})
                 c_all = int(t_counts.get("all") or 0)
                 c_prof = int(t_counts.get("profit") or 0)

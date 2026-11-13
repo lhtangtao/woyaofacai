@@ -245,6 +245,81 @@ def slice_monthly_series(
     return [item for item in monthly_series if item["month"] >= cutoff_ym]
 
 
+def compute_closed_ticker_top10(closed_rows: list[dict[str, Any]], *, top_n: int = 5) -> dict[str, Any]:
+    """按 Ticker 汇总当前有效筛选范围内全部已清仓记录的已实现盈亏，分别取盈利与亏损 Top N。"""
+    by_ticker: dict[str, dict[str, Any]] = {}
+    total_profit = ZERO
+    total_loss = ZERO
+
+    for r in closed_rows:
+        tk = str(r.get("ticker") or "").strip().upper()
+        if not tk:
+            continue
+        rpnl = _to_dec(r.get("realized_pnl")) or ZERO
+        if rpnl > ZERO:
+            total_profit += rpnl
+        elif rpnl < ZERO:
+            total_loss += rpnl
+
+        raw_ch = str(r.get("channel") or r.get("broker") or "").split(" · #")[0].strip()
+        ch_name = channel_label(raw_ch) if raw_ch else ""
+
+        entry = by_ticker.get(tk)
+        if entry is None:
+            entry = {
+                "ticker": tk,
+                "net_pnl": ZERO,
+                "record_count": 0,
+                "channels": set(),
+            }
+            by_ticker[tk] = entry
+        entry["net_pnl"] += rpnl
+        entry["record_count"] += 1
+        if ch_name:
+            entry["channels"].add(ch_name)
+
+    winners_raw = sorted(
+        (v for v in by_ticker.values() if v["net_pnl"] > ZERO),
+        key=lambda x: (-x["net_pnl"], x["ticker"]),
+    )
+    losers_raw = sorted(
+        (v for v in by_ticker.values() if v["net_pnl"] < ZERO),
+        key=lambda x: (x["net_pnl"], x["ticker"]),
+    )
+
+    def _serialize(item: dict[str, Any], rank: int) -> dict[str, Any]:
+        return {
+            "rank": rank,
+            "ticker": item["ticker"],
+            "realized_pnl": serialize_val(item["net_pnl"]),
+            "record_count": item["record_count"],
+            "closed_count": item["record_count"],
+            "channels": sorted(item["channels"]),
+            "brokers": sorted(item["channels"]),
+        }
+
+    all_winners = [_serialize(v, i + 1) for i, v in enumerate(winners_raw)]
+    all_losers = [_serialize(v, i + 1) for i, v in enumerate(losers_raw)]
+
+    n = max(1, int(top_n or 5))
+    winners = all_winners[:n]
+    losers = all_losers[:n]
+
+    return {
+        "winners": winners,
+        "losers": losers,
+        "profit_top": winners,
+        "loss_top": losers,
+        "all_winners": all_winners,
+        "all_losers": all_losers,
+        "total_realized_profit": serialize_val(total_profit),
+        "total_realized_loss": serialize_val(total_loss),
+        "scope_profit_total": serialize_val(total_profit),
+        "scope_loss_total": serialize_val(total_loss),
+        "scope_net_pnl": serialize_val(total_profit + total_loss),
+    }
+
+
 def build_closed_dashboard_analytics(
     analytics,
     closed_rows: list[dict[str, Any]],
@@ -252,6 +327,7 @@ def build_closed_dashboard_analytics(
     mode: str = "person",
     trend_window: str = "all",
     today: date | None = None,
+    top_n: int = 5,
 ) -> dict[str, Any]:
     """一次性计算美股已清仓收益分析看板的全部数据（7卡片、渠道汇总、盈亏结构、月度趋势）。"""
     total_buy = ZERO
@@ -306,6 +382,7 @@ def build_closed_dashboard_analytics(
     net_realized_pnl = realized_profit + realized_loss
     overall_rate = ratio(net_realized_pnl, total_buy) if total_buy > ZERO else None
     total_count = len(closed_rows)
+    win_pct_val = round(win_count / total_count * 100, 2) if total_count > 0 else None
 
     cards = {
         "closed_count": total_count,
@@ -315,6 +392,9 @@ def build_closed_dashboard_analytics(
         "realized_loss": serialize_val(realized_loss),
         "net_realized_pnl": serialize_val(net_realized_pnl),
         "realized_pnl_rate": serialize_val(overall_rate),
+        "win_ratio": win_pct_val,
+        "win_pct": win_pct_val,
+        "win_count": win_count,
         "rate_formula_note": "净已实现盈亏 ÷ 买入总额 × 100%（与系统已清仓个股收益率口径一致）",
     }
 
@@ -357,11 +437,22 @@ def build_closed_dashboard_analytics(
     }
 
     full_monthly, used_fallback = compute_closed_monthly_pnl(analytics, closed_rows, mode=mode)
+    cum_acc = ZERO
+    for item in full_monthly:
+        cum_acc += _to_dec(item.get("pnl")) or ZERO
+        item["cumulative_pnl"] = serialize_val(cum_acc)
+
     sliced_monthly = slice_monthly_series(full_monthly, trend_window, today=today)
     monthly_clean = [
-        {"month": item["month"], "pnl": item["pnl"], "sell_count": item["sell_count"]}
+        {
+            "month": item["month"],
+            "pnl": item["pnl"],
+            "cumulative_pnl": item["cumulative_pnl"],
+            "sell_count": item["sell_count"],
+        }
         for item in sliced_monthly
     ]
+    ticker_top10 = compute_closed_ticker_top10(closed_rows, top_n=top_n)
 
     attribution_mode = "close_date_fallback" if used_fallback else "trade_level"
     attribution_note = (
@@ -377,9 +468,15 @@ def build_closed_dashboard_analytics(
         "structure": structure,
         "monthly_trend": monthly_clean,
         "monthly_all": [
-            {"month": item["month"], "pnl": item["pnl"], "sell_count": item["sell_count"]}
+            {
+                "month": item["month"],
+                "pnl": item["pnl"],
+                "cumulative_pnl": item["cumulative_pnl"],
+                "sell_count": item["sell_count"],
+            }
             for item in full_monthly
         ],
+        "ticker_top10": ticker_top10,
         "attribution_mode": attribution_mode,
         "attribution_note": attribution_note,
     }

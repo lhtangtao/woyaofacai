@@ -477,23 +477,27 @@ def compute_open_mv_trend(
     running_person_qty: dict[tuple[Any, Any], Decimal] = defaultdict(lambda: ZERO)
 
     daily_mv: dict[str, Decimal] = {}
+    daily_pnl_map: dict[str, Decimal | None] = {}
+    daily_cum_pnl_map: dict[str, Decimal | None] = {}
     incomplete_days: set[str] = set()
+    running_cum_pnl = ZERO
+    has_any_valid_pnl = False
 
     for d_str in all_dates:
         if need_person_replay_filter and d_str in person_trades_by_day:
             for acc_id, inst_id, pq in person_trades_by_day[d_str]:
                 running_person_qty[(acc_id, inst_id)] = pq
 
-        if start_d and d_str < start_d:
-            continue
-        if end_d and d_str > end_d:
-            continue
         if d_str not in daily_rows_by_date:
             continue
 
         day_sum = ZERO
         day_valid_mv_count = 0
         day_missing_mv_count = 0
+        day_pnl_sum = ZERO
+        day_pnl_valid_count = 0
+        day_pnl_missing_count = 0
+
         for r in daily_rows_by_date[d_str]:
             vals = r.values
             rmeta = getattr(r, "metadata", {}) or {}
@@ -526,6 +530,7 @@ def compute_open_mv_trend(
             end_qty = _to_dec(vals[8]) or ZERO
             close_p = _to_dec(vals[10])
             row_mv = _to_dec(vals[11])
+            row_pnl = _to_dec(vals[19]) if len(vals) > 19 else None
 
             if need_person_replay_filter:
                 p_qty = running_person_qty.get((acc_id, inst_id), ZERO)
@@ -539,25 +544,57 @@ def compute_open_mv_trend(
                     day_valid_mv_count += 1
                 else:
                     day_missing_mv_count += 1
-                    incomplete_days.add(d_str)
+                    if (not start_d or d_str >= start_d) and (not end_d or d_str <= end_d):
+                        incomplete_days.add(d_str)
+                # 独立人员回放模式不混用全员每日收益
+                day_pnl_missing_count += 1
             else:
+                # 累计当日收益（包含当日已清仓但有当日收益的记录，先于市值跳过判断）
+                if row_pnl is not None:
+                    day_pnl_sum += row_pnl
+                    day_pnl_valid_count += 1
+                elif end_qty > ZERO or (len(vals) > 16 and ((_to_dec(vals[16]) or ZERO) > ZERO or (_to_dec(vals[17]) or ZERO) > ZERO)):
+                    day_pnl_missing_count += 1
+
                 if end_qty <= ZERO and (row_mv is None or row_mv <= ZERO):
                     continue
                 if end_qty > ZERO and row_mv is None:
                     day_missing_mv_count += 1
-                    incomplete_days.add(d_str)
+                    if (not start_d or d_str >= start_d) and (not end_d or d_str <= end_d):
+                        incomplete_days.add(d_str)
                 elif row_mv is not None:
                     day_sum += row_mv
                     day_valid_mv_count += 1
 
+        # 真实累计盈亏必须基于完整历史数据逐日累计，再按时间范围截取显示区间
+        day_pnl_val: Decimal | None = None
+        day_cum_val: Decimal | None = None
+        if not need_person_replay_filter and day_pnl_valid_count > 0 and day_pnl_missing_count == 0:
+            day_pnl_val = day_pnl_sum
+            running_cum_pnl += day_pnl_sum
+            has_any_valid_pnl = True
+            day_cum_val = running_cum_pnl
+        elif not need_person_replay_filter and day_pnl_missing_count > 0:
+            if (not start_d or d_str >= start_d) and (not end_d or d_str <= end_d):
+                incomplete_days.add(d_str)
+
+        if start_d and d_str < start_d:
+            continue
+        if end_d and d_str > end_d:
+            continue
+
         # 仅当当日存在真实有效的历史市值快照时才加入折线点，绝不将缺失收盘价的交易日补造为 0
         if day_valid_mv_count > 0:
             daily_mv[d_str] = day_sum
+            daily_pnl_map[d_str] = day_pnl_val
+            daily_cum_pnl_map[d_str] = day_cum_val
 
     points = [
         {
             "date": d,
             "market_value": serialize_val(daily_mv[d]),
+            "daily_pnl": serialize_val(daily_pnl_map.get(d)),
+            "cumulative_pnl": serialize_val(daily_cum_pnl_map.get(d)),
             "incomplete": d in incomplete_days,
         }
         for d in sorted(daily_mv.keys())
@@ -582,6 +619,99 @@ def compute_open_mv_trend(
     }
 
 
+def compute_open_ticker_top10(scoped_rows: list[dict[str, Any]], *, top_n: int = 5) -> dict[str, Any]:
+    """按 Ticker 汇总当前有效筛选范围内持有中股票的浮动盈亏，分别取盈利与亏损 Top N。"""
+    by_ticker: dict[str, dict[str, Any]] = {}
+    total_profit = ZERO
+    total_loss = ZERO
+
+    for r in scoped_rows:
+        tk = str(r.get("ticker") or "").strip().upper()
+        if not tk:
+            continue
+        pnl = _to_dec(r.get("total_pnl")) or ZERO
+        mv = _to_dec(r.get("market_value")) or ZERO
+        cost = _to_dec(r.get("cost_amount"))
+        if cost is None:
+            cost = mv - pnl
+        qty = _to_dec(r.get("quantity")) or ZERO
+
+        if pnl > ZERO:
+            total_profit += pnl
+        elif pnl < ZERO:
+            total_loss += pnl
+
+        raw_ch = str(r.get("channel") or r.get("broker") or "").split(" · #")[0].strip()
+        ch_name = channel_label(raw_ch) if raw_ch else ""
+
+        entry = by_ticker.get(tk)
+        if entry is None:
+            entry = {
+                "ticker": tk,
+                "net_pnl": ZERO,
+                "market_value": ZERO,
+                "cost_amount": ZERO,
+                "quantity": ZERO,
+                "record_count": 0,
+                "channels": set(),
+            }
+            by_ticker[tk] = entry
+        entry["net_pnl"] += pnl
+        entry["market_value"] += mv
+        entry["cost_amount"] += cost
+        entry["quantity"] += qty
+        entry["record_count"] += 1
+        if ch_name:
+            entry["channels"].add(ch_name)
+
+    winners_raw = sorted(
+        (v for v in by_ticker.values() if v["net_pnl"] > ZERO),
+        key=lambda x: (-x["net_pnl"], x["ticker"]),
+    )
+    losers_raw = sorted(
+        (v for v in by_ticker.values() if v["net_pnl"] < ZERO),
+        key=lambda x: (x["net_pnl"], x["ticker"]),
+    )
+
+    def _serialize(item: dict[str, Any], rank: int) -> dict[str, Any]:
+        return {
+            "rank": rank,
+            "ticker": item["ticker"],
+            "realized_pnl": serialize_val(item["net_pnl"]),
+            "floating_pnl": serialize_val(item["net_pnl"]),
+            "market_value": serialize_val(item["market_value"]),
+            "cost_amount": serialize_val(item["cost_amount"]),
+            "quantity": serialize_val(item["quantity"]),
+            "record_count": item["record_count"],
+            "closed_count": item["record_count"],
+            "channels": sorted(item["channels"]),
+            "brokers": sorted(item["channels"]),
+        }
+
+    all_winners = [_serialize(v, i + 1) for i, v in enumerate(winners_raw)]
+    all_losers = [_serialize(v, i + 1) for i, v in enumerate(losers_raw)]
+
+    n = max(1, int(top_n or 5))
+    winners = all_winners[:n]
+    losers = all_losers[:n]
+
+    return {
+        "winners": winners,
+        "losers": losers,
+        "profit_top": winners,
+        "loss_top": losers,
+        "all_winners": all_winners,
+        "all_losers": all_losers,
+        "total_realized_profit": serialize_val(total_profit),
+        "total_realized_loss": serialize_val(total_loss),
+        "total_floating_profit": serialize_val(total_profit),
+        "total_floating_loss": serialize_val(total_loss),
+        "scope_profit_total": serialize_val(total_profit),
+        "scope_loss_total": serialize_val(total_loss),
+        "scope_net_pnl": serialize_val(total_profit + total_loss),
+    }
+
+
 def build_open_holdings_dashboard(
     analytics,
     raw_open_rows: list[dict[str, Any]],
@@ -596,6 +726,7 @@ def build_open_holdings_dashboard(
     search: str | None = None,
     pnl_filter: str = "all",
     trend_window: str = "ytd",
+    top_n: int = 5,
 ) -> dict[str, Any]:
     """构建美股「持有中」页面的全部统计卡片、券商分布、行业分布、市值趋势及明细列表数据。"""
     meta_map = load_instrument_metadata_map(db_path=db_path, quote_db_path=quote_db_path)
@@ -684,9 +815,11 @@ def build_open_holdings_dashboard(
         ch = str(r.get("channel") or "未知渠道")
         bg = broker_groups.get(ch)
         if bg is None:
-            bg = {"channel": ch, "market_value": ZERO, "stock_count": 0, "tickers": set()}
+            bg = {"channel": ch, "market_value": ZERO, "cost_amount": ZERO, "floating_pnl": ZERO, "stock_count": 0, "tickers": set()}
             broker_groups[ch] = bg
         bg["market_value"] += mv
+        bg["cost_amount"] += cost
+        bg["floating_pnl"] += pnl
         bg["stock_count"] += 1
         if tk:
             bg["tickers"].add(tk)
@@ -728,10 +861,13 @@ def build_open_holdings_dashboard(
     broker_distribution = []
     for ch, bg in sorted(broker_groups.items(), key=lambda x: (-x[1]["market_value"], x[0])):
         mv = bg["market_value"]
+        c_val = bg.get("cost_amount", ZERO)
         r_val = ratio(mv, total_mv) if total_mv > ZERO else ZERO
         broker_distribution.append({
             "channel": ch,
             "name": ch,
+            "cost_amount": serialize_val(c_val),
+            "floating_pnl": serialize_val(bg.get("floating_pnl", ZERO)),
             "market_value": serialize_val(mv),
             "ratio": serialize_val(r_val),
             "percent": round(float(r_val or ZERO) * 100.0, 2),
@@ -807,6 +943,7 @@ def build_open_holdings_dashboard(
     )
     table_pnl = sum((_to_dec(r.get("total_pnl")) or ZERO for r in table_rows), ZERO)
     table_rate = ratio(table_pnl, table_cost) if table_cost > ZERO else None
+    ticker_top10 = compute_open_ticker_top10(scoped_rows, top_n=top_n)
 
     return {
         "cards": cards,
@@ -814,6 +951,7 @@ def build_open_holdings_dashboard(
         "industry_distribution": industry_distribution,
         "person_summary": person_summary,
         "mv_trend": mv_trend,
+        "ticker_top10": ticker_top10,
         "pnl_counts": {
             "all": stock_count,
             "profit": profit_count,

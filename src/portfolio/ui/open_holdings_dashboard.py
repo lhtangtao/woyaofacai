@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -31,11 +31,17 @@ from PySide6.QtGui import (
     QPen,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -84,21 +90,27 @@ def _pnl_color(val: float | None) -> str:
     return "#16A34A" if float(val) > 0 else "#DC2626"
 
 
-class OpenKpiCard(QFrame):
-    """持有中页面顶部 6 张统计卡片之一，现代简约金融风格。"""
+class HoldingsKpiCard(QFrame):
+    """持仓管理（持有中 / 已清仓）统一顶部 KPI 统计卡片，现代简约金融风格。"""
 
-    def __init__(self, title: str, icon_text: str, tooltip: str = "", parent=None):
+    def __init__(self, title: str, icon_text: str = "•", tooltip: str = "", parent=None):
         super().__init__(parent)
-        self.setObjectName("openKpiCard")
+        if not tooltip and len(icon_text) > 4:
+            tooltip = icon_text
+            icon_text = "•"
+        self.setObjectName("holdingsKpiCard")
         if tooltip:
             self.setToolTip(tooltip)
         self.setStyleSheet("""
-            QFrame#openKpiCard {
+            QFrame#holdingsKpiCard, QFrame#openKpiCard, QFrame#closedKpiCard {
                 background: #FFFFFF;
                 border: 1px solid #E2E8F0;
                 border-radius: 10px;
             }
-            QFrame#openKpiCard QLabel {
+            QFrame#holdingsKpiCard:hover, QFrame#openKpiCard:hover, QFrame#closedKpiCard:hover {
+                border-color: #CBD5E1;
+            }
+            QFrame#holdingsKpiCard QLabel, QFrame#openKpiCard QLabel, QFrame#closedKpiCard QLabel {
                 border: none;
                 background: transparent;
             }
@@ -110,7 +122,7 @@ class OpenKpiCard(QFrame):
         outer.setContentsMargins(12, 8, 12, 8)
         outer.setSpacing(10)
 
-        self.icon_badge = QLabel(icon_text)
+        self.icon_badge = QLabel(icon_text or "•")
         self.icon_badge.setFixedSize(38, 38)
         self.icon_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_badge.setStyleSheet("""
@@ -144,6 +156,9 @@ class OpenKpiCard(QFrame):
         self.icon_badge.setStyleSheet(
             f"background: {badge_bg}; color: {badge_fg}; border-radius: 8px; font-size: 14px; font-weight: 700;"
         )
+
+
+OpenKpiCard = HoldingsKpiCard
 
 
 class OpenHoldingsKpiBar(QWidget):
@@ -290,12 +305,12 @@ class OpenDistributionDonut(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
 
-        donut_d = min(max(120, h - 24), int(w * 0.38))
-        cx = 12.0 + donut_d / 2.0
+        donut_d = min(max(110, h - 24), int(w * 0.44))
+        cx = 16.0 + donut_d / 2.0
         cy = h / 2.0
         self._center_pt = QPointF(cx, cy)
         self._outer_r = donut_d / 2.0
-        self._inner_r = self._outer_r * 0.62
+        self._inner_r = self._outer_r * 0.58
 
         outer_rect = QRectF(cx - self._outer_r, cy - self._outer_r, donut_d, donut_d)
         inner_rect = QRectF(cx - self._inner_r, cy - self._inner_r, self._inner_r * 2, self._inner_r * 2)
@@ -340,8 +355,8 @@ class OpenDistributionDonut(QWidget):
         )
 
         # 右侧图例列表（名称 | 占比 | 市值 | X 只）
-        legend_x = outer_rect.right() + 14.0
-        legend_w = max(120.0, w - legend_x - 6.0)
+        legend_x = cx + self._outer_r + 16.0
+        legend_w = max(100.0, w - legend_x - 6.0)
         row_h = min(28.0, max(20.0, (h - 16.0) / max(1, len(self.items))))
         total_h = row_h * len(self.items)
         start_y = max(8.0, (h - total_h) / 2.0)
@@ -406,167 +421,427 @@ class OpenDistributionDonut(QWidget):
 
 
 class OpenMvTrendChart(QWidget):
-    """真实历史持仓市值趋势面积折线图组件。"""
+    """持仓市值趋势双 Y 轴组合图：左侧持仓市值（始终非负），右侧可切换累计盈亏（真实累计/区间归零）或每日盈亏柱状图。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(210)
+        self.setMinimumHeight(135)
         self.setMouseTracking(True)
         self.points: list[dict[str, Any]] = []
         self._hover_idx: int = -1
         self._plot_pts: list[QPointF] = []
+        self._xs: list[float] = []
+        self._last_plot_rect = QRectF()
+
+        self.pnl_metric: str = "cum"   # "cum" | "daily"
+        self.cum_mode: str = "real"    # "real" | "zeroed"
+        self.show_mv: bool = True
+        self.show_pnl: bool = True
+
+        self._mv_bounds: tuple[float, float] = (0.0, 100.0)
+        self._pnl_bounds: tuple[float, float] = (-100.0, 100.0)
+        self._display_pnl: list[float | None] = []
+        self._zero_base_pnl: float | None = None
 
     def set_data(self, points: list[dict[str, Any]]):
         self.points = list(points or [])
         self._hover_idx = -1
+        self._recompute_series()
         self.update()
 
+    def set_mode(self, *, pnl_metric: str | None = None, cum_mode: str | None = None):
+        if pnl_metric in ("cum", "daily"):
+            self.pnl_metric = pnl_metric
+        if cum_mode in ("real", "zeroed"):
+            self.cum_mode = cum_mode
+        self._recompute_series()
+        self.update()
+
+    def set_visibility(self, *, show_mv: bool | None = None, show_pnl: bool | None = None):
+        if show_mv is not None:
+            self.show_mv = bool(show_mv)
+        if show_pnl is not None:
+            self.show_pnl = bool(show_pnl)
+        self.update()
+
+    def _recompute_series(self):
+        mv_vals = [float(p["market_value"]) for p in self.points if p.get("market_value") is not None]
+        if not mv_vals:
+            self._mv_bounds = (0.0, 100.0)
+        else:
+            v_min, v_max = min(mv_vals), max(mv_vals)
+            if abs(v_max - v_min) < 1e-6:
+                self._mv_bounds = (max(0.0, v_min * 0.9), v_max * 1.1 + 100.0)
+            else:
+                pad = (v_max - v_min) * 0.12
+                self._mv_bounds = (max(0.0, v_min - pad), v_max + pad)
+
+        self._zero_base_pnl = None
+        if self.pnl_metric == "daily":
+            self._display_pnl = [
+                float(p["daily_pnl"]) if p.get("daily_pnl") is not None else None
+                for p in self.points
+            ]
+        else:
+            raw_cum = [
+                float(p["cumulative_pnl"]) if p.get("cumulative_pnl") is not None else None
+                for p in self.points
+            ]
+            if self.cum_mode == "zeroed":
+                first_valid = next((v for v in raw_cum if v is not None), None)
+                self._zero_base_pnl = first_valid
+                if first_valid is not None:
+                    self._display_pnl = [(v - first_valid) if v is not None else None for v in raw_cum]
+                else:
+                    self._display_pnl = [None for _ in raw_cum]
+            else:
+                self._display_pnl = raw_cum
+
+        valid_pnl = [v for v in self._display_pnl if v is not None and math.isfinite(v)]
+        if not valid_pnl:
+            self._pnl_bounds = (-100.0, 100.0)
+        else:
+            r_min = min(0.0, min(valid_pnl))
+            r_max = max(0.0, max(valid_pnl))
+            if abs(r_max - r_min) < 1e-6:
+                self._pnl_bounds = (-100.0, 100.0)
+            else:
+                span = r_max - r_min
+                pad_u = r_max * 1.12 if r_max > 0 else span * 0.08
+                pad_d = r_min * 1.12 if r_min < 0 else -span * 0.08
+                self._pnl_bounds = (min(0.0, pad_d), max(0.0, pad_u))
+
     def mouseMoveEvent(self, event):
-        if not self._plot_pts:
-            QToolTip.hideText()
+        if not self._xs or self._last_plot_rect.isEmpty():
             return
-        mx = event.position().x()
-        best_idx = min(range(len(self._plot_pts)), key=lambda i: abs(self._plot_pts[i].x() - mx))
+        pos = event.position()
+        if not self._last_plot_rect.adjusted(-12, -10, 12, 16).contains(pos):
+            if self._hover_idx != -1:
+                self._hover_idx = -1
+                self.update()
+            return
+        mx = pos.x()
+        best_idx = min(range(len(self._xs)), key=lambda i: abs(self._xs[i] - mx))
         if best_idx != self._hover_idx:
             self._hover_idx = best_idx
             self.update()
-        pt_data = self.points[best_idx]
-        mv = float(pt_data.get("market_value") or 0.0)
-        inc_tag = "\n（当日部分快照待补齐）" if pt_data.get("incomplete") else ""
-        QToolTip.showText(
-            event.globalPosition().toPoint(),
-            f"日期：{pt_data.get('date')}\n持仓市值：{_fmt_usd(mv)}{inc_tag}",
-            self,
-        )
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         if self._hover_idx != -1:
             self._hover_idx = -1
             self.update()
-        QToolTip.hideText()
         super().leaveEvent(event)
 
     @staticmethod
     def _fmt_axis_val(v: float) -> str:
+        if abs(v) < 1e-4:
+            return "0"
         if abs(v) >= 1_000_000:
             return f"{v / 1_000_000:.1f}M"
         if abs(v) >= 1_000:
             return f"{v / 1_000:.0f}K"
         return f"{v:.0f}"
 
+    @staticmethod
+    def _fmt_signed_usd(v: float | None) -> str:
+        if v is None:
+            return "—"
+        if abs(v) < 0.005:
+            return "$0.00"
+        return f"{'+' if v > 0 else '-'}${abs(v):,.2f}"
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
+        w, h = float(self.width()), float(self.height())
         self._plot_pts.clear()
+        self._xs.clear()
 
         if not self.points:
             painter.setPen(QColor("#94A3B8"))
             painter.setFont(QFont(".AppleSystemUIFont", 12))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "当前时间范围暂无真实历史市值快照")
+            self._last_plot_rect = QRectF()
             return
 
         left_pad = 46.0
-        right_pad = 14.0
-        top_pad = 14.0
-        bottom_pad = 26.0
+        right_pad = 50.0
+        top_pad = 20.0
+        bottom_pad = 20.0
         plot_w = max(40.0, w - left_pad - right_pad)
         plot_h = max(40.0, h - top_pad - bottom_pad)
+        plot = QRectF(left_pad, top_pad, plot_w, plot_h)
+        self._last_plot_rect = plot
 
-        vals = [float(p.get("market_value") or 0.0) for p in self.points]
-        v_min = min(vals)
-        v_max = max(vals)
-        if abs(v_max - v_min) < 1e-6:
-            v_min = max(0.0, v_min * 0.9)
-            v_max = v_max * 1.1 + 100.0
-        else:
-            pad_v = (v_max - v_min) * 0.12
-            v_min = max(0.0, v_min - pad_v)
-            v_max = v_max + pad_v
+        v_min, v_max = self._mv_bounds
+        r_min, r_max = self._pnl_bounds
 
-        # 1. 绘制水平网格线与 Y 轴刻度
+        # 顶部双轴单位标签
+        painter.setFont(QFont(".AppleSystemUIFont", 9, QFont.Weight.DemiBold))
+        if self.show_mv:
+            painter.setPen(QColor("#2563EB"))
+            painter.drawText(QRectF(2, 2, 110, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "持仓市值 (USD)")
+        if self.show_pnl:
+            r_title = "每日盈亏 (USD)" if self.pnl_metric == "daily" else "累计盈亏 (USD)"
+            painter.setPen(QColor("#16A34A" if self.pnl_metric == "daily" else "#F59E0B"))
+            painter.drawText(QRectF(w - 122, 2, 120, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, r_title)
+
+        # 1. 绘制水平网格线与左右独立 Y 轴刻度
         grid_steps = 4
         painter.setFont(numeric_font(9))
         for i in range(grid_steps + 1):
             ratio_y = i / grid_steps
             y = top_pad + plot_h * (1.0 - ratio_y)
-            val_y = v_min + (v_max - v_min) * ratio_y
-
             painter.setPen(QPen(QColor("#F1F5F9"), 1, Qt.PenStyle.SolidLine))
             painter.drawLine(QPointF(left_pad, y), QPointF(left_pad + plot_w, y))
 
-            painter.setPen(QColor("#64748B"))
-            painter.drawText(
-                QRectF(0, y - 8, left_pad - 6, 16),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                self._fmt_axis_val(val_y),
-            )
+            if self.show_mv:
+                val_y = v_min + (v_max - v_min) * ratio_y
+                painter.setPen(QColor("#2563EB"))
+                painter.drawText(
+                    QRectF(0, y - 8, left_pad - 6, 16),
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    self._fmt_axis_val(val_y),
+                )
+            if self.show_pnl:
+                r_val = r_min + (r_max - r_min) * ratio_y
+                painter.setPen(QColor("#D97706" if self.pnl_metric == "cum" else "#475569"))
+                painter.drawText(
+                    QRectF(left_pad + plot_w + 6, y - 8, right_pad - 8, 16),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    self._fmt_axis_val(r_val),
+                )
 
-        # 2. 计算坐标点
+        # 右轴 0 USD 基准线
+        y0_right = top_pad + plot_h * (1.0 - (0.0 - r_min) / max(1e-9, r_max - r_min))
+        if self.show_pnl and top_pad <= y0_right <= top_pad + plot_h:
+            painter.setPen(QPen(QColor("#CBD5E1"), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(left_pad, y0_right), QPointF(left_pad + plot_w, y0_right))
+
+        # 2. 计算横坐标点
         n = len(self.points)
-        for idx, v in enumerate(vals):
-            x = left_pad + (plot_w * idx / (n - 1) if n > 1 else plot_w / 2.0)
-            y = top_pad + plot_h * (1.0 - (v - v_min) / (v_max - v_min))
-            self._plot_pts.append(QPointF(x, y))
+        xs = [left_pad + (plot_w * idx / (n - 1) if n > 1 else plot_w / 2.0) for idx in range(n)]
+        self._xs = xs
 
-        # 3. 渐变填充面积与折线
-        line_path = QPainterPath()
-        line_path.moveTo(self._plot_pts[0])
-        for pt in self._plot_pts[1:]:
-            line_path.lineTo(pt)
+        def y_mv(v: float) -> float:
+            return top_pad + plot_h * (1.0 - (v - v_min) / max(1e-9, v_max - v_min))
 
-        area_path = QPainterPath(line_path)
-        area_path.lineTo(QPointF(self._plot_pts[-1].x(), top_pad + plot_h))
-        area_path.lineTo(QPointF(self._plot_pts[0].x(), top_pad + plot_h))
-        area_path.closeSubpath()
+        def y_pnl(v: float) -> float:
+            return top_pad + plot_h * (1.0 - (v - r_min) / max(1e-9, r_max - r_min))
 
-        grad = QLinearGradient(0, top_pad, 0, top_pad + plot_h)
-        grad.setColorAt(0.0, QColor(37, 99, 235, 68))
-        grad.setColorAt(1.0, QColor(37, 99, 235, 4))
-        painter.fillPath(area_path, grad)
+        # 3. 绘制右轴收益系列（每日盈亏柱状图 或 累计盈亏橙色折线）
+        if self.show_pnl:
+            if self.pnl_metric == "daily":
+                bar_w = max(1.5, min(6.0, (plot_w / max(1, n)) * 0.58))
+                for idx, val in enumerate(self._display_pnl):
+                    if val is None or abs(val) < 1e-9:
+                        continue
+                    yv = y_pnl(val)
+                    top_b = min(y0_right, yv)
+                    bh = max(1.0, abs(yv - y0_right))
+                    col = QColor(22, 163, 74, 190) if val >= 0 else QColor(220, 38, 38, 190)
+                    painter.fillRect(QRectF(xs[idx] - bar_w / 2.0, top_b, bar_w, bh), col)
+            else:
+                segs: list[list[QPointF]] = []
+                cur_seg: list[QPointF] = []
+                for idx, val in enumerate(self._display_pnl):
+                    if val is None:
+                        if cur_seg:
+                            segs.append(cur_seg)
+                            cur_seg = []
+                    else:
+                        cur_seg.append(QPointF(xs[idx], y_pnl(val)))
+                if cur_seg:
+                    segs.append(cur_seg)
+                painter.setPen(QPen(QColor("#F59E0B"), 1.8))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                for seg in segs:
+                    if len(seg) == 1:
+                        painter.setBrush(QColor("#F59E0B"))
+                        painter.drawEllipse(seg[0], 3.5, 3.5)
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                    else:
+                        p_path = QPainterPath(seg[0])
+                        for pt in seg[1:]:
+                            p_path.lineTo(pt)
+                        painter.drawPath(p_path)
 
-        painter.setPen(QPen(QColor("#2563EB"), 2.2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(line_path)
+        # 4. 绘制左轴蓝色持仓市值折线 + 柔和填充
+        mv_pts: list[tuple[int, QPointF]] = []
+        for idx, p in enumerate(self.points):
+            mv_raw = p.get("market_value")
+            if mv_raw is not None:
+                pt = QPointF(xs[idx], y_mv(float(mv_raw)))
+                mv_pts.append((idx, pt))
+                self._plot_pts.append(pt)
 
-        # 最新点高亮圆点
-        last_pt = self._plot_pts[-1]
-        painter.setPen(QPen(QColor("#FFFFFF"), 2))
-        painter.setBrush(QColor("#2563EB"))
-        painter.drawEllipse(last_pt, 4.5, 4.5)
-
-        # 悬停十字准星与圆点
-        if 0 <= self._hover_idx < len(self._plot_pts):
-            h_pt = self._plot_pts[self._hover_idx]
-            painter.setPen(QPen(QColor("#94A3B8"), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(QPointF(h_pt.x(), top_pad), QPointF(h_pt.x(), top_pad + plot_h))
+        if self.show_mv and mv_pts:
+            if len(mv_pts) >= 2:
+                line_path = QPainterPath(mv_pts[0][1])
+                for _, pt in mv_pts[1:]:
+                    line_path.lineTo(pt)
+                area_path = QPainterPath(line_path)
+                area_path.lineTo(QPointF(mv_pts[-1][1].x(), top_pad + plot_h))
+                area_path.lineTo(QPointF(mv_pts[0][1].x(), top_pad + plot_h))
+                area_path.closeSubpath()
+                grad = QLinearGradient(0, top_pad, 0, top_pad + plot_h)
+                grad.setColorAt(0.0, QColor(37, 99, 235, 58))
+                grad.setColorAt(1.0, QColor(37, 99, 235, 4))
+                painter.fillPath(area_path, grad)
+                painter.setPen(QPen(QColor("#2563EB"), 2.1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(line_path)
+            last_pt = mv_pts[-1][1]
             painter.setPen(QPen(QColor("#FFFFFF"), 2))
-            painter.setBrush(QColor("#1D4ED8"))
-            painter.drawEllipse(h_pt, 5.0, 5.0)
+            painter.setBrush(QColor("#2563EB"))
+            painter.drawEllipse(last_pt, 4.0, 4.0)
 
-        # 4. X 轴日期刻度
+        if not self.show_mv and not self.show_pnl:
+            painter.setPen(QColor("#94A3B8"))
+            painter.setFont(QFont(".AppleSystemUIFont", 11))
+            painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, "已隐藏全部系列，点击下方图例可恢复显示")
+
+        # 5. X 轴自适应日期刻度（防止文字重叠）
         painter.setPen(QColor("#64748B"))
         painter.setFont(numeric_font(9))
-        tick_count = min(6, n)
-        if tick_count == 1:
-            tick_indices = [0]
+        max_ticks = max(2, min(6, int(plot_w // 52)))
+        if n <= max_ticks:
+            tick_indices = list(range(n))
         else:
-            tick_indices = sorted({int(round(i * (n - 1) / (tick_count - 1))) for i in range(tick_count)})
-
+            tick_indices = sorted({int(round(i * (n - 1) / (max_ticks - 1))) for i in range(max_ticks)})
+        spans_years = len({str(p.get("date") or "")[:4] for p in self.points}) > 1
         for ti in tick_indices:
-            pt = self._plot_pts[ti]
             d_str = str(self.points[ti].get("date") or "")
-            short_d = d_str[5:] if len(d_str) >= 10 else d_str
-            painter.drawText(
-                QRectF(pt.x() - 26, top_pad + plot_h + 4, 52, 18),
-                Qt.AlignmentFlag.AlignCenter,
-                short_d,
-            )
+            short_d = d_str[2:] if (spans_years and len(d_str) >= 10) else (d_str[5:] if len(d_str) >= 10 else d_str)
+            rx = max(left_pad - 4, min(left_pad + plot_w + 4 - 52, xs[ti] - 26))
+            painter.drawText(QRectF(rx, top_pad + plot_h + 2, 52, 16), Qt.AlignmentFlag.AlignCenter, short_d)
+
+        # 6. 鼠标悬停垂直辅助线、高亮点与边界钳制 Tooltip
+        if 0 <= self._hover_idx < n:
+            hi = self._hover_idx
+            hx = xs[hi]
+            painter.setPen(QPen(QColor("#94A3B8"), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(hx, top_pad), QPointF(hx, top_pad + plot_h))
+
+            pt_data = self.points[hi]
+            mv_v = float(pt_data["market_value"]) if pt_data.get("market_value") is not None else None
+            disp_v = self._display_pnl[hi]
+            real_cum_v = float(pt_data["cumulative_pnl"]) if pt_data.get("cumulative_pnl") is not None else None
+
+            if self.show_mv and mv_v is not None:
+                painter.setPen(QPen(QColor("#FFFFFF"), 2))
+                painter.setBrush(QColor("#1D4ED8"))
+                painter.drawEllipse(QPointF(hx, y_mv(mv_v)), 4.5, 4.5)
+            if self.show_pnl and disp_v is not None and self.pnl_metric == "cum":
+                painter.setPen(QPen(QColor("#FFFFFF"), 2))
+                painter.setBrush(QColor("#F59E0B"))
+                painter.drawEllipse(QPointF(hx, y_pnl(disp_v)), 4.5, 4.5)
+
+            tip_lines: list[tuple[str, str]] = [("", str(pt_data.get("date") or ""))]
+            if self.show_mv:
+                tip_lines.append(("#2563EB", f"持仓市值：{f'${mv_v:,.2f}' if mv_v is not None else '—'}"))
+            if self.show_pnl:
+                if self.pnl_metric == "daily":
+                    dot = "#16A34A" if (disp_v is not None and disp_v >= 0) else "#DC2626" if disp_v is not None else "#64748B"
+                    tip_lines.append((dot, f"当日盈亏：{self._fmt_signed_usd(disp_v)}"))
+                else:
+                    if self.cum_mode == "zeroed":
+                        tip_lines.append(("#F59E0B", f"区间累计(归零)：{self._fmt_signed_usd(disp_v)}"))
+                        tip_lines.append(("#64748B", f"真实累计盈亏：{self._fmt_signed_usd(real_cum_v)}"))
+                        tip_lines.append(("", "模式：区间归零"))
+                    else:
+                        tip_lines.append(("#F59E0B", f"真实累计盈亏：{self._fmt_signed_usd(real_cum_v)}"))
+                        tip_lines.append(("", "模式：真实累计"))
+            if pt_data.get("incomplete"):
+                tip_lines.append(("#B45309", "部分历史快照缺失"))
+
+            tip_font = QFont(".AppleSystemUIFont", 10)
+            tip_bold = QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold)
+            tfm = painter.fontMetrics()
+            painter.setFont(tip_bold)
+            tfm = painter.fontMetrics()
+            tip_w = max(tfm.horizontalAdvance(t) for _, t in tip_lines) + 26.0
+            tip_h = 10.0 + len(tip_lines) * 17.0
+            tx = hx + 10.0
+            if tx + tip_w > w - 4.0:
+                tx = hx - tip_w - 10.0
+            tx = max(4.0, min(w - tip_w - 4.0, tx))
+            ty = max(4.0, min(top_pad + plot_h - tip_h - 4.0, top_pad + 4.0))
+
+            painter.setPen(QPen(QColor("#CBD5E1"), 1))
+            painter.setBrush(QColor(255, 255, 255, 245))
+            painter.drawRoundedRect(QRectF(tx, ty, tip_w, tip_h), 7.0, 7.0)
+            for li, (dot_c, txt) in enumerate(tip_lines):
+                ly = ty + 5.0 + li * 17.0
+                painter.setFont(tip_bold if li == 0 else tip_font)
+                tx_pos = tx + 8.0
+                if dot_c:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(dot_c))
+                    painter.drawEllipse(QPointF(tx + 12.0, ly + 8.0), 3.0, 3.0)
+                    tx_pos = tx + 19.0
+                painter.setPen(QColor("#0F172A"))
+                painter.drawText(QRectF(tx_pos, ly, tip_w - (tx_pos - tx) - 4.0, 16.0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, txt)
+
+
+class RatioProgressBarCell(QWidget):
+    """带蓝色横向进度条与百分比数值的紧凑单元格组件（居中展示）。"""
+
+    def __init__(
+        self,
+        ratio_val: float,
+        percent_text: str,
+        *,
+        is_total: bool = False,
+        is_selected: bool = False,
+        tooltip: str = "",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if tooltip:
+            self.setToolTip(tooltip)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.pbar = QProgressBar(self)
+        self.pbar.setFixedHeight(5)
+        self.pbar.setTextVisible(False)
+        self.pbar.setRange(0, 1000)
+        clamped = max(0.0, min(1.0, float(ratio_val or 0.0)))
+        self.pbar.setValue(int(round(clamped * 1000)))
+        bar_color = "#2563EB" if not is_total else "#3B82F6"
+        self.pbar.setStyleSheet(f"""
+            QProgressBar {{
+                background: #E2E8F0;
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: {bar_color};
+                border-radius: 2px;
+            }}
+        """)
+        layout.addWidget(self.pbar, 1)
+
+        # 展示百分比标签（拉宽后空间充裕，合计行与普通行均展示）
+        if percent_text:
+            self.lbl = QLabel(percent_text, self)
+            self.lbl.setFont(numeric_font(10))
+            txt_color = "#2563EB" if (is_selected or is_total) else "#0F172A"
+            self.lbl.setStyleSheet(f"color: {txt_color}; background: transparent; border: none;")
+            self.lbl.setFixedWidth(40)
+            self.lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            layout.addWidget(self.lbl)
+        else:
+            self.lbl = None
 
 
 class OpenHoldingsChartsRow(QWidget):
-    """持有中页面中部三列并排图表区（券商持仓分布 | 行业持仓分布 | 持仓市值趋势）。"""
+    """持有中页面中部三列并排图表区（按券商渠道持仓汇总列表 | 股票类型分布环形图 | 持仓市值趋势）。"""
 
     broker_clicked = Signal(str)
     industry_clicked = Signal(str)
@@ -574,9 +849,10 @@ class OpenHoldingsChartsRow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._active_broker: str = ""
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
         card_qss = """
             QFrame#openChartCard {
@@ -590,12 +866,13 @@ class OpenHoldingsChartsRow(QWidget):
             }
         """
 
-        # 1. 持仓分布（按券商渠道）
+        # 1. 持仓分布（按券商渠道）汇总列表 (约占 39%)
         self.broker_card = QFrame()
         self.broker_card.setObjectName("openChartCard")
+        self.broker_card.setMinimumHeight(265)
         self.broker_card.setStyleSheet(card_qss)
         b_layout = QVBoxLayout(self.broker_card)
-        b_layout.setContentsMargins(14, 12, 14, 12)
+        b_layout.setContentsMargins(14, 10, 14, 10)
         b_layout.setSpacing(6)
 
         b_hdr = QHBoxLayout()
@@ -603,22 +880,83 @@ class OpenHoldingsChartsRow(QWidget):
         b_title.setStyleSheet("color: #0F172A; font-size: 13px; font-weight: 700;")
         b_hdr.addWidget(b_title)
         b_hdr.addStretch()
-        b_hint = QLabel("点击联动筛选")
+        b_hint = QLabel("点击行筛选券商，点击合计恢复")
         b_hint.setStyleSheet("color: #94A3B8; font-size: 11px;")
         b_hdr.addWidget(b_hint)
         b_layout.addLayout(b_hdr)
 
-        self.broker_donut = OpenDistributionDonut("暂无券商持仓数据", self.broker_card)
-        self.broker_donut.item_clicked.connect(self.broker_clicked.emit)
-        b_layout.addWidget(self.broker_donut, 1)
-        layout.addWidget(self.broker_card, 1)
+        self.broker_table = QTableWidget(0, 6)
+        self.broker_table.setHorizontalHeaderLabels([
+            "券商渠道", "市值占比", "持仓成本", "持仓市值", "浮动盈亏", "持仓数量"
+        ])
+        for c in range(6):
+            it = self.broker_table.horizontalHeaderItem(c)
+            if it:
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.broker_table.verticalHeader().setVisible(False)
+        self.broker_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.broker_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.broker_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.broker_table.setShowGrid(False)
+        self.broker_table.setAlternatingRowColors(False)
+        self.broker_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.broker_table.setStyleSheet("""
+            QTableWidget {
+                border: none;
+                background: #FFFFFF;
+                font-size: 11px;
+            }
+            QTableWidget::item:hover {
+                background: #F8FAFC;
+            }
+            QHeaderView::section {
+                background: #F8FAFC;
+                color: #64748B;
+                font-size: 11px;
+                font-weight: 600;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+                padding: 5px 4px;
+                text-align: center;
+            }
+            QTableWidget::item {
+                border-bottom: 1px solid #F1F5F9;
+                padding: 4px 4px;
+            }
+        """)
+        b_hdr_view = self.broker_table.horizontalHeader()
+        b_hdr_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        b_hdr_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        b_hdr_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        b_hdr_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        b_hdr_view.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        b_hdr_view.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.broker_table.setColumnWidth(0, 64)
+        self.broker_table.setColumnWidth(2, 74)
+        self.broker_table.setColumnWidth(3, 74)
+        self.broker_table.setColumnWidth(4, 76)
+        self.broker_table.cellClicked.connect(self._on_broker_row_clicked)
+        b_layout.addWidget(self.broker_table, 1)
 
-        # 2. 持仓分布（按类型）
+        # 兼容旧代码与自动化测试中对 broker_donut.item_clicked 的访问
+        class _DonutCompat(QObject):
+            item_clicked = Signal(str)
+
+            def set_data(self, *args, **kwargs):
+                pass
+
+        self.broker_donut = _DonutCompat(self)
+        self.broker_donut.item_clicked.connect(self.broker_clicked.emit)
+
+        layout.addWidget(self.broker_card, 39)
+
+        # 2. 持仓分布（按类型）环形图 (约占 25%)
         self.industry_card = QFrame()
         self.industry_card.setObjectName("openChartCard")
+        self.industry_card.setMinimumHeight(265)
         self.industry_card.setStyleSheet(card_qss)
         i_layout = QVBoxLayout(self.industry_card)
-        i_layout.setContentsMargins(14, 12, 14, 12)
+        i_layout.setContentsMargins(14, 10, 14, 10)
         i_layout.setSpacing(6)
 
         i_hdr = QHBoxLayout()
@@ -634,15 +972,16 @@ class OpenHoldingsChartsRow(QWidget):
         self.industry_donut = OpenDistributionDonut("暂无类型持仓数据", self.industry_card)
         self.industry_donut.item_clicked.connect(self.industry_clicked.emit)
         i_layout.addWidget(self.industry_donut, 1)
-        layout.addWidget(self.industry_card, 1)
+        layout.addWidget(self.industry_card, 25)
 
-        # 3. 持仓市值趋势
+        # 3. 持仓市值趋势 (约占 36%)
         self.trend_card = QFrame()
         self.trend_card.setObjectName("openChartCard")
+        self.trend_card.setMinimumHeight(265)
         self.trend_card.setStyleSheet(card_qss)
         t_layout = QVBoxLayout(self.trend_card)
-        t_layout.setContentsMargins(14, 12, 14, 12)
-        t_layout.setSpacing(6)
+        t_layout.setContentsMargins(14, 10, 14, 10)
+        t_layout.setSpacing(4)
 
         t_hdr = QHBoxLayout()
         t_hdr.setSpacing(4)
@@ -694,9 +1033,140 @@ class OpenHoldingsChartsRow(QWidget):
         self.incomplete_lbl.hide()
         t_layout.addWidget(self.incomplete_lbl)
 
+        # 收益指标与累计模式紧凑切换栏
+        sub_ctrl = QHBoxLayout()
+        sub_ctrl.setContentsMargins(0, 0, 0, 0)
+        sub_ctrl.setSpacing(4)
+        lbl_pm = QLabel("收益指标")
+        lbl_pm.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 600;")
+        sub_ctrl.addWidget(lbl_pm)
+
+        pill_qss = """
+            QPushButton {
+                background: #F1F5F9; color: #64748B; border: none; border-radius: 5px;
+                padding: 2px 8px; font-size: 11px; font-weight: 500;
+            }
+            QPushButton:checked { background: #2563EB; color: #FFFFFF; font-weight: 700; }
+            QPushButton:hover:!checked { background: #E2E8F0; color: #0F172A; }
+        """
+        self.metric_buttons: dict[str, QPushButton] = {}
+        for lbl, key in (("累计盈亏", "cum"), ("每日盈亏", "daily")):
+            b = QPushButton(lbl)
+            b.setCheckable(True)
+            b.setChecked(key == "cum")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(pill_qss)
+            b.clicked.connect(lambda _=False, k=key: self._on_pnl_metric_clicked(k))
+            self.metric_buttons[key] = b
+            sub_ctrl.addWidget(b)
+
+        self.cum_mode_sep = QLabel("|")
+        self.cum_mode_sep.setStyleSheet("color: #CBD5E1; font-size: 11px; padding: 0 2px;")
+        sub_ctrl.addWidget(self.cum_mode_sep)
+
+        self.cum_mode_lbl = QLabel("累计模式")
+        self.cum_mode_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 600;")
+        sub_ctrl.addWidget(self.cum_mode_lbl)
+
+        self.cum_mode_buttons: dict[str, QPushButton] = {}
+        for lbl, key in (("真实累计", "real"), ("区间归零", "zeroed")):
+            b = QPushButton(lbl)
+            b.setCheckable(True)
+            b.setChecked(key == "real")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(pill_qss)
+            b.clicked.connect(lambda _=False, k=key: self._on_cum_mode_clicked(k))
+            self.cum_mode_buttons[key] = b
+            sub_ctrl.addWidget(b)
+        sub_ctrl.addStretch(1)
+        t_layout.addLayout(sub_ctrl)
+
         self.trend_chart = OpenMvTrendChart(self.trend_card)
         t_layout.addWidget(self.trend_chart, 1)
-        layout.addWidget(self.trend_card, 1)
+
+        # 底部可点击交互图例
+        legend_row = QHBoxLayout()
+        legend_row.setContentsMargins(0, 0, 0, 0)
+        legend_row.setSpacing(10)
+        legend_row.addStretch(1)
+        self.mv_legend_btn = QPushButton("●  持仓市值 (左轴)")
+        self.mv_legend_btn.setCheckable(True)
+        self.mv_legend_btn.setChecked(True)
+        self.mv_legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mv_legend_btn.clicked.connect(self._on_trend_legend_toggled)
+        legend_row.addWidget(self.mv_legend_btn)
+
+        self.pnl_legend_btn = QPushButton("●  累计盈亏 (右轴)")
+        self.pnl_legend_btn.setCheckable(True)
+        self.pnl_legend_btn.setChecked(True)
+        self.pnl_legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pnl_legend_btn.clicked.connect(self._on_trend_legend_toggled)
+        legend_row.addWidget(self.pnl_legend_btn)
+        legend_row.addStretch(1)
+        t_layout.addLayout(legend_row)
+        self._sync_trend_legend_styles()
+
+        layout.addWidget(self.trend_card, 36)
+
+    def _on_broker_row_clicked(self, row: int, _col: int):
+        item = self.broker_table.item(row, 0)
+        if not item:
+            return
+        ch = item.data(Qt.ItemDataRole.UserRole) or item.text() or ""
+        if not ch or ch == "合计":
+            self.broker_clicked.emit("")
+        elif self._active_broker and str(self._active_broker).strip().casefold() == str(ch).strip().casefold():
+            self.broker_clicked.emit("")
+        else:
+            self.broker_clicked.emit(ch)
+
+    def _on_pnl_metric_clicked(self, key: str):
+        for k, btn in self.metric_buttons.items():
+            btn.setChecked(k == key)
+        is_cum = key == "cum"
+        self.cum_mode_sep.setVisible(is_cum)
+        self.cum_mode_lbl.setVisible(is_cum)
+        for btn in self.cum_mode_buttons.values():
+            btn.setVisible(is_cum)
+        self.trend_chart.set_mode(pnl_metric=key)
+        self._sync_trend_legend_styles()
+
+    def _on_cum_mode_clicked(self, key: str):
+        for k, btn in self.cum_mode_buttons.items():
+            btn.setChecked(k == key)
+        self.trend_chart.set_mode(cum_mode=key)
+
+    def _on_trend_legend_toggled(self):
+        self._sync_trend_legend_styles()
+        self.trend_chart.set_visibility(
+            show_mv=self.mv_legend_btn.isChecked(),
+            show_pnl=self.pnl_legend_btn.isChecked(),
+        )
+
+    def _sync_trend_legend_styles(self):
+        pnl_is_daily = self.trend_chart.pnl_metric == "daily" if hasattr(self, "trend_chart") else False
+        specs = (
+            (self.mv_legend_btn, "持仓市值 (左轴)", "#2563EB", "●"),
+            (
+                self.pnl_legend_btn,
+                "每日盈亏 (右轴)" if pnl_is_daily else "累计盈亏 (右轴)",
+                "#16A34A" if pnl_is_daily else "#F59E0B",
+                "■" if pnl_is_daily else "●",
+            ),
+        )
+        for btn, label, color, glyph in specs:
+            active = btn.isChecked()
+            btn.setText(f"{glyph}  {label}" if active else f"○  {label}（已隐藏）")
+            if active:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: #F8FAFC; color: {color}; border: 1px solid #CBD5E1; border-radius: 11px; padding: 2px 10px; font-size: 11px; font-weight: 600; }}"
+                    f"QPushButton:hover {{ border-color: {color}; background: #EFF6FF; }}"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background: #F1F5F9; color: #94A3B8; border: 1px dashed #CBD5E1; border-radius: 11px; padding: 2px 10px; font-size: 11px; font-weight: 500; }"
+                    "QPushButton:hover { background: #E2E8F0; color: #475569; }"
+                )
 
     def _on_window_clicked(self, key: str):
         for k, btn in self.window_buttons.items():
@@ -713,18 +1183,206 @@ class OpenHoldingsChartsRow(QWidget):
     ):
         cards = payload.get("cards", {})
         total_mv = float(cards.get("total_market_value") or 0.0)
+        total_cost = float(cards.get("total_cost_amount") or 0.0)
+        total_pnl = float(cards.get("floating_pnl") or 0.0)
+        total_stocks = int(cards.get("stock_count") or 0)
+        self._active_broker = active_broker or ""
 
+        # -----------------------------------------------------------------
+        # 1. 填充券商渠道持仓汇总列表（默认按持仓市值从高到低排序）
+        # -----------------------------------------------------------------
+        raw_brokers = list(payload.get("broker_distribution") or [])
+        sorted_brokers = sorted(
+            raw_brokers,
+            key=lambda x: -float(x.get("market_value") or 0.0),
+        )
+
+        has_data = len(sorted_brokers) > 0 or total_mv > 0
+        total_rows = len(sorted_brokers) + (1 if has_data else 0)
+        self.broker_table.setRowCount(total_rows)
+
+        num_font = numeric_font(11)
+        bold_num_font = numeric_font(11, bold=True)
+
+        for r_idx, b in enumerate(sorted_brokers):
+            ch_name = str(b.get("channel") or b.get("name") or "")
+            b_cost = float(b.get("cost_amount") or 0.0)
+            b_mv = float(b.get("market_value") or 0.0)
+            b_pnl = float(b.get("floating_pnl") if b.get("floating_pnl") is not None else (b_mv - b_cost))
+            b_ratio = float(b.get("ratio") or (b_mv / total_mv if total_mv > 0 else 0.0))
+            b_percent = float(b.get("percent") or (b_ratio * 100.0))
+            b_stocks = int(b.get("stock_count") or 0)
+
+            is_selected = bool(
+                self._active_broker
+                and self._active_broker.strip().casefold() == ch_name.strip().casefold()
+            )
+            bg = QColor("#EFF6FF") if is_selected else QColor("#FFFFFF")
+            fg = "#2563EB" if is_selected else "#0F172A"
+
+            tip = (
+                f"券商渠道：{ch_name}\n"
+                f"持仓成本：{b_cost:,.2f} USD\n"
+                f"持仓市值：{b_mv:,.2f} USD\n"
+                f"浮动盈亏：{b_pnl:+,.2f} USD\n"
+                f"市值占比：{b_percent:.1f}%\n"
+                f"持仓数量：{b_stocks} 只"
+            )
+
+            # Col 0: 券商渠道（居中）
+            it0 = QTableWidgetItem(ch_name)
+            it0.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it0.setData(Qt.ItemDataRole.UserRole, ch_name)
+            it0.setBackground(bg)
+            it0.setForeground(QColor(fg))
+            it0.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 0, it0)
+
+            # Col 1: 市值占比（居中紧凑进度条 + 百分比，底层item不填文字避免阴影重影）
+            it1 = QTableWidgetItem("")
+            it1.setData(Qt.ItemDataRole.UserRole, f"{b_percent:.1f}%")
+            it1.setBackground(bg)
+            it1.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 1, it1)
+            p_cell = RatioProgressBarCell(
+                b_ratio,
+                f"{b_percent:.1f}%",
+                is_total=False,
+                is_selected=is_selected,
+                tooltip=tip,
+                parent=self.broker_table,
+            )
+            self.broker_table.setCellWidget(r_idx, 1, p_cell)
+
+            # Col 2: 持仓成本（居中）
+            it2 = QTableWidgetItem(f"{b_cost:,.2f}")
+            it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it2.setFont(num_font)
+            it2.setBackground(bg)
+            it2.setForeground(QColor(fg))
+            it2.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 2, it2)
+
+            # Col 3: 持仓市值（居中）
+            it3 = QTableWidgetItem(f"{b_mv:,.2f}")
+            it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it3.setFont(num_font)
+            it3.setBackground(bg)
+            it3.setForeground(QColor(fg))
+            it3.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 3, it3)
+
+            # Col 4: 浮动盈亏（居中，带正负号与盈亏颜色）
+            pnl_fg = _pnl_color(b_pnl)
+            it4 = QTableWidgetItem(f"{b_pnl:+,.2f}")
+            it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it4.setFont(num_font)
+            it4.setBackground(bg)
+            it4.setForeground(QColor(pnl_fg))
+            it4.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 4, it4)
+
+            # Col 5: 持仓数量（居中）
+            it5 = QTableWidgetItem(str(b_stocks))
+            it5.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it5.setFont(num_font)
+            it5.setBackground(bg)
+            it5.setForeground(QColor(fg))
+            it5.setToolTip(tip)
+            self.broker_table.setItem(r_idx, 5, it5)
+
+            self.broker_table.setRowHeight(r_idx, 27)
+
+        # 底部合计行（保持与当前筛选范围内的顶部 KPI 一致）
+        if has_data:
+            tot_idx = len(sorted_brokers)
+            tot_bg = QColor("#F8FAFC")
+            tot_tip = (
+                f"总持仓成本：{total_cost:,.2f} USD\n"
+                f"总持仓市值：{total_mv:,.2f} USD\n"
+                f"总浮动盈亏：{total_pnl:+,.2f} USD\n"
+                f"总持仓数量：{total_stocks} 只"
+            )
+
+            it0 = QTableWidgetItem("合计")
+            it0.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it0.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold))
+            it0.setData(Qt.ItemDataRole.UserRole, "合计")
+            it0.setBackground(tot_bg)
+            it0.setForeground(QColor("#0F172A"))
+            it0.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 0, it0)
+
+            # 合计行展示满额 100.0% 进度条与数字
+            it1 = QTableWidgetItem("")
+            it1.setData(Qt.ItemDataRole.UserRole, "100.0%")
+            it1.setBackground(tot_bg)
+            it1.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 1, it1)
+            tot_p_cell = RatioProgressBarCell(
+                1.0,
+                "100.0%",
+                is_total=True,
+                is_selected=False,
+                tooltip=tot_tip,
+                parent=self.broker_table,
+            )
+            self.broker_table.setCellWidget(tot_idx, 1, tot_p_cell)
+
+            it2 = QTableWidgetItem(f"{total_cost:,.2f}")
+            it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it2.setFont(bold_num_font)
+            it2.setBackground(tot_bg)
+            it2.setForeground(QColor("#0F172A"))
+            it2.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 2, it2)
+
+            it3 = QTableWidgetItem(f"{total_mv:,.2f}")
+            it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it3.setFont(bold_num_font)
+            it3.setBackground(tot_bg)
+            it3.setForeground(QColor("#0F172A"))
+            it3.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 3, it3)
+
+            tot_pnl_fg = _pnl_color(total_pnl)
+            it4 = QTableWidgetItem(f"{total_pnl:+,.2f}")
+            it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it4.setFont(bold_num_font)
+            it4.setBackground(tot_bg)
+            it4.setForeground(QColor(tot_pnl_fg))
+            it4.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 4, it4)
+
+            it5 = QTableWidgetItem(str(total_stocks))
+            it5.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it5.setFont(bold_num_font)
+            it5.setBackground(tot_bg)
+            it5.setForeground(QColor("#0F172A"))
+            it5.setToolTip(tot_tip)
+            self.broker_table.setItem(tot_idx, 5, it5)
+
+            self.broker_table.setRowHeight(tot_idx, 27)
+
+        # 保持旧兼容组件数据同步
         self.broker_donut.set_data(
             payload.get("broker_distribution", []),
             total_mv,
             active_key=active_broker,
         )
+
+        # -----------------------------------------------------------------
+        # 2. 股票类型分布环形图
+        # -----------------------------------------------------------------
         self.industry_donut.set_data(
             payload.get("industry_distribution", []),
             total_mv,
             active_key=active_industry,
         )
 
+        # -----------------------------------------------------------------
+        # 3. 持仓市值与收益趋势图
+        # -----------------------------------------------------------------
         win_key = (trend_window or "ytd").strip().lower()
         for k, btn in self.window_buttons.items():
             blocked = btn.blockSignals(True)
@@ -733,9 +1391,366 @@ class OpenHoldingsChartsRow(QWidget):
 
         mv_trend = payload.get("mv_trend", {})
         self.trend_chart.set_data(mv_trend.get("series") or mv_trend.get("points") or [])
-        if mv_trend.get("has_incomplete_data") and mv_trend.get("incomplete_note"):
-            self.incomplete_lbl.setText(mv_trend["incomplete_note"])
-            self.incomplete_lbl.show()
+        self.incomplete_lbl.setText("")
+        self.incomplete_lbl.hide()
+
+
+class OpenTop10Chart(QWidget):
+    """以 0 为中心的横向发散条形图（持有中股票浮动盈亏贡献：左侧亏损 Top N + 中央发散条形 + 右侧盈利 Top N）。"""
+
+    ticker_clicked = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.winners: list[dict[str, Any]] = []
+        self.losers: list[dict[str, Any]] = []
+        self.active_ticker: str = ""
+        self._hit_rects: list[tuple[QRectF, dict[str, Any]]] = []
+        self._hover_ticker: str = ""
+        self.setMinimumHeight(148)
+
+    def set_data(self, top10: dict[str, Any], *, active_ticker: str = ""):
+        self.winners = list(top10.get("winners") or ())
+        self.losers = list(top10.get("losers") or ())
+        self.active_ticker = (active_ticker or "").strip().upper()
+        rows = max(len(self.winners), len(self.losers), 1)
+        self.setFixedHeight(max(76, rows * 26 + 30))
+        self.update()
+
+    def _hit_item(self, pos: QPointF) -> dict[str, Any] | None:
+        for rect, item in self._hit_rects:
+            if rect.contains(pos):
+                return item
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            item = self._hit_item(event.position())
+            if item:
+                tk = str(item.get("ticker") or "").upper()
+                self._on_bar_clicked(tk)
+                return
+        super().mousePressEvent(event)
+
+    def _on_bar_clicked(self, ticker: str):
+        tk = (ticker or "").strip().upper()
+        self.ticker_clicked.emit("" if tk == self.active_ticker else tk)
+
+    def mouseMoveEvent(self, event):
+        item = self._hit_item(event.position())
+        if item:
+            tk = str(item.get("ticker") or "")
+            if tk != self._hover_ticker:
+                self._hover_ticker = tk
+                self.update()
+            pnl = item.get("floating_pnl") if item.get("floating_pnl") is not None else item.get("realized_pnl")
+            mv = item.get("market_value")
+            qty = item.get("quantity")
+            chs = "、".join(item.get("channels") or ()) or "—"
+            lines = [f"股票代码：{tk}", f"浮动盈亏：{_fmt_usd(pnl, signed=True)} USD"]
+            if mv is not None:
+                lines.append(f"持仓市值：{_fmt_usd(mv)} USD")
+            if qty is not None:
+                lines.append(f"持仓数量：{qty}")
+            lines.append(f"涉及券商：{chs}")
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                "\n".join(lines),
+                self,
+            )
         else:
-            self.incomplete_lbl.setText("")
-            self.incomplete_lbl.hide()
+            if self._hover_ticker:
+                self._hover_ticker = ""
+                self.update()
+            QToolTip.hideText()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hover_ticker:
+            self._hover_ticker = ""
+            self.update()
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hit_rects.clear()
+        w, h = float(self.width()), float(self.height())
+
+        if not self.winners and not self.losers:
+            painter.setPen(QColor("#94A3B8"))
+            painter.setFont(QFont(".AppleSystemUIFont", 12))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "当前筛选范围暂无非零浮动盈亏的持仓股票")
+            return
+
+        rows = max(len(self.winners), len(self.losers), 1)
+        side_w = max(145.0, min(215.0, w * 0.22))
+        bar_area_x = side_w + 10.0
+        bar_area_w = max(80.0, w - 2.0 * side_w - 20.0)
+        center_x = bar_area_x + bar_area_w / 2.0
+        half_w = bar_area_w / 2.0 - 8.0
+
+        top_y = 20.0
+        row_h = 26.0
+        bottom_axis_y = top_y + rows * row_h + 2.0
+
+        all_pnls = [
+            abs(float(x.get("floating_pnl") if x.get("floating_pnl") is not None else (x.get("realized_pnl") or 0.0)))
+            for x in (*self.winners, *self.losers)
+        ]
+        max_abs = max(all_pnls) if all_pnls else 100.0
+        if max_abs <= 0:
+            max_abs = 100.0
+
+        # 中央 0 USD 虚线
+        center_pen = QPen(QColor("#CBD5E1"), 1, Qt.PenStyle.DashLine)
+        painter.setPen(center_pen)
+        painter.drawLine(QPointF(center_x, top_y - 8), QPointF(center_x, bottom_axis_y))
+
+        # 底部基准刻度
+        painter.setPen(QPen(QColor("#E2E8F0"), 1))
+        painter.drawLine(QPointF(bar_area_x, bottom_axis_y), QPointF(bar_area_x + bar_area_w, bottom_axis_y))
+        painter.setPen(QColor("#94A3B8"))
+        painter.setFont(numeric_font(9))
+        painter.drawText(QRectF(center_x - 30, bottom_axis_y + 3, 60, 16), Qt.AlignmentFlag.AlignCenter, "0")
+        for frac in (0.33, 0.66, 1.0):
+            val_txt = f"{max_abs * frac:,.0f}"
+            lx = center_x - half_w * frac
+            painter.drawText(QRectF(lx - 40, bottom_axis_y + 3, 80, 16), Qt.AlignmentFlag.AlignCenter, f"-{val_txt}")
+            rx = center_x + half_w * frac
+            painter.drawText(QRectF(rx - 40, bottom_axis_y + 3, 80, 16), Qt.AlignmentFlag.AlignCenter, val_txt)
+
+        # 逐行绘制
+        l_start = 8.0
+        r_start = w - side_w - 8.0
+
+        for idx in range(rows):
+            ry = top_y + idx * row_h
+
+            # 左侧亏损行
+            if idx < len(self.losers):
+                item = self.losers[idx]
+                tk = str(item["ticker"])
+                val = float(item.get("floating_pnl") if item.get("floating_pnl") is not None else (item.get("realized_pnl") or 0.0))
+                is_sel = self.active_ticker == tk.upper()
+                is_hov = self._hover_ticker == tk
+                bar_len = max(4.0, (abs(val) / max_abs) * half_w)
+
+                row_rect = QRectF(l_start, ry + 1, side_w - 2, row_h - 2)
+                bar_rect = QRectF(center_x - bar_len, ry + 5, bar_len, row_h - 10)
+                self._hit_rects.append((row_rect, item))
+                self._hit_rects.append((bar_rect, item))
+
+                if is_sel or is_hov:
+                    painter.setPen(QPen(QColor("#FCA5A5" if is_sel else "#FEE2E2"), 1))
+                    painter.setBrush(QColor("#FEF2F2" if is_sel else "#FFF5F5"))
+                    painter.drawRoundedRect(row_rect, 4, 4)
+
+                painter.setPen(QColor("#64748B"))
+                painter.setFont(numeric_font(10))
+                painter.drawText(QRectF(l_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item["rank"]))
+
+                painter.setPen(QColor("#2563EB" if is_sel else "#0F172A"))
+                painter.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold if is_sel else QFont.Weight.DemiBold))
+                painter.drawText(QRectF(l_start + 30, ry, 64, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
+
+                painter.setPen(QColor("#DC2626"))
+                painter.setFont(numeric_font(11, bold=True))
+                painter.drawText(QRectF(l_start + 94, ry, side_w - 98, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
+
+                bar_col = QColor("#EF4444")
+                if self.active_ticker and not is_sel:
+                    bar_col.setAlpha(75)
+                elif is_sel or is_hov:
+                    bar_col = QColor("#DC2626")
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(bar_col)
+                painter.drawRoundedRect(bar_rect, 3, 3)
+
+            # 右侧盈利行
+            if idx < len(self.winners):
+                item = self.winners[idx]
+                tk = str(item["ticker"])
+                val = float(item.get("floating_pnl") if item.get("floating_pnl") is not None else (item.get("realized_pnl") or 0.0))
+                is_sel = self.active_ticker == tk.upper()
+                is_hov = self._hover_ticker == tk
+                bar_len = max(4.0, (abs(val) / max_abs) * half_w)
+
+                row_rect = QRectF(r_start, ry + 1, side_w - 2, row_h - 2)
+                bar_rect = QRectF(center_x, ry + 5, bar_len, row_h - 10)
+                self._hit_rects.append((row_rect, item))
+                self._hit_rects.append((bar_rect, item))
+
+                if is_sel or is_hov:
+                    painter.setPen(QPen(QColor("#93C5FD" if is_sel else "#E2E8F0"), 1))
+                    painter.setBrush(QColor("#EFF6FF" if is_sel else "#F8FAFC"))
+                    painter.drawRoundedRect(row_rect, 4, 4)
+
+                painter.setPen(QColor("#64748B"))
+                painter.setFont(numeric_font(10))
+                painter.drawText(QRectF(r_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item["rank"]))
+
+                painter.setPen(QColor("#2563EB" if is_sel else "#0F172A"))
+                painter.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold if is_sel else QFont.Weight.DemiBold))
+                painter.drawText(QRectF(r_start + 30, ry, 64, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
+
+                painter.setPen(QColor("#16A34A"))
+                painter.setFont(numeric_font(11, bold=True))
+                painter.drawText(QRectF(r_start + 94, ry, side_w - 98, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
+
+                bar_col = QColor("#22C55E")
+                if self.active_ticker and not is_sel:
+                    bar_col.setAlpha(75)
+                elif is_sel or is_hov:
+                    bar_col = QColor("#16A34A")
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(bar_col)
+                painter.drawRoundedRect(bar_rect, 3, 3)
+
+
+class OpenTop10Card(QFrame):
+    """可折叠的「持有中股票盈亏贡献 Top N」横向发散条形图卡片。"""
+
+    ticker_clicked = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("openPanelCard")
+        self.setStyleSheet("""
+            QFrame#openPanelCard {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 8px;
+            }
+            QFrame#openPanelCard QLabel {
+                border: none;
+                background: transparent;
+            }
+        """)
+        self._raw_top10_data: dict[str, Any] = {}
+        self._active_ticker: str = ""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(6)
+        title_prefix = QLabel("持有中股票盈亏贡献 Top")
+        title_prefix.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
+        hdr.addWidget(title_prefix)
+
+        self.top_n_spin = QSpinBox()
+        self.top_n_spin.setRange(1, 50)
+        self.top_n_spin.setValue(5)
+        self.top_n_spin.setFixedWidth(54)
+        self.top_n_spin.setFixedHeight(22)
+        self.top_n_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.top_n_spin.setToolTip("输入要展示的股票数量（例如填 5 则展示 5 个最多收益与 5 个最多亏损股票）")
+        self.top_n_spin.setStyleSheet("""
+            QSpinBox {
+                background: #FFFFFF;
+                color: #2563EB;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 1px 2px;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QSpinBox:hover { border-color: #93C5FD; }
+            QSpinBox:focus { border-color: #2563EB; }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 14px;
+                border: none;
+                background: #F1F5F9;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #E2E8F0;
+            }
+        """)
+        self.top_n_spin.valueChanged.connect(self._on_top_n_changed)
+        hdr.addWidget(self.top_n_spin)
+
+        sub = QLabel("按浮动盈亏排序，可点击联动下方明细")
+        sub.setStyleSheet("font-size: 11px; color: #94A3B8; margin-left: 2px;")
+        hdr.addWidget(sub)
+        hdr.addStretch()
+
+        self.toggle_btn = QPushButton("⌄")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setChecked(True)
+        self.toggle_btn.setFixedSize(26, 24)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setToolTip("展开 / 收起 Top 贡献图")
+        self.toggle_btn.setStyleSheet("""
+            QPushButton { background: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; border-radius: 5px; font-size: 13px; font-weight: 700; }
+            QPushButton:hover { background: #EFF6FF; color: #2563EB; border-color: #93C5FD; }
+        """)
+        self.toggle_btn.clicked.connect(self._on_toggle)
+        hdr.addWidget(self.toggle_btn)
+        layout.addLayout(hdr)
+
+        self.body_widget = QWidget(self)
+        self.content_widget = self.body_widget
+        b_layout = QVBoxLayout(self.body_widget)
+        b_layout.setContentsMargins(0, 2, 0, 0)
+        b_layout.setSpacing(6)
+
+        # 顶部汇总提示（明确标注为当前筛选范围全部持仓记录汇总，非 Top 小计）
+        sum_row = QHBoxLayout()
+        self.loss_pill = QLabel("亏损贡献 (Top 5)  |  当前筛选全部亏损合计 —")
+        self.loss_pill.setStyleSheet(
+            "background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA; border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
+        )
+        sum_row.addWidget(self.loss_pill)
+        sum_row.addStretch()
+        self.win_pill = QLabel("盈利贡献 (Top 5)  |  当前筛选全部盈利合计 —")
+        self.win_pill.setStyleSheet(
+            "background: #F0FDF4; color: #15803D; border: 1px solid #BBF7D0; border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 600;"
+        )
+        sum_row.addWidget(self.win_pill)
+        b_layout.addLayout(sum_row)
+
+        self.chart = OpenTop10Chart(self.body_widget)
+        self.chart.ticker_clicked.connect(self.ticker_clicked.emit)
+        b_layout.addWidget(self.chart)
+
+        layout.addWidget(self.body_widget)
+
+    def _on_toggle(self):
+        expanded = self.toggle_btn.isChecked()
+        self.body_widget.setVisible(expanded)
+        self.toggle_btn.setText("⌄" if expanded else "›")
+
+    def _on_top_n_changed(self, _val: int):
+        self._refresh_display()
+
+    def _refresh_display(self):
+        if not hasattr(self, "_raw_top10_data") or not self._raw_top10_data:
+            return
+        n = max(1, self.top_n_spin.value())
+        tot_loss = self._raw_top10_data.get("total_floating_loss") if self._raw_top10_data.get("total_floating_loss") is not None else self._raw_top10_data.get("total_realized_loss")
+        tot_win = self._raw_top10_data.get("total_floating_profit") if self._raw_top10_data.get("total_floating_profit") is not None else self._raw_top10_data.get("total_realized_profit")
+        self.loss_pill.setText(f"亏损贡献 (Top {n})  |  当前筛选全部亏损合计 {_fmt_usd(tot_loss, signed=True)} USD")
+        self.win_pill.setText(f"盈利贡献 (Top {n})  |  当前筛选全部盈利合计 {_fmt_usd(tot_win, signed=True)} USD")
+
+        all_w = self._raw_top10_data.get("all_winners")
+        if all_w is None:
+            all_w = self._raw_top10_data.get("winners") or []
+        all_l = self._raw_top10_data.get("all_losers")
+        if all_l is None:
+            all_l = self._raw_top10_data.get("losers") or []
+
+        sliced_top10 = {
+            **self._raw_top10_data,
+            "winners": all_w[:n],
+            "losers": all_l[:n],
+        }
+        self.chart.set_data(sliced_top10, active_ticker=getattr(self, "_active_ticker", ""))
+
+    def set_data(self, top10: dict[str, Any], *, active_ticker: str = ""):
+        self._raw_top10_data = dict(top10 or {})
+        self._active_ticker = (active_ticker or "").strip().upper()
+        self._refresh_display()
