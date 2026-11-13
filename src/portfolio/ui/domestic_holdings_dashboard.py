@@ -383,7 +383,9 @@ class HoldingsDelegate(QStyledItemDelegate):
             return
         styled = QStyleOptionViewItem(option)
         self.initStyleOption(styled, index)
-        text, styled.text = styled.text, ""
+        # Qt converts newlines to U+2028 in style options; use the model's
+        # original value so the name and code remain two separate lines.
+        text, styled.text = str(index.data() or ""), ""
         styled.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, styled, painter, styled.widget)
         painter.save()
         rect = option.rect.adjusted(8, 2, -8, -2)
@@ -394,15 +396,21 @@ class HoldingsDelegate(QStyledItemDelegate):
             font.setBold(True)
             painter.setFont(font)
             painter.setPen(QColor("#1E293B"))
-            first = QRect(rect.x(), rect.y(), rect.width(), rect.height() // 2)
-            second = QRect(rect.x(), first.bottom() + 1, rect.width(), rect.height() - first.height())
-            painter.drawText(first, Qt.AlignmentFlag.AlignVCenter,
-                             painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, rect.width()))
+            bold_metrics = painter.fontMetrics()
             font.setBold(False)
             font.setPointSizeF(max(9, font.pointSizeF() - 1))
             painter.setFont(font)
+            normal_metrics = painter.fontMetrics()
+            block_height = bold_metrics.height() + normal_metrics.height()
+            top = rect.y() + max(0, (rect.height() - block_height) // 2)
+            bold_font = painter.font()
+            bold_font.setBold(True)
+            painter.setFont(bold_font)
+            painter.drawText(rect.x(), top + bold_metrics.ascent(),
+                             bold_metrics.elidedText(name, Qt.TextElideMode.ElideRight, rect.width()))
+            painter.setFont(font)
             painter.setPen(QColor("#64748B"))
-            painter.drawText(second, Qt.AlignmentFlag.AlignVCenter, code)
+            painter.drawText(rect.x(), top + bold_metrics.height() + normal_metrics.ascent(), code)
         else:
             width = min(rect.width(), painter.fontMetrics().horizontalAdvance(text) + 14)
             badge = QRect(rect.center().x() - width // 2, rect.center().y() - 10, width, 20)

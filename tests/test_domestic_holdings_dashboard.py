@@ -93,3 +93,28 @@ def test_contribution_top_count_can_change_for_both_modes():
     assert [r["realized"] for r in chart.chart.losses] == [-8, -7, -6]
     chart.top_n.setValue(7)
     assert len(chart.chart.losses) == 7
+
+
+def test_fund_detail_opens_drawer_and_preserves_list_state(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+    from portfolio.ui.domestic_holdings_page import DomesticHoldingsPage
+
+    app = QApplication.instance() or QApplication([])
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    page = DomesticHoldingsPage(host)
+    layout.addWidget(page)
+    host.resize(1400, 900)
+    host.show()
+    app.processEvents()
+    monkeypatch.setattr(page, "reload", lambda: None)
+    monkeypatch.setattr(page, "render_detail", lambda: None)
+    page.search.setText("基金一")
+    page.open_fund(dict(account_id="a", fund_code="000001"))
+    app.processEvents()
+    assert not page.drawer.isHidden() and page.stack.currentIndex() == 0
+    assert page.selected == ("a", "000001")
+    page.back()
+    assert page.drawer.isHidden() and page.selected is None
+    assert page.search.text() == "基金一"
+    host.close()

@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from portfolio.domestic.holdings_history import daily_values
@@ -216,8 +216,15 @@ class DomesticHoldingsPage(QWidget):
         self.message = QLabel()
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(6)
+        self.splitter.setStyleSheet("QSplitter::handle:horizontal {border-left:1px solid #E2E8F0; margin:4px 1px;} QSplitter::handle:horizontal:hover {background:#93C5FD;}")
+        self._drawer_width = 700
+        self.splitter.splitterMoved.connect(self._drawer_resized)
+        layout.addWidget(self.splitter, 1)
         self.stack = QStackedWidget()
-        layout.addWidget(self.stack, 1)
+        self.splitter.addWidget(self.stack)
         overview = self.scroll_page()
         overview.setSpacing(9)
         overview.parentWidget().setObjectName("domesticDashboard")
@@ -355,10 +362,12 @@ class DomesticHoldingsPage(QWidget):
         self.sources = QLabel(objectName="domesticCaption", wordWrap=True)
         overview.addWidget(self.sources)
 
-        detail = self.scroll_page()
+        detail = self.scroll_page(drawer=True)
         detail.parentWidget().setObjectName("domesticDashboard")
         bar = QHBoxLayout()
-        back = QPushButton("← 返回持仓管理")
+        back = QPushButton("✕")
+        back.setToolTip("关闭基金详情")
+        back.setFixedSize(32, 32)
         back.clicked.connect(self.back)
         self.breadcrumb = QLabel()
         self.breadcrumb.setWordWrap(True)
@@ -383,7 +392,7 @@ class DomesticHoldingsPage(QWidget):
         trade_layout = QVBoxLayout(trade_tab)
         trade_layout.setContentsMargins(0, 8, 0, 0)
         self.detail_tabs.addTab(trade_tab, "交易记录")
-        middle = QHBoxLayout()
+        middle = QVBoxLayout()
         box, body = card("交易明细")
         filter_row = QHBoxLayout()
         self.tx_kind = combo([("全部交易类型", "")])
@@ -405,13 +414,13 @@ class DomesticHoldingsPage(QWidget):
         body.addWidget(self.trade_source_note)
         self.trades = FundTable(TRADES, "confirmation_date")
         body.addWidget(self.trades)
-        middle.addWidget(box, 3)
+        middle.addWidget(box, 1)
         box, body = card("持仓概览")
         self.fund_overview = QLabel()
         self.fund_overview.setWordWrap(True)
         body.addWidget(self.fund_overview)
         body.addStretch()
-        middle.addWidget(box, 1)
+        middle.addWidget(box)
         trade_layout.addLayout(middle)
         holdings_tab = QWidget()
         holdings_layout = QVBoxLayout(holdings_tab)
@@ -454,16 +463,34 @@ class DomesticHoldingsPage(QWidget):
         self.detail_tabs.addTab(monthly_tab, "月度表现")
         self.render_trend()
 
-    def scroll_page(self):
+    def scroll_page(self, *, drawer=False):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 12, 12, 12) if drawer else layout.setContentsMargins(0, 0, 0, 0)
         scroll.setWidget(content)
-        self.stack.addWidget(scroll)
+        if drawer:
+            self.drawer = scroll
+            self.drawer.setMinimumWidth(360)
+            self.drawer.setMaximumWidth(900)
+            self.drawer.setStyleSheet("QScrollArea {background:white; border:1px solid #E2E8F0; border-radius:10px;}")
+            self.splitter.addWidget(self.drawer)
+            self.drawer.hide()
+        else:
+            self.stack.addWidget(scroll)
         return layout
+
+    def _drawer_resized(self, *_):
+        sizes = self.splitter.sizes()
+        if sizes and hasattr(self, "graph_grid"):
+            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
+                grid.reflow(max(0, sizes[0] - 30))
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._drawer_width = sizes[1]
+            if hasattr(self, "detail_metric_grid"):
+                self.detail_metric_grid.reflow(max(0, sizes[1] - 36))
 
     def reload(self):
         account, fund = self.selected or ("", "")
@@ -516,10 +543,11 @@ class DomesticHoldingsPage(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "graph_grid"):
-            available = max(0, event.size().width() - 50)
+            sizes = self.splitter.sizes()
+            available = max(0, (sizes[0] if not self.drawer.isHidden() and sizes else event.size().width()) - 50)
             for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
                 grid.reflow(available)
-            self.detail_metric_grid.reflow(available)
+            self.detail_metric_grid.reflow(max(0, self.drawer.width() - 36) if not self.drawer.isHidden() else available)
 
     def reset_filters(self):
         for control in (self.platform, self.kind, self.search, self.close_start, self.close_end):
@@ -688,13 +716,22 @@ class DomesticHoldingsPage(QWidget):
         self.trend_end.clear()
         self.detail_tabs.setCurrentIndex(0)
         self.render_detail()
-        self.stack.setCurrentIndex(1)
-        self.stack.currentWidget().verticalScrollBar().setValue(0)
+        if self.drawer.isHidden():
+            self.drawer.show()
+            width = max(360, min(900, self._drawer_width, int(self.width() * .6)))
+            self.splitter.setSizes([max(200, self.width() - width), width])
+        self._drawer_resized()
+        self.detail_metric_grid.reflow(max(0, self.drawer.width() - 36))
+        self.drawer.verticalScrollBar().setValue(0)
         self.reload()
 
     def back(self):
+        sizes = self.splitter.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._drawer_width = sizes[1]
         self.selected = None
-        self.stack.setCurrentIndex(0)
+        self.drawer.hide()
+        self._drawer_resized()
         self.message.clear()
 
     def render_detail(self):
