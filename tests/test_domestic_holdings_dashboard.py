@@ -66,3 +66,21 @@ def test_contribution_bars_share_scale_and_open_selected_fund():
     QTest.mouseClick(plot, Qt.MouseButton.LeftButton, pos=plot.hits[0][0].center().toPoint())
     assert selected == [loss]
     plot.close()
+
+
+def test_contribution_top_count_can_change_for_both_modes():
+    from PySide6.QtWidgets import QApplication
+    from portfolio.ui.domestic_holdings_dashboard import Contribution
+
+    app = QApplication.instance() or QApplication([])
+    chart = Contribution(lambda row: None)
+    rows = [dict(fund_code=f"{i:06}", floating=Decimal(i), realized=Decimal(-i)) for i in range(1, 9)]
+    chart.render(rows)
+    assert len(chart.chart.gains) == 5
+    chart.top_n.setValue(3)
+    assert [r["floating"] for r in chart.chart.gains] == [8, 7, 6]
+    assert "Top 3" in chart.gain_label.text() and "36.00" in chart.gain_label.text()
+    chart.render(rows, closed=True)
+    assert [r["realized"] for r in chart.chart.losses] == [-8, -7, -6]
+    chart.top_n.setValue(7)
+    assert len(chart.chart.losses) == 7

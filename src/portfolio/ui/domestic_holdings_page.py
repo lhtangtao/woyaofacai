@@ -78,10 +78,11 @@ def card(title, value=None):
 
 
 class FundTable(QWidget):
-    def __init__(self, columns, default_sort):
+    def __init__(self, columns, default_sort, *, expand_rows=False):
         super().__init__()
         self.columns, self.sort = columns, default_sort
         self.open_positions = columns in (OPEN_POSITIONS, CLOSED_POSITIONS)
+        self.expand_rows = expand_rows
         self.descending = True
         self.rows = []
         self.visible_rows = []
@@ -93,6 +94,8 @@ class FundTable(QWidget):
         self.table.horizontalHeader().sectionClicked.connect(self.change_sort)
         self.table.horizontalHeader().setMinimumSectionSize(72)
         self.table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
+        if expand_rows:
+            self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setAlternatingRowColors(True)
         if self.open_positions:
             self.table.verticalHeader().setDefaultSectionSize(54)
@@ -144,6 +147,10 @@ class FundTable(QWidget):
             headers.append(label + (" ↓" if self.descending else " ↑") if key == self.sort else label)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.visible_rows))
+        if self.expand_rows:
+            header_height = max(39, self.table.horizontalHeader().sizeHint().height())
+            rows_height = len(self.visible_rows) * self.table.verticalHeader().defaultSectionSize()
+            self.table.setFixedHeight(max(100, header_height + rows_height + 18))
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
@@ -197,6 +204,7 @@ class DomesticHoldingsPage(QWidget):
             QLabel#domesticValue { font-size: 21px; font-weight: 700; color: #1e293b; }
         """ + STYLE)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.message = QLabel()
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -209,8 +217,9 @@ class DomesticHoldingsPage(QWidget):
         self.modes = QButtonGroup(self)
         for i, name in enumerate(("持有中", "已清仓")):
             button = QPushButton(name, objectName="domesticMode", checkable=True)
+            button.setFixedHeight(34)
             self.modes.addButton(button, i)
-            mode_bar.addWidget(button)
+            mode_bar.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
         self.modes.button(0).setChecked(True)
         self.modes.idClicked.connect(lambda _: self.render_overview(reset=True))
         mode_bar.addStretch()
@@ -236,7 +245,10 @@ class DomesticHoldingsPage(QWidget):
         self.metric_area.setLayout(self.metric_grid)
         overview.addWidget(self.metric_area)
 
-        filter_box, filter_body = panel()
+        filter_box = QWidget()
+        filter_body = QVBoxLayout(filter_box)
+        filter_body.setContentsMargins(0, 0, 0, 0)
+        filter_body.setSpacing(4)
         self.platform = combo([("全部平台", "")])
         self.kind = combo([("全部基金类型", "")])
         self.search = QLineEdit(placeholderText="搜索基金名称 / 基金代码")
@@ -244,7 +256,12 @@ class DomesticHoldingsPage(QWidget):
         self.close_end = QLineEdit(placeholderText="清仓止日 YYYY-MM-DD")
         reset = QPushButton("重置筛选")
         reset.clicked.connect(self.reset_filters)
-        self.filter_grid = ResponsiveGrid([self.platform, self.kind, self.search, reset], 140, 4)
+        for widget in (self.platform, self.kind):
+            widget.setMaximumWidth(190)
+        reset.setMaximumWidth(110)
+        for widget in (self.platform, self.kind, self.search, reset):
+            widget.setFixedHeight(34)
+        self.filter_grid = ResponsiveGrid([self.platform, self.kind, self.search, reset], 140, 4, weights=(1, 1, 3, 1))
         filter_body.addLayout(self.filter_grid)
         self.close_dates = QWidget()
         dates_layout = QHBoxLayout(self.close_dates)
@@ -300,8 +317,7 @@ class DomesticHoldingsPage(QWidget):
         self.profit_filters.button(0).setChecked(True)
         self.profit_filters.idClicked.connect(lambda _: self.render_overview(reset=True))
         body.addLayout(table_header)
-        self.open_positions = FundTable(OPEN_POSITIONS, "market_value")
-        self.open_positions.table.setMinimumHeight(280)
+        self.open_positions = FundTable(OPEN_POSITIONS, "market_value", expand_rows=True)
         self.open_positions.table.cellClicked.connect(
             lambda row, _: self.open_fund(self.open_positions.visible_rows[row]))
         body.addWidget(self.open_positions, 1)
@@ -321,8 +337,7 @@ class DomesticHoldingsPage(QWidget):
         self.closed_filters.button(0).setChecked(True)
         self.closed_filters.idClicked.connect(lambda _: self.render_overview(reset=True))
         body.addLayout(closed_header)
-        self.positions = FundTable(CLOSED_POSITIONS, "realized")
-        self.positions.table.setMinimumHeight(280)
+        self.positions = FundTable(CLOSED_POSITIONS, "realized", expand_rows=True)
         self.positions.table.cellClicked.connect(lambda row, _: self.open_fund(self.positions.visible_rows[row]))
         body.addWidget(self.positions, 1)
         self.closed_total = QLabel(wordWrap=True)
@@ -437,6 +452,7 @@ class DomesticHoldingsPage(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         scroll.setWidget(content)
         self.stack.addWidget(scroll)
         return layout

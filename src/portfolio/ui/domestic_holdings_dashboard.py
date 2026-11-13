@@ -7,7 +7,7 @@ from decimal import Decimal, localcontext
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
 from PySide6.QtCore import QMargins, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
 GREEN = "#15803D"
@@ -275,7 +275,19 @@ class Contribution(QWidget):
         frame, self.body = panel()
         outer.addWidget(frame)
         self.title = QLabel(objectName="domesticSection")
-        self.body.addWidget(self.title)
+        heading = QHBoxLayout()
+        heading.addWidget(self.title)
+        self.top_n = QSpinBox()
+        self.top_n.setRange(1, 50)
+        self.top_n.setValue(5)
+        self.top_n.setFixedWidth(64)
+        self.top_n.setToolTip("分别显示盈利和亏损排名前 N 条基金记录")
+        self.top_n.valueChanged.connect(self._top_changed)
+        heading.addWidget(self.top_n)
+        heading.addStretch()
+        self.body.addLayout(heading)
+        self.rows = []
+        self.closed = False
         labels = QHBoxLayout()
         self.loss_label, self.gain_label = QLabel(), QLabel()
         self.loss_label.setStyleSheet("color:#DC2626; background:#FEF2F2; border-radius:4px; padding:4px;")
@@ -285,14 +297,19 @@ class Contribution(QWidget):
         self.chart = ContributionPlot(selected)
         self.body.addWidget(self.chart)
 
+    def _top_changed(self, _value):
+        self.render(self.rows, self.closed)
+
     def render(self, rows, closed=False):
-        self.title.setText(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top 5")
+        self.rows, self.closed = list(rows), closed
+        n = self.top_n.value()
+        self.title.setText(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top")
         key = "realized" if closed else "floating"
         losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
         gains = sorted((r for r in rows if r.get(key) is not None and r[key] > 0), key=lambda r: r[key], reverse=True)
-        self.loss_label.setText(f"亏损贡献（Top 5） · 全部 {money(total(r[key] for r in losses))} CNY")
-        self.gain_label.setText(f"盈利贡献（Top 5） · 全部 {money(total(r[key] for r in gains))} CNY")
-        self.chart.set_data(losses[:5], gains[:5], key)
+        self.loss_label.setText(f"亏损贡献（Top {n}） · 全部 {money(total(r[key] for r in losses))} CNY")
+        self.gain_label.setText(f"盈利贡献（Top {n}） · 全部 {money(total(r[key] for r in gains))} CNY")
+        self.chart.set_data(losses[:n], gains[:n], key)
 
 
 class ContributionPlot(QWidget):
