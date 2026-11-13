@@ -8,7 +8,7 @@ from decimal import Decimal, localcontext
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
 from PySide6.QtCore import QMargins, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
 GREEN = "#15803D"
@@ -35,7 +35,7 @@ QWidget#domesticDashboard QComboBox, QWidget#domesticDashboard QLineEdit {
     min-height: 22px; padding: 5px 8px; border: 1px solid #E2E8F0; border-radius: 7px; background: white;
 }
 QWidget#domesticDashboard QTableView {
-    border: 0; alternate-background-color: #F8FAFC; selection-background-color: #EAF2FF; color: #1E293B;
+    border: 0; alternate-background-color: #F8FAFC; selection-background-color: #EAF2FF; selection-color:#1E293B; color: #1E293B;
 }
 QWidget#domesticDashboard QHeaderView::section {
     background: #F1F5FB; color: #475569; border: 0; border-bottom: 1px solid #E2E8F0; padding: 5px;
@@ -177,6 +177,24 @@ class ResponsiveGrid(QGridLayout):
             self.addWidget(widget, i // columns, i % columns)
 
 
+class LegendButton(QPushButton):
+    def __init__(self, lines):
+        super().__init__()
+        self.lines = lines
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setMinimumWidth(0)
+        self._update_text()
+
+    def _update_text(self):
+        width = max(1, self.width() - 12)
+        self.setText("\n".join(self.fontMetrics().elidedText(line, Qt.TextElideMode.ElideRight, width)
+                               for line in self.lines))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_text()
+
+
 class Distribution(QWidget):
     def __init__(self, title, selected):
         super().__init__()
@@ -191,20 +209,33 @@ class Distribution(QWidget):
         self.chart.legend().hide()
         self.chart.setBackgroundVisible(False)
         self.chart.setMargins(QMargins())
-        plot = QChartView(self.chart)
-        plot.setStyleSheet("background:transparent; border:0;")
-        plot.setRenderHint(QPainter.RenderHint.Antialiasing)
-        plot.setFixedSize(132, 132)
-        self.center = QLabel(plot)
-        self.center.setGeometry(27, 42, 78, 48)
+        self.plot = QChartView(self.chart)
+        self.plot.setStyleSheet("background:transparent; border:0;")
+        self.plot.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.plot.setFixedSize(160, 160)
+        self.center = QLabel(self.plot)
+        self.center.setGeometry(28, 53, 104, 54)
         self.center.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.center.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        row.addWidget(plot)
+        row.addWidget(self.plot)
         self.legend = QVBoxLayout()
         self.legend.setSpacing(3)
         row.addLayout(self.legend, 1)
+        self.compact = False
+        self.last_render = None
+
+    def set_compact(self, compact):
+        if self.compact == compact:
+            return
+        self.compact = compact
+        self.plot.setFixedSize(110, 110) if compact else self.plot.setFixedSize(160, 160)
+        self.center.setGeometry(8, 29, 94, 52) if compact else self.center.setGeometry(28, 53, 104, 54)
+        if self.last_render is not None:
+            rows, key, market, value_key, absolute = self.last_render
+            self.render(rows, key, market, value_key=value_key, absolute=absolute)
 
     def render(self, rows, key, market, value_key="market_value", absolute=False):
+        self.last_render = (rows, key, market, value_key, absolute)
         self.chart.removeAllSeries()
         while self.legend.count():
             item = self.legend.takeAt(0)
@@ -218,6 +249,7 @@ class Distribution(QWidget):
         series.setHoleSize(.69)
         series.setPieSize(.98)
         self.center.setText(f"<b>{money(market)}</b><br>{'盈亏绝对值' if absolute else '持仓市值'}")
+        self.legend.addStretch()
         if absolute and market is None:
             self.legend.addWidget(QLabel("暂无已核算收益\n无法计算分布"))
             self.legend.addStretch()
@@ -233,7 +265,9 @@ class Distribution(QWidget):
                 segment.setColor(QColor(color))
                 segment.setBorderColor(QColor("white"))
                 segment.clicked.connect(lambda name=name: self.selected(name))
-            button = QPushButton(f"● {name}  {portion}  {money(value)}  {count} 只")
+            lines = (f"● {name}", f"{portion}  {money(value)}  {count} 只") if self.compact else (f"● {name}  {portion}  {money(value)}  {count} 只",)
+            button = LegendButton(lines)
+            button.setToolTip(f"{name}　{portion}　{money(value)}　{count} 只")
             button.setStyleSheet(f"text-align:left; border:0; background:transparent; color:{color}; padding:4px;")
             button.clicked.connect(lambda _, name=name: self.selected(name))
             self.legend.addWidget(button)
@@ -258,7 +292,7 @@ class PlatformList(QWidget):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setMinimumSectionSize(68)
+        self.table.horizontalHeader().setMinimumSectionSize(86)
         self.table.setShowGrid(False)
         self.table.setStyleSheet("QTableWidget {font-size:11px;} QHeaderView::section {font-size:11px; padding:4px;}")
         self.table.setMinimumHeight(170)

@@ -9,13 +9,14 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
 from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard
 from portfolio.ui.holdings_page import ModernMetricCard
+from portfolio.ui.theme import numeric_font
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
     closed_metrics, closed_trend_points, holding_metrics, money, panel, percent, trend_points,
@@ -271,8 +272,10 @@ class DomesticHoldingsPage(QWidget):
         self.platform = combo([("全部平台", "")])
         self.kind = combo([("全部基金类型", "")])
         self.search = QLineEdit(placeholderText="搜索基金名称 / 基金代码")
-        self.close_start = QLineEdit(placeholderText="清仓起日 YYYY-MM-DD")
-        self.close_end = QLineEdit(placeholderText="清仓止日 YYYY-MM-DD")
+        self.close_start = QLineEdit(placeholderText="YYYY-MM-DD")
+        self.close_end = QLineEdit(placeholderText="YYYY-MM-DD")
+        self.close_start.setToolTip("清仓开始日期")
+        self.close_end.setToolTip("清仓结束日期")
         reset = QPushButton("重置筛选")
         reset.clicked.connect(self.reset_filters)
         for widget in (self.platform, self.kind):
@@ -280,15 +283,25 @@ class DomesticHoldingsPage(QWidget):
         reset.setMaximumWidth(110)
         for widget in (self.platform, self.kind, self.search, reset):
             widget.setFixedHeight(34)
-        self.filter_grid = ResponsiveGrid([self.platform, self.kind, self.search, reset], 140, 4, weights=(1, 1, 3, 1))
-        filter_body.addLayout(self.filter_grid)
         self.close_dates = QWidget()
         dates_layout = QHBoxLayout(self.close_dates)
         dates_layout.setContentsMargins(0, 0, 0, 0)
+        dates_layout.setSpacing(4)
         dates_layout.addWidget(QLabel("清仓日期"))
+        for widget in (self.close_start, self.close_end):
+            widget.setFixedHeight(34)
+            widget.setMinimumWidth(110)
+            widget.setMaximumWidth(145)
         dates_layout.addWidget(self.close_start)
         dates_layout.addWidget(self.close_end)
-        filter_body.addWidget(self.close_dates)
+        search_group = QWidget()
+        search_layout = QHBoxLayout(search_group)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(6)
+        search_layout.addWidget(self.close_dates)
+        search_layout.addWidget(self.search, 1)
+        self.filter_grid = ResponsiveGrid([self.platform, self.kind, search_group, reset], 140, 4, weights=(1, 1, 3, 1))
+        filter_body.addLayout(self.filter_grid)
         self.close_dates.hide()
         for widget in (self.platform, self.kind, self.search, self.close_start, self.close_end):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
@@ -315,6 +328,9 @@ class DomesticHoldingsPage(QWidget):
         trend_body.addWidget(self.history_plot, 1)
         self.history_note = QLabel("", objectName="domesticCaption", wordWrap=True)
         trend_body.addWidget(self.history_note)
+        for widget in (self.by_platform, self.by_type, trend):
+            widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            widget.setMinimumWidth(0)
         self.graph_grid = ResponsiveGrid([self.by_platform, self.by_type, trend], 345, 3, weights=(4, 3, 4))
         self.graph_grid.setContentsMargins(0, 0, 0, 0)
         self.graph_area.setLayout(self.graph_grid)
@@ -386,9 +402,12 @@ class DomesticHoldingsPage(QWidget):
                            ("market", "持仓市值"), ("floating", "浮动盈亏"), ("pnl", "累计盈亏")):
             metric = ModernMetricCard(title, compact=True)
             metric.setFixedHeight(72)
+            metric.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            metric.layout().setContentsMargins(6, 7, 6, 7)
+            metric.val_lbl.setFont(numeric_font(12, bold=True))
             self.detail_metrics[key] = metric
             detail_metrics.append(metric)
-        self.detail_metric_grid = ResponsiveGrid(detail_metrics, 150, 6)
+        self.detail_metric_grid = ResponsiveGrid(detail_metrics, 100, 6)
         detail.addLayout(self.detail_metric_grid)
         self.detail_tabs = QTabWidget()
         detail.addWidget(self.detail_tabs)
@@ -489,19 +508,27 @@ class DomesticHoldingsPage(QWidget):
     def _drawer_resized(self, *_):
         sizes = self.splitter.sizes()
         if sizes and hasattr(self, "graph_grid"):
-            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
-                grid.reflow(max(0, sizes[0] - 30))
+            self._reflow_overview(max(0, sizes[0] - 30))
         if len(sizes) == 2 and sizes[1] > 0:
             self._drawer_width = sizes[1]
             if hasattr(self, "detail_metric_grid"):
-                self.detail_metric_grid.reflow(max(0, sizes[1] - 36))
+                self.detail_metric_grid.reflow(max(600, sizes[1] - 36))
+
+    def _reflow_overview(self, width):
+        self.metric_grid.reflow(width)
+        self.filter_grid.reflow(width)
+        drawer_open = hasattr(self, "drawer") and not self.drawer.isHidden()
+        self.by_type.set_compact(drawer_open)
+        for button in self.history_ranges.buttons():
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(38 if drawer_open else 16777215)
+        self.graph_grid.reflow(max(width, 3 * self.graph_grid.width_per_card) if drawer_open else width)
 
     def eventFilter(self, watched, event):
         if (watched is getattr(self, "overview_viewport", None) and event.type() == QEvent.Type.Resize
                 and hasattr(self, "graph_grid")):
             width = max(0, event.size().width() - 8)
-            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
-                grid.reflow(width)
+            self._reflow_overview(width)
         return super().eventFilter(watched, event)
 
     def reload(self):
@@ -557,9 +584,8 @@ class DomesticHoldingsPage(QWidget):
         if hasattr(self, "graph_grid"):
             sizes = self.splitter.sizes()
             available = max(0, (sizes[0] if not self.drawer.isHidden() and sizes else event.size().width()) - 50)
-            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
-                grid.reflow(available)
-            self.detail_metric_grid.reflow(max(0, self.drawer.width() - 36) if not self.drawer.isHidden() else available)
+            self._reflow_overview(available)
+            self.detail_metric_grid.reflow(max(600, self.drawer.width() - 36) if not self.drawer.isHidden() else available)
 
     def reset_filters(self):
         for control in (self.platform, self.kind, self.search, self.close_start, self.close_end):
@@ -625,7 +651,7 @@ class DomesticHoldingsPage(QWidget):
             self.history_title.setText("累计已实现盈亏趋势")
             self.closed_scope = prepared
             self.render_history()
-            closed_titles = ("历史已实现盈亏（CNY）", "已清仓基金数量", "已导入买入（CNY）", "已导入赎回（CNY）", "基金成本加权收益率", "平均持有时长")
+            closed_titles = ("历史已实现盈亏（CNY）", "已清仓基金数量", "已导入买入（CNY）", "已导入赎回（CNY）", "基金成本加权收益率", "已确认平均持有时长")
             stats = closed_metrics(prepared)
             self.closed_total.setText(f"合计　{len(prepared)} 条　买入 {money(stats['buy'])}　赎回 {money(stats['sell'])}　历史收益 {money(stats['realized'])} CNY")
             numbers = (stats['realized'], len({r["fund_code"] for r in prepared}), stats['buy'], stats['sell'], stats['rate'], stats['holding_days'])
@@ -634,8 +660,10 @@ class DomesticHoldingsPage(QWidget):
                 self.metric_cards[key].icon_badge.setText(icon)
                 value, note = self.metric_labels[key]
                 value.setText("—" if number is None else f"{number} 只" if key == "cost" else f"{number:.0f} 天" if key == "top" else percent(number) if key == "count" else money(number))
-                note.setText(f"历史可核对 {stats['profit_count']}/{len(prepared)} 条" if key == "market" else "")
-                note.setVisible(key == "market" and stats['profit_count'] < len(prepared))
+                note.setText(f"历史可核对 {stats['profit_count']}/{len(prepared)} 条" if key == "market" else
+                             f"已确认 {stats['day_count']}/{len(prepared)} 条" if key == "top" else "")
+                note.setVisible((key == "market" and stats['profit_count'] < len(prepared)) or
+                                (key == "top" and stats['day_count'] < len(prepared)))
                 self.metric_cards[key].setToolTip(
                     "按可核对基金的成本加权，基金间转换转入会计入该基金成本，不能当作账户资金收益率。" if key == "count" else
                     "确认流水汇总；转换进出和分红单独统计，可能不含缺失历史。" if key in ("floating", "rate") else
@@ -744,7 +772,7 @@ class DomesticHoldingsPage(QWidget):
             width = max(360, min(900, self._drawer_width, int(self.width() * .6)))
             self.splitter.setSizes([max(200, self.width() - width), width])
         self._drawer_resized()
-        self.detail_metric_grid.reflow(max(0, self.drawer.width() - 36))
+        self.detail_metric_grid.reflow(max(600, self.drawer.width() - 36))
         self.drawer.verticalScrollBar().setValue(0)
         self.reload()
 

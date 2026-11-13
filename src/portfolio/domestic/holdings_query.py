@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .calculate import ALIPAY_ZERO_OPENINGS
-from .closed_fund_analytics import closed_transaction_summaries, tiantian_realized_events, tiantian_return_issue
+from .closed_fund_analytics import closed_transaction_summaries, confirmed_holding_days, tiantian_realized_events, tiantian_return_issue
 from .fund_returns import confirmed_returns, tiantian_returns
 from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
@@ -337,17 +337,13 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                             break
             holding_days = None
             if (current_status == "已清仓" and closed_date and summary.get("first_trade_date")
-                    and (returns.get("last_confirmed_total_pnl") is not None or returns.get("pnl") is not None)):
+                    and (returns.get("last_confirmed_total_pnl") is not None or returns.get("pnl") is not None
+                         or (key[0] == ACCOUNT and not opening and key[1] in ALIPAY_ZERO_OPENINGS.get(date(2021, 11, 11), ())))):
                 start_day = date.fromisoformat(summary["first_trade_date"])
                 end_day = date.fromisoformat(closed_date)
                 table = "calc_tiantian_positions" if recent else "calc_fund_positions_daily"
                 if start_day <= end_day and calc:
-                    positions_by_day = list(calc.execute(f"""SELECT trade_date,holding_shares FROM {table}
-                        WHERE account_id=? AND fund_code=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date""",
-                        (*key, start_day.isoformat(), end_day.isoformat())))
-                    if (len(positions_by_day) == (end_day - start_day).days + 1
-                            and all(p['holding_shares'] is not None and Decimal(p['holding_shares']) >= 0 for p in positions_by_day)):
-                        holding_days = sum(Decimal(p['holding_shares']) > 0 for p in positions_by_day)
+                    holding_days = confirmed_holding_days(calc, table, *key, start_day, end_day)
             result["rows"].append(dict(**returns, return_issue=return_issue, account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
                 fund_type=info.get("fund_type") or record.get("fund_type") or "待分类", platform=meta.get("platform", "—"),
                 account_name=meta.get("account_name", "—"), shares=str(qty) if qty is not None else None,

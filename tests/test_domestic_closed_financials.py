@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 import sqlite3
 
-from portfolio.domestic.closed_fund_analytics import closed_transaction_summaries, tiantian_realized_events, tiantian_return_issue
+from portfolio.domestic.closed_fund_analytics import closed_transaction_summaries, confirmed_holding_days, tiantian_realized_events, tiantian_return_issue
 from portfolio.domestic.fund_transactions import SCHEMA as RAW_SCHEMA
 from portfolio.domestic.storage import CALC_SCHEMA
 from portfolio.ui.domestic_holdings_dashboard import closed_metrics, closed_trend_points
@@ -96,3 +96,16 @@ def test_unreconciled_trade_explains_missing_profit():
                confirmed_amount='1000.00', confirmed_shares='994.27', fee='5.96',
                confirmed_nav='1.0000', confirmation_status='成功', parse_status='正常', linked_bank_card='')
     assert '确认金额、份额、净值和手续费未能对账' in tiantian_return_issue([row])
+
+
+def test_holding_days_excludes_zero_periods_and_requires_complete_history():
+    db = sqlite3.connect(':memory:'); db.row_factory = sqlite3.Row
+    db.execute('CREATE TABLE calc_fund_positions_daily(account_id TEXT, fund_code TEXT, trade_date TEXT, holding_shares TEXT)')
+    db.executemany('INSERT INTO calc_fund_positions_daily VALUES (?,?,?,?)', [
+        ('A','012414','2024-01-01','5'), ('A','012414','2024-01-02','0'),
+        ('A','012414','2024-01-03','7'), ('A','012414','2024-01-04','0')])
+    start, end = date(2024,1,1), date(2024,1,4)
+    assert confirmed_holding_days(db,'calc_fund_positions_daily','A','012414',start,end) == 2
+    db.execute("DELETE FROM calc_fund_positions_daily WHERE trade_date='2024-01-02'")
+    assert confirmed_holding_days(db,'calc_fund_positions_daily','A','012414',start,end) is None
+    db.close()

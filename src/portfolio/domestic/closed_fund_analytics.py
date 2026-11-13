@@ -19,6 +19,21 @@ def _total(values):
     return sum(values, Decimal(0)) if values else None
 
 
+def confirmed_holding_days(calc, table, account, code, start, end):
+    """Count actual held days only when the full daily share history exists."""
+    if table not in ('calc_tiantian_positions', 'calc_fund_positions_daily'):
+        raise ValueError('未知的国内基金持仓表')
+    if end < start:
+        return None
+    rows = list(calc.execute(f"""SELECT trade_date,holding_shares FROM {table}
+        WHERE account_id=? AND fund_code=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date""",
+        (account, code, start.isoformat(), end.isoformat())))
+    if (len(rows) != (end - start).days + 1 or any(row['holding_shares'] is None for row in rows)):
+        return None
+    quantities = [_number(row['holding_shares']) for row in rows]
+    return sum(value > 0 for value in quantities) if all(value is not None for value in quantities) else None
+
+
 def tiantian_return_issue(rows):
     """Explain why the existing return engine cannot validate a transaction."""
     confirmations = Counter(subscription_key(row) for row in rows

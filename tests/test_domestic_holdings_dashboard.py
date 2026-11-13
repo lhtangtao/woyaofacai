@@ -130,6 +130,9 @@ def test_fund_detail_opens_drawer_and_preserves_list_state(monkeypatch):
     app.processEvents()
     assert not page.drawer.isHidden() and page.stack.currentIndex() == 0
     assert page.selected == ("a", "000001")
+    assert page.graph_grid.columns == 3
+    assert page.detail_metric_grid.columns == 6
+    assert len({card.y() for card in page.detail_metrics.values()}) == 1
     page.back()
     app.processEvents()
     assert page.drawer.isHidden() and page.selected is None
@@ -142,4 +145,25 @@ def test_fund_detail_opens_drawer_and_preserves_list_state(monkeypatch):
     page.back()
     app.processEvents()
     assert (page.metric_grid.columns, page.graph_grid.columns) == (6, 3)
+    host.close()
+
+
+def test_closed_date_filters_share_row_and_chart_legend_is_centered():
+    from PySide6.QtCharts import QChartView
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+    from portfolio.ui.domestic_holdings_page import DomesticHoldingsPage
+
+    app = QApplication.instance() or QApplication([])
+    host = QWidget(); layout = QVBoxLayout(host)
+    page = DomesticHoldingsPage(host); layout.addWidget(page)
+    host.resize(1600, 900); host.show(); app.processEvents()
+    page.modes.button(1).setChecked(True); page.render_overview(); app.processEvents()
+    assert page.close_dates.isVisible()
+    assert page.close_start.mapTo(host, QPoint()).y() == page.search.mapTo(host, QPoint()).y()
+    page.modes.button(0).setChecked(True)
+    page.by_type.render([dict(fund_code="000001", fund_type="指数", market_value=Decimal("10"))], "fund_type", Decimal("10"))
+    app.processEvents()
+    plot = page.by_type.findChild(QChartView)
+    assert abs(plot.geometry().center().y() - page.by_type.legend.geometry().center().y()) <= 2
     host.close()
