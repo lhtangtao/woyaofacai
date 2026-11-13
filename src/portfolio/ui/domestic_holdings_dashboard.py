@@ -334,7 +334,7 @@ class ContributionPlot(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无已核算的盈亏数据")
             return
         width = float(self.width())
-        side = max(130.0, min(200.0, width * .22))
+        side = max(160.0, min(330.0, width * .30))
         center = width / 2
         half = max(10.0, center - side - 12)
         maximum = max(abs(r[self.key]) for r in self.losses + self.gains)
@@ -351,8 +351,15 @@ class ContributionPlot(QWidget):
                 painter.setBrush(QColor("#EF4444" if sign < 0 else "#22C55E"))
                 painter.drawRoundedRect(bar, 3, 3)
                 painter.setPen(QColor(RED if sign < 0 else GREEN))
-                text = f"{index + 1}  {row['fund_code']}   {money(row[self.key])}"
-                painter.drawText(label, Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if sign < 0 else Qt.AlignmentFlag.AlignRight), text)
+                value = money(row[self.key])
+                value_width = painter.fontMetrics().horizontalAdvance(value) + 8
+                name_width = max(0, int(label.width() - value_width))
+                name = f"{index + 1}  {row.get('fund_name') or row['fund_code']}"
+                name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, name_width)
+                painter.drawText(QRectF(label.x(), label.y(), name_width, label.height()),
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+                painter.drawText(QRectF(label.x() + name_width, label.y(), value_width, label.height()),
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, value)
 
     def mousePressEvent(self, event):
         for rect, row in self.hits:
@@ -364,7 +371,7 @@ class ContributionPlot(QWidget):
     def mouseMoveEvent(self, event):
         for rect, row in self.hits:
             if rect.contains(event.position()):
-                QToolTip.showText(event.globalPosition().toPoint(), f"{row['fund_name']} · {row['platform']}\n{money(row[self.key])} CNY", self)
+                QToolTip.showText(event.globalPosition().toPoint(), f"{row['fund_name']}（{row['fund_code']}） · {row['platform']}\n{money(row[self.key])} CNY", self)
                 return
         QToolTip.hideText()
 
