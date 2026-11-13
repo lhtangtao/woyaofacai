@@ -5,7 +5,7 @@ import csv
 import sqlite3
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QCategoryAxis
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
@@ -31,7 +31,8 @@ OPEN_POSITIONS = dict(
     weight="持仓占比", arrow="详情",
 )
 CLOSED_POSITIONS = dict(fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型",
-                        buy_amount="累计买入（CNY）", sell_amount="累计卖出（CNY）",
+                        buy_amount="累计买入（CNY）", sell_amount="确认赎回（CNY）",
+                        transfer_out_amount="转换转出（CNY）",
                         realized="已实现盈亏（CNY）", realized_rate="收益率", holding_days="持有天数",
                         last_confirmed_close_date="清仓日期", arrow="详情")
 METRICS = (
@@ -42,7 +43,7 @@ METRICS = (
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
               confirmed_amount="确认金额", fee="手续费", confirmed_nav="确认净值", confirmation_status="确认状态",
               parse_error="备注")
-NUMERIC = {"pnl", "rate", "shares", "holding_shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "buy_amount", "sell_amount", "realized", "realized_rate", "holding_days"}
+NUMERIC = {"pnl", "rate", "shares", "holding_shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "buy_amount", "sell_amount", "transfer_out_amount", "realized", "realized_rate", "holding_days"}
 
 
 def amount(value):
@@ -162,7 +163,7 @@ class FundTable(QWidget):
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
-                if key in ("market_value", "confirmed_amount", "fee", "pnl", "cost", "floating", "buy_amount", "sell_amount", "realized"):
+                if key in ("market_value", "confirmed_amount", "fee", "pnl", "cost", "floating", "buy_amount", "sell_amount", "transfer_out_amount", "realized"):
                     val = amount(val)
                 elif key in ("weight", "rate", "floating_rate", "realized_rate") and val is not None:
                     val = f"{Decimal(val):.2f}%"
@@ -186,7 +187,9 @@ class FundTable(QWidget):
                         item.setForeground(QBrush(QColor(BLUE)))
                 if key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tooltip = row.get("cash_summary_scope") if key in ("buy_amount", "sell_amount") else row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate", "realized", "realized_rate") else row.get("issue")
+                tooltip = row.get("cash_summary_scope") if key in ("buy_amount", "sell_amount", "transfer_out_amount") else row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate", "realized", "realized_rate") else row.get("issue")
+                if key == "sell_amount" and row.get("sell_amount") is None and row.get("transfer_out_amount") is not None:
+                    tooltip = "未发现普通赎回；该基金通过转换转出，金额单独列示。"
                 if key in ("realized", "realized_rate") and row.get("historical_returns_as_of"):
                     tooltip = f"历史账本截至 {row['historical_returns_as_of']} 的已确认收益；{row.get('confirmation_note') or ''}"
                 if key == "fund_name":
@@ -225,6 +228,8 @@ class DomesticHoldingsPage(QWidget):
         self.stack = QStackedWidget()
         self.splitter.addWidget(self.stack)
         overview = self.scroll_page()
+        self.overview_viewport = self.stack.currentWidget().viewport()
+        self.overview_viewport.installEventFilter(self)
         overview.setSpacing(9)
         overview.parentWidget().setObjectName("domesticDashboard")
         mode_bar = QHBoxLayout()
@@ -490,6 +495,14 @@ class DomesticHoldingsPage(QWidget):
             self._drawer_width = sizes[1]
             if hasattr(self, "detail_metric_grid"):
                 self.detail_metric_grid.reflow(max(0, sizes[1] - 36))
+
+    def eventFilter(self, watched, event):
+        if (watched is getattr(self, "overview_viewport", None) and event.type() == QEvent.Type.Resize
+                and hasattr(self, "graph_grid")):
+            width = max(0, event.size().width() - 8)
+            for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
+                grid.reflow(width)
+        return super().eventFilter(watched, event)
 
     def reload(self):
         account, fund = self.selected or ("", "")

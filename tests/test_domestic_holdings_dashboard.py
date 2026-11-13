@@ -13,6 +13,22 @@ def test_sub_yuan_filter_only_hides_known_current_holdings():
     assert show_in_overview(dict(current_position_status="已清仓", market_value="0"))
 
 
+def test_closed_table_shows_conversion_separately_from_redemption():
+    from PySide6.QtWidgets import QApplication
+    from portfolio.ui.domestic_holdings_page import CLOSED_POSITIONS, FundTable
+
+    app = QApplication.instance() or QApplication([])
+    table = FundTable(CLOSED_POSITIONS, "realized", expand_rows=True)
+    table.rows = [dict(fund_name="基金一", fund_code="000001", sell_amount=None,
+                       transfer_out_amount=Decimal("1796.24"))]
+    table.set_page(0)
+    fields = list(CLOSED_POSITIONS)
+    redemption = table.table.item(0, fields.index("sell_amount"))
+    transfer = table.table.item(0, fields.index("transfer_out_amount"))
+    assert redemption.text() == "—" and "转换转出" in redemption.toolTip()
+    assert transfer.text() == "1,796.24"
+
+
 def test_domestic_dashboard_aggregates_matched_costs_and_preserves_history_gaps():
     rows = [
         dict(account_id="a", fund_code="000001", shares="10", market_value="100", cost="50"),
@@ -115,6 +131,15 @@ def test_fund_detail_opens_drawer_and_preserves_list_state(monkeypatch):
     assert not page.drawer.isHidden() and page.stack.currentIndex() == 0
     assert page.selected == ("a", "000001")
     page.back()
+    app.processEvents()
     assert page.drawer.isHidden() and page.selected is None
     assert page.search.text() == "基金一"
+    assert (page.metric_grid.columns, page.graph_grid.columns) == (6, 3)
+    page.modes.button(1).setChecked(True)
+    page.render_overview()
+    page.open_fund(dict(account_id="a", fund_code="000001"))
+    app.processEvents()
+    page.back()
+    app.processEvents()
+    assert (page.metric_grid.columns, page.graph_grid.columns) == (6, 3)
     host.close()
