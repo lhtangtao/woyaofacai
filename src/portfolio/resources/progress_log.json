@@ -1,5 +1,17 @@
 [
   {
+    "title": "股票归属与成本分析页面轻量化计算与后台缓存预热",
+    "time": "2026-11-14 01:51",
+    "author": "Antigravity",
+    "tag": "股票归属加载性能优化已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 AnalyticsService 新增 calculate_ownership_bundle 专用轻量汇总通道：单次只读连接复用 replay 与 position_reports，跳过本页面用不到的逐日/逐月收益率曲线、审计及全套图表计算，并增加进程内缓存（_ownership_cache）。",
+      "将 OwnershipAnalysisPage 切换至 calculate_ownership_bundle，同时在主窗口打开数据库就绪后通过 preload_ownership_bundle 在后台静默预热当期归属缓存。",
+      "新增 test_ownership_fast_bundle.py 验证持仓中/已清仓/全部状态下与全量 calculate_people 口径 100% 一致，联合 test_ownership_analysis.py 全部通过。"
+    ]
+  },
+  {
     "title": "交易明细移除页内筛选条并将高级筛选移至顶部重置筛选旁",
     "time": "2026-11-14 01:37",
     "author": "Antigravity",

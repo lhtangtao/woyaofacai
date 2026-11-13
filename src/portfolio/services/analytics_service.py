@@ -40,7 +40,7 @@ class AnalyticsService:
             from portfolio.services.fx_service import FxStore
             fx_store=FxStore(quote_cache_path().with_name("fx.sqlite3"))
         self.fx_store = fx_store
-        self._cache, self._lock = {}, RLock()
+        self._cache, self._ownership_cache, self._lock = {}, {}, RLock()
 
     def identity(self):
         from portfolio.services.derived_dependencies import source_identity
@@ -66,6 +66,63 @@ class AnalyticsService:
         if identity != self.identity():
             raise ValueError('源库在人员核对期间发生变化，请刷新重试。')
         return PeopleBundle(aggregate, tuple(persons), broker)
+
+    def calculate_ownership_bundle(self, scope, *, cancel=None, use_cache=True):
+        """股票归属与成本分析专用的轻量化人员/券商持仓汇总（跳过逐日收益曲线与全套图表），并带进程内缓存。"""
+        from portfolio.engine.people_pnl import PeopleBundle
+        from portfolio.engine.replay import replay
+
+        scope = replace(scope, ledger=Ledger.PERSON, person_ids=None, reporting_currency="USD")
+        identity = self.identity()
+        key = (identity, scope, "ownership-light-1")
+        with self._lock:
+            if use_cache and key in self._ownership_cache:
+                return self._ownership_cache[key]
+
+        def _build_book(connection, sub_scope):
+            if cancel and cancel.is_set():
+                raise ValueError('计算已取消。')
+            snapshot = load_snapshot(connection, replace(sub_scope, reporting_currency="USD"), cancel=cancel)
+            if self.quote_store:
+                self.quote_store.supplement(snapshot)
+            positions, traces, _ = replay(snapshot, cancel=cancel)
+            reports = position_reports(snapshot, positions)
+            return Analytics(
+                sub_scope,
+                reports,
+                (),
+                snapshot.issues,
+                positions,
+                traces,
+                None,
+                (),
+                calculated_at=datetime.now(timezone.utc).isoformat(),
+                source_identity=hashlib.sha256(repr(identity).encode()).hexdigest()[:16],
+                trading_days=snapshot.extras.get("trading_days", ()),
+            )
+
+        with localcontext() as ctx:
+            ctx.prec = 50
+            with readonly_connection(self.path, cancel=cancel, timeout=120) as connection:
+                people = list(
+                    connection.execute(
+                        'SELECT id,name FROM persons' + ('' if scope.include_disabled else ' WHERE enabled=1') + ' ORDER BY id'
+                    )
+                )
+                aggregate = _build_book(connection, scope)
+                persons = []
+                for person, name in people:
+                    persons.append((person, name, _build_book(connection, replace(scope, person_ids=(person,)))))
+                broker = _build_book(connection, replace(scope, ledger=Ledger.BROKER))
+
+        if identity != self.identity():
+            raise ValueError('源库在人员核对期间发生变化，请刷新重试。')
+        bundle = PeopleBundle(aggregate, tuple(persons), broker)
+        with self._lock:
+            if len(self._ownership_cache) >= 8:
+                self._ownership_cache.pop(next(iter(self._ownership_cache)))
+            self._ownership_cache[key] = bundle
+        return bundle
 
     def calculate(self, scope, *, cancel=None, use_cache=True):
         key = (self.identity(), scope, "decimal-engine-2", self.audit_start)

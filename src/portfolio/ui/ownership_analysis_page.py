@@ -127,7 +127,7 @@ class OwnershipAnalysisPage(QWidget):
             from portfolio.db.connection import readonly_connection
             from portfolio.db.repositories.analytics import instrument_catalog
             from portfolio.domain.live_quotes import us_session,NY
-            bundle=prior or service.calculate_people(QueryScope(cutoff,include_disabled=True,start_date=None),cancel=cancel)
+            bundle=prior or service.calculate_ownership_bundle(QueryScope(cutoff,include_disabled=True,start_date=None),cancel=cancel)
             with readonly_connection(identity[0],cancel=cancel) as c:catalog=instrument_catalog(c)
             now=datetime.now(UTC);quotes,days,halves,covered=main.quote_store.load(now)
             session=us_session(now,days,halves) if cutoff==now.astimezone(ZoneInfo('Asia/Shanghai')).date() and covered and covered[0]<=now.astimezone(NY).date()<=covered[1] else None

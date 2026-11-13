@@ -1,3 +1,10 @@
+## 2026-11-14 01:51 股票归属与成本分析页面轻量化计算与后台缓存预热
+
+- 修改者：Antigravity（代码修改）
+- 在 [analytics_service.py](file:///Users/tangtao/money3/src/portfolio/services/analytics_service.py) 新增 `calculate_ownership_bundle` 轻量持仓汇总与 `_ownership_cache` 进程内缓存：单次只读数据库连接内复用 `replay` 与 `position_reports`，跳过逐日收益曲线、审计规则与全套图表构建。
+- 在 [ownership_analysis_page.py](file:///Users/tangtao/money3/src/portfolio/ui/ownership_analysis_page.py) 启用 `calculate_ownership_bundle`，并在 [main_window.py](file:///Users/tangtao/money3/src/portfolio/ui/main_window.py) 的 `_analytics_ready` 后新增 `preload_ownership_bundle` 后台静默预热。
+- 新增 [test_ownership_fast_bundle.py](file:///Users/tangtao/money3/tests/test_ownership_fast_bundle.py) 验证数值与全量计算 100% 一致。
+
 ## 2026-11-14 01:37 交易明细移除页内筛选条并将高级筛选移至顶部重置筛选旁
 
 - 修改者：Antigravity（代码修改）

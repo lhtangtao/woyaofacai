@@ -751,6 +751,26 @@ class MainWindow(InteractionMixin, QMainWindow):
                 page.clear()
             self.reconcile_page.clear("选择 Excel 进行当前范围对账")
 
+    def preload_ownership_bundle(self):
+        """后台低优先级预热「股票归属与成本分析」轻量持仓缓存。"""
+        if self.info is None or not self.analytics_service:
+            return
+        cutoff = self.as_of.date().toPython()
+        key = (str(self.analytics_service.path), cutoff)
+        if getattr(self, "_preloaded_ownership_key", None) == key:
+            return
+        self._preloaded_ownership_key = key
+        service = self.analytics_service
+        def task(cancel):
+            try:
+                return service.calculate_ownership_bundle(
+                    QueryScope(cutoff, include_disabled=True, start_date=None),
+                    cancel=cancel,
+                )
+            except Exception:
+                return None
+        self._submit("preload_ownership", task, lambda _res: None)
+
     def preload_people_bundle(self):
         if self.info is None or not self.analytics_service or self.broker_people_view():
             return
@@ -832,6 +852,7 @@ class MainWindow(InteractionMixin, QMainWindow):
                 self.earnings_page.signature = None
                 logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
         self.preload_people_bundle()
+        self.preload_ownership_bundle()
         if self.pages.currentIndex() == 22:
             self.holdings_page.set_inline_status("")
             self.holdings_page.set_analytics(analytics)
