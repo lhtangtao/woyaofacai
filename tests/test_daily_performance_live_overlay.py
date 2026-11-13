@@ -37,10 +37,10 @@ def test_apply_live_daily_overlay_fills_unclosed_day_from_latest_quote():
     analytics = SimpleNamespace(
         reports={"每日持仓收益": Report("每日持仓收益", DAILY_COLUMNS, (r_prev, r_curr_open, r_curr_closed))}
     )
-    instruments = {
-        1: {"symbol": "TQQQ", "market": "US"},
-        2: {"symbol": "NVDA", "market": "US"},
-    }
+    instruments = (
+        {"id": 1, "symbol": "TQQQ", "market": "US"},
+        {"id": 2, "symbol": "NVDA", "market": "US"},
+    )
     now = datetime(2026, 11, 13, 18, 12, tzinfo=UTC)
     quotes = {
         ("TQQQ.US", "Regular"): LiveQuote("TQQQ.US", Decimal("60.5"), now, "Regular", "live"),
@@ -60,3 +60,19 @@ def test_apply_live_daily_overlay_fills_unclosed_day_from_latest_quote():
     # 当日清仓的 NVDA：市值 = 0；当日收益 = 0 - 200 - 0 + 215 = +15
     assert rows[2][11] == Decimal("0")
     assert rows[2][19] == Decimal("15")
+
+
+def test_main_window_open_demo_and_daily_page_no_errors(qtbot, demo_path):
+    """验证 MainWindow 打开数据库并切到每日持仓收益时，不会因 info.instruments 为 tuple/list 触发 AttributeError。"""
+    from portfolio.ui.main_window import MainWindow
+
+    w = MainWindow(settings=False)
+    qtbot.addWidget(w)
+    w.show()
+    w.open_database(demo_path)
+    qtbot.waitUntil(lambda: w.analytics is not None, timeout=15000)
+
+    w.navigation.select(23)
+    assert w.daily_performance_page.analytics is not None
+    assert w.daily_performance_page.max_as_of_date
+

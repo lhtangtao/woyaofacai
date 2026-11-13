@@ -1,3 +1,9 @@
+## 2026-11-14 02:20 修复每日持仓收益实时估值兼容列表型 instruments 结构
+
+- 修改者：Antigravity（代码修改）
+- 修复 [daily_performance_page.py](file:///Users/tangtao/money3/src/portfolio/ui/daily_performance_page.py) 中 `apply_live_daily_overlay` 对 `win.info.instruments`（tuple/list）直接调用 `.get()` 引发 `AttributeError` 的问题，统一兼容 `dict` 与 `list/tuple`。
+- 在 [test_daily_performance_live_overlay.py](file:///Users/tangtao/money3/tests/test_daily_performance_live_overlay.py) 增加主窗口真实加载与页面切换测试。
+
 ## 2026-11-14 02:16 每日持仓收益未收盘日支持最近交易报价实时计算当日收益
 
 - 修改者：Antigravity（代码修改）

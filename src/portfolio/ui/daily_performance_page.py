@@ -691,11 +691,17 @@ def apply_live_daily_overlay(analytics, quote_store=None, instruments=None, *, n
         candidates.sort(key=lambda q: q.timestamp, reverse=True)
         return candidates[0]
 
+    inst_map = (
+        instruments
+        if isinstance(instruments, dict)
+        else {item["id"]: item for item in instruments if isinstance(item, dict) and "id" in item}
+    )
+
     live_filled = 0
     for idx in max_indices:
         row_obj = report.rows[idx]
         inst_id = (row_obj.metadata or {}).get("instrument_id")
-        inst = instruments.get(inst_id, {}) if instruments else {}
+        inst = inst_map.get(inst_id, {}) if inst_id is not None else {}
         sym = inst.get("symbol") or raw_rows[idx][3]
         if inst and inst.get("market") != "US":
             continue

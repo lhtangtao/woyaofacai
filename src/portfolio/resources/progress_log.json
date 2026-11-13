@@ -1,5 +1,16 @@
 [
   {
+    "title": "修复每日持仓收益实时估值兼容列表型 instruments 结构",
+    "time": "2026-11-14 02:20",
+    "author": "Antigravity",
+    "tag": "已修复 AttributeError 报错",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "修复 apply_live_daily_overlay 直接对 win.info.instruments（tuple/list）调用 .get() 导致的 AttributeError，兼容 dict 与 list/tuple 两种标的元数据格式。",
+      "在 test_daily_performance_live_overlay.py 新增 MainWindow 端到端加载与页面切换回归测试。"
+    ]
+  },
+  {
     "title": "每日持仓收益未收盘日支持最近交易报价实时计算当日收益",
     "time": "2026-11-14 02:16",
     "author": "Antigravity",
