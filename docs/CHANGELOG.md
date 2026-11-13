@@ -1,3 +1,9 @@
+## 2026-11-14 02:25 表格表头点击直接切换正排/倒排并取消多余排序弹窗
+
+- 修改者：Antigravity（代码修改）
+- 修改 [report_page.py](file:///Users/tangtao/money3/src/portfolio/ui/report_page.py) 的 `open_sort_menu`，点击表头不再弹出多余的排序选择菜单，直接调用 `sort_column` 实现点一下正排、点两下倒排。
+- 更新 [test_report_sort_menu.py](file:///Users/tangtao/money3/tests/test_report_sort_menu.py) 验证直点排序行为。
+
 ## 2026-11-14 02:20 修复每日持仓收益实时估值兼容列表型 instruments 结构
 
 - 修改者：Antigravity（代码修改）

@@ -567,23 +567,10 @@ class ReportPage(QWidget):
             self.sort_column(*choice)
 
     def open_sort_menu(self, column, header=None):
+        """点击表头直接切换排序方向（首次正排、再次倒排），不再弹出选择菜单。"""
         if not self.report or not 0 <= column < len(self.report.columns):
             return
-        col_name = self.report.columns[column]
-        if any(k in col_name for k in ("日期", "月份", "时间", "effective_from", "effective_to", "business_date", "imported_at_utc", "报价UTC", "rate_date")):
-            self.sort_column(column)
-            return
-        header = header or self.table.horizontalHeader()
-        self.sort_menu.clear()
-        self.sort_menu.addSection(col_name)
-        saved = self.sort_orders.get(self.report.name)
-        for label, descending in (('正序（从小到大）', False), ('倒序（从大到小）', True)):
-            action = self.sort_menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(saved == (col_name, descending))
-            action.triggered.connect(lambda checked=False, column=column, descending=descending: self.sort_column(column, descending))
-        from PySide6.QtCore import QPoint
-        self.sort_menu.popup(header.mapToGlobal(QPoint(header.sectionViewportPosition(column), header.height())))
+        self.sort_column(column)
 
     def sort_column(self, column, descending=None):
         if not self.report or not 0 <= column < len(self.report.columns):

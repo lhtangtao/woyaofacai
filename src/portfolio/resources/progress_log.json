@@ -1,5 +1,16 @@
 [
   {
+    "title": "表格表头点击直接切换正排/倒排并取消多余排序弹窗",
+    "time": "2026-11-14 02:25",
+    "author": "Antigravity",
+    "tag": "表头直点排序已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "移除 ReportPage.open_sort_menu 中点击列标题弹出的「正序（从小到大）/ 倒序（从大到小）」菜单，改为点击一下直接正排、点两下直接倒排，日期时间类列保留原有排序逻辑。",
+      "更新 test_report_sort_menu.py，联合 test_date_sorting.py、test_analytics_ui.py 回归测试通过。"
+    ]
+  },
+  {
     "title": "修复每日持仓收益实时估值兼容列表型 instruments 结构",
     "time": "2026-11-14 02:20",
     "author": "Antigravity",
