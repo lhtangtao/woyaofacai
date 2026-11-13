@@ -1,5 +1,17 @@
 [
   {
+    "title": "每日持仓收益未收盘日支持最近交易报价实时计算当日收益",
+    "time": "2026-11-14 02:16",
+    "author": "Antigravity",
+    "tag": "当日未收盘实时估值已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 DailyPerformancePage 新增 apply_live_daily_overlay：当最新交易日尚未产生正式日末收盘价时，从 QuoteStore 自动匹配当前交易时段或最近可用交易时间点的有效报价，按 期末估值 - 期初市值 - 当日买入 + 当日卖出 实时补算当日市值、当日收益及各渠道收益分布。",
+      "右上角徽章明确标注“实时估值 · 已覆盖/总条数”，不与正式收盘日混淆；在 LivePanel 每 10 秒收到新报价时同步联动刷新每日持仓收益页面。",
+      "新增 test_daily_performance_live_overlay.py，联合 test_daily_performance_broker_tabs.py 与 test_daily_performance_dashboard.py 回归测试。"
+    ]
+  },
+  {
     "title": "股票归属与成本分析页面轻量化计算与后台缓存预热",
     "time": "2026-11-14 01:51",
     "author": "Antigravity",

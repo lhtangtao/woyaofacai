@@ -1,3 +1,10 @@
+## 2026-11-14 02:16 每日持仓收益未收盘日支持最近交易报价实时计算当日收益
+
+- 修改者：Antigravity（代码修改）
+- 在 [daily_performance_page.py](file:///Users/tangtao/money3/src/portfolio/ui/daily_performance_page.py) 新增 `apply_live_daily_overlay` 与 `refresh_live_quotes`，当最新交易日尚未生成正式收盘价时自动使用 `QuoteStore` 最近有效交易报价实时计算当日市值与收益，并联动更新顶部标签与渠道/单日归因汇总。
+- 在 [live_quotes.py](file:///Users/tangtao/money3/src/portfolio/ui/live_quotes.py) 的实时报价回调中联动刷新可见的每日持仓收益页。
+- 新增 [test_daily_performance_live_overlay.py](file:///Users/tangtao/money3/tests/test_daily_performance_live_overlay.py) 验证实时估值与当日清仓公式计算。
+
 ## 2026-11-14 01:51 股票归属与成本分析页面轻量化计算与后台缓存预热
 
 - 修改者：Antigravity（代码修改）

@@ -428,3 +428,9 @@ class LiveQuotesPanel(QWidget):
                         self.window.holdings_page.refresh_detail()
             except Exception as e:
                 pass
+        if hasattr(self.window, "daily_performance_page") and self.window.daily_performance_page:
+            try:
+                if self.window.daily_performance_page.isVisible():
+                    self.window.daily_performance_page.refresh_live_quotes()
+            except Exception:
+                pass

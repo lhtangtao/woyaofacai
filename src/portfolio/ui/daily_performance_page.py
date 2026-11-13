@@ -12,7 +12,7 @@ Parity with Web:
 5. Selected Date Donut Distribution with Profit/Loss/Flat quick filters.
 6. Right Slide-out Drawer for Date, Channel, and Stock history details.
 """
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 import io
 import logging
@@ -649,6 +649,85 @@ class ModernTableModel(QAbstractTableModel):
         end = start + self.page_size
         self.rows = self.all_rows[start:end]
         self.endResetModel()
+
+
+def apply_live_daily_overlay(analytics, quote_store=None, instruments=None, *, now=None):
+    """当最新交易日尚未有正式收盘价时，使用 quote_store 最近可用交易报价实时估算当日市值与收益。"""
+    if not analytics or "每日持仓收益" not in analytics.reports:
+        return [], "", False, 0, 0
+    report = analytics.reports["每日持仓收益"]
+    raw_rows = [tuple(r.values) for r in report.rows]
+    dates = [r[0] for r in raw_rows if r[0]]
+    if not dates:
+        return raw_rows, "", False, 0, 0
+    max_day = max(dates)
+    max_indices = [i for i, r in enumerate(raw_rows) if r[0] == max_day]
+    if not max_indices or quote_store is None or not instruments:
+        return raw_rows, max_day, False, 0, len(max_indices)
+    # 仅在最新交易日全部尚无正式收盘价与当日收益时启用实时估值叠加
+    if any(raw_rows[i][10] is not None or raw_rows[i][19] is not None for i in max_indices):
+        return raw_rows, max_day, False, 0, len(max_indices)
+
+    from portfolio.domain.live_quotes import quote_usable, us_session
+
+    now = now or datetime.now(UTC)
+    quotes, days, halves, _ = quote_store.load(now)
+    if not quotes:
+        return raw_rows, max_day, False, 0, len(max_indices)
+    session = us_session(now, days, halves)
+
+    def _best_quote(symbol: str):
+        us_sym = symbol + ".US"
+        if session is not None:
+            q = quotes.get((us_sym, session.name))
+            if quote_usable(q, session, now):
+                return q
+        candidates = [
+            q for (sym, _sess), q in quotes.items()
+            if sym == us_sym and q is not None and q.price is not None and Decimal(q.price) > 0
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda q: q.timestamp, reverse=True)
+        return candidates[0]
+
+    live_filled = 0
+    for idx in max_indices:
+        row_obj = report.rows[idx]
+        inst_id = (row_obj.metadata or {}).get("instrument_id")
+        inst = instruments.get(inst_id, {}) if instruments else {}
+        sym = inst.get("symbol") or raw_rows[idx][3]
+        if inst and inst.get("market") != "US":
+            continue
+        row_list = list(raw_rows[idx])
+        qty = row_list[8]
+        open_mv, bought, sold = row_list[15], row_list[16], row_list[17]
+        if qty is None:
+            continue
+        qty_d = Decimal(qty)
+        if qty_d == 0:
+            row_list[11] = Decimal(0)
+            if open_mv is not None and bought is not None and sold is not None:
+                row_list[19] = -Decimal(open_mv) - Decimal(bought) + Decimal(sold)
+                live_filled += 1
+            raw_rows[idx] = tuple(row_list)
+            continue
+        q = _best_quote(str(sym or ""))
+        if q is None:
+            continue
+        price = Decimal(q.price)
+        mv = qty_d * price
+        row_list[10] = price
+        row_list[11] = mv
+        if open_mv is not None and bought is not None and sold is not None:
+            pnl = mv - Decimal(open_mv) - Decimal(bought) + Decimal(sold)
+            row_list[19] = pnl
+            if Decimal(open_mv) > 0:
+                row_list[13] = pnl / Decimal(open_mv)
+        live_filled += 1
+        raw_rows[idx] = tuple(row_list)
+
+    return raw_rows, max_day, live_filled > 0, live_filled, len(max_indices)
 
 
 class DailyPerformancePage(QWidget):
@@ -1450,13 +1529,34 @@ class DailyPerformancePage(QWidget):
             self.metrics_panel.sync_shared_expansion()
         self.show()
 
+    def _apply_analytics_rows(self, analytics):
+        win = self.window()
+        quote_store = getattr(win, "quote_store", None)
+        info = getattr(win, "info", None)
+        instruments = getattr(info, "instruments", None) if info is not None else None
+        raw_rows, max_day, is_live, live_count, total_count = apply_live_daily_overlay(
+            analytics, quote_store=quote_store, instruments=instruments
+        )
+        self.raw_rows = raw_rows
+        return max_day, is_live, live_count, total_count
+
+    def refresh_live_quotes(self):
+        """收到最新实时报价时，如果最新日期尚未收盘则重新叠加当日实时估值并刷新视图。"""
+        if not self.analytics or "每日持仓收益" not in self.analytics.reports:
+            return
+        max_day, is_live, live_count, total_count = self._apply_analytics_rows(self.analytics)
+        if not max_day or not is_live:
+            return
+        self.max_as_of_date = max_day
+        self.as_of_badge.setText(f"数据截至：{max_day}（实时估值 · {live_count}/{total_count}）")
+        self.recalculate_and_refresh()
+
     def update_data(self, analytics):
         self.analytics = analytics
         if not analytics or "每日持仓收益" not in analytics.reports:
             return
 
-        report = analytics.reports["每日持仓收益"]
-        self.raw_rows = [tuple(r.values) for r in report.rows]
+        max_day, is_live, live_count, total_count = self._apply_analytics_rows(analytics)
 
         # Update person dropdown
         self._populate_persons()
@@ -1479,10 +1579,12 @@ class DailyPerformancePage(QWidget):
         self.category_combo.blockSignals(False)
 
         # Max date
-        dates = [r[0] for r in self.raw_rows if r[0]]
-        if dates:
-            self.max_as_of_date = max(dates)
-            self.as_of_badge.setText(f"数据截至：{self.max_as_of_date}（收盘）")
+        if max_day:
+            self.max_as_of_date = max_day
+            if is_live:
+                self.as_of_badge.setText(f"数据截至：{self.max_as_of_date}（实时估值 · {live_count}/{total_count}）")
+            else:
+                self.as_of_badge.setText(f"数据截至：{self.max_as_of_date}（收盘）")
             if not self.selected_date:
                 self.selected_date = self.max_as_of_date
             self.end_date_edit.setDate(QDate.fromString(self.max_as_of_date, "yyyy-MM-dd"))
