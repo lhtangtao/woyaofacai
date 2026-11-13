@@ -1,5 +1,6 @@
 """Presentation and aggregation for the Mac domestic fund holdings dashboard."""
 from calendar import monthrange
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, localcontext
@@ -83,6 +84,45 @@ def holding_metrics(rows):
                               count=len({row["fund_code"] for row in prepared}),
                               top=sum(sorted(values_by_code.values(), reverse=True)[:5]) / market * 100 if market else None,
                               valued=sum(row["market_value"] is not None for row in prepared), matched=len(matched))
+
+
+def closed_metrics(rows):
+    """Aggregate confirmed values without replacing missing amounts with zero."""
+    profits = [row for row in rows if row.get("realized") is not None]
+    eligible = [row for row in profits if row.get("contributed") is not None and row["contributed"] > 0]
+    basis = total(row["contributed"] for row in eligible)
+    days = [row["holding_days"] for row in rows if row.get("holding_days") is not None]
+    return dict(realized=total(row["realized"] for row in profits),
+                buy=total(row.get("buy_amount") for row in rows),
+                sell=total(row.get("sell_amount") for row in rows),
+                rate=total(row["realized"] for row in eligible) / basis * 100 if basis else None,
+                holding_days=Decimal(sum(days)) / Decimal(len(days)) if days else None,
+                profit_count=len(profits), rate_count=len(eligible), day_count=len(days))
+
+
+def closed_trend_points(rows, period, today):
+    """Cumulative verified event amounts; never invent missing event dates."""
+    events = defaultdict(Decimal)
+    covered = 0
+    for row in rows:
+        if row.get("closed_events") is None:
+            continue
+        covered += 1
+        for day, amount in row["closed_events"]:
+            events[date.fromisoformat(day)] += Decimal(amount)
+    start = None
+    if period == "year":
+        start = date(today.year, 1, 1)
+    elif period:
+        year, month = divmod(today.year * 12 + today.month - 1 - period, 12)
+        start = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
+    cumulative = Decimal(0)
+    points = []
+    for day, amount in sorted(events.items()):
+        cumulative += amount
+        if day <= today and (start is None or day >= start):
+            points.append((day, cumulative))
+    return points, covered
 
 
 def trend_points(values, rows, period, today):
@@ -238,8 +278,8 @@ class PlatformList(QWidget):
         for row in rows:
             groups[row["platform"]].append(row)
         self.names = sorted(groups)
-        self.table.setColumnCount(4 if closed else 6)
-        self.table.setHorizontalHeaderLabels(["交易平台", "已核算盈亏", "未核算", "基金数"] if closed else
+        self.table.setColumnCount(5 if closed else 6)
+        self.table.setHorizontalHeaderLabels(["交易平台", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
                                              ["交易平台", "市值占比", "持仓成本", "持仓市值", "浮动盈亏", "基金数"])
         self.table.setRowCount(len(self.names) + 1)
         market = total(row.get("market_value") for row in rows)
@@ -249,7 +289,9 @@ class PlatformList(QWidget):
             value = total(values)
             incomplete = sum(v is None for v in values)
             if closed:
-                columns = (name, money(value), str(incomplete), str(len({r['fund_code'] for r in group})))
+                columns = (name, money(total(r.get("buy_amount") for r in group)),
+                           money(total(r.get("sell_amount") for r in group)), money(value),
+                           str(len({r['fund_code'] for r in group})))
             else:
                 matched = [r for r in group if r.get("floating") is not None]
                 incomplete = sum(r.get("floating") is None for r in group)
@@ -260,7 +302,7 @@ class PlatformList(QWidget):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if incomplete:
-                    item.setToolTip(f"{incomplete} 条收益尚未核算")
+                    item.setToolTip(f"{incomplete} 条缺少可确认的历史收益；金额基于已导入交易，转换单独统计")
                 if name == "合计":
                     font = item.font(); font.setBold(True); item.setFont(font)
                 self.table.setItem(index, column, item)
@@ -303,12 +345,13 @@ class Contribution(QWidget):
     def render(self, rows, closed=False):
         self.rows, self.closed = list(rows), closed
         n = self.top_n.value()
-        self.title.setText(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top")
+        self.title.setText(("已清仓基金历史收益" if closed else "持有中基金浮动盈亏") + "贡献 Top")
         key = "realized" if closed else "floating"
         losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
         gains = sorted((r for r in rows if r.get(key) is not None and r[key] > 0), key=lambda r: r[key], reverse=True)
-        self.loss_label.setText(f"亏损贡献（Top {n}） · 全部 {money(total(r[key] for r in losses))} CNY")
-        self.gain_label.setText(f"盈利贡献（Top {n}） · 全部 {money(total(r[key] for r in gains))} CNY")
+        label = "可核对合计" if closed else "全部"
+        self.loss_label.setText(f"亏损贡献（Top {n}） · {label} {money(total(r[key] for r in losses))} CNY")
+        self.gain_label.setText(f"盈利贡献（Top {n}） · {label} {money(total(r[key] for r in gains))} CNY")
         self.chart.set_data(losses[:n], gains[:n], key)
 
 
@@ -435,7 +478,7 @@ class TrendView(QChartView):
         self.x_axis = None
         self.area_boundaries = []
 
-    def render(self, points, nav_dates=None):
+    def render(self, points, nav_dates=None, *, calendar_spacing=False, step_series=False, value_label="持仓总市值"):
         chart = self.chart()
         chart.removeAllSeries()
         self.area_boundaries.clear()
@@ -446,25 +489,41 @@ class TrendView(QChartView):
         chart.setBackgroundVisible(False)
         chart.setMargins(QMargins())
         chart.legend().hide()
-        self.days = list(range(len(points)))
+        self.days = ([ (day - points[0][0]).days for day, _ in points ] if calendar_spacing and points
+                     else list(range(len(points))))
         self.values = points
         self.x_axis = None
         self.nav_dates = nav_dates or {}
+        self.value_label = value_label
+        self.step_series = step_series
         values = [float(value) for _, value in points if value is not None]
         if not values:
             chart.update()
             return
         low, high = min(values), max(values)
         pad = max(1, (high - low) * .10, high * .015)
-        base = max(0, low - pad)
+        base = low - pad if low < 0 else max(0, low - pad)
         x = QCategoryAxis()
         x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
-        x.setStartValue(-1)
+        padding_x = max(.2, self.days[-1] * .08) if calendar_spacing else .2
+        x.setStartValue(-padding_x - 1)
         step = max(1, (len(points) + 4) // 5)
+        multi_year = points[0][0].year != points[-1][0].year
+        labels = set()
+        tick_indexes = set()
+        if calendar_spacing:
+            span = self.days[-1]
+            candidates = sorted({min(range(len(self.days)), key=lambda i: abs(self.days[i] - span * k / 5)) for k in range(6)})
+            for index in candidates:
+                if not tick_indexes or self.days[index] - self.days[max(tick_indexes)] >= span / 7:
+                    tick_indexes.add(index)
         for index, (day, _) in enumerate(points):
-            if index % step == 0 or index == len(points) - 1:
-                x.append(day.strftime("%m-%d" if len(points) < 300 else "%y-%m"), index)
-        x.setRange(-0.2, max(1, len(points) - 1) + 0.2)
+            if (index in tick_indexes if calendar_spacing else index % step == 0 or index == len(points) - 1):
+                label = day.strftime("%Y-%m" if multi_year else "%m-%d")
+                if label not in labels:
+                    x.append(label, self.days[index])
+                    labels.add(label)
+        x.setRange(-padding_x, max(1, self.days[-1]) + padding_x)
         y = QValueAxis()
         y.setRange(base, high + pad)
         y.setLabelFormat("%.0f")
@@ -477,8 +536,12 @@ class TrendView(QChartView):
             if not run:
                 return
             line = QLineSeries()
+            previous = None
             for day, value in run:
+                if step_series and previous is not None:
+                    line.append(day, float(previous))
                 line.append(day, float(value))
+                previous = value
             if len(run) == 1:
                 series = line
                 line.setColor(QColor(BLUE))
@@ -498,8 +561,12 @@ class TrendView(QChartView):
             series.attachAxis(y)
             if len(run) > 1:
                 outline = QLineSeries()
+                previous = None
                 for day, value in run:
+                    if step_series and previous is not None:
+                        outline.append(day, float(previous))
                     outline.append(day, float(value))
+                    previous = value
                 outline.setPen(QPen(QColor(BLUE), 1.6))
                 chart.addSeries(outline)
                 outline.attachAxis(x)
@@ -520,12 +587,13 @@ class TrendView(QChartView):
             start = self.x_axis.min()
             end = self.x_axis.max()
             target = start + (pos.x() - plot.left()) / plot.width() * (end - start)
-            index = max(0, min(len(self.values) - 1, round(target)))
+            index = max(0, bisect_right(self.days, target) - 1) if self.step_series else min(range(len(self.days)), key=lambda i: abs(self.days[i] - target))
             day, value = self.values[index]
             if value is not None:
-                dates = self.nav_dates.get(day, "—")
+                dates = self.nav_dates.get(day)
+                note = f"\n净值日期 {dates}" if dates else ""
                 QToolTip.showText(event.globalPosition().toPoint(),
-                                  f"{day} · 持仓总市值 {money(value)} CNY\n净值日期 {dates}", self)
+                                  f"{day} · {self.value_label} {money(value)} CNY{note}", self)
             else:
                 QToolTip.hideText()
         else:

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .calculate import ALIPAY_ZERO_OPENINGS
+from .closed_fund_analytics import closed_transaction_summaries, tiantian_realized_events, tiantian_return_issue
 from .fund_returns import confirmed_returns, tiantian_returns
 from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
@@ -173,6 +174,7 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 statements[key] = dict(row)
                 records.setdefault(key, dict(row))
         confirmations = read_confirmations(calc, cutoff)
+        summaries = closed_transaction_summaries(raw, calc, records, cutoff) if unified and calc else {}
         for key, record in records.items():
             if account and key != (account, fund):
                 continue
@@ -276,6 +278,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             info = metadata.get(key[1], {})
             meta = accounts.get(key[0], {})
             returns = {}
+            closed_events = None
+            tt_trades = None
             historical_close = qty is None and last_confirmed_status == "已清仓"
             return_shares = Decimal(0) if historical_close else qty
             return_day = last_confirmed_date if historical_close else as_of
@@ -293,17 +297,57 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 trades = [dict(r) for r in raw.execute("""SELECT * FROM raw_fund_transactions
                     WHERE account_id=? AND fund_code=? AND source_platform='TIANTIAN'
                     AND confirmation_date<=? ORDER BY confirmation_date,transaction_time,id""", (*key, return_day))]
+                tt_trades = trades
                 returns = tiantian_returns(trades, return_shares, return_value)
+            if (not historical_close and current_status == "已清仓" and returns and tt_trades is not None and calc):
+                closed_events = tiantian_realized_events(calc, tt_trades, *key, return_day, returns["pnl"])
             if historical_close:
-                returns = ({"last_confirmed_realized_pnl": returns["realized_pnl"]} if returns else {})
-            return_issue = None if "pnl" in returns else (
-                "天天基金历史流水或成本基准待核对" if meta.get("platform") == "天天基金" else
-                "期初成本、交易或估值尚未完整核对")
+                if returns:
+                    if recent and calc:
+                        closed_events = tiantian_realized_events(calc, trades, *key, return_day, returns["pnl"])
+                    returns = {"last_confirmed_realized_pnl": returns["realized_pnl"],
+                               "last_confirmed_total_pnl": returns["pnl"],
+                               "last_confirmed_cash_dividend": returns["cash_dividend"],
+                               "last_confirmed_contributed": returns["contributed"],
+                               "last_confirmed_rate": returns["rate"],
+                               "historical_returns_as_of": return_day}
+                else:
+                    returns = {}
+            return_issue = None if "pnl" in returns or "last_confirmed_total_pnl" in returns else (
+                tiantian_return_issue(tt_trades) if tt_trades is not None else
+                "天天基金历史份额、交易覆盖或成本基准待核对" if meta.get("platform") == "天天基金" else
+                "期初持仓成本或跨基金转换成本尚未完整核对")
             confirmation_note = None
-            if user_closed and (qty is None or return_issue):
+            if user_closed and returns.get("historical_returns_as_of"):
+                confirmation_note = f"用户确认当前已清仓；历史收益截至 {returns['historical_returns_as_of']}，之后的交易资料尚需核对"
+            elif user_closed and (qty is None or return_issue):
                 confirmation_note = "用户确认；历史交易或收益尚未完整核算"
             elif user_held:
                 confirmation_note = f"用户确认当前持有；估值份额及成本沿用 {last_confirmed_date} 的账本结果"
+            summary = summaries.get(key, {})
+            first_confirmed_holding = None
+            if current_status == "已清仓" and calc:
+                holding_table = "calc_tiantian_positions" if recent else "calc_fund_positions_daily"
+                if calc.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (holding_table,)).fetchone():
+                    for item in calc.execute(f"""SELECT trade_date,holding_shares FROM {holding_table}
+                            WHERE account_id=? AND fund_code=? AND trade_date<=? AND holding_shares IS NOT NULL
+                            ORDER BY trade_date""", (*key, cutoff)):
+                        if Decimal(item['holding_shares']) > 0:
+                            first_confirmed_holding = item['trade_date']
+                            break
+            holding_days = None
+            if (current_status == "已清仓" and closed_date and summary.get("first_trade_date")
+                    and (returns.get("last_confirmed_total_pnl") is not None or returns.get("pnl") is not None)):
+                start_day = date.fromisoformat(summary["first_trade_date"])
+                end_day = date.fromisoformat(closed_date)
+                table = "calc_tiantian_positions" if recent else "calc_fund_positions_daily"
+                if start_day <= end_day and calc:
+                    positions_by_day = list(calc.execute(f"""SELECT trade_date,holding_shares FROM {table}
+                        WHERE account_id=? AND fund_code=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date""",
+                        (*key, start_day.isoformat(), end_day.isoformat())))
+                    if (len(positions_by_day) == (end_day - start_day).days + 1
+                            and all(p['holding_shares'] is not None and Decimal(p['holding_shares']) >= 0 for p in positions_by_day)):
+                        holding_days = sum(Decimal(p['holding_shares']) > 0 for p in positions_by_day)
             result["rows"].append(dict(**returns, return_issue=return_issue, account_id=key[0], fund_code=key[1], fund_name=info.get("fund_name") or record["fund_name"],
                 fund_type=info.get("fund_type") or record.get("fund_type") or "待分类", platform=meta.get("platform", "—"),
                 account_name=meta.get("account_name", "—"), shares=str(qty) if qty is not None else None,
@@ -321,7 +365,9 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 daily_return_rate=nav_record.get("daily_return_rate"),
                 nav_source=nav_record.get("source"), nav_status=nav_status,
                 nav_field_status=nav_record.get("field_status"),
-                observed_shares=recent["observed_shares"] if recent and recent["issue"] else None))
+                observed_shares=recent["observed_shares"] if recent and recent["issue"] else None,
+                closed_events=closed_events, holding_days=holding_days,
+                first_confirmed_holding_date=first_confirmed_holding, **summary))
         if account and result["rows"]:
             result["transactions"] = [dict(r) for r in raw.execute(
                 f"SELECT * FROM ({source}) WHERE account_id=? AND fund_code=? AND (confirmation_date IS NULL OR confirmation_date<=?) ORDER BY confirmation_date DESC,id",

@@ -18,7 +18,7 @@ from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard
 from portfolio.ui.holdings_page import ModernMetricCard
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
-    holding_metrics, money, panel, percent, trend_points,
+    closed_metrics, closed_trend_points, holding_metrics, money, panel, percent, trend_points,
 )
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
@@ -162,7 +162,6 @@ class FundTable(QWidget):
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
-                unaccounted = self.columns is CLOSED_POSITIONS and key in ("buy_amount", "sell_amount", "realized", "realized_rate", "holding_days") and val is None
                 if key in ("market_value", "confirmed_amount", "fee", "pnl", "cost", "floating", "buy_amount", "sell_amount", "realized"):
                     val = amount(val)
                 elif key in ("weight", "rate", "floating_rate", "realized_rate") and val is not None:
@@ -179,8 +178,6 @@ class FundTable(QWidget):
                             val = "—"
                     elif key in ("average", "shares"):
                         val = money(val, 4 if key == "average" else 2)
-                if unaccounted:
-                    val = "未核算"
                 item = QTableWidgetItem(("查看 ›" if self.open_positions else "›") if key == "arrow" else str(val) if val is not None else "—")
                 if self.open_positions:
                     if key in ("floating", "floating_rate", "realized", "realized_rate") and row.get(key) is not None and row[key]:
@@ -189,7 +186,9 @@ class FundTable(QWidget):
                         item.setForeground(QBrush(QColor(BLUE)))
                 if key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tooltip = row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate", "realized", "realized_rate", "buy_amount", "sell_amount") else row.get("issue")
+                tooltip = row.get("cash_summary_scope") if key in ("buy_amount", "sell_amount") else row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate", "realized", "realized_rate") else row.get("issue")
+                if key in ("realized", "realized_rate") and row.get("historical_returns_as_of"):
+                    tooltip = f"历史账本截至 {row['historical_returns_as_of']} 的已确认收益；{row.get('confirmation_note') or ''}"
                 if key == "fund_name":
                     tooltip = f"{row.get('fund_name', '')} · {row.get('fund_code', '')}"
                 if tooltip:
@@ -590,11 +589,14 @@ class DomesticHoldingsPage(QWidget):
         if not opened:
             prepared = []
             for row in rows:
-                # Historical snapshots with incomplete accounting are not
-                # equivalent to fully reconciled realized returns.
-                realized = row.get("realized_pnl") if not row.get("return_issue") else None
+                realized = row.get("last_confirmed_total_pnl")
+                rate = row.get("last_confirmed_rate")
+                contributed = row.get("last_confirmed_contributed")
+                if realized is None and not row.get("return_issue"):
+                    realized, rate, contributed = row.get("pnl"), row.get("rate"), row.get("contributed")
                 prepared.append(dict(row, realized=Decimal(realized) if realized is not None else None,
-                                     realized_rate=None, buy_amount=None, sell_amount=None, holding_days=None))
+                                     realized_rate=Decimal(rate) if rate is not None else None,
+                                     contributed=Decimal(contributed) if contributed is not None else None))
             profit = [r for r in prepared if r["realized"] is not None and r["realized"] > 0]
             loss = [r for r in prepared if r["realized"] is not None and r["realized"] < 0]
             for i, (name, group) in enumerate(zip(("全部", "盈利", "亏损"), (prepared, profit, loss))):
@@ -608,19 +610,23 @@ class DomesticHoldingsPage(QWidget):
             self.by_type.render(prepared, "fund_type", absolute or None, value_key="realized", absolute=True)
             self.contribution.render(prepared, closed=True)
             self.history_title.setText("累计已实现盈亏趋势")
+            self.closed_scope = prepared
             self.render_history()
-            closed_titles = ("已实现盈亏（CNY）", "已清仓基金数量", "累计买入（CNY）", "累计卖出（CNY）", "清仓收益率", "平均持有时长")
-            realized_values = [r["realized"] for r in prepared if r["realized"] is not None]
-            self.closed_total.setText(f"合计　{len(prepared)} 条　已核算收益 {money(sum(realized_values, Decimal(0)) if realized_values else None)} CNY　· {len(prepared) - len(realized_values)} 条未核算")
-            numbers = (sum(realized_values, Decimal(0)) if realized_values else None,
-                       len({r["fund_code"] for r in prepared}), None, None, None, None)
+            closed_titles = ("历史已实现盈亏（CNY）", "已清仓基金数量", "已导入买入（CNY）", "已导入赎回（CNY）", "基金成本加权收益率", "平均持有时长")
+            stats = closed_metrics(prepared)
+            self.closed_total.setText(f"合计　{len(prepared)} 条　买入 {money(stats['buy'])}　赎回 {money(stats['sell'])}　历史收益 {money(stats['realized'])} CNY")
+            numbers = (stats['realized'], len({r["fund_code"] for r in prepared}), stats['buy'], stats['sell'], stats['rate'], stats['holding_days'])
             for (key, _, _), title, number, icon in zip(METRICS, closed_titles, numbers, ("¥", "#", "买", "卖", "%", "◷")):
                 self.metric_captions[key].setText(title)
                 self.metric_cards[key].icon_badge.setText(icon)
                 value, note = self.metric_labels[key]
-                value.setText(f"{number} 只" if key == "cost" and number is not None else money(number) if number is not None else "未核算")
-                note.setText(f"{len(realized_values)}/{len(prepared)} 条已核算" if key == "market" else "")
-                note.setVisible(key == "market" and len(realized_values) < len(prepared))
+                value.setText("—" if number is None else f"{number} 只" if key == "cost" else f"{number:.0f} 天" if key == "top" else percent(number) if key == "count" else money(number))
+                note.setText(f"历史可核对 {stats['profit_count']}/{len(prepared)} 条" if key == "market" else "")
+                note.setVisible(key == "market" and stats['profit_count'] < len(prepared))
+                self.metric_cards[key].setToolTip(
+                    "按可核对基金的成本加权，基金间转换转入会计入该基金成本，不能当作账户资金收益率。" if key == "count" else
+                    "确认流水汇总；转换进出和分红单独统计，可能不含缺失历史。" if key in ("floating", "rate") else
+                    "仅统计历史账本可核对的记录。")
                 value.setProperty("sign", "positive" if key == "market" and number is not None and number > 0 else "negative" if key == "market" and number is not None and number < 0 else "")
                 self.metric_cards[key].set_value(value.text(), GREEN if key == "market" and number is not None and number > 0 else RED if key == "market" and number is not None and number < 0 else "#0F172A")
                 value.style().unpolish(value); value.style().polish(value)
@@ -674,9 +680,13 @@ class DomesticHoldingsPage(QWidget):
 
     def render_history(self):
         if self.modes.checkedId() == 1:
-            self.history_plot.render([])
-            self.history_plot.hide()
-            self.history_note.setText("缺少逐笔已核算收益确认日期，暂无法绘制真实累计趋势。")
+            rows = getattr(self, "closed_scope", [])
+            cutoff = date.fromisoformat(rows[0]["valuation_date"]) if rows else date.today()
+            points, covered = closed_trend_points(rows, self.history_periods[self.history_ranges.checkedId()], cutoff)
+            self.history_plot.render(points, calendar_spacing=True, step_series=True, value_label="累计历史已实现盈亏")
+            self.history_plot.setVisible(bool(points))
+            self.history_note.setText((f"按确认日累计，仅包含有逐笔收益依据的 {covered}/{len(rows)} 条记录。" if points else
+                                       f"当前范围没有可展示的收益确认事件；有逐笔依据 {covered}/{len(rows)} 条。"))
             self.history_note.show()
             return
         self.history_note.hide()
@@ -755,8 +765,10 @@ class DomesticHoldingsPage(QWidget):
         value = Decimal(row["market_value"]) if row.get("market_value") is not None else None
         cost = Decimal(row["cost"]) if row.get("cost") is not None else None
         floating = value - cost if value is not None and cost is not None else None
-        realized = Decimal(row["realized_pnl"]) if row.get("realized_pnl") is not None and not row.get("return_issue") else None
-        pnl = Decimal(row["pnl"]) if row.get("pnl") is not None and not row.get("return_issue") else None
+        realized_raw = row.get("last_confirmed_realized_pnl") if row.get("last_confirmed_realized_pnl") is not None else row.get("realized_pnl") if not row.get("return_issue") else None
+        pnl_raw = row.get("last_confirmed_total_pnl") if row.get("last_confirmed_total_pnl") is not None else row.get("pnl") if not row.get("return_issue") else None
+        realized = Decimal(realized_raw) if realized_raw is not None else None
+        pnl = Decimal(pnl_raw) if pnl_raw is not None else None
         data = {"shares": amount(row.get("shares")), "cost": amount(cost),
                 "nav": row.get("nav") or "—", "market": amount(value),
                 "floating": amount(floating), "pnl": amount(pnl)}
@@ -767,19 +779,28 @@ class DomesticHoldingsPage(QWidget):
             metric.val_lbl.setStyleSheet(f"color:{color or '#0F172A'};")
         for key, number in (("floating", floating), ("realized", realized), ("pnl", pnl)):
             color = GREEN if number is not None and number > 0 else RED if number is not None and number < 0 else None
-            self.pnl_metrics[key].set_content(amount(number) if number is not None else "未核算", "", color)
+            self.pnl_metrics[key].set_content(amount(number) if number is not None else "—", "", color)
             self.pnl_metrics[key].val_lbl.setStyleSheet(f"color:{color or '#0F172A'};")
-        self.pnl_note.setText(row.get("confirmation_note") or row.get("return_issue") or "累计盈亏包含已实现收益及现金分红；浮动盈亏为市值减剩余持仓成本。")
+        note = row.get("confirmation_note") or row.get("return_issue") or "累计盈亏包含已实现收益及现金分红；浮动盈亏为市值减剩余持仓成本。"
+        historical = f"历史收益截至 {row['historical_returns_as_of']}；" if row.get("historical_returns_as_of") and not row.get("confirmation_note") else ""
+        self.pnl_note.setText(historical + note)
         self.fund_overview.setText(
             f"平台  {row['platform']}\n账户  {row['account_name']}\n基金代码  {row['fund_code']}\n"
             f"交易资料覆盖截至  {row['coverage_through'] or '—'}\n{row['status']}\n"
             f"净值状态  {row['nav_status']}\n"
+            f"最早可确认持有日  {row.get('first_confirmed_holding_date') or '—'}\n"
+            f"首次确认买入或转入日  {row.get('first_trade_date') or '—'}\n"
             f"最近确认清仓日  {row['last_confirmed_close_date'] or '—'}\n\n"
             f"当前份额  {row['shares'] or '—'}\n当前市值  {amount(row['market_value'])}\n"
             f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
+            f"确认买入金额  {amount(row.get('buy_amount'))}\n确认赎回金额  {amount(row.get('sell_amount'))}\n"
+            f"转换转入金额  {amount(row.get('transfer_in_amount'))}\n转换转出金额  {amount(row.get('transfer_out_amount'))}\n"
+            f"历史现金分红  {amount(row.get('dividend_amount'))}\n交易手续费  {amount(row.get('fee_amount'))}\n"
             f"剩余持仓成本  {amount(row.get('cost'))}\n已实现盈亏  {amount(row.get('realized_pnl'))}\n"
             + (f"最近确认已实现盈亏  {amount(row['last_confirmed_realized_pnl'])}\n" if row.get("last_confirmed_realized_pnl") is not None else "")
             + (f"{row['confirmation_note']}\n" if row.get("confirmation_note") else "")
+            + (f"流水说明  {row['cash_summary_scope']}\n" if row.get("cash_summary_scope") else "")
+            + (f"流水异常  {row['cash_summary_issue']}\n" if row.get("cash_summary_issue") else "")
             + f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
             f"累计分红  {amount(row.get('cash_dividend'))}\n"
             f"数据说明  {row.get('issue') or '—'}\n"

@@ -37,7 +37,7 @@ def confirmed_returns(transactions, shares, market_value):
     if quantity != shares or contributed <= ZERO or (shares > ZERO and market_value is None):
         return {}
     pnl = (market_value or ZERO) - cost + realized + dividends
-    return dict(cost=exact(cost), realized_pnl=exact(realized), cash_dividend=exact(dividends),
+    return dict(cost=exact(cost), contributed=exact(contributed), realized_pnl=exact(realized), cash_dividend=exact(dividends),
                 pnl=exact(pnl), rate=exact(pnl / contributed * 100))
 
 
