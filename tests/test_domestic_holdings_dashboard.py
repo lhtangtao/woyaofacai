@@ -44,3 +44,25 @@ def test_history_area_does_not_draw_gap_edges():
     assert len(areas) == len(lines) == 2
     assert all(area.pen().style() == Qt.PenStyle.NoPen for area in areas)
     assert all(line.count() == 2 for line in lines)
+
+
+def test_contribution_bars_share_scale_and_open_selected_fund():
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from portfolio.ui.domestic_holdings_dashboard import ContributionPlot
+
+    app = QApplication.instance() or QApplication([])
+    selected = []
+    plot = ContributionPlot(selected.append)
+    loss = dict(fund_code="000001", fund_name="基金一", platform="支付宝", floating=Decimal("-10"))
+    gain = dict(fund_code="000002", fund_name="基金二", platform="天天基金", floating=Decimal("20"))
+    plot.resize(800, 150)
+    plot.set_data([loss], [gain], "floating")
+    plot.show()
+    app.processEvents()
+    plot.grab()
+    assert abs(plot.hits[0][0].width() * 2 - plot.hits[2][0].width()) < 0.01
+    QTest.mouseClick(plot, Qt.MouseButton.LeftButton, pos=plot.hits[0][0].center().toPoint())
+    assert selected == [loss]
+    plot.close()

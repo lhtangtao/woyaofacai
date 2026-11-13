@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
+from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
     holding_metrics, money, panel, percent, trend_points,
@@ -215,17 +216,18 @@ class DomesticHoldingsPage(QWidget):
         self.metric_area = QWidget()
         self.metric_labels = {}
         self.metric_captions = {}
+        self.metric_cards = {}
         cards = []
-        for key, title, _ in METRICS:
-            frame, body = panel()
-            caption = QLabel(title, objectName="domesticCaption", wordWrap=True)
-            value = QLabel("—", objectName="domesticMetric")
+        for (key, title, _), icon in zip(METRICS, ("¥", "∑", "±", "%", "#", "◔")):
+            frame = HoldingsKpiCard(title, icon)
+            caption, value = frame.title_lbl, frame.val_lbl
             note = QLabel(objectName="domesticCaption", wordWrap=True)
-            for widget in (caption, value, note):
-                body.addWidget(widget)
+            frame.layout().itemAt(1).layout().addWidget(note)
+            note.hide()
             cards.append(frame)
             self.metric_labels[key] = value, note
             self.metric_captions[key] = caption
+            self.metric_cards[key] = frame
         self.metric_grid = ResponsiveGrid(cards, 183, 6)
         self.metric_grid.setContentsMargins(0, 0, 0, 0)
         self.metric_area.setLayout(self.metric_grid)
@@ -252,7 +254,7 @@ class DomesticHoldingsPage(QWidget):
         for widget in (self.platform, self.kind, self.search, self.close_start, self.close_end):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(lambda *_: self.render_overview(reset=True))
-        overview.addWidget(filter_box)
+        mode_bar.addWidget(filter_box, 1)
 
         self.graph_area = QWidget()
         self.by_platform = PlatformList(lambda name: self.apply_distribution(self.platform, name))
@@ -274,7 +276,7 @@ class DomesticHoldingsPage(QWidget):
         trend_body.addWidget(self.history_plot, 1)
         self.history_note = QLabel("", objectName="domesticCaption", wordWrap=True)
         trend_body.addWidget(self.history_note)
-        self.graph_grid = ResponsiveGrid([self.by_platform, self.by_type, trend], 345, 3)
+        self.graph_grid = ResponsiveGrid([self.by_platform, self.by_type, trend], 345, 3, weights=(4, 3, 4))
         self.graph_grid.setContentsMargins(0, 0, 0, 0)
         self.graph_area.setLayout(self.graph_grid)
         overview.addWidget(self.graph_area)
@@ -506,13 +508,15 @@ class DomesticHoldingsPage(QWidget):
             self.closed_total.setText(f"合计　{len(prepared)} 条　已核算收益 {money(sum(realized_values, Decimal(0)) if realized_values else None)} CNY　· {len(prepared) - len(realized_values)} 条未核算")
             numbers = (sum(realized_values, Decimal(0)) if realized_values else None,
                        len({r["fund_code"] for r in prepared}), None, None, None, None)
-            for (key, _, _), title, number in zip(METRICS, closed_titles, numbers):
+            for (key, _, _), title, number, icon in zip(METRICS, closed_titles, numbers, ("¥", "#", "买", "卖", "%", "◷")):
                 self.metric_captions[key].setText(title)
+                self.metric_cards[key].icon_badge.setText(icon)
                 value, note = self.metric_labels[key]
                 value.setText(f"{number} 只" if key == "cost" and number is not None else money(number) if number is not None else "未核算")
                 note.setText(f"{len(realized_values)}/{len(prepared)} 条已核算" if key == "market" else "")
                 note.setVisible(key == "market" and len(realized_values) < len(prepared))
                 value.setProperty("sign", "positive" if key == "market" and number is not None and number > 0 else "negative" if key == "market" and number is not None and number < 0 else "")
+                self.metric_cards[key].set_value(value.text(), GREEN if key == "market" and number is not None and number > 0 else RED if key == "market" and number is not None and number < 0 else "#0F172A")
                 value.style().unpolish(value); value.style().polish(value)
             return
 
@@ -538,12 +542,16 @@ class DomesticHoldingsPage(QWidget):
         self.contribution.render(prepared)
         self.history_title.setText("持仓市值趋势")
         self.render_history()
-        for key, title, formatter in METRICS:
+        for (key, title, formatter), icon in zip(METRICS, ("¥", "∑", "±", "%", "#", "◔")):
             self.metric_captions[key].setText(title)
+            self.metric_cards[key].icon_badge.setText(icon)
             value, note = self.metric_labels[key]
             metric = summary[key]
             value.setText(formatter(metric))
             sign = ("positive" if metric > 0 else "negative") if key in ("floating", "rate") and metric else ""
+            self.metric_cards[key].set_value(value.text(), GREEN if sign == "positive" else RED if sign == "negative" else "#0F172A",
+                badge_bg="#DCFCE7" if sign == "positive" else "#FEE2E2" if sign == "negative" else "#EFF6FF",
+                badge_fg=GREEN if sign == "positive" else RED if sign == "negative" else BLUE)
             value.setProperty("sign", sign)
             value.style().unpolish(value)
             value.style().polish(value)

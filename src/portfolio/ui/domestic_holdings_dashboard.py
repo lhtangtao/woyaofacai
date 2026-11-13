@@ -5,9 +5,9 @@ from datetime import date
 from decimal import Decimal, localcontext
 
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
-from PySide6.QtCore import QMargins, QRect, Qt
+from PySide6.QtCore import QMargins, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
 GREEN = "#15803D"
@@ -113,11 +113,12 @@ def panel(title=None):
 
 
 class ResponsiveGrid(QGridLayout):
-    def __init__(self, widgets, width_per_card, columns):
+    def __init__(self, widgets, width_per_card, columns, weights=None):
         super().__init__()
         self.widgets = widgets
         self.width_per_card = width_per_card
         self.max_columns = columns
+        self.weights = weights
         self.columns = 0
         self.reflow(columns * width_per_card)
 
@@ -126,7 +127,7 @@ class ResponsiveGrid(QGridLayout):
         if columns == self.columns:
             return
         for index in range(self.max_columns):
-            self.setColumnStretch(index, int(index < columns))
+            self.setColumnStretch(index, (self.weights[index] if self.weights and columns == self.max_columns else 1) if index < columns else 0)
         self.columns = columns
         for i, widget in enumerate(self.widgets):
             self.removeWidget(widget)
@@ -148,6 +149,7 @@ class Distribution(QWidget):
         self.chart.setBackgroundVisible(False)
         self.chart.setMargins(QMargins())
         plot = QChartView(self.chart)
+        plot.setStyleSheet("background:transparent; border:0;")
         plot.setRenderHint(QPainter.RenderHint.Antialiasing)
         plot.setFixedSize(132, 132)
         self.center = QLabel(plot)
@@ -188,8 +190,8 @@ class Distribution(QWidget):
                 segment.setColor(QColor(color))
                 segment.setBorderColor(QColor("white"))
                 segment.clicked.connect(lambda name=name: self.selected(name))
-            button = QPushButton(f"{name}  ·  {count} 只\n{money(value)}  ·  {portion}")
-            button.setStyleSheet(f"text-align: left; border-left: 3px solid {color};")
+            button = QPushButton(f"● {name}  {portion}  {money(value)}  {count} 只")
+            button.setStyleSheet(f"text-align:left; border:0; background:transparent; color:{color}; padding:4px;")
             button.clicked.connect(lambda _, name=name: self.selected(name))
             self.legend.addWidget(button)
         self.chart.addSeries(series)
@@ -207,35 +209,58 @@ class PlatformList(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         frame, self.body = panel("按交易平台分布")
         outer.addWidget(frame)
+        self.table = QTableWidget()
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().hide()
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setMinimumSectionSize(68)
+        self.table.setShowGrid(False)
+        self.table.setStyleSheet("QTableWidget {font-size:11px;} QHeaderView::section {font-size:11px; padding:4px;}")
+        self.table.setMinimumHeight(170)
+        self.table.cellClicked.connect(self._clicked)
+        self.body.addWidget(self.table, 1)
+        self.names = []
+
+    def _clicked(self, row, _column):
+        if row < len(self.names):
+            self.selected(self.names[row])
+        else:
+            self.selected("")
 
     def render(self, rows, closed=False):
-        while self.body.count() > 1:
-            item = self.body.takeAt(1)
-            if item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
         value_key = "realized" if closed else "market_value"
         groups = defaultdict(list)
         for row in rows:
             groups[row["platform"]].append(row)
-        self.body.addWidget(QLabel("平台　　已核算盈亏 / 基金数" if closed else "平台　　市值 / 成本 / 浮动盈亏 / 基金数", objectName="domesticCaption"))
-        for name, group in sorted(groups.items()):
+        self.names = sorted(groups)
+        self.table.setColumnCount(4 if closed else 6)
+        self.table.setHorizontalHeaderLabels(["交易平台", "已核算盈亏", "未核算", "基金数"] if closed else
+                                             ["交易平台", "市值占比", "持仓成本", "持仓市值", "浮动盈亏", "基金数"])
+        self.table.setRowCount(len(self.names) + 1)
+        market = total(row.get("market_value") for row in rows)
+        for index, name in enumerate(self.names + ["合计"]):
+            group = rows if name == "合计" else groups[name]
             values = [row.get(value_key) for row in group]
             value = total(values)
             incomplete = sum(v is None for v in values)
             if closed:
-                summary = f"已实现 {money(value)} CNY"
+                columns = (name, money(value), str(incomplete), str(len({r['fund_code'] for r in group})))
             else:
                 matched = [r for r in group if r.get("floating") is not None]
-                summary = f"市值 {money(value)}　成本 {money(total(r.get('cost') for r in matched))}　盈亏 {money(total(r.get('floating') for r in matched))}"
                 incomplete = sum(r.get("floating") is None for r in group)
-            button = QPushButton(f"{name}　{summary}　{len({r['fund_code'] for r in group})} 只" + (f"　· {incomplete} 条未核算" if incomplete else ""))
-            button.setStyleSheet("text-align:left; padding:9px;")
-            button.clicked.connect(lambda _, name=name: self.selected(name))
-            self.body.addWidget(button)
-        if not groups:
-            self.body.addWidget(QLabel("暂无数据"))
-        self.body.addStretch()
+                columns = (name, percent(value / market * 100) if market and value is not None else "—",
+                           money(total(r.get('cost') for r in matched)), money(value),
+                           money(total(r.get('floating') for r in matched)), str(len({r['fund_code'] for r in group})))
+            for column, text in enumerate(columns):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if incomplete:
+                    item.setToolTip(f"{incomplete} 条收益尚未核算")
+                if name == "合计":
+                    font = item.font(); font.setBold(True); item.setFont(font)
+                self.table.setItem(index, column, item)
 
 
 class Contribution(QWidget):
@@ -246,42 +271,82 @@ class Contribution(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         frame, self.body = panel()
         outer.addWidget(frame)
+        self.title = QLabel(objectName="domesticSection")
+        self.body.addWidget(self.title)
+        labels = QHBoxLayout()
+        self.loss_label, self.gain_label = QLabel(), QLabel()
+        self.loss_label.setStyleSheet("color:#DC2626; background:#FEF2F2; border-radius:4px; padding:4px;")
+        self.gain_label.setStyleSheet("color:#16A34A; background:#F0FDF4; border-radius:4px; padding:4px;")
+        labels.addWidget(self.loss_label); labels.addStretch(); labels.addWidget(self.gain_label)
+        self.body.addLayout(labels)
+        self.chart = ContributionPlot(selected)
+        self.body.addWidget(self.chart)
 
     def render(self, rows, closed=False):
-        while self.body.count():
-            item = self.body.takeAt(0)
-            if item.widget():
-                item.widget().hide()
-                item.widget().deleteLater()
-        self.body.addWidget(QLabel(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top 5", objectName="domesticSection"))
+        self.title.setText(("已清仓基金已实现盈亏" if closed else "持有中基金浮动盈亏") + "贡献 Top 5")
         key = "realized" if closed else "floating"
-        columns = QWidget()
-        columns_layout = QHBoxLayout(columns)
-        columns_layout.setContentsMargins(0, 0, 0, 0)
-        self.body.addWidget(columns)
-        for sign, title, color in ((-1, "亏损贡献", RED), (1, "盈利贡献", GREEN)):
-            side = QWidget()
-            side_layout = QVBoxLayout(side)
-            side_layout.setContentsMargins(0, 0, 0, 0)
-            columns_layout.addWidget(side, 1)
-            group = sorted((r for r in rows if r.get(key) is not None and r[key] * sign > 0),
-                           key=lambda r: abs(r[key]), reverse=True)[:5]
-            side_layout.addWidget(QLabel(f"{title} Top 5" + (f"　· 已核算 {len(group)} 条" if group else "　· 暂无已核算数据")))
-            maximum = max((abs(r[key]) for r in group), default=Decimal(1))
-            for row in group:
-                button = QPushButton(f"{row['fund_code']}　{row['fund_name']}　{money(row[key])}")
-                button.setStyleSheet(f"text-align:left; color:{color};")
-                button.setToolTip(f"{row['fund_name']}　{row['platform']}　{money(row[key])} CNY")
-                button.clicked.connect(lambda _, row=row: self.selected(row))
-                side_layout.addWidget(button)
-                bar = QProgressBar()
-                bar.setTextVisible(False)
-                bar.setFixedHeight(5)
-                bar.setInvertedAppearance(sign < 0)
-                bar.setValue(int(abs(row[key]) / maximum * 100))
-                bar.setStyleSheet(f"QProgressBar::chunk {{ background:{color}; }}")
-                side_layout.addWidget(bar)
-            side_layout.addStretch()
+        losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
+        gains = sorted((r for r in rows if r.get(key) is not None and r[key] > 0), key=lambda r: r[key], reverse=True)
+        self.loss_label.setText(f"亏损贡献（Top 5） · 全部 {money(total(r[key] for r in losses))} CNY")
+        self.gain_label.setText(f"盈利贡献（Top 5） · 全部 {money(total(r[key] for r in gains))} CNY")
+        self.chart.set_data(losses[:5], gains[:5], key)
+
+
+class ContributionPlot(QWidget):
+    """Domestic fund contribution bars, scaled around a shared zero."""
+    def __init__(self, selected):
+        super().__init__()
+        self.selected, self.losses, self.gains, self.key, self.hits = selected, [], [], "floating", []
+        self.setMouseTracking(True)
+        self.setMinimumHeight(150)
+
+    def set_data(self, losses, gains, key):
+        self.losses, self.gains, self.key = losses, gains, key
+        self.setFixedHeight(max(100, max(len(losses), len(gains), 1) * 26 + 18))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.hits = []
+        if not self.losses and not self.gains:
+            painter.setPen(QColor("#94A3B8"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无已核算的盈亏数据")
+            return
+        width = float(self.width())
+        side = max(130.0, min(200.0, width * .22))
+        center = width / 2
+        half = max(10.0, center - side - 12)
+        maximum = max(abs(r[self.key]) for r in self.losses + self.gains)
+        painter.setPen(QPen(QColor("#CBD5E1"), 1, Qt.PenStyle.DashLine))
+        painter.drawLine(int(center), 5, int(center), self.height() - 5)
+        for sign, rows in ((-1, self.losses), (1, self.gains)):
+            for index, row in enumerate(rows):
+                y = 8 + index * 26
+                length = float(abs(row[self.key]) / maximum) * half
+                bar = QRectF(center - length if sign < 0 else center, y + 5, max(2, length), 15)
+                label = QRectF(4 if sign < 0 else width - side, y, side - 4, 25)
+                self.hits.extend(((bar, row), (label, row)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#EF4444" if sign < 0 else "#22C55E"))
+                painter.drawRoundedRect(bar, 3, 3)
+                painter.setPen(QColor(RED if sign < 0 else GREEN))
+                text = f"{index + 1}  {row['fund_code']}   {money(row[self.key])}"
+                painter.drawText(label, Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignLeft if sign < 0 else Qt.AlignmentFlag.AlignRight), text)
+
+    def mousePressEvent(self, event):
+        for rect, row in self.hits:
+            if rect.contains(event.position()):
+                self.selected(row)
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        for rect, row in self.hits:
+            if rect.contains(event.position()):
+                QToolTip.showText(event.globalPosition().toPoint(), f"{row['fund_name']} · {row['platform']}\n{money(row[self.key])} CNY", self)
+                return
+        QToolTip.hideText()
 
 
 class HoldingsDelegate(QStyledItemDelegate):
@@ -326,6 +391,7 @@ class HoldingsDelegate(QStyledItemDelegate):
 class TrendView(QChartView):
     def __init__(self):
         super().__init__(QChart())
+        self.setStyleSheet("background:transparent; border:0;")
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setMouseTracking(True)
         self.setMinimumHeight(162)
