@@ -533,8 +533,13 @@ class MainWindow(InteractionMixin, QMainWindow):
         finally:
             self._syncing_global_filter = False
             self._filter_batch = False
+        adv_cleared = False
+        if self.pages.currentIndex() == 0 and hasattr(self, "trade_center") and hasattr(self.trade_center, "clear_advanced_filters"):
+            adv_cleared = self.trade_center.clear_advanced_filters()
         self.search_timer.stop()
         self.filters_changed()
+        if adv_cleared and self.pages.currentIndex() == 0 and hasattr(self, "trade_center"):
+            self.trade_center.query()
 
     def filters_changed(self, *_):
         if self._filter_batch:
@@ -567,6 +572,9 @@ class MainWindow(InteractionMixin, QMainWindow):
                 self.holdings_page.sync_from_global_filter(self.global_asset_filter.state())
             else:
                 self.holdings_page.sync_person_from_main(self.person.currentData())
+        if hasattr(self, "trade_center") and hasattr(self.trade_center, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
+            if self.pages.currentIndex() == 0:
+                self.trade_center.sync_from_global_filter(self.global_asset_filter.state())
         self.refresh()
 
     def sync_person_from_holdings(self, person_id):

@@ -673,6 +673,8 @@ class DailyPerformancePage(QWidget):
         self.stock_filter_date: str = ""
         self.selected_date: str = ""
         self.max_as_of_date: str = ""
+        self._broker_overview_mode: str = "daily"
+        self._broker_overview_rows: List[Tuple] = []
         self._syncing_person = False
         self._syncing_broker = False
 
@@ -882,26 +884,28 @@ class DailyPerformancePage(QWidget):
         trend_vbox.setSpacing(2)
 
         trend_top = QHBoxLayout()
+        tab_btn_style = """
+            QPushButton {
+                background: transparent;
+                color: #64748B;
+                font-size: 12px;
+                font-weight: 600;
+                border: none;
+                padding: 3px 8px;
+                border-radius: 4px;
+            }
+            QPushButton:checked {
+                background: #EFF6FF;
+                color: #2563EB;
+            }
+        """
+        self._card_tab_style = tab_btn_style
         self.trend_tab_daily = QPushButton("每日收益走势")
         self.trend_tab_cum = QPushButton("累计收益走势")
         for btn in (self.trend_tab_daily, self.trend_tab_cum):
             btn.setCheckable(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: transparent;
-                    color: #64748B;
-                    font-size: 12px;
-                    font-weight: 600;
-                    border: none;
-                    padding: 3px 8px;
-                    border-radius: 4px;
-                }
-                QPushButton:checked {
-                    background: #EFF6FF;
-                    color: #2563EB;
-                }
-            """)
+            btn.setStyleSheet(tab_btn_style)
         self.trend_tab_daily.setChecked(True)
         self.trend_tab_daily.clicked.connect(lambda: self.switch_trend_mode("daily"))
         self.trend_tab_cum.clicked.connect(lambda: self.switch_trend_mode("cum"))
@@ -926,12 +930,26 @@ class DailyPerformancePage(QWidget):
         broker_vbox.setSpacing(4)
 
         b_header = QHBoxLayout()
-        b_title = QLabel("渠道收益概览 <span style='font-size: 11px; color: #64748B;'>(期间累计)</span>")
-        b_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #1E293B;")
+        b_header.setSpacing(4)
+        self.broker_tab_daily = QPushButton("当日渠道收益")
+        self.broker_tab_cum = QPushButton("累计渠道收益")
+        for btn in (self.broker_tab_daily, self.broker_tab_cum):
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._card_tab_style)
+        self.broker_tab_daily.setChecked(True)
+        self.broker_tab_daily.clicked.connect(lambda: self.switch_broker_overview_mode("daily"))
+        self.broker_tab_cum.clicked.connect(lambda: self.switch_broker_overview_mode("cum"))
+
+        self.broker_scope_lbl = QLabel("")
+        self.broker_scope_lbl.setStyleSheet("font-size: 11px; color: #64748B; padding-left: 4px;")
+
         b_detail_link = QLabel("<a href='#channel' style='color: #2563EB; text-decoration: none;'>查看详情 →</a>")
         b_detail_link.setOpenExternalLinks(False)
         b_detail_link.linkActivated.connect(lambda: self.tab_bar.setCurrentIndex(1))
-        b_header.addWidget(b_title)
+        b_header.addWidget(self.broker_tab_daily)
+        b_header.addWidget(self.broker_tab_cum)
+        b_header.addWidget(self.broker_scope_lbl)
         b_header.addStretch()
         b_header.addWidget(b_detail_link)
         broker_vbox.addLayout(b_header)
@@ -944,13 +962,13 @@ class DailyPerformancePage(QWidget):
         th_b_name.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
         th_b_bar = QLabel("收益率 (占总收益)")
         th_b_bar.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
-        th_b_pnl = QLabel("累计收益")
-        th_b_pnl.setFixedWidth(85)
-        th_b_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        th_b_pnl.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
+        self.th_b_pnl = QLabel("当日收益")
+        self.th_b_pnl.setFixedWidth(85)
+        self.th_b_pnl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.th_b_pnl.setStyleSheet("font-size: 11px; color: #94A3B8; font-weight: 600;")
         b_th.addWidget(th_b_name)
         b_th.addWidget(th_b_bar)
-        b_th.addWidget(th_b_pnl)
+        b_th.addWidget(self.th_b_pnl)
         broker_vbox.addLayout(b_th)
 
         self.broker_scroll = QScrollArea()
@@ -1757,16 +1775,41 @@ class DailyPerformancePage(QWidget):
         # Update Active Table Tab
         self.refresh_table_view(filtered, date_summaries)
 
+    def switch_broker_overview_mode(self, mode: str):
+        self._broker_overview_mode = "cum" if mode == "cum" else "daily"
+        self.broker_tab_daily.setChecked(self._broker_overview_mode == "daily")
+        self.broker_tab_cum.setChecked(self._broker_overview_mode == "cum")
+        self.update_broker_overview(self._broker_overview_rows)
+
     def update_broker_overview(self, overview_rows: List[Tuple]):
+        self._broker_overview_rows = list(overview_rows)
         while self.broker_list_layout.count():
             item = self.broker_list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        is_daily = self._broker_overview_mode == "daily"
+        target_d = self.selected_date or self.max_as_of_date
+        if is_daily:
+            self.th_b_pnl.setText("当日收益")
+            self.broker_scope_lbl.setText(target_d or "")
+            scoped_rows = [r for r in overview_rows if r[0] == target_d] if target_d else []
+        else:
+            self.th_b_pnl.setText("累计收益")
+            self.broker_scope_lbl.setText("(期间累计)")
+            scoped_rows = overview_rows
+
         broker_pnl: Dict[str, float] = {}
-        for r in overview_rows:
+        for r in scoped_rows:
             b = r[1]
             broker_pnl[b] = broker_pnl.get(b, 0.0) + float(r[19] or 0)
+
+        if not broker_pnl:
+            empty_lbl = QLabel("当日暂无渠道收益数据" if is_daily else "暂无渠道收益数据")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet("font-size: 12px; color: #94A3B8; padding: 24px 0;")
+            self.broker_list_layout.addWidget(empty_lbl)
+            return
 
         total_abs = max(1e-5, sum(abs(v) for v in broker_pnl.values()))
         sorted_brokers = sorted(broker_pnl.items(), key=lambda x: x[1], reverse=True)
@@ -1909,6 +1952,8 @@ class DailyPerformancePage(QWidget):
             self.table_model.highlight_date = new_date
             self.table_model.layoutChanged.emit()
             self.update_date_distribution(self.current_filtered_rows or self.raw_rows)
+            if self._broker_overview_mode == "daily" and self._broker_overview_rows:
+                self.update_broker_overview(self._broker_overview_rows)
             self.trend_canvas.selected_date = new_date
             self.trend_canvas.update()
             self.update_date_nav_buttons()
@@ -2345,6 +2390,8 @@ class DailyPerformancePage(QWidget):
     def select_date(self, target_date: str):
         self.selected_date = target_date
         self.update_date_distribution(self.current_filtered_rows or self.raw_rows)
+        if self._broker_overview_mode == "daily" and self._broker_overview_rows:
+            self.update_broker_overview(self._broker_overview_rows)
         self.trend_canvas.selected_date = target_date
         self.trend_canvas.update()
         self.update_date_nav_buttons()
@@ -2387,6 +2434,8 @@ class DailyPerformancePage(QWidget):
         self.selected_date = target_date
         rows = getattr(self, "current_filtered_rows", self.raw_rows)
         self.update_date_distribution(rows)
+        if self._broker_overview_mode == "daily" and self._broker_overview_rows:
+            self.update_broker_overview(self._broker_overview_rows)
         self.trend_canvas.selected_date = target_date
         self.trend_canvas.update()
 

@@ -43,7 +43,7 @@ class InteractionMixin:
         return self.pages.currentIndex() == 3 and self.asset_page.selector.currentText() == '今日盈亏'
 
     def is_global_asset_page(self):
-        return self.pages.currentIndex() in (2, 22, 23, 24) or self.today_snapshot()
+        return self.pages.currentIndex() in (0, 2, 22, 23, 24) or self.today_snapshot()
 
     def ownership_view(self):
         return self.pages.currentIndex()==3 and self.asset_page.selector.currentText()=='股票归属'
@@ -307,6 +307,10 @@ class InteractionMixin:
         self.trade_refresh_button.setVisible(trade_page)
         if hasattr(self, "holdings_page") and hasattr(self.holdings_page, "mode_box"):
             self.holdings_page.mode_box.hide()
+        if hasattr(self, "global_asset_filter") and hasattr(self.global_asset_filter, "set_trailing_widget"):
+            self.global_asset_filter.set_trailing_widget(
+                self.trade_center.top_advanced_button if trade_page and hasattr(self.trade_center, "top_advanced_button") else None
+            )
         self.refresh_button.setText("重连数据源" if trade_page else "刷新")
         self.refresh_button.setToolTip("重新打开当前数据库并检查结构 · ⌘R" if trade_page else "刷新当前数据源 · ⌘R")
         self.heading.setToolTip(str(self.info.path) if trade_page and self.info else "")
@@ -356,7 +360,9 @@ class InteractionMixin:
         if page == 0 and hasattr(self, "trade_center"):
             self.heading.setText("交易明细")
             if hasattr(self, "global_asset_filter"):
-                self.global_asset_filter.hide()
+                self.global_asset_filter.show()
+                if hasattr(self.trade_center, "sync_from_global_filter"):
+                    self.trade_center.sync_from_global_filter(self.global_asset_filter.state())
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.show();self.asset_reset_button.hide()
             self.export_button.setToolTip("导出当前筛选的全部匹配交易")

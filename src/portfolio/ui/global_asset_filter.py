@@ -88,6 +88,21 @@ class GlobalAssetFilter(QFrame):
                 color: #2563EB;
                 background: #EFF6FF;
             }
+            QFrame#globalAssetFilter QPushButton#globalTrailingBtn {
+                min-height: 28px;
+                padding: 0 12px;
+                border: 1px solid #CBD5E1;
+                border-radius: 7px;
+                background: #FFFFFF;
+                color: #334155;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QFrame#globalAssetFilter QPushButton#globalTrailingBtn:hover {
+                border-color: #2563EB;
+                color: #2563EB;
+                background: #EFF6FF;
+            }
         """)
 
         layout = QHBoxLayout(self)
@@ -140,6 +155,14 @@ class GlobalAssetFilter(QFrame):
         self.reset_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_button.setToolTip("重置人员、券商渠道、股票代码为默认筛选状态")
         layout.addWidget(self.reset_button)
+
+        self.trailing_host = QWidget(self)
+        self.trailing_host.setStyleSheet("background: transparent; border: none;")
+        self.trailing_layout = QHBoxLayout(self.trailing_host)
+        self.trailing_layout.setContentsMargins(0, 0, 0, 0)
+        self.trailing_layout.setSpacing(6)
+        self.trailing_host.hide()
+        layout.addWidget(self.trailing_host, 0)
 
         self._state = GlobalAssetFilterState()
 
@@ -291,6 +314,20 @@ class GlobalAssetFilter(QFrame):
         if idx >= 0:
             return self.person_filter.itemData(idx)
         return None
+
+    def set_trailing_widget(self, widget: QWidget | None):
+        """在右侧重置筛选按钮旁挂载或移除页面专属操作控件（如交易明细高级筛选）。"""
+        while self.trailing_layout.count():
+            item = self.trailing_layout.takeAt(0)
+            old = item.widget()
+            if old is not None and old is not widget:
+                old.hide()
+        if widget is None:
+            self.trailing_host.hide()
+            return
+        self.trailing_layout.addWidget(widget)
+        widget.show()
+        self.trailing_host.show()
 
     def reset_to_default(self, *, emit=True):
         self.set_state(

@@ -244,12 +244,14 @@ def test_five_pages_share_global_filter_and_sidebar_order(qtbot, demo_path):
         "持仓管理",
         "每日持仓收益",
         "每月持仓收益",
+        "交易明细",
         "股票归属",
         "持仓财报日历",
     ]
     trade_titles = [entry[0] for entry in GROUPS[2][1]]
     assert "每日持仓收益" not in trade_titles
     assert "每月持仓收益" not in trade_titles
+    assert "交易明细" not in trade_titles
 
     w = _open_demo(qtbot, demo_path)
     gaf = w.global_asset_filter

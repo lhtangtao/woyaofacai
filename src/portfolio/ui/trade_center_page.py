@@ -209,7 +209,7 @@ LABELS={'broker':'券商渠道','symbol':'Ticker','category':'股票分类','sid
 
 class TradeCenterPage(QWidget):
     def __init__(self,host):
-        super().__init__();self.host=host;self.jobs={};self.path=None;self.data=None;self.applied={};self.page=1;self.size=50;self.sort='trade_time';self.direction='desc';self.selected=None
+        super().__init__();self.host=host;self.jobs={};self.path=None;self.data=None;self.applied={};self.page=1;self.size=50;self.sort='trade_time';self.direction='desc';self.selected=None;self._global_state=None;self._global_shadow_boxes=[]
         self.setObjectName('tradeCenter');self.setStyleSheet(STYLE)
         self.body=QHBoxLayout(self)
         self.body.setContentsMargins(0,0,0,0)
@@ -229,14 +229,17 @@ class TradeCenterPage(QWidget):
                 card.clicked.connect(lambda _,index=i:self.quick(index))
             stats.addWidget(card,1)
             self.cards.append(card)
-        form=QWidget();form.setObjectName('filterCard');form_layout=QVBoxLayout(form);form_layout.setContentsMargins(14,12,14,10);form_layout.setSpacing(8);self.fields={}
+        self.filter_form=QWidget();self.filter_form.setObjectName('filterCard');form_layout=QVBoxLayout(self.filter_form);form_layout.setContentsMargins(14,12,14,10);form_layout.setSpacing(8);self.fields={}
         def field(label,widget):
             box=QWidget();column=QVBoxLayout(box);column.setContentsMargins(0,0,0,0);column.setSpacing(5)
             name=QLabel(label);name.setObjectName('fieldLabel');column.addWidget(name);column.addWidget(widget);widget.setMinimumWidth(0);return box
         self.person=QComboBox();self.person.addItem('全部人员',None)
         for key in ('broker','symbol','category','side','kind','search'):
             widget=QLineEdit() if key in ('symbol','search') else QComboBox()
-            if isinstance(widget,QComboBox):widget.addItem('全部','')
+            if isinstance(widget,QComboBox):
+                widget.addItem('全部','')
+                if key in ('category','side','kind'):
+                    widget.activated.connect(self.query)
             else:widget.returnPressed.connect(self.query)
             self.fields[key]=widget
         self.fields['symbol'].setPlaceholderText('搜索 Ticker')
@@ -262,11 +265,21 @@ class TradeCenterPage(QWidget):
         date_layout.addWidget(self.start)
         date_layout.addWidget(QLabel('至'))
         date_layout.addWidget(self.end)
+        self.local_filter_bar=QWidget()
+        local_layout=QVBoxLayout(self.local_filter_bar)
+        local_layout.setContentsMargins(0,0,0,0)
+        local_layout.setSpacing(8)
         top=QHBoxLayout()
         top.setSpacing(12)
+        has_global=hasattr(self.host,'global_asset_filter')
         for label,widget,stretch in (('归属人员',self.person,2),('券商渠道',self.fields['broker'],1),('Ticker',self.fields['symbol'],1),('日期范围 · 账务日期',dates,0),('关键词',self.fields['search'],3)):
-            top.addWidget(field(label,widget),stretch)
-        form_layout.addLayout(top)
+            box=field(label,widget)
+            if label in ('归属人员','券商渠道','Ticker'):
+                self._global_shadow_boxes.append(box)
+                if has_global:
+                    box.hide()
+            top.addWidget(box,stretch)
+        local_layout.addLayout(top)
 
         secondary=QHBoxLayout()
         secondary.setSpacing(10)
@@ -279,8 +292,16 @@ class TradeCenterPage(QWidget):
             button.clicked.connect(slot)
             secondary.addWidget(button,0,Qt.AlignmentFlag.AlignVCenter)
         self.advanced_button=button
-        form_layout.addLayout(secondary)
-        layout.addLayout(stats);layout.addWidget(form)
+        local_layout.addLayout(secondary)
+        form_layout.addWidget(self.local_filter_bar)
+        if has_global:
+            self.local_filter_bar.hide()
+            self.filter_form.hide()
+        self.top_advanced_button=QPushButton('高级筛选 ▾')
+        self.top_advanced_button.setObjectName('globalTrailingBtn')
+        self.top_advanced_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.top_advanced_button.clicked.connect(self.toggle_advanced)
+        layout.addLayout(stats);layout.addWidget(self.filter_form)
         self.advanced=QWidget()
         advanced=QGridLayout(self.advanced)
         advanced.setContentsMargins(0,4,0,4)
@@ -292,12 +313,14 @@ class TradeCenterPage(QWidget):
                 widget=QComboBox() if key in ('source_kind','link_status') else QLineEdit()
                 if isinstance(widget,QComboBox):
                     widget.addItem('全部','')
+                    widget.activated.connect(self.query)
                 else:
                     widget.returnPressed.connect(self.query)
                 self.fields[key]=widget
             advanced.addWidget(field(LABELS[key],self.fields[key]),index//4,index%4)
         for index,key in enumerate(('review_only','affects_only')):
             widget=QCheckBox('仅待核查' if index==0 else '仅影响持仓')
+            widget.clicked.connect(self.query)
             self.fields[key]=widget
             advanced.addWidget(widget,3,index+2)
         self.advanced.hide()
@@ -407,7 +430,7 @@ class TradeCenterPage(QWidget):
         for n in (25,50,100,200,500,1000):self.per_page.addItem(f'每页 {n} 条',n)
         self.per_page.setCurrentIndex(1);self.per_page.currentIndexChanged.connect(self.change_size);footer.addWidget(self.per_page)
         self.previous_page=QPushButton('上一页');self.next_page=QPushButton('下一页');self.previous_page.clicked.connect(lambda:self.turn(-1));self.next_page.clicked.connect(lambda:self.turn(1));footer.addWidget(self.previous_page);footer.addWidget(self.next_page);footer.setContentsMargins(14,10,14,10);table_layout.addLayout(footer)
-        self.note=QLabel();self.note.setWordWrap(True);layout.addWidget(self.note)
+        self.note=QLabel();self.note.setWordWrap(True);self.note.hide();layout.addWidget(self.note)
 
     def submit(self,name,task,ready):
         previous=self.jobs.get(name)
@@ -452,10 +475,36 @@ class TradeCenterPage(QWidget):
             self.person.blockSignals(False);self.reset();return
         if self.data is None or force:self.fetch()
 
+    def sync_from_global_filter(self,state,*,refresh:bool=True):
+        """从主窗口统一 GlobalAssetFilter 同步人员、券商渠道与股票代码。"""
+        changed=self._global_state!=state
+        self._global_state=state
+        for box in getattr(self,'_global_shadow_boxes',()):
+            box.hide()
+        self.person.blockSignals(True)
+        if isinstance(state.person,int):
+            idx=self.person.findData(state.person)
+            self.person.setCurrentIndex(idx if idx>=0 else 0)
+        else:
+            self.person.setCurrentIndex(0)
+        self.person.blockSignals(False)
+        for key in ('broker','symbol'):
+            w=self.fields.get(key)
+            if isinstance(w,QComboBox):
+                w.blockSignals(True);w.setCurrentIndex(0);w.blockSignals(False)
+            elif isinstance(w,QLineEdit):
+                w.blockSignals(True);w.clear();w.blockSignals(False)
+        if refresh and changed and self.path is not None and self.data is not None:
+            self.query()
+
     def values(self):
         result={'start_date':self.start.date().toString('yyyy-MM-dd'),'end_date':self.end.date().toString('yyyy-MM-dd')}
-        if self.person.currentData() is not None:result['person_id']=self.person.currentData()
+        using_global=self._global_state is not None or hasattr(self.host,'global_asset_filter')
+        if not using_global and self.person.currentData() is not None:
+            result['person_id']=self.person.currentData()
         for key,w in self.fields.items():
+            if using_global and key in ('broker','symbol'):
+                continue
             v=w.isChecked() if isinstance(w,QCheckBox) else w.currentData() if isinstance(w,QComboBox) else w.text().strip()
             if v not in ('',None,False):result[key]=v
         return result
@@ -463,8 +512,29 @@ class TradeCenterPage(QWidget):
     def scope(self):
         end=date.fromisoformat(self.applied.get('end_date') or date.today().isoformat());start=date.fromisoformat(self.applied.get('start_date') or '2025-01-01')
         if start>end:raise ValueError('开始日期不可晚于结束日期。')
-        p=self.applied.get('person_id')
-        return QueryScope(as_of=end,ledger=Ledger.PERSON,person_ids=(p,) if p is not None else None,start_date=start,include_disabled=True,category=self.applied.get('category') or None,search=self.applied.get('search',''))
+        gstate=self._global_state
+        if gstate is not None:
+            person=gstate.person
+            person_ids=None
+            if person is not None:
+                info=getattr(self.host,'info',None)
+                persons=getattr(info,'persons',()) if info is not None else ()
+                disabled_chk=getattr(self.host,'disabled',None)
+                inc_disabled=bool(disabled_chk and disabled_chk.isChecked())
+                if person=='OTHERS':
+                    person_ids=tuple(p['id'] for p in persons if p['name']!='个人' and (p['enabled'] or inc_disabled))
+                elif isinstance(person,(tuple,list)):
+                    person_ids=tuple(person)
+                else:
+                    person_ids=(person,)
+            account_ids=gstate.account_ids
+            instrument_ids=(gstate.instrument_id,) if gstate.instrument_id is not None else None
+        else:
+            p=self.applied.get('person_id')
+            person_ids=(p,) if p is not None else None
+            account_ids=None
+            instrument_ids=None
+        return QueryScope(as_of=end,ledger=Ledger.PERSON,person_ids=person_ids,account_ids=account_ids,instrument_ids=instrument_ids,start_date=start,include_disabled=True,category=self.applied.get('category') or None,search=self.applied.get('search',''))
 
     def params(self):return {**self.applied,'page':self.page,'size':self.size,'sort_col':self.sort,'sort_dir':self.direction}
     def _on_symbol_completed(self,text):
@@ -568,10 +638,34 @@ class TradeCenterPage(QWidget):
             filters['review_only']=not filters.get('review_only')
         self.apply_filters(filters)
 
+    def clear_advanced_filters(self):
+        """清空高级筛选区所有条件；返回是否原本存在已填条件。"""
+        had_value=False
+        for key,widget in self.fields.items():
+            if key in ('broker','symbol','search'):
+                continue
+            if isinstance(widget,QComboBox):
+                if widget.currentIndex()!=0:
+                    had_value=True
+                widget.blockSignals(True);widget.setCurrentIndex(0);widget.blockSignals(False)
+            elif isinstance(widget,QCheckBox):
+                if widget.isChecked():
+                    had_value=True
+                widget.blockSignals(True);widget.setChecked(False);widget.blockSignals(False)
+            else:
+                if widget.text().strip():
+                    had_value=True
+                widget.blockSignals(True);widget.clear();widget.blockSignals(False)
+        return had_value
+
     def toggle_advanced(self):
         expanded=self.advanced.isHidden()
         self.advanced.setVisible(expanded)
-        self.advanced_button.setText('高级筛选 ▴' if expanded else '高级筛选 ▾')
+        text='高级筛选 ▴' if expanded else '高级筛选 ▾'
+        self.advanced_button.setText(text)
+        self.top_advanced_button.setText(text)
+        if hasattr(self.host,'global_asset_filter'):
+            self.filter_form.setVisible(expanded)
 
     def sort_column(self,col):
         key=KEYS[col]

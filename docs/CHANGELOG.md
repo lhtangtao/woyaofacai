@@ -1,9 +1,43 @@
+## 2026-11-14 01:37 交易明细移除页内筛选条并将高级筛选移至顶部重置筛选旁
+
+- 修改者：Antigravity（代码修改）
+- 在 [trade_center_page.py](file:///Users/tangtao/money3/src/portfolio/ui/trade_center_page.py) 隐藏连接全局筛选器时的页内本地筛选栏（日期范围、关键词、已选条件、查询、重置），默认收起 `filter_form`，并隐藏表格底部冗余说明提示 `self.note`。
+- 在 [global_asset_filter.py](file:///Users/tangtao/money3/src/portfolio/ui/global_asset_filter.py) 的「重置筛选」按钮旁新增 `trailing_host` 插槽，配合 [interactions.py](file:///Users/tangtao/money3/src/portfolio/ui/interactions.py) 在进入「交易明细」时挂载「高级筛选 ▾/▴」按钮，切至其他页面时自动隐藏。
+- 在 [main_window.py](file:///Users/tangtao/money3/src/portfolio/ui/main_window.py) 中点击顶部「重置筛选」时同步清空交易明细高级筛选条件；高级筛选下拉框与复选框交互即触发查询。
+
+## 2026-11-14 01:32 交易明细导航迁移至资产管理并接入顶部全局筛选器
+
+- 修改者：Antigravity（代码修改）
+- 在 [sidebar.py](file:///Users/tangtao/money3/src/portfolio/ui/sidebar.py) 将「交易明细」从「交易与收益」调整到「资产管理」分组的「每月持仓收益」与「股票归属」之间。
+- 在 [interactions.py](file:///Users/tangtao/money3/src/portfolio/ui/interactions.py)、[main_window.py](file:///Users/tangtao/money3/src/portfolio/ui/main_window.py) 与 [trade_center_page.py](file:///Users/tangtao/money3/src/portfolio/ui/trade_center_page.py) 中让「交易明细」接入顶部 `GlobalAssetFilter`（人员、券商渠道、股票代码），隐藏页内重复筛选控件并在切换或修改全局筛选时联动刷新。
+- 新增 [test_trade_center_global_filter.py](file:///Users/tangtao/money3/tests/test_trade_center_global_filter.py) 并同步更新 [test_global_asset_filter.py](file:///Users/tangtao/money3/tests/test_global_asset_filter.py)。
+
 ## 2026-11-13 18:22 调整国内基金抽屉与筛选布局
 
 - 修改者：Codex（代码修改）
 - 抽屉打开时三个图表和六项详情指标分别保持单行；紧凑图例支持查看完整信息。
 - 清仓日期筛选并入顶部，环图与图例居中；根据完整份额记录计算可确认的持有天数。
 - Mac 原生窗口检查及 21 项专项测试通过；Raw 和 Calc 数据库校验一致。
+
+## 2026-11-14 01:08 每日持仓收益渠道概览新增当日与累计切换标签
+
+- 修改者：Antigravity（代码修改）
+- 在 [daily_performance_page.py](file:///Users/tangtao/money3/src/portfolio/ui/daily_performance_page.py) 右侧渠道概览卡片顶部新增「当日渠道收益」与「累计渠道收益」切换标签，默认选中「当日渠道收益」。
+- 当日模式根据当前选中日期（`selected_date`）联动展示各渠道当日收益与占比，并在点击趋势图或切换上/下一日时同步刷新；累计模式保留期间累计统计。
+- 新增 [test_daily_performance_broker_tabs.py](file:///Users/tangtao/money3/tests/test_daily_performance_broker_tabs.py)，与 [test_daily_performance_dashboard.py](file:///Users/tangtao/money3/tests/test_daily_performance_dashboard.py) 联合运行全部通过。
+
+## 2026-11-13 17:17 已清仓明细新增全部/盈利/亏损快捷切换开关
+
+- 修改者：Antigravity（代码修改）
+- 在 [holdings_page.py](file:///Users/tangtao/money3/src/portfolio/ui/holdings_page.py) 为「已清仓」明细表格顶部新增「全部 / 盈利 / 亏损」快捷切换栏 `closed_table_header`，并与「持有中」共用按钮样式渲染逻辑，与上方盈亏结构环图双向联动。
+- 在 [test_open_holdings_drawer_scope.py](file:///Users/tangtao/money3/tests/test_open_holdings_drawer_scope.py) 新增 `test_closed_holdings_pnl_quick_filter_buttons` 回归测试，验证计数、点击切换与表格过滤结果。
+
+## 2026-11-13 17:12 修复持有中明细点击标的行抽屉未按渠道隔离并移除冗余详情列
+
+- 修改者：Antigravity（代码修改）
+- 修复 [holdings_page.py](file:///Users/tangtao/money3/src/portfolio/ui/holdings_page.py) 在「持有中（`open`）」模式下点击持仓明细行时未传递 `row.metadata` 的问题，使右侧抽屉的顶部汇总、交易记录、持仓分析、收益分析与月度表现按所点击行的 `person_id`、`account_id`、`instrument_id`（无 `account_id` 时回退 `channel`）隔离展示，不再混入全部渠道数据。
+- 移除「持仓明细」表格最右侧冗余的「详情（`查看 >`）」列，保留点击整行展开详情抽屉。
+- 新增测试 [test_open_holdings_drawer_scope.py](file:///Users/tangtao/money3/tests/test_open_holdings_drawer_scope.py)，与 [test_open_holdings_optimization.py](file:///Users/tangtao/money3/tests/test_open_holdings_optimization.py)、[test_pnl_analysis_charts.py](file:///Users/tangtao/money3/tests/test_pnl_analysis_charts.py) 联合运行全部通过。
 
 ## 2026-11-13 16:45 优化基金筛选布局与可确认持有天数
 
