@@ -39,6 +39,9 @@ QWidget#domesticDashboard QTableView {
 QWidget#domesticDashboard QHeaderView::section {
     background: #F1F5FB; color: #475569; border: 0; border-bottom: 1px solid #E2E8F0; padding: 5px;
 }
+QWidget#domesticDashboard QTabWidget::pane { border:0; background:transparent; }
+QWidget#domesticDashboard QTabBar::tab { background:#F1F5FB; color:#64748B; padding:8px 14px; border:0; }
+QWidget#domesticDashboard QTabBar::tab:selected { background:#EFF6FF; color:#2563EB; border-bottom:2px solid #2563EB; }
 """
 
 

@@ -1,19 +1,21 @@
 """Domestic holdings and account-scoped fund detail."""
 from datetime import date
 from decimal import Decimal
+import csv
 import sqlite3
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QCategoryAxis
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QScrollArea, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QScrollArea, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
 from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard
+from portfolio.ui.holdings_page import ModernMetricCard
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
     holding_metrics, money, panel, percent, trend_points,
@@ -40,7 +42,7 @@ METRICS = (
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
               confirmed_amount="确认金额", fee="手续费", confirmed_nav="确认净值", confirmation_status="确认状态",
               parse_error="备注")
-NUMERIC = {"pnl", "rate", "shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "buy_amount", "sell_amount", "realized", "realized_rate", "holding_days"}
+NUMERIC = {"pnl", "rate", "shares", "holding_shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "buy_amount", "sell_amount", "realized", "realized_rate", "holding_days"}
 
 
 def amount(value):
@@ -51,6 +53,7 @@ def clear(layout):
     while layout.count():
         item = layout.takeAt(0)
         if item.widget():
+            item.widget().hide()
             item.widget().deleteLater()
 
 
@@ -330,6 +333,7 @@ class DomesticHoldingsPage(QWidget):
         overview.addWidget(self.sources)
 
         detail = self.scroll_page()
+        detail.parentWidget().setObjectName("domesticDashboard")
         bar = QHBoxLayout()
         back = QPushButton("← 返回持仓管理")
         back.clicked.connect(self.back)
@@ -338,8 +342,24 @@ class DomesticHoldingsPage(QWidget):
         bar.addWidget(self.breadcrumb, 1)
         bar.addWidget(back)
         detail.addLayout(bar)
-        self.detail_cards = QHBoxLayout()
-        detail.addLayout(self.detail_cards)
+        self.detail_identity = QLabel("基金详情", objectName="domesticSection")
+        detail.addWidget(self.detail_identity)
+        detail_metrics = []
+        self.detail_metrics = {}
+        for key, title in (("shares", "当前持有"), ("cost", "持仓成本"), ("nav", "最新净值"),
+                           ("market", "持仓市值"), ("floating", "浮动盈亏"), ("pnl", "累计盈亏")):
+            metric = ModernMetricCard(title, compact=True)
+            metric.setFixedHeight(72)
+            self.detail_metrics[key] = metric
+            detail_metrics.append(metric)
+        self.detail_metric_grid = ResponsiveGrid(detail_metrics, 150, 6)
+        detail.addLayout(self.detail_metric_grid)
+        self.detail_tabs = QTabWidget()
+        detail.addWidget(self.detail_tabs)
+        trade_tab = QWidget()
+        trade_layout = QVBoxLayout(trade_tab)
+        trade_layout.setContentsMargins(0, 8, 0, 0)
+        self.detail_tabs.addTab(trade_tab, "交易记录")
         middle = QHBoxLayout()
         box, body = card("交易明细")
         filter_row = QHBoxLayout()
@@ -350,6 +370,12 @@ class DomesticHoldingsPage(QWidget):
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(self.render_trades)
         body.addLayout(filter_row)
+        trade_actions = QHBoxLayout()
+        trade_actions.addStretch()
+        export_trades = QPushButton("导出 CSV")
+        export_trades.clicked.connect(self.export_trades)
+        trade_actions.addWidget(export_trades)
+        body.addLayout(trade_actions)
         self.trade_source_note = QLabel("原始交易记录未提供确认净值。")
         self.trade_source_note.setWordWrap(True)
         self.trade_source_note.hide()
@@ -363,7 +389,11 @@ class DomesticHoldingsPage(QWidget):
         body.addWidget(self.fund_overview)
         body.addStretch()
         middle.addWidget(box, 1)
-        detail.addLayout(middle)
+        trade_layout.addLayout(middle)
+        holdings_tab = QWidget()
+        holdings_layout = QVBoxLayout(holdings_tab)
+        holdings_layout.setContentsMargins(0, 8, 0, 0)
+        self.detail_tabs.addTab(holdings_tab, "持仓分析")
         box, body = card("份额 / 市值变化")
         range_row = QHBoxLayout()
         self.trend_range = combo([("近6个月", 6), ("近1年", 12), ("全部", 0), ("自定义", -1)])
@@ -376,7 +406,29 @@ class DomesticHoldingsPage(QWidget):
         body.addLayout(range_row)
         self.trend_body = QVBoxLayout()
         body.addLayout(self.trend_body)
-        detail.addWidget(box)
+        holdings_layout.addWidget(box)
+        pnl_tab = QWidget()
+        pnl_layout = QVBoxLayout(pnl_tab)
+        pnl_layout.setContentsMargins(0, 8, 0, 0)
+        pnl_cards = QHBoxLayout()
+        self.pnl_metrics = {}
+        for key, title in (("floating", "浮动盈亏（CNY）"), ("realized", "已实现盈亏（CNY）"), ("pnl", "累计盈亏（CNY）")):
+            metric = ModernMetricCard(title, compact=True)
+            metric.setFixedHeight(72)
+            self.pnl_metrics[key] = metric
+            pnl_cards.addWidget(metric, 1)
+        pnl_layout.addLayout(pnl_cards)
+        self.pnl_note = QLabel(wordWrap=True)
+        pnl_layout.addWidget(self.pnl_note)
+        pnl_layout.addStretch()
+        self.detail_tabs.addTab(pnl_tab, "收益分析")
+        monthly_tab = QWidget()
+        monthly_layout = QVBoxLayout(monthly_tab)
+        monthly_layout.setContentsMargins(0, 8, 0, 0)
+        monthly_layout.addWidget(QLabel("按月查看历史持有份额和市值；缺少数据时显示未核算。"))
+        self.monthly = FundTable(dict(month="月份", holding_shares="月末份额", market_value="月末市值（CNY）"), "month")
+        monthly_layout.addWidget(self.monthly)
+        self.detail_tabs.addTab(monthly_tab, "月度表现")
         self.render_trend()
 
     def scroll_page(self):
@@ -443,6 +495,7 @@ class DomesticHoldingsPage(QWidget):
             available = max(0, event.size().width() - 50)
             for grid in (self.metric_grid, self.filter_grid, self.graph_grid):
                 grid.reflow(available)
+            self.detail_metric_grid.reflow(available)
 
     def reset_filters(self):
         for control in (self.platform, self.kind, self.search, self.close_start, self.close_end):
@@ -608,6 +661,7 @@ class DomesticHoldingsPage(QWidget):
         self.trend_range.setCurrentIndex(1)
         self.trend_start.clear()
         self.trend_end.clear()
+        self.detail_tabs.setCurrentIndex(0)
         self.render_detail()
         self.stack.setCurrentIndex(1)
         self.stack.currentWidget().verticalScrollBar().setValue(0)
@@ -619,22 +673,41 @@ class DomesticHoldingsPage(QWidget):
         self.message.clear()
 
     def render_detail(self):
-        clear(self.detail_cards)
         self.choices(self.tx_kind, "全部交易类型", self.detail.get("transactions", []), "kind")
         self.render_trades()
         self.render_trend()
+        self.monthly.rows = self.detail.get("history", [])
+        self.monthly.set_page(0)
         rows = self.detail.get("rows", [])
         self.fund_overview.clear()
         if not rows:
             self.breadcrumb.setText("国内资产 / 持仓管理 / 持仓明细")
+            self.detail_identity.setText("正在加载基金详情…")
+            for metric in (*self.detail_metrics.values(), *self.pnl_metrics.values()):
+                metric.set_content("—")
+            self.pnl_note.clear()
             return
         row = rows[0]
         self.breadcrumb.setText(f"国内资产 / 持仓管理 / {row['fund_name']}")
-        for label, value in (("当前持有份额", row["shares"] or "—"),
-                             (f"最新单位净值 · {row['nav_date'] or '净值缺失'}", row["nav"] or "—"),
-                             ("当前市值（CNY）", amount(row["market_value"])), ("累计盈亏", amount(row.get("pnl"))),
-                             ("收益率", f"{Decimal(row['rate']):.2f}%" if row.get("rate") is not None else "—")):
-            self.detail_cards.addWidget(card(label, value)[0], 1)
+        self.detail_identity.setText(f"{row['fund_code']}  {row['fund_name']}  ·  {row['platform']}")
+        value = Decimal(row["market_value"]) if row.get("market_value") is not None else None
+        cost = Decimal(row["cost"]) if row.get("cost") is not None else None
+        floating = value - cost if value is not None and cost is not None else None
+        realized = Decimal(row["realized_pnl"]) if row.get("realized_pnl") is not None and not row.get("return_issue") else None
+        pnl = Decimal(row["pnl"]) if row.get("pnl") is not None and not row.get("return_issue") else None
+        data = {"shares": amount(row.get("shares")), "cost": amount(cost),
+                "nav": row.get("nav") or "—", "market": amount(value),
+                "floating": amount(floating), "pnl": amount(pnl)}
+        for key, metric in self.detail_metrics.items():
+            numeric = floating if key == "floating" else pnl if key == "pnl" else None
+            color = GREEN if numeric is not None and numeric > 0 else RED if numeric is not None and numeric < 0 else None
+            metric.set_content(data[key], row.get("nav_date") or "净值缺失" if key == "nav" else "", color)
+            metric.val_lbl.setStyleSheet(f"color:{color or '#0F172A'};")
+        for key, number in (("floating", floating), ("realized", realized), ("pnl", pnl)):
+            color = GREEN if number is not None and number > 0 else RED if number is not None and number < 0 else None
+            self.pnl_metrics[key].set_content(amount(number) if number is not None else "未核算", "", color)
+            self.pnl_metrics[key].val_lbl.setStyleSheet(f"color:{color or '#0F172A'};")
+        self.pnl_note.setText(row.get("confirmation_note") or row.get("return_issue") or "累计盈亏包含已实现收益及现金分红；浮动盈亏为市值减剩余持仓成本。")
         self.fund_overview.setText(
             f"平台  {row['platform']}\n账户  {row['account_name']}\n基金代码  {row['fund_code']}\n"
             f"交易资料覆盖截至  {row['coverage_through'] or '—'}\n{row['status']}\n"
@@ -668,6 +741,20 @@ class DomesticHoldingsPage(QWidget):
                                 r["confirmation_date"] and (not start or r["confirmation_date"] >= start)
                                 and (not end or r["confirmation_date"] <= end))]
         self.trades.set_page(0)
+
+    def export_trades(self):
+        if not self.trades.rows:
+            return
+        code = self.selected[1] if self.selected else "基金"
+        path, _ = QFileDialog.getSaveFileName(self, "导出交易记录", f"{code}_交易明细.csv", "CSV 文件 (*.csv)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.writer(file)
+            fields = [key for index, key in enumerate(TRADES) if not self.trades.table.isColumnHidden(index)]
+            writer.writerow([TRADES[key] for key in fields])
+            for row in self.trades.rows:
+                writer.writerow([row.get(key) if row.get(key) is not None else "" for key in fields])
 
     @staticmethod
     def add_chart(layout, chart):
