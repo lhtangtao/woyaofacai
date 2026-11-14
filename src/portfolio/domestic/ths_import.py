@@ -833,3 +833,11 @@ INITIAL_513300_CYCLE1_RECORDS = [
     {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-09-12 11:08:37", "confirmation_date": "2024-09-12", "transaction_type_raw": "卖出", "confirmed_nav": "1.800", "confirmed_shares": "-6000", "confirmed_amount": "10800.00", "fee": "5.00"},
     {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-10-08 09:36:16", "confirmation_date": "2024-10-08", "transaction_type_raw": "清仓", "confirmed_nav": "1.736", "confirmed_shares": "-18700", "confirmed_amount": "32463.20", "fee": "8.12"},
 ]
+
+INITIAL_600036_EARLY_RECORDS = [
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2020-07-08 14:44:04", "confirmation_date": "2020-07-08", "transaction_type_raw": "建仓", "confirmed_nav": "41.400", "confirmed_shares": "100", "confirmed_amount": "4140.00", "fee": "5.08"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2020-07-09 16:00:00", "confirmation_date": "2020-07-09", "transaction_type_raw": "分红", "confirmed_nav": "39.910", "confirmed_shares": "0", "confirmed_amount": "120.00", "fee": "0.00"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2020-09-18 13:20:06", "confirmation_date": "2020-09-18", "transaction_type_raw": "清仓", "confirmed_nav": "38.600", "confirmed_shares": "-100", "confirmed_amount": "3860.00", "fee": "8.94"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2020-09-30 13:54:01", "confirmation_date": "2020-09-30", "transaction_type_raw": "建仓", "confirmed_nav": "36.000", "confirmed_shares": "100", "confirmed_amount": "3600.00", "fee": "5.07"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2020-11-10 11:16:27", "confirmation_date": "2020-11-10", "transaction_type_raw": "清仓", "confirmed_nav": "43.670", "confirmed_shares": "-100", "confirmed_amount": "4367.00", "fee": "9.46"},
+]
