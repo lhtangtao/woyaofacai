@@ -628,3 +628,65 @@ INITIAL_513520_CYCLE1_RECORDS = [
         "fee": "5.00",
     },
 ]
+
+INITIAL_600900_RECORDS = [
+    {
+        "fund_code": "600900",
+        "fund_name": "长江电力",
+        "fund_type": "股票-主板",
+        "transaction_time": "2024-06-18 14:28:19",
+        "confirmation_date": "2024-06-18",
+        "transaction_type_raw": "建仓",
+        "confirmed_nav": "27.780",
+        "confirmed_shares": "400",
+        "confirmed_amount": "11112.00",
+        "fee": "5.12",
+    },
+    {
+        "fund_code": "600900",
+        "fund_name": "长江电力",
+        "fund_type": "股票-主板",
+        "transaction_time": "2024-07-12 14:51:59",
+        "confirmation_date": "2024-07-12",
+        "transaction_type_raw": "清仓",
+        "confirmed_nav": "29.910",
+        "confirmed_shares": "-400",
+        "confirmed_amount": "11964.00",
+        "fee": "11.10",
+    },
+]
+
+INITIAL_300014_RECORDS = [
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2021-12-10 10:57:37", "confirmation_date": "2021-12-10", "transaction_type_raw": "建仓", "confirmed_nav": "135.000", "confirmed_shares": "100", "confirmed_amount": "13500.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-01-28 14:40:13", "confirmation_date": "2022-01-28", "transaction_type_raw": "买入", "confirmed_nav": "93.800", "confirmed_shares": "100", "confirmed_amount": "9380.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-02-11 09:30:50", "confirmation_date": "2022-02-11", "transaction_type_raw": "卖出", "confirmed_nav": "83.860", "confirmed_shares": "-200", "confirmed_amount": "16772.00", "fee": "21.77"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-02-11 14:51:31", "confirmation_date": "2022-02-11", "transaction_type_raw": "买入", "confirmed_nav": "84.600", "confirmed_shares": "100", "confirmed_amount": "8460.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-03-04 10:52:00", "confirmation_date": "2022-03-04", "transaction_type_raw": "买入", "confirmed_nav": "78.000", "confirmed_shares": "100", "confirmed_amount": "7800.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-03-15 14:55:04", "confirmation_date": "2022-03-15", "transaction_type_raw": "卖出", "confirmed_nav": "70.900", "confirmed_shares": "-100", "confirmed_amount": "7090.00", "fee": "12.09"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2022-07-07 17:00:01", "confirmation_date": "2022-07-07", "transaction_type_raw": "分红", "confirmed_nav": "104.000", "confirmed_shares": "0", "confirmed_amount": "16.00", "fee": "0.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2023-02-01 10:05:58", "confirmation_date": "2023-02-01", "transaction_type_raw": "卖出", "confirmed_nav": "91.190", "confirmed_shares": "-100", "confirmed_amount": "9119.00", "fee": "14.12"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2023-02-01 14:50:44", "confirmation_date": "2023-02-01", "transaction_type_raw": "买入", "confirmed_nav": "90.000", "confirmed_shares": "100", "confirmed_amount": "9000.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2023-02-20 10:31:02", "confirmation_date": "2023-02-20", "transaction_type_raw": "买入", "confirmed_nav": "73.800", "confirmed_shares": "100", "confirmed_amount": "7380.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2023-06-16 17:00:01", "confirmation_date": "2023-06-16", "transaction_type_raw": "分红", "confirmed_nav": "60.990", "confirmed_shares": "0", "confirmed_amount": "32.00", "fee": "0.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2024-01-17 10:42:51", "confirmation_date": "2024-01-17", "transaction_type_raw": "买入", "confirmed_nav": "39.250", "confirmed_shares": "100", "confirmed_amount": "3925.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2024-01-17 11:02:50", "confirmation_date": "2024-01-17", "transaction_type_raw": "买入", "confirmed_nav": "39.000", "confirmed_shares": "100", "confirmed_amount": "3900.00", "fee": "5.00"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2024-01-24 10:34:37", "confirmation_date": "2024-01-24", "transaction_type_raw": "卖出", "confirmed_nav": "37.740", "confirmed_shares": "-200", "confirmed_amount": "7548.00", "fee": "8.78"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2024-01-24 14:39:11", "confirmation_date": "2024-01-24", "transaction_type_raw": "清仓", "confirmed_nav": "38.000", "confirmed_shares": "-200", "confirmed_amount": "7600.00", "fee": "8.80"},
+    {"fund_code": "300014", "fund_name": "亿纬锂能", "fund_type": "股票-创业板", "transaction_time": "2024-01-25 09:00:00", "confirmation_date": "2024-01-25", "transaction_type_raw": "股息红利税补缴", "confirmed_nav": "0.000", "confirmed_shares": "0", "confirmed_amount": "1.60", "fee": "0.00"},
+]
+
+INITIAL_161725_CYCLE1_RECORDS = [
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-07-05 13:00:00", "confirmation_date": "2021-07-05", "transaction_type_raw": "建仓", "confirmed_nav": "1.463", "confirmed_shares": "20000", "confirmed_amount": "29260.00", "fee": "7.32"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-07-09 11:20:31", "confirmation_date": "2021-07-09", "transaction_type_raw": "买入", "confirmed_nav": "1.419", "confirmed_shares": "8000", "confirmed_amount": "11352.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-09-09 17:00:01", "confirmation_date": "2021-09-09", "transaction_type_raw": "分红", "confirmed_nav": "1.216", "confirmed_shares": "0", "confirmed_amount": "336.00", "fee": "0.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-11-04 11:19:26", "confirmation_date": "2021-11-04", "transaction_type_raw": "卖出", "confirmed_nav": "1.300", "confirmed_shares": "-7000", "confirmed_amount": "9100.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-11-24 10:42:37", "confirmation_date": "2021-11-24", "transaction_type_raw": "卖出", "confirmed_nav": "1.363", "confirmed_shares": "-7000", "confirmed_amount": "9541.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-11-29 10:32:02", "confirmation_date": "2021-11-29", "transaction_type_raw": "买入", "confirmed_nav": "1.350", "confirmed_shares": "7000", "confirmed_amount": "9450.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-12-08 14:28:08", "confirmation_date": "2021-12-08", "transaction_type_raw": "卖出", "confirmed_nav": "1.440", "confirmed_shares": "-5000", "confirmed_amount": "7200.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2021-12-13 17:00:01", "confirmation_date": "2021-12-13", "transaction_type_raw": "分红", "confirmed_nav": "1.449", "confirmed_shares": "0", "confirmed_amount": "448.00", "fee": "0.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2022-01-05 17:00:01", "confirmation_date": "2022-01-05", "transaction_type_raw": "分红", "confirmed_nav": "1.309", "confirmed_shares": "0", "confirmed_amount": "720.00", "fee": "0.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2022-01-06 14:54:04", "confirmation_date": "2022-01-06", "transaction_type_raw": "买入", "confirmed_nav": "1.280", "confirmed_shares": "2700", "confirmed_amount": "3456.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2022-01-10 09:34:54", "confirmation_date": "2022-01-10", "transaction_type_raw": "买入", "confirmed_nav": "1.230", "confirmed_shares": "2800", "confirmed_amount": "3444.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2022-03-07 09:44:27", "confirmation_date": "2022-03-07", "transaction_type_raw": "买入", "confirmed_nav": "1.120", "confirmed_shares": "700", "confirmed_amount": "784.00", "fee": "5.00"},
+    {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2024-01-22 11:04:17", "confirmation_date": "2024-01-22", "transaction_type_raw": "清仓", "confirmed_nav": "0.853", "confirmed_shares": "-22200", "confirmed_amount": "18936.60", "fee": "5.00"},
+]

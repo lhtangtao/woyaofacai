@@ -30,6 +30,10 @@ def classify_ths_row(row):
         if amount is None or amount < ZERO:
             return None
         return ("CASH_DIVIDEND", ZERO, amount)
+    if kind == "股息红利税补缴":
+        if amount is None or amount < ZERO:
+            return None
+        return ("DIVIDEND_TAX", ZERO, amount)
     if kind == "红利再投资":
         if shares is None or shares <= ZERO:
             return None
@@ -119,6 +123,23 @@ def ths_returns_and_events(trades, shares, market_value, is_closed):
     """基于 confirmed_returns 与 alipay_realized_events 计算同花顺收益与清仓事件。"""
     if not trades:
         return {}, None
-    returns = confirmed_returns(trades, shares, market_value)
-    events = alipay_realized_events(trades) if (is_closed and returns) else None
+    core_trades = [t for t in trades if t["transaction_type"] != "DIVIDEND_TAX"]
+    tax_trades = [t for t in trades if t["transaction_type"] == "DIVIDEND_TAX"]
+    returns = confirmed_returns(core_trades, shares, market_value)
+    events = alipay_realized_events(core_trades) if (is_closed and returns) else None
+    if returns and tax_trades:
+        tax_total = sum((Decimal(t["confirmed_amount"]) for t in tax_trades), ZERO)
+        contributed = Decimal(returns["contributed"])
+        cash_dividend = Decimal(returns["cash_dividend"]) - tax_total
+        pnl = Decimal(returns["pnl"]) - tax_total
+        returns["cash_dividend"] = str(cash_dividend)
+        returns["pnl"] = str(pnl)
+        if contributed > ZERO:
+            returns["rate"] = str(pnl / contributed * 100)
+        if events is not None:
+            for t in tax_trades:
+                amt = Decimal(t["confirmed_amount"])
+                if amt != ZERO and t.get("effective_date"):
+                    events.append((t["effective_date"], str(-amt)))
+            events.sort(key=lambda item: item[0])
     return returns, events
