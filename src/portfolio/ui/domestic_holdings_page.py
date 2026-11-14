@@ -800,9 +800,17 @@ class DomesticHoldingsPage(QWidget):
             rows = getattr(self, "closed_scope", [])
             cutoff = date.fromisoformat(rows[0]["valuation_date"]) if rows else date.today()
             zeroed = self.cum_mode_group.checkedId() == 1
-            points, covered = closed_trend_points(rows, self.history_periods[self.history_ranges.checkedId()], cutoff, zeroed=zeroed)
-            self.history_plot.render(points, calendar_spacing=True, step_series=True,
-                                     value_label="区间归零已实现盈亏" if zeroed else "累计历史已实现盈亏")
+            period = self.history_periods[self.history_ranges.checkedId()]
+            points, covered = closed_trend_points(rows, period, cutoff, zeroed=zeroed)
+            real_points = closed_trend_points(rows, period, cutoff, zeroed=False)[0] if zeroed else points
+            self.history_plot.render(
+                points,
+                calendar_spacing=True,
+                step_series=True,
+                value_label="区间累计(归零)" if zeroed else "真实累计盈亏",
+                real_values=dict(real_points),
+                cum_mode="zeroed" if zeroed else "real",
+            )
             self.history_plot.setVisible(bool(points))
             self.history_note.setText((f"按确认日累计，仅包含有逐笔收益依据的 {covered}/{len(rows)} 条记录。" if points else
                                        f"当前范围没有可展示的收益确认事件；有逐笔依据 {covered}/{len(rows)} 条。"))

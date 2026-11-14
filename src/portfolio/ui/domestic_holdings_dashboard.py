@@ -6,8 +6,8 @@ from datetime import date
 from decimal import Decimal, localcontext
 
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
-from PySide6.QtCore import QMargins, QRect, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QMargins, QPointF, QRect, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
@@ -578,6 +578,13 @@ class HoldingsDelegate(QStyledItemDelegate):
 
 
 
+def _fmt_signed_cny(value):
+    if value is None:
+        return "—"
+    v = float(value)
+    return f"-¥{abs(v):,.2f}" if v < 0 else f"¥{v:,.2f}"
+
+
 class TrendView(QChartView):
     def __init__(self):
         super().__init__(QChart())
@@ -589,11 +596,18 @@ class TrendView(QChartView):
         self.values = []
         self.x_axis = None
         self.area_boundaries = []
+        self._hover_idx = -1
+        self._primary_series = None
+        self._real_values = {}
+        self._cum_mode = None
 
-    def render(self, points, nav_dates=None, *, calendar_spacing=False, step_series=False, value_label="持仓总市值"):
+    def render(self, points, nav_dates=None, *, calendar_spacing=False, step_series=False,
+               value_label="持仓总市值", real_values=None, cum_mode=None):
         chart = self.chart()
         chart.removeAllSeries()
         self.area_boundaries.clear()
+        self._hover_idx = -1
+        self._primary_series = None
         for axis in chart.axes():
             axis.setVisible(False)
             chart.removeAxis(axis)
@@ -608,6 +622,8 @@ class TrendView(QChartView):
         self.nav_dates = nav_dates or {}
         self.value_label = value_label
         self.step_series = step_series
+        self._real_values = real_values or {}
+        self._cum_mode = cum_mode
         values = [float(value) for _, value in points if value is not None]
         if not values:
             chart.update()
@@ -617,7 +633,7 @@ class TrendView(QChartView):
         base = low - pad if low < 0 else max(0, low - pad)
         x = QCategoryAxis()
         x.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
-        padding_x = max(.2, self.days[-1] * .08) if calendar_spacing else .2
+        padding_x = max(.2, self.days[-1] * .005) if calendar_spacing else .2
         x.setStartValue(-padding_x - 1)
         step = max(1, (len(points) + 4) // 5)
         multi_year = points[0][0].year != points[-1][0].year
@@ -662,6 +678,7 @@ class TrendView(QChartView):
                 series = line
                 line.setColor(QColor(BLUE))
                 line.setPointsVisible(True)
+                self._primary_series = line
             else:
                 bottom = QLineSeries()
                 bottom.append(run[0][0], base)
@@ -687,6 +704,7 @@ class TrendView(QChartView):
                 chart.addSeries(outline)
                 outline.attachAxis(x)
                 outline.attachAxis(y)
+                self._primary_series = outline
 
         for day, (_, value) in zip(self.days, points):
             if value is None:
@@ -699,19 +717,101 @@ class TrendView(QChartView):
     def mouseMoveEvent(self, event):
         pos = self.chart().mapFromScene(self.mapToScene(event.position().toPoint()))
         plot = self.chart().plotArea()
-        if self.x_axis and plot.contains(pos):
+        new_idx = -1
+        if self.x_axis and self.days and plot.contains(pos):
             start = self.x_axis.min()
             end = self.x_axis.max()
             target = start + (pos.x() - plot.left()) / plot.width() * (end - start)
-            index = max(0, bisect_right(self.days, target) - 1) if self.step_series else min(range(len(self.days)), key=lambda i: abs(self.days[i] - target))
-            day, value = self.values[index]
-            if value is not None:
-                dates = self.nav_dates.get(day)
-                note = f"\n净值日期 {dates}" if dates else ""
-                QToolTip.showText(event.globalPosition().toPoint(),
-                                  f"{day} · {self.value_label} {money(value)} CNY{note}", self)
-            else:
-                QToolTip.hideText()
-        else:
-            QToolTip.hideText()
+            idx = max(0, bisect_right(self.days, target) - 1) if self.step_series else min(
+                range(len(self.days)), key=lambda i: abs(self.days[i] - target)
+            )
+            if self.values[idx][1] is not None:
+                new_idx = idx
+        if new_idx != self._hover_idx:
+            self._hover_idx = new_idx
+            self.viewport().update()
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.viewport().update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not (0 <= self._hover_idx < len(self.values)) or self._primary_series is None:
+            return
+        day, value = self.values[self._hover_idx]
+        if value is None:
+            return
+        chart = self.chart()
+        plot = chart.plotArea()
+        if not plot.isValid():
+            return
+        pt_vp = self.mapFromScene(chart.mapToScene(
+            chart.mapToPosition(QPointF(self.days[self._hover_idx], float(value)), self._primary_series)
+        ))
+        top_vp = self.mapFromScene(chart.mapToScene(QPointF(plot.left(), plot.top())))
+        bot_vp = self.mapFromScene(chart.mapToScene(QPointF(plot.right(), plot.bottom())))
+        hx = float(pt_vp.x())
+        hy = float(pt_vp.y())
+        top_y = float(top_vp.y())
+        bot_y = float(bot_vp.y())
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 垂直辅助虚线 + 高亮圆点
+        painter.setPen(QPen(QColor("#94A3B8"), 1, Qt.PenStyle.DashLine))
+        painter.drawLine(QPointF(hx, top_y), QPointF(hx, bot_y))
+        painter.setPen(QPen(QColor("#FFFFFF"), 2))
+        painter.setBrush(QColor("#1D4ED8"))
+        painter.drawEllipse(QPointF(hx, hy), 4.5, 4.5)
+
+        # 白色圆角卡片悬浮框
+        tip_lines: list[tuple[str, str]] = [
+            ("", str(day)),
+            ("#2563EB", f"{self.value_label}：{_fmt_signed_cny(value)}"),
+        ]
+        if self._cum_mode == "zeroed":
+            if day in self._real_values:
+                tip_lines.append(("#64748B", f"真实累计盈亏：{_fmt_signed_cny(self._real_values[day])}"))
+            tip_lines.append(("", "模式：区间归零"))
+        elif self._cum_mode == "real":
+            tip_lines.append(("", "模式：真实累计"))
+        dates = self.nav_dates.get(day)
+        if dates:
+            tip_lines.append(("", f"净值日期：{dates}"))
+
+        tip_font = QFont(".AppleSystemUIFont", 10)
+        tip_bold = QFont(".AppleSystemUIFont", 10, QFont.Weight.Bold)
+        painter.setFont(tip_bold)
+        tfm = painter.fontMetrics()
+        tip_w = max(tfm.horizontalAdvance(t) for _, t in tip_lines) + 26.0
+        tip_h = 10.0 + len(tip_lines) * 17.0
+        vw = float(self.viewport().width())
+        tx = hx + 10.0
+        if tx + tip_w > vw - 4.0:
+            tx = hx - tip_w - 10.0
+        tx = max(4.0, min(vw - tip_w - 4.0, tx))
+        ty = max(4.0, min(bot_y - tip_h - 4.0, top_y + 4.0))
+
+        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.setBrush(QColor(255, 255, 255, 245))
+        painter.drawRoundedRect(QRectF(tx, ty, tip_w, tip_h), 7.0, 7.0)
+        for li, (dot_c, txt) in enumerate(tip_lines):
+            ly = ty + 5.0 + li * 17.0
+            painter.setFont(tip_bold if li == 0 else tip_font)
+            tx_pos = tx + 8.0
+            if dot_c:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(dot_c))
+                painter.drawEllipse(QPointF(tx + 12.0, ly + 8.0), 3.0, 3.0)
+                tx_pos = tx + 19.0
+            painter.setPen(QColor("#0F172A"))
+            painter.drawText(
+                QRectF(tx_pos, ly, tip_w - (tx_pos - tx) - 4.0, 16.0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                txt,
+            )
