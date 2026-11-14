@@ -11,6 +11,7 @@ from .closed_fund_analytics import closed_transaction_summaries, confirmed_holdi
 from .fund_returns import alipay_realized_events, confirmed_returns, tiantian_returns
 from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
+from .ths_analytics import THS_SOURCE, ths_returns_and_events, ths_trade_events
 
 REVIEW = "待核对"
 SOURCE_PRIORITY = {"AKShare/Eastmoney": 0, "AKShare/Eastmoney Hong Kong": 0}
@@ -114,10 +115,10 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             calc.execute("BEGIN")
         tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         unified = "raw_fund_transactions" in tables
-        source = """SELECT account_id,fund_code,fund_name,fund_type,confirmation_date,
+        source = """SELECT account_id,source_platform,fund_code,fund_name,fund_type,confirmation_date,
             transaction_type_raw AS kind,confirmed_shares,confirmed_amount,fee,
             confirmed_nav,confirmation_status,parse_status,parse_error,id,source_page
-            FROM raw_fund_transactions""" if unified else """SELECT account_id,fund_code,fund_name,
+            FROM raw_fund_transactions""" if unified else """SELECT account_id,'ALIPAY' AS source_platform,fund_code,fund_name,
             NULL AS fund_type,confirmation_date,transaction_type AS kind,confirmed_shares,
             confirmed_amount,fee,NULL AS confirmed_nav,NULL AS confirmation_status,
             parse_status,parse_error,id,source_page FROM raw_alipay_fund_transactions"""
@@ -182,12 +183,17 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
         for key, record in records.items():
             if account and key != (account, fund):
                 continue
+            is_ths = record.get("source_platform") == THS_SOURCE or accounts.get(key[0], {}).get("platform") == "同花顺"
+            ths_info = ths_trade_events(raw, key[0], key[1], cutoff) if is_ths and unified else None
             position = positions.get(key)
             opening = openings.get(key)
             recent = tiantian.get(key)
             position = tt_positions.get(key) or position
-            as_of = position["trade_date"] if position else None
-            shares = position["holding_shares"] if position else None
+            as_of = ths_info["as_of"] if ths_info else (position["trade_date"] if position else None)
+            shares = (
+                str(ths_info["shares"]) if (ths_info and ths_info.get("issue") is None and ths_info.get("as_of"))
+                else (position["holding_shares"] if position else None)
+            )
             history = confirmed.get(key)
             statement = statements.get(key)
             snapshot_conflict = None
@@ -198,14 +204,28 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 if history and history["confirmed_date"] == as_of:
                     previous = (date.fromisoformat(as_of) - timedelta(days=1)).isoformat()
                     history = confirmed_history(calc, "calc_tiantian_positions", previous, *key).get(key)
-            last_confirmed_shares = history["confirmed_shares"] if history else None
-            last_confirmed_date = history["confirmed_date"] if history else None
+            last_confirmed_shares = (
+                str(ths_info["shares"]) if (ths_info and ths_info.get("issue") is None and ths_info.get("as_of"))
+                else (history["confirmed_shares"] if history else None)
+            )
+            last_confirmed_date = (
+                ths_info["as_of"] if (ths_info and ths_info.get("issue") is None and ths_info.get("as_of"))
+                else (history["confirmed_date"] if history else None)
+            )
             last_confirmed_status = position_label(last_confirmed_shares)
-            closed_date = history["closed_date"] if history else None
-            position_issue = None
-            coverage_through = as_of if key[0] == ACCOUNT else tt_coverage.get(key[0])
+            closed_date = (
+                ths_info["closed_date"] if ths_info
+                else (history["closed_date"] if history else None)
+            )
+            position_issue = ths_info["issue"] if ths_info else None
+            coverage_through = (
+                ths_info["as_of"] if ths_info
+                else (as_of if key[0] == ACCOUNT else tt_coverage.get(key[0]))
+            )
             confidence = "已确认至查询日期"
-            if as_of is None:
+            if ths_info and ths_info.get("issue"):
+                confidence = "份额异常"
+            elif as_of is None:
                 confidence, position_issue = "份额异常", "无可用的份额计算结果"
             elif shares is None or Decimal(shares) < 0:
                 position_issue = snapshot_conflict or (recent["issue"] if recent else None) or "份额缺失或异常"
@@ -283,6 +303,7 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             meta = accounts.get(key[0], {})
             returns = {}
             closed_events = None
+            ths_closed = None
             tt_trades = None
             alipay_trades = None
             alipay_opening_shares = ZERO
@@ -309,6 +330,10 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                     opening_shares=alipay_opening_shares, opening_cost=alipay_opening_cost,
                     allow_transfer_amount=True,
                 )
+            elif ths_info and not ths_info.get("issue") and return_shares is not None:
+                returns, ths_closed = ths_returns_and_events(
+                    ths_info["trades"], return_shares, return_value, current_status == "已清仓"
+                )
             elif recent and not recent["issue"] and return_shares is not None and Decimal(recent["observed_shares"]) == return_shares:
                 trades = [dict(r) for r in raw.execute("""SELECT * FROM raw_fund_transactions
                     WHERE account_id=? AND fund_code=? AND source_platform='TIANTIAN'
@@ -316,7 +341,9 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 tt_trades = trades
                 returns = tiantian_returns(trades, return_shares, return_value)
             if not historical_close and current_status == "已清仓" and returns:
-                if tt_trades is not None and calc:
+                if ths_info and not ths_info.get("issue"):
+                    closed_events = ths_closed
+                elif tt_trades is not None and calc:
                     closed_events = tiantian_realized_events(calc, tt_trades, *key, return_day, returns["pnl"])
                 elif alipay_trades is not None:
                     closed_events = alipay_realized_events(
@@ -352,8 +379,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             elif user_held:
                 confirmation_note = f"用户确认当前持有；估值份额及成本沿用 {last_confirmed_date} 的账本结果"
             summary = summaries.get(key, {})
-            first_confirmed_holding = None
-            if current_status == "已清仓" and calc:
+            first_confirmed_holding = ths_info["first_holding_day"] if (ths_info and current_status == "已清仓") else None
+            if first_confirmed_holding is None and current_status == "已清仓" and calc and not ths_info:
                 holding_table = "calc_tiantian_positions" if recent else "calc_fund_positions_daily"
                 if calc.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (holding_table,)).fetchone():
                     for item in calc.execute(f"""SELECT trade_date,holding_shares FROM {holding_table}
@@ -362,8 +389,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                         if Decimal(item['holding_shares']) > 0:
                             first_confirmed_holding = item['trade_date']
                             break
-            holding_days = None
-            if (current_status == "已清仓" and closed_date and summary.get("first_trade_date")
+            holding_days = ths_info["holding_days"] if (ths_info and current_status == "已清仓") else None
+            if (holding_days is None and not ths_info and current_status == "已清仓" and closed_date and summary.get("first_trade_date")
                     and (returns.get("last_confirmed_total_pnl") is not None or returns.get("pnl") is not None
                          or (key[0] == ACCOUNT and not opening and key[1] in ALIPAY_ZERO_OPENINGS.get(date(2021, 11, 11), ())))):
                 start_day = date.fromisoformat(summary["first_trade_date"])

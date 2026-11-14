@@ -14,7 +14,7 @@ BLUE = "#2563EB"
 GREEN = "#15803D"
 RED = "#DC2626"
 COLORS = (BLUE, "#0D9488", "#8B5CF6", "#D97706", "#64748B", "#0EA5E9")
-PLATFORM_COLORS = {"支付宝": BLUE, "天天基金": "#D97706"}
+PLATFORM_COLORS = {"支付宝": BLUE, "天天基金": "#D97706", "同花顺": "#E11D48"}
 STYLE = """
 QWidget#domesticDashboard { background: #F5F7FB; }
 QFrame#domesticPanel { background: white; border: 1px solid #E2E8F0; border-radius: 11px; }
@@ -630,7 +630,8 @@ class HoldingsDelegate(QStyledItemDelegate):
             width = min(rect.width(), painter.fontMetrics().horizontalAdvance(text) + 14)
             badge = QRect(rect.center().x() - width // 2, rect.center().y() - 10, width, 20)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#FFF2DE" if text == "天天基金" else "#EAF2FF"))
+            bg = "#FFF2DE" if text == "天天基金" else "#FFE4E6" if text == "同花顺" else "#EAF2FF"
+            painter.setBrush(QColor(bg))
             painter.drawRoundedRect(badge, 5, 5)
             painter.setPen(QColor(PLATFORM_COLORS.get(text, BLUE)))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)

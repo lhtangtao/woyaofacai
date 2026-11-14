@@ -4,6 +4,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from .fund_returns import tiantian_returns
+from .ths_analytics import THS_SOURCE, classify_ths_row
 from .tiantian_positions import BUY, SELL, movement, subscription_key
 
 
@@ -90,6 +91,13 @@ def closed_transaction_summaries(raw, calc, keys, cutoff):
         if groups[key] and groups[key][0]['source_platform'] == 'ALIPAY':
             transactions = alipay[key]
             classified = ((row, row['transaction_type'] if row['status'] == '正常' else None) for row in transactions)
+        elif groups[key] and groups[key][0]['source_platform'] == THS_SOURCE:
+            transactions = groups[key]
+            def ths_events():
+                for row in transactions:
+                    parsed = classify_ths_row(row)
+                    yield row, (parsed[0] if parsed is not None else None)
+            classified = ths_events()
         else:
             transactions = groups[key]
             confirmations = Counter(subscription_key(row) for row in transactions

@@ -94,6 +94,21 @@ def _collect_daily_cash_flows(rows, cutoff: str, *, root=DOMESTIC_ASSETS_DIR):
                         entry = flows.setdefault(fkey, {"buy": Decimal(0), "sell": Decimal(0), "count": 0})
                         entry["sell"] += amt
                         entry["count"] += 1
+            elif row.get("platform") == "同花顺" and "raw_fund_transactions" in raw_tables:
+                from .ths_analytics import ths_trade_events
+
+                ths_info = ths_trade_events(raw, key[0], key[1], cutoff)
+                for t in ths_info.get("trades", ()):
+                    amt = Decimal(t["confirmed_amount"])
+                    fkey = (t["effective_date"], key[0], key[1])
+                    if t["transaction_type"] == "BUY":
+                        entry = flows.setdefault(fkey, {"buy": Decimal(0), "sell": Decimal(0), "count": 0})
+                        entry["buy"] += amt
+                        entry["count"] += 1
+                    elif t["transaction_type"] in ("SELL", "CASH_DIVIDEND"):
+                        entry = flows.setdefault(fkey, {"buy": Decimal(0), "sell": Decimal(0), "count": 0})
+                        entry["sell"] += amt
+                        entry["count"] += 1
     return flows
 
 

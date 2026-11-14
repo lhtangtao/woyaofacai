@@ -8,8 +8,8 @@ from portfolio.paths import DOMESTIC_ASSETS_DIR
 
 from .storage import RAW_FILE, connect
 
-_BUY_KEYWORDS = ("买入", "买基金", "买新基金", "定投", "定时定额", "认购", "申购", "即充即用", "转入")
-_SELL_KEYWORDS = ("卖出", "卖基金", "赎回", "取现", "转出")
+_BUY_KEYWORDS = ("买入", "建仓", "买基金", "买新基金", "定投", "定时定额", "认购", "申购", "即充即用", "转入")
+_SELL_KEYWORDS = ("卖出", "清仓", "卖基金", "赎回", "取现", "转出")
 _DIVIDEND_KEYWORDS = ("分红", "红利")
 _TRANSFER_KEYWORDS = ("转换", "调增", "调减", "转卡")
 
@@ -72,7 +72,12 @@ def query_domestic_trades(*, root=DOMESTIC_ASSETS_DIR) -> dict[str, Any]:
         for r in raw.execute(sql):
             code = str(r["fund_code"] or "")
             meta = fund_meta.get(code, {})
-            plat = "支付宝" if r["source_platform"] == "ALIPAY" else "天天基金" if r["source_platform"] == "TIANTIAN" else str(r["source_platform"] or "—")
+            plat = (
+                "支付宝" if r["source_platform"] == "ALIPAY"
+                else "天天基金" if r["source_platform"] == "TIANTIAN"
+                else "同花顺" if r["source_platform"] == "THS"
+                else str(r["source_platform"] or "—")
+            )
             raw_type = str(r["transaction_type_raw"] or "—")
             t_time = str(r["transaction_time"] or "")
             c_date = str(r["confirmation_date"] or "")

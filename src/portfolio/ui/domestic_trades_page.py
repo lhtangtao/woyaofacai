@@ -421,11 +421,14 @@ class DomesticTradesPage(QWidget):
         fee_sum = 0.0
         tt_cnt = 0
         ap_cnt = 0
+        ths_cnt = 0
         for r in rows:
             if r["platform"] == "天天基金":
                 tt_cnt += 1
             elif r["platform"] == "支付宝":
                 ap_cnt += 1
+            elif r["platform"] == "同花顺":
+                ths_cnt += 1
             amt = r.get("confirmed_amount") or 0.0
             if r["direction"] == "买入":
                 buy_sum += amt
@@ -437,7 +440,10 @@ class DomesticTradesPage(QWidget):
 
         net = buy_sum - sell_sum
         self._kpi_labels["count"][0].setText(f"{len(rows):,}")
-        self._kpi_labels["count"][1].setText(f"支付宝 {ap_cnt:,} · 天天基金 {tt_cnt:,}")
+        parts = [f"支付宝 {ap_cnt:,}", f"天天基金 {tt_cnt:,}"]
+        if ths_cnt:
+            parts.append(f"同花顺 {ths_cnt:,}")
+        self._kpi_labels["count"][1].setText(" · ".join(parts))
         self._kpi_labels["buy"][0].setText(f"¥{buy_sum:,.2f}")
         self._kpi_labels["buy"][1].setText(f"共 {buy_cnt:,} 笔")
         self._kpi_labels["sell"][0].setText(f"¥{sell_sum:,.2f}")
