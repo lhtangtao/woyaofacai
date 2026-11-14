@@ -107,6 +107,9 @@ def closed_metrics(rows):
                 profit_count=len(profits), rate_count=len(eligible), day_count=len(days))
 
 
+DOMESTIC_TREND_START = date(2022, 1, 1)
+
+
 def closed_trend_points(rows, period, today):
     """Cumulative verified event amounts; never invent missing event dates."""
     events = defaultdict(Decimal)
@@ -117,12 +120,14 @@ def closed_trend_points(rows, period, today):
         covered += 1
         for day, amount in row["closed_events"]:
             events[date.fromisoformat(day)] += Decimal(amount)
-    start = None
+    start = DOMESTIC_TREND_START if today >= DOMESTIC_TREND_START else None
     if period == "year":
-        start = date(today.year, 1, 1)
+        year_start = date(today.year, 1, 1)
+        start = max(start, year_start) if start else year_start
     elif period:
         year, month = divmod(today.year * 12 + today.month - 1 - period, 12)
-        start = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
+        p_start = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
+        start = max(start, p_start) if start else p_start
     cumulative = Decimal(0)
     points = []
     for day, amount in sorted(events.items()):
@@ -134,12 +139,14 @@ def closed_trend_points(rows, period, today):
 
 def trend_points(values, rows, period, today):
     keys = {(row["account_id"], row["fund_code"]) for row in rows}
-    start = None
+    start = DOMESTIC_TREND_START if today >= DOMESTIC_TREND_START else None
     if period == "year":
-        start = date(today.year, 1, 1)
+        year_start = date(today.year, 1, 1)
+        start = max(start, year_start) if start else year_start
     elif period:
         year, month = divmod(today.year * 12 + today.month - 1 - period, 12)
-        start = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
+        p_start = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
+        start = max(start, p_start) if start else p_start
     result = []
     with localcontext() as precision:
         precision.prec = 60
