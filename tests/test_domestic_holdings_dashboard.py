@@ -167,3 +167,17 @@ def test_closed_date_filters_share_row_and_chart_legend_is_centered():
     plot = page.by_type.findChild(QChartView)
     assert abs(plot.geometry().center().y() - page.by_type.legend.geometry().center().y()) <= 2
     host.close()
+
+
+def test_holding_metrics_includes_partial_realized_pnl_when_available():
+    rows = [
+        dict(
+            account_id="a", fund_code="040046", shares="100",
+            market_value="150", cost="100", contributed="200", pnl="80", rate="40",
+        ),
+    ]
+    prepared, stats = holding_metrics(rows)
+    assert prepared[0]["floating"] == Decimal("80")
+    assert prepared[0]["floating_rate"] == Decimal("40")
+    assert stats["floating"] == Decimal("80")
+    assert stats["rate"] == Decimal("40")

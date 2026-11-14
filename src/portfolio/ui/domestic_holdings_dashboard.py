@@ -69,18 +69,25 @@ def holding_metrics(rows):
                                    for key in ("market_value", "cost", "shares"))
             if value is not None:
                 values_by_code[row["fund_code"]] += value
-            pnl = value - cost if value is not None and cost is not None else None
+            total_pnl = Decimal(row["pnl"]) if row.get("pnl") is not None else None
+            # 持有中统一按累计持有收益（含同基金历史部分卖出已实现与现金分红），缺省时退回市值减成本
+            pnl = total_pnl if total_pnl is not None else (value - cost if value is not None and cost is not None else None)
+            basis = Decimal(row["contributed"]) if total_pnl is not None and row.get("contributed") is not None else cost
+            rate = Decimal(row["rate"]) if total_pnl is not None and row.get("rate") is not None else (
+                pnl / basis * 100 if pnl is not None and basis is not None and basis > 0 else None
+            )
             prepared.append(dict(row, market_value=value, cost=cost, shares=shares,
                                  average=cost / shares if cost is not None and shares and shares > 0 else None,
-                                 floating=pnl, floating_rate=pnl / cost * 100 if pnl is not None and cost > 0 else None))
+                                 floating=pnl, floating_rate=rate, _basis=basis))
         market = total(row["market_value"] for row in prepared)
         matched = [row for row in prepared if row["floating"] is not None]
         cost = total(row["cost"] for row in matched)
+        basis_total = total(row["_basis"] for row in matched)
         floating = total(row["floating"] for row in matched)
         for row in prepared:
             row["weight"] = row["market_value"] / market * 100 if market and row["market_value"] is not None else None
         return prepared, dict(market=market, cost=cost, floating=floating,
-                              rate=floating / cost * 100 if cost and cost > 0 else None,
+                              rate=floating / basis_total * 100 if basis_total and basis_total > 0 else None,
                               count=len({row["fund_code"] for row in prepared}),
                               top=sum(sorted(values_by_code.values(), reverse=True)[:5]) / market * 100 if market else None,
                               valued=sum(row["market_value"] is not None for row in prepared), matched=len(matched))
@@ -314,7 +321,7 @@ class PlatformList(QWidget):
         self.names = sorted(groups)
         self.table.setColumnCount(5 if closed else 6)
         self.table.setHorizontalHeaderLabels(["交易平台", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
-                                             ["交易平台", "市值占比", "持仓成本", "持仓市值", "浮动盈亏", "基金数"])
+                                             ["交易平台", "市值占比", "持仓成本", "持仓市值", "持有收益", "基金数"])
         self.table.setRowCount(len(self.names) + 1)
         market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):
@@ -380,7 +387,7 @@ class Contribution(QWidget):
     def render(self, rows, closed=False):
         self.rows, self.closed = list(rows), closed
         n = self.top_n.value()
-        self.title.setText(("已清仓基金历史收益" if closed else "持有中基金浮动盈亏") + "贡献 Top")
+        self.title.setText(("已清仓基金历史收益" if closed else "持有中基金收益") + "贡献 Top")
         key = "realized" if closed else "floating"
         losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
         gains = sorted((r for r in rows if r.get(key) is not None and r[key] > 0), key=lambda r: r[key], reverse=True)

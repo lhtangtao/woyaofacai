@@ -28,7 +28,7 @@ POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="�
 OPEN_POSITIONS = dict(
     fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型", shares="持有份额",
     average="持仓均价", nav="最新单位净值\n（净值日期）", market_value="持仓市值（CNY）",
-    cost="持仓成本（CNY）", floating="浮动盈亏（CNY）", floating_rate="收益率",
+    cost="持仓成本（CNY）", floating="持有收益（CNY）", floating_rate="收益率",
     weight="持仓占比", arrow="详情",
 )
 CLOSED_POSITIONS = dict(fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型",
@@ -38,7 +38,7 @@ CLOSED_POSITIONS = dict(fund_name="基金名称 / 代码", platform="交易平�
                         last_confirmed_close_date="清仓日期", arrow="详情")
 METRICS = (
     ("market", "持仓总市值（CNY）", money), ("cost", "持仓总成本（CNY）", money),
-    ("floating", "浮动盈亏（CNY）", money), ("rate", "持仓收益率", percent),
+    ("floating", "持有收益（CNY）", money), ("rate", "持仓收益率", percent),
     ("count", "持有基金数量", lambda count: f"{count} 只"), ("top", "前五大基金集中度", percent),
 )
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
@@ -716,7 +716,7 @@ class DomesticHoldingsPage(QWidget):
         _, totals = holding_metrics(shown)
         self.open_total.setText(
             f"合计　持仓市值 {money(totals['market'])}　持仓成本 {money(totals['cost'])}　"
-            f"浮动盈亏 {money(totals['floating'])}　收益率 {percent(totals['rate'])}"
+            f"持有收益 {money(totals['floating'])}　收益率 {percent(totals['rate'])}"
             + ("　· 部分数据未核算" if totals["matched"] < len(shown) else "")
         )
 
