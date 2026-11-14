@@ -2788,11 +2788,11 @@ class HoldingsPage(QWidget):
                     active_industry=self._open_industry,
                     trend_window=self._open_trend_window,
                 )
-                mv_trend = open_payload.get("mv_trend") or {}
+                mv_trend_all = open_payload.get("mv_trend_all") or open_payload.get("mv_trend") or {}
                 self.open_top10_card.set_data(
                     open_payload.get("ticker_top10") or {},
                     active_ticker=self._open_ticker_filter,
-                    trend_points=mv_trend.get("series") or mv_trend.get("points") or [],
+                    trend_points=mv_trend_all.get("series") or mv_trend_all.get("points") or [],
                 )
                 if self._open_ticker_filter:
                     raw_rows = [

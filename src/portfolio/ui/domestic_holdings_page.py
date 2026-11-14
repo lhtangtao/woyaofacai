@@ -834,8 +834,12 @@ class DomesticHoldingsPage(QWidget):
             history, self.history_scope,
             self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff),
         ) if cutoff else []
+        all_combo_points = (
+            combo_points if self.history_periods[self.history_ranges.checkedId()] == 0
+            else trend_combo_points(history, self.history_scope, 0, date.fromisoformat(cutoff))
+        ) if cutoff else []
         self.open_trend_chart.set_data(combo_points)
-        self.contribution.set_daily_points(combo_points)
+        self.contribution.set_daily_points(all_combo_points)
         if getattr(history, "calendar_incomplete", False):
             self.message.setText("部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。")
         elif self.message.text() == "部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。":

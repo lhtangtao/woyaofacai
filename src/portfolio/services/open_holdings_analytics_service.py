@@ -927,6 +927,21 @@ def build_open_holdings_dashboard(
         search=search,
         trend_window=trend_window,
     )
+    mv_trend_all = (
+        mv_trend
+        if str(trend_window or "").strip().lower() == "all"
+        else compute_open_mv_trend(
+            analytics,
+            meta_map=meta_map,
+            person_id=person_id,
+            broker=broker,
+            stock_type=stock_type,
+            industry=industry,
+            currency=currency,
+            search=search,
+            trend_window="all",
+        )
+    )
 
     # 7. 明细表盈利/亏损状态切换（只改变列表对应记录的展示范围）
     table_rows = filter_open_holdings_rows(
@@ -951,6 +966,7 @@ def build_open_holdings_dashboard(
         "industry_distribution": industry_distribution,
         "person_summary": person_summary,
         "mv_trend": mv_trend,
+        "mv_trend_all": mv_trend_all,
         "ticker_top10": ticker_top10,
         "pnl_counts": {
             "all": stock_count,

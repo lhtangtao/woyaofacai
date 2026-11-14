@@ -519,8 +519,8 @@ class Contribution(QWidget):
                         day_rows.append({"fund_name": d_str, "fund_code": d_str, "floating": val, "is_daily_top": True})
             losses = sorted((r for r in day_rows if r["floating"] < 0), key=lambda r: r["floating"])
             gains = sorted((r for r in day_rows if r["floating"] > 0), key=lambda r: r["floating"], reverse=True)
-            self.loss_label.setText(f"最惨交易日（Top {n}） · 区间亏损日合计 {money(total(r['floating'] for r in losses))} CNY")
-            self.gain_label.setText(f"最爽交易日（Top {n}） · 区间盈利日合计 {money(total(r['floating'] for r in gains))} CNY")
+            self.loss_label.setText(f"最惨交易日（Top {n}） · 2022年起亏损日合计 {money(total(r['floating'] for r in losses))} CNY")
+            self.gain_label.setText(f"最爽交易日（Top {n}） · 2022年起盈利日合计 {money(total(r['floating'] for r in gains))} CNY")
             self.chart.set_data(losses[:n], gains[:n], "floating")
             return
         self.title.setText(("已清仓基金历史收益" if closed else "持有中基金收益") + "贡献 Top")
