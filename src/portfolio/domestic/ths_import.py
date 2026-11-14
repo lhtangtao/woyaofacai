@@ -690,3 +690,29 @@ INITIAL_161725_CYCLE1_RECORDS = [
     {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2022-03-07 09:44:27", "confirmation_date": "2022-03-07", "transaction_type_raw": "买入", "confirmed_nav": "1.120", "confirmed_shares": "700", "confirmed_amount": "784.00", "fee": "5.00"},
     {"fund_code": "161725", "fund_name": "白酒基金LOF", "fund_type": "指数型-股票", "transaction_time": "2024-01-22 11:04:17", "confirmation_date": "2024-01-22", "transaction_type_raw": "清仓", "confirmed_nav": "0.853", "confirmed_shares": "-22200", "confirmed_amount": "18936.60", "fee": "5.00"},
 ]
+
+INITIAL_515790_RECORDS = [
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2021-11-16 14:02:47", "confirmation_date": "2021-11-16", "transaction_type_raw": "建仓", "confirmed_nav": "1.738", "confirmed_shares": "6500", "confirmed_amount": "11297.00", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2021-11-22 14:16:06", "confirmation_date": "2021-11-22", "transaction_type_raw": "卖出", "confirmed_nav": "1.828", "confirmed_shares": "-3200", "confirmed_amount": "5849.60", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2021-11-24 10:05:59", "confirmation_date": "2021-11-24", "transaction_type_raw": "买入", "confirmed_nav": "1.798", "confirmed_shares": "6400", "confirmed_amount": "11507.20", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2021-11-24 10:05:59", "confirmation_date": "2021-11-24", "transaction_type_raw": "买入", "confirmed_nav": "1.798", "confirmed_shares": "6400", "confirmed_amount": "11507.20", "fee": "5.00", "order_id": "THS-515790-2021-11-24 10:05:59-买入-2"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2023-03-24 09:30:25", "confirmation_date": "2023-03-24", "transaction_type_raw": "买入", "confirmed_nav": "1.300", "confirmed_shares": "3900", "confirmed_amount": "5070.00", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2024-01-16 09:51:13", "confirmation_date": "2024-01-16", "transaction_type_raw": "卖出", "confirmed_nav": "0.888", "confirmed_shares": "-10000", "confirmed_amount": "8880.00", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "指数型-股票", "transaction_time": "2024-01-17 10:11:33", "confirmation_date": "2024-01-17", "transaction_type_raw": "清仓", "confirmed_nav": "0.870", "confirmed_shares": "-10000", "confirmed_amount": "8700.00", "fee": "5.00"},
+]
+
+INITIAL_159995_RECORDS = [
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2021-07-09 14:15:45", "confirmation_date": "2021-07-09", "transaction_type_raw": "建仓", "confirmed_nav": "1.618", "confirmed_shares": "13200", "confirmed_amount": "21357.60", "fee": "5.34"},
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2022-05-10 14:25:31", "confirmation_date": "2022-05-10", "transaction_type_raw": "卖出", "confirmed_nav": "1.083", "confirmed_shares": "-6600", "confirmed_amount": "7147.80", "fee": "5.00"},
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2022-09-05 09:33:36", "confirmation_date": "2022-09-05", "transaction_type_raw": "买入", "confirmed_nav": "1.134", "confirmed_shares": "800", "confirmed_amount": "907.20", "fee": "5.00"},
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2023-04-14 14:10:57", "confirmation_date": "2023-04-14", "transaction_type_raw": "卖出", "confirmed_nav": "1.270", "confirmed_shares": "-800", "confirmed_amount": "1016.00", "fee": "5.00"},
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2023-05-22 13:36:45", "confirmation_date": "2023-05-22", "transaction_type_raw": "买入", "confirmed_nav": "1.080", "confirmed_shares": "3200", "confirmed_amount": "3456.00", "fee": "5.00"},
+    {"fund_code": "159995", "fund_name": "芯片ETF", "fund_type": "指数型-股票", "transaction_time": "2024-01-12 10:02:27", "confirmation_date": "2024-01-12", "transaction_type_raw": "清仓", "confirmed_nav": "0.839", "confirmed_shares": "-9800", "confirmed_amount": "8222.20", "fee": "5.00"},
+]
+
+INITIAL_600036_RECORDS = [
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2022-08-22 14:04:15", "confirmation_date": "2022-08-22", "transaction_type_raw": "建仓", "confirmed_nav": "33.500", "confirmed_shares": "200", "confirmed_amount": "6700.00", "fee": "5.07"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2022-08-23 09:40:48", "confirmation_date": "2022-08-23", "transaction_type_raw": "买入", "confirmed_nav": "33.330", "confirmed_shares": "200", "confirmed_amount": "6666.00", "fee": "5.07"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2022-11-29 15:00:00", "confirmation_date": "2022-11-29", "transaction_type_raw": "卖出", "confirmed_nav": "34.860", "confirmed_shares": "-200", "confirmed_amount": "6972.00", "fee": "12.04"},
+    {"fund_code": "600036", "fund_name": "招商银行", "fund_type": "股票-主板", "transaction_time": "2023-01-11 10:28:27", "confirmation_date": "2023-01-11", "transaction_type_raw": "清仓", "confirmed_nav": "39.000", "confirmed_shares": "-200", "confirmed_amount": "7800.00", "fee": "12.88"},
+]
