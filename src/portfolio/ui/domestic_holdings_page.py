@@ -688,6 +688,7 @@ class DomesticHoldingsPage(QWidget):
         money_funds = getattr(self.data.get("daily_values", {}), "money_funds", set())
         self.history_scope = [row for row in history_rows
                               if row["fund_code"] not in money_funds
+                              and not row.get("is_historical_baseline")
                               and all(not control.currentData() or row[key] == control.currentData()
                                      for control, key in ((self.platform, "platform"), (self.kind, "fund_type")))
                               and query in (row["fund_code"] + " " + row["fund_name"]).casefold()]

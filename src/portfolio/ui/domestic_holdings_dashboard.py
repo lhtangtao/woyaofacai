@@ -219,14 +219,14 @@ class Distribution(QWidget):
         self.plot = QChartView(self.chart)
         self.plot.setStyleSheet("background:transparent; border:0;")
         self.plot.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.plot.setFixedSize(160, 160)
+        self.plot.setFixedSize(136, 136)
         self.center = QLabel(self.plot)
-        self.center.setGeometry(28, 53, 104, 54)
+        self.center.setGeometry(18, 41, 100, 54)
         self.center.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.center.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         row.addWidget(self.plot)
         self.legend = QVBoxLayout()
-        self.legend.setSpacing(3)
+        self.legend.setSpacing(2)
         row.addLayout(self.legend, 1)
         self.compact = False
         self.last_render = None
@@ -235,8 +235,8 @@ class Distribution(QWidget):
         if self.compact == compact:
             return
         self.compact = compact
-        self.plot.setFixedSize(110, 110) if compact else self.plot.setFixedSize(160, 160)
-        self.center.setGeometry(8, 29, 94, 52) if compact else self.center.setGeometry(28, 53, 104, 54)
+        self.plot.setFixedSize(108, 108) if compact else self.plot.setFixedSize(136, 136)
+        self.center.setGeometry(8, 28, 92, 52) if compact else self.center.setGeometry(18, 41, 100, 54)
         if self.last_render is not None:
             rows, key, market, value_key, absolute = self.last_render
             self.render(rows, key, market, value_key=value_key, absolute=absolute)
@@ -262,20 +262,24 @@ class Distribution(QWidget):
             self.legend.addStretch()
             self.chart.addSeries(series)
             return
-        for i, (name, group) in enumerate(sorted(groups.items())):
-            color = PLATFORM_COLORS.get(name, COLORS[i % len(COLORS)])
+        grouped = []
+        for name, group in groups.items():
             value = total(abs(row[value_key]) if absolute and row.get(value_key) is not None else row.get(value_key) for row in group)
+            grouped.append((name, group, value))
+        grouped.sort(key=lambda item: (item[2] is None, -(item[2] or Decimal(0)), item[0]))
+        for i, (name, group, value) in enumerate(grouped):
+            color = PLATFORM_COLORS.get(name, COLORS[i % len(COLORS)])
             portion = percent(value / market * 100) if market and value is not None else "—"
-            count = len({row["fund_code"] for row in group})
+            count = len({row["fund_code"] for row in group if not row.get("is_historical_baseline")})
             if value is not None and value > 0:
                 segment = series.append(name, float(value))
                 segment.setColor(QColor(color))
                 segment.setBorderColor(QColor("white"))
                 segment.clicked.connect(lambda name=name: self.selected(name))
-            lines = (f"● {name}", f"{portion}  {money(value)}  {count} 只") if self.compact else (f"● {name}  {portion}  {money(value)}  {count} 只",)
+            lines = (f"● {name}", f"{portion}  {money(value)}  {count} 只") if self.compact else (f"● {name}  {portion}  {money(value)}  {count}只",)
             button = LegendButton(lines)
             button.setToolTip(f"{name}　{portion}　{money(value)}　{count} 只")
-            button.setStyleSheet(f"text-align:left; border:0; background:transparent; color:{color}; padding:4px;")
+            button.setStyleSheet(f"text-align:left; border:0; background:transparent; color:{color}; padding:2px 0px; font-size:11px;")
             button.clicked.connect(lambda _, name=name: self.selected(name))
             self.legend.addWidget(button)
         self.chart.addSeries(series)
@@ -298,10 +302,9 @@ class PlatformList(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setMinimumSectionSize(86)
+        self.table.horizontalHeader().setMinimumSectionSize(56)
         self.table.setShowGrid(False)
-        self.table.setStyleSheet("QTableWidget {font-size:11px;} QHeaderView::section {font-size:11px; padding:4px;}")
+        self.table.setStyleSheet("QTableWidget {font-size:11px;} QHeaderView::section {font-size:11px; padding:4px 6px;}")
         self.table.setMinimumHeight(170)
         self.table.cellClicked.connect(self._clicked)
         self.body.addWidget(self.table, 1)
@@ -314,6 +317,8 @@ class PlatformList(QWidget):
             self.selected("")
 
     def render(self, rows, closed=False):
+        from portfolio.ui.open_holdings_dashboard import RatioProgressBarCell
+
         value_key = "realized" if closed else "market_value"
         groups = defaultdict(list)
         for row in rows:
@@ -322,6 +327,13 @@ class PlatformList(QWidget):
         self.table.setColumnCount(5 if closed else 6)
         self.table.setHorizontalHeaderLabels(["交易平台", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
                                              ["交易平台", "市值占比", "持仓成本", "持仓市值", "持有收益", "基金数"])
+        header = self.table.horizontalHeader()
+        if closed:
+            for col in range(5):
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 0 else QHeaderView.ResizeMode.ResizeToContents)
+        else:
+            for col in range(6):
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
         self.table.setRowCount(len(self.names) + 1)
         market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):
@@ -329,20 +341,48 @@ class PlatformList(QWidget):
             values = [row.get(value_key) for row in group]
             value = total(values)
             incomplete = sum(v is None for v in values)
+            pnl_value = None
+            ratio_fraction = None
+            ratio_text = "—"
             if closed:
                 fund_count = len({r['fund_code'] for r in group if not r.get('is_historical_baseline')})
+                pnl_value = value
                 columns = (name, money(total(r.get("buy_amount") for r in group)),
                            money(total(r.get("sell_amount") for r in group)), money(value),
                            str(fund_count))
             else:
                 matched = [r for r in group if r.get("floating") is not None]
                 incomplete = sum(r.get("floating") is None for r in group)
-                columns = (name, percent(value / market * 100) if market and value is not None else "—",
+                pnl_value = total(r.get('floating') for r in matched)
+                if market and value is not None and market > 0:
+                    ratio_fraction = float(value / market)
+                    ratio_text = f"{ratio_fraction * 100:.1f}%"
+                columns = (name, ratio_text,
                            money(total(r.get('cost') for r in matched)), money(value),
-                           money(total(r.get('floating') for r in matched)), str(len({r['fund_code'] for r in group})))
+                           money(pnl_value), str(len({r['fund_code'] for r in group})))
+            pnl_col = 3 if closed else 4
+            money_cols = {1, 2, 3} if closed else {2, 3, 4}
             for column, text in enumerate(columns):
+                if not closed and column == 1:
+                    self.table.setItem(index, column, QTableWidgetItem(""))
+                    cell = RatioProgressBarCell(
+                        ratio_fraction or 0.0,
+                        ratio_text,
+                        is_total=(name == "合计"),
+                    )
+                    self.table.setCellWidget(index, column, cell)
+                    continue
+                self.table.removeCellWidget(index, column)
                 item = QTableWidgetItem(text)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if column in money_cols:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if column == pnl_col and pnl_value is not None:
+                    if pnl_value > 0:
+                        item.setForeground(QColor(GREEN))
+                    elif pnl_value < 0:
+                        item.setForeground(QColor(RED))
                 if incomplete:
                     item.setToolTip(f"{incomplete} 条缺少可确认的历史收益；金额基于已导入交易，转换单独统计")
                 if name == "合计":
@@ -569,6 +609,10 @@ class TrendView(QChartView):
         y = QValueAxis()
         y.setRange(base, high + pad)
         y.setLabelFormat("%.0f")
+        y.setLabelsColor(QColor("#64748B"))
+        y.setGridLineColor(QColor("#F1F5F9"))
+        x.setLabelsColor(QColor("#64748B"))
+        x.setGridLineVisible(False)
         chart.addAxis(x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(y, Qt.AlignmentFlag.AlignLeft)
         self.x_axis = x
