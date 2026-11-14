@@ -78,6 +78,7 @@ class InteractionMixin:
                     self.live_panel_host.setVisible(self.pages.currentIndex() == 3)
         self.holding_date.setVisible(is_today or self.broker_people_view())
         overview = self.pages.currentIndex() == 2
+        self.overview_currency.setVisible(overview)
         only_overview = self.shared_asset_page() and not overview
         self.person.setVisible(not (only_overview or self.broker_people_view()))
         for control in (self.accounts, self.stock, self.search, self.advanced_button, self.filter_reset):

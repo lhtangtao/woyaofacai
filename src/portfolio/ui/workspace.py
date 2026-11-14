@@ -222,6 +222,13 @@ def build_workspace(self):
     self.currency.addItem("USD 原币账本", "USD")
     self.currency.addItem("CNY 折算展示", "CNY")
     self.currency.setToolTip("原始交易始终为 USD；CNY 自动补齐参考汇率，非发布日沿用此前最近值（最多7天），不含汇率损益。")
+    self.overview_currency = QComboBox(self.global_asset_filter)
+    self.overview_currency.addItem("美元", "USD")
+    self.overview_currency.addItem("人民币", "CNY")
+    self.overview_currency.setToolTip(self.currency.toolTip())
+    self.global_asset_filter.layout().insertWidget(self.global_asset_filter.layout().indexOf(self.global_asset_filter.inline_host), self.overview_currency)
+    self.overview_currency.currentIndexChanged.connect(lambda i: self.currency.setCurrentIndex(i))
+    self.currency.currentIndexChanged.connect(lambda i: self.overview_currency.setCurrentIndex(i))
     self.link_status = QComboBox()
     for text, value in (("全部关联状态", None), ("已关联", "LINKED"), ("历史未关联", "LEGACY_UNLINKED"), ("待审核", "REVIEW_REQUIRED"), ("不适用", "NOT_APPLICABLE")):
         self.link_status.addItem(text, value)
