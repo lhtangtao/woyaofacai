@@ -67,7 +67,6 @@ class Sidebar(QWidget):
                 item = QListWidgetItem(icon(kind, self), text, self.items)
                 item.setSizeHint(QSize(190, 36))
                 item.setData(Qt.ItemDataRole.UserRole, (page, target))
-                item.setToolTip(text)
                 self.entries.append((item, text))
         self.items.currentItemChanged.connect(self._selected)
         layout.addWidget(self.items, 1)
@@ -130,6 +129,7 @@ class Sidebar(QWidget):
             item.setHidden(self.collapsed)
         for item, text in self.entries:
             item.setText("" if self.collapsed else text)
+            item.setToolTip(text if self.collapsed else "")
             item.setSizeHint(QSize(40 if self.collapsed else 190, 38 if self.collapsed else 36))
         self.toggle_button.setText("" if self.collapsed else "  收起导航")
         self.toggle_button.setToolTip("展开导航" if self.collapsed else "收起导航")
