@@ -152,3 +152,33 @@ def test_platform_list_excludes_historical_baseline_from_fund_count():
     assert widget.table.item(0, 3).text() == "-20.00"
     assert widget.table.item(0, 4).text() == "1"
     app.processEvents()
+
+
+def test_tiantian_returns_allows_ipo_interest_and_zero_cash_share_reduce():
+    from portfolio.domestic.fund_returns import tiantian_returns
+
+    rows = [
+        {
+            "transaction_type_raw": "买新基金", "confirmation_date": "2022-07-08",
+            "confirmed_amount": "5000.00", "confirmed_shares": "0.00", "fee": "0.00",
+            "confirmed_nav": "1.0000", "confirmation_status": "成功", "parse_status": "正常", "linked_bank_card": "",
+        },
+        {
+            "transaction_type_raw": "认购结果", "confirmation_date": "2022-07-20",
+            "confirmed_amount": "5000.00", "confirmed_shares": "5002.22", "fee": "0.00",
+            "confirmed_nav": "1.0000", "confirmation_status": "成功", "parse_status": "正常", "linked_bank_card": "",
+        },
+        {
+            "transaction_type_raw": "强减", "confirmation_date": "2022-08-01",
+            "confirmed_amount": "0.00", "confirmed_shares": "1002.22", "fee": "0.00",
+            "confirmed_nav": "0.0000", "confirmation_status": "成功", "parse_status": "正常", "linked_bank_card": "",
+        },
+        {
+            "transaction_type_raw": "卖基金", "confirmation_date": "2023-07-24",
+            "confirmed_amount": "4014.28", "confirmed_shares": "4000.00", "fee": "0.00",
+            "confirmed_nav": "1.00357", "confirmation_status": "成功", "parse_status": "正常", "linked_bank_card": "",
+        },
+    ]
+    res = tiantian_returns(rows, Decimal("0"), Decimal("0"))
+    assert Decimal(res["pnl"]) == Decimal("-985.72")
+    assert Decimal(res["contributed"]) == Decimal("5000.00")

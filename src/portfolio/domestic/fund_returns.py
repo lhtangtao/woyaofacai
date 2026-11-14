@@ -37,6 +37,9 @@ def confirmed_returns(transactions, shares, market_value, *, opening_shares=ZERO
             realized += cash - released
         elif kind == "CASH_DIVIDEND" and change == ZERO:
             dividends += cash
+        elif kind == "SHARE_REDUCE" and ZERO < -change <= quantity and cash == ZERO:
+            # 分级基金下折等零现金份额缩减：仅减少份额，保留总成本不变
+            quantity += change
         else:
             # An internal conversion requires a verified cost basis from the other fund.
             return {}
@@ -109,12 +112,20 @@ def tiantian_returns(rows, shares, market_value):
                 return {}
             signed_fee = fee if side == "BUY" else -fee
             # The statement's confirmed cash includes purchase fees and deducts
-            # redemption fees. Allow for the disclosed cash/share rounding.
+            # redemption fees. Allow for the disclosed cash/share rounding, and
+            # allow IPO subscription interest converted to shares on 认购结果.
             tolerance = Decimal("0.005") * (1 + nav) + abs(delta) * Decimal("0.00005")
-            if abs(amount - gross - signed_fee) > tolerance:
+            diff = amount - gross - signed_fee
+            is_ipo_interest = (
+                kind == "认购结果" and nav == Decimal("1")
+                and ZERO <= -diff <= max(Decimal("10"), amount * Decimal("0.01"))
+            )
+            if abs(diff) > tolerance and not is_ipo_interest:
                 return {}
         elif kind in ("现金分红", "红利再投资"):
             side = "CASH_DIVIDEND" if kind == "现金分红" else "REINVEST"
+        elif kind == "强减" and delta < ZERO and Decimal(cash or ZERO) == ZERO:
+            side = "SHARE_REDUCE"
         elif delta == ZERO:
             continue
         else:
