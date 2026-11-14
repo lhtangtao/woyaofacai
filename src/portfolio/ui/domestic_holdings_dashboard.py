@@ -540,7 +540,7 @@ class ContributionPlot(QWidget):
 
 class HoldingsDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
-        if index.column() not in (0, 1):
+        if index.column() != 1 and not (index.column() == 0 and "\n" in str(index.data() or "")):
             super().paint(painter, option, index)
             return
         styled = QStyleOptionViewItem(option)
