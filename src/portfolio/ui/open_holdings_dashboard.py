@@ -1675,15 +1675,17 @@ class OpenTop10Chart(QWidget):
 
                 painter.setPen(QColor("#64748B"))
                 painter.setFont(numeric_font(10))
-                painter.drawText(QRectF(l_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item["rank"]))
+                painter.drawText(QRectF(l_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item.get("rank", idx + 1)))
 
+                tk_w = 82 if (len(tk) >= 8 and "-" in tk) else 64
                 painter.setPen(QColor("#2563EB" if is_sel else "#0F172A"))
                 painter.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold if is_sel else QFont.Weight.DemiBold))
-                painter.drawText(QRectF(l_start + 30, ry, 64, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
+                painter.drawText(QRectF(l_start + 30, ry, tk_w, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
 
+                amt_x = l_start + 30 + tk_w
                 painter.setPen(QColor("#DC2626"))
                 painter.setFont(numeric_font(11, bold=True))
-                painter.drawText(QRectF(l_start + 94, ry, side_w - 98, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
+                painter.drawText(QRectF(amt_x, ry, max(40.0, side_w - (amt_x - l_start) - 4), row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
 
                 bar_col = QColor("#EF4444")
                 if self.active_ticker and not is_sel:
@@ -1715,15 +1717,17 @@ class OpenTop10Chart(QWidget):
 
                 painter.setPen(QColor("#64748B"))
                 painter.setFont(numeric_font(10))
-                painter.drawText(QRectF(r_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item["rank"]))
+                painter.drawText(QRectF(r_start + 4, ry, 24, row_h), Qt.AlignmentFlag.AlignCenter, str(item.get("rank", idx + 1)))
 
+                tk_w = 82 if (len(tk) >= 8 and "-" in tk) else 64
                 painter.setPen(QColor("#2563EB" if is_sel else "#0F172A"))
                 painter.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold if is_sel else QFont.Weight.DemiBold))
-                painter.drawText(QRectF(r_start + 30, ry, 64, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
+                painter.drawText(QRectF(r_start + 30, ry, tk_w, row_h), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tk)
 
+                amt_x = r_start + 30 + tk_w
                 painter.setPen(QColor("#16A34A"))
                 painter.setFont(numeric_font(11, bold=True))
-                painter.drawText(QRectF(r_start + 94, ry, side_w - 98, row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
+                painter.drawText(QRectF(amt_x, ry, max(40.0, side_w - (amt_x - r_start) - 4), row_h), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, _fmt_usd(val, signed=True))
 
                 bar_col = QColor("#22C55E")
                 if self.active_ticker and not is_sel:
@@ -1899,9 +1903,11 @@ class OpenTop10Card(QFrame):
             losses = sorted([r for r in day_rows if r["floating_pnl"] < 0], key=lambda x: x["floating_pnl"])
             tot_win = sum(r["floating_pnl"] for r in wins)
             tot_loss = sum(r["floating_pnl"] for r in losses)
+            top_w = [{**r, "rank": idx} for idx, r in enumerate(wins[:n], start=1)]
+            top_l = [{**r, "rank": idx} for idx, r in enumerate(losses[:n], start=1)]
             self.loss_pill.setText(f"最惨交易日 (Top {n})  |  区间全部亏损日合计 {_fmt_usd(tot_loss, signed=True)} USD")
             self.win_pill.setText(f"最爽交易日 (Top {n})  |  区间全部盈利日合计 {_fmt_usd(tot_win, signed=True)} USD")
-            self.chart.set_data({"winners": wins[:n], "losers": losses[:n]}, active_ticker="")
+            self.chart.set_data({"winners": top_w, "losers": top_l}, active_ticker="")
             return
 
         self.title_prefix.setText("持有中股票盈亏贡献 Top")
