@@ -300,7 +300,6 @@ OPEN_HOLDINGS_COLUMNS = (
     "持仓占比",
     "买入次数",
     "卖出次数",
-    "详情",
 )
 
 OPEN_PERSON_SUMMARY_COLUMNS = (
@@ -313,6 +312,18 @@ OPEN_PERSON_SUMMARY_COLUMNS = (
     "持仓股票数",
     "盈利股票数",
     "亏损股票数",
+)
+
+CLOSED_PERSON_SUMMARY_COLUMNS = (
+    "归属人员",
+    "买入总额",
+    "卖出总额",
+    "净已实现盈亏",
+    "已实现收益率",
+    "清仓数量占比",
+    "已清仓股票数",
+    "盈利清仓数",
+    "亏损清仓数",
 )
 
 logger = logging.getLogger(__name__)
@@ -587,14 +598,14 @@ class HoldingsTableModel(FinanceModel):
             if col_name == "详情" and not is_total:
                 return "查看 >"
             if isinstance(val, (int, float, Decimal)):
-                if col_name == "持仓占比":
+                if col_name in ("持仓占比", "清仓数量占比"):
                     return f"{val * 100:.2f}%"
                 if col_name == "离回本需涨":
                     if val <= 0:
                         return "已回本"
                     return f"+{val * 100:.2f}%"
                 # 股票只数/买卖次数等离散计数，一律展示为纯整数，不带小数位 (解决如已清仓显示为 35.00 的问题)
-                if col_name in ("操作笔数", "买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数", "持仓股票数", "盈利股票数", "亏损股票数") or (
+                if col_name in ("操作笔数", "买入次数", "卖出次数", "已清仓", "当前持仓", "持仓股票", "股票数量", "持股只数", "持仓股票数", "盈利股票数", "亏损股票数", "已清仓股票数", "盈利清仓数", "亏损清仓数") or (
                     ("股票" in col_name or "次数" in col_name) and not any(k in col_name for k in ("市值", "盈亏", "成本", "收益", "比例", "率", "金", "额"))
                 ):
                     return f"{int(round(float(val))):,d}"
@@ -643,9 +654,9 @@ class HoldingsTableModel(FinanceModel):
                 return QColor(tokens(self.parent()).subtle)
             if col_name == "离回本需涨" and isinstance(val, (int, float, Decimal)):
                 return QColor(tokens(self.parent()).loss if val > 0 else tokens(self.parent()).profit)
-            if col_name == "盈利股票数" and isinstance(val, (int, float, Decimal)) and val > 0:
+            if col_name in ("盈利股票数", "盈利清仓数") and isinstance(val, (int, float, Decimal)) and val > 0:
                 return QColor(tokens(self.parent()).profit)
-            if col_name == "亏损股票数" and isinstance(val, (int, float, Decimal)) and val > 0:
+            if col_name in ("亏损股票数", "亏损清仓数") and isinstance(val, (int, float, Decimal)) and val > 0:
                 return QColor(tokens(self.parent()).loss)
             if isinstance(val, (int, float, Decimal)) and any(w in col_name for w in ("盈亏", "收益", "涨幅", "涨跌")):
                 return QColor(tokens(self.parent()).profit if val > 0 else tokens(self.parent()).loss if val < 0 else tokens(self.parent()).muted)
@@ -927,6 +938,79 @@ class StockDrawerWidget(QFrame):
     def mousePressEvent(self, event):
         # 阻止抽屉内部标签/空白区域的点击事件向父容器冒泡，防止误触外部点击收起抽屉
         event.accept()
+
+
+class PersonSummaryCard(QFrame):
+    """持有中与已清仓共用的『各人员情况』九列汇总卡片组件。"""
+
+    person_clicked = Signal(object, str)  # (person_id, person_name)
+
+    def __init__(self, title: str, columns: tuple[str, ...], parent=None):
+        super().__init__(parent)
+        self.setObjectName("PersonSummaryCard")
+        self.setStyleSheet("""
+            QFrame#PersonSummaryCard, QFrame#OpenPersonCard, QFrame#ClosedPersonCard {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 10px;
+            }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
+
+        hdr = QHBoxLayout()
+        self.title_lbl = QLabel(title)
+        self.title_lbl.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 700; border: none; background: transparent;")
+        hdr.addWidget(self.title_lbl)
+        hdr.addStretch()
+        self.hint_lbl = QLabel("当前全局人员为多人员范围 · 点击人员行可筛选下方明细，再次点击恢复全部")
+        self.hint_lbl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
+        hdr.addWidget(self.hint_lbl)
+        layout.addLayout(hdr)
+
+        self.table = FinanceTable(freeze=False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.table.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.model = HoldingsTableModel(self.table)
+        self.model.columns = columns
+        self.table.setModel(self.model)
+        h_hdr = self.table.horizontalHeader()
+        h_hdr.setFixedHeight(34)
+        h_hdr.setMinimumSectionSize(88)
+        h_hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        h_hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        h_hdr.setStretchLastSection(True)
+        h_hdr.setStyleSheet("background: #F8FAFC; border: none; border-bottom: 1px solid #E2E8F0;")
+        self.table.setStyleSheet("QHeaderView, QHeaderView::section { background: #F8FAFC; border: none; border-bottom: 1px solid #E2E8F0; }")
+        h_hdr.sectionClicked.connect(self.model.toggle_sort)
+        self.table.clicked.connect(self._on_table_clicked)
+        layout.addWidget(self.table)
+
+    def _on_table_clicked(self, index):
+        if not index.isValid():
+            return
+        row = self.model.rows[index.row()]
+        if (len(row.values) > 0 and row.values[0] == "合计") or row.metadata.get("is_total"):
+            return
+        pid = row.metadata.get("person_id")
+        pname = str(row.values[0] or "")
+        self.person_clicked.emit(pid, pname)
+
+    def set_rows(self, rows: list[ReportRow], *, selected_person_id: Any = None):
+        self.model.replace(rows)
+        row_cnt = max(1, len(rows))
+        table_h = min(260, 38 + row_cnt * 34 + 6)
+        self.table.setFixedHeight(table_h)
+        self.table.clearSelection()
+        if selected_person_id is not None:
+            for row_idx, r in enumerate(self.model.rows):
+                if r.metadata.get("person_id") == selected_person_id:
+                    self.table.selectRow(row_idx)
+                    break
 
 
 class HoldingsPage(QWidget):
@@ -1277,6 +1361,8 @@ class HoldingsPage(QWidget):
         self._open_ticker_filter = ""
         self._open_person_drill_id: int | None = None
         self._open_person_drill_name: str = ""
+        self._closed_person_drill_id: int | None = None
+        self._closed_person_drill_name: str = ""
         self._open_trend_window = "ytd"
         self._open_page = 1
         self._open_page_size = 50
@@ -1448,47 +1534,13 @@ class HoldingsPage(QWidget):
         self.open_charts_row.trend_window_changed.connect(self._on_open_trend_window_changed)
         lt_layout.addWidget(self.open_charts_row)
 
-        # 5.5 人员持仓情况汇总表（当全局人员选择「全部」或「他人」时展示每个人的持仓情况）
-        self.open_person_card = QFrame(self)
+        # 5.5 人员持仓情况汇总表（当全局人员为多人员范围时展示每个人的持仓情况）
+        self.open_person_card = PersonSummaryCard("各人员持仓情况", OPEN_PERSON_SUMMARY_COLUMNS, self)
         self.open_person_card.setObjectName("OpenPersonCard")
-        self.open_person_card.setStyleSheet("""
-            QFrame#OpenPersonCard {
-                background: #FFFFFF;
-                border: 1px solid #E2E8F0;
-                border-radius: 10px;
-            }
-        """)
-        opc_layout = QVBoxLayout(self.open_person_card)
-        opc_layout.setContentsMargins(14, 10, 14, 10)
-        opc_layout.setSpacing(8)
-
-        opc_hdr = QHBoxLayout()
-        self.open_person_title_lbl = QLabel("各人员持仓情况")
-        self.open_person_title_lbl.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 700; border: none; background: transparent;")
-        opc_hdr.addWidget(self.open_person_title_lbl)
-        opc_hdr.addStretch()
-        opc_hint = QLabel("当前全局人员为多人员范围 · 点击人员行可筛选下方明细，再次点击恢复全部")
-        opc_hint.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
-        opc_hdr.addWidget(opc_hint)
-        opc_layout.addLayout(opc_hdr)
-
-        self.open_person_table = FinanceTable(freeze=False)
-        self.open_person_table.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.open_person_table.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.open_person_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.open_person_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.open_person_model = HoldingsTableModel(self.open_person_table)
-        self.open_person_model.columns = OPEN_PERSON_SUMMARY_COLUMNS
-        self.open_person_table.setModel(self.open_person_model)
-        self.open_person_table.horizontalHeader().setFixedHeight(34)
-        self.open_person_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.open_person_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.open_person_table.horizontalHeader().setStretchLastSection(True)
-        self.open_person_table.horizontalHeader().setStyleSheet("background: #F8FAFC; border: none; border-bottom: 1px solid #E2E8F0;")
-        self.open_person_table.setStyleSheet("QHeaderView, QHeaderView::section { background: #F8FAFC; border: none; border-bottom: 1px solid #E2E8F0; }")
-        self.open_person_table.horizontalHeader().sectionClicked.connect(self.open_person_model.toggle_sort)
-        self.open_person_table.clicked.connect(self._on_open_person_table_clicked)
-        opc_layout.addWidget(self.open_person_table)
+        self.open_person_title_lbl = self.open_person_card.title_lbl
+        self.open_person_table = self.open_person_card.table
+        self.open_person_model = self.open_person_card.model
+        self.open_person_card.person_clicked.connect(self._on_open_person_selected)
         self.open_person_card.hide()
         lt_layout.addWidget(self.open_person_card)
 
@@ -1537,12 +1589,56 @@ class HoldingsPage(QWidget):
         self.closed_dashboard.structure_clicked.connect(self._on_structure_clicked)
         self.closed_dashboard.trend_window_changed.connect(self._on_closed_trend_window_changed)
         self.closed_dashboard.ticker_clicked.connect(self._on_closed_ticker_clicked)
+
+        # 挂载『各人员清仓情况』汇总表至三张分析卡片与 Top10 之间
+        self.closed_person_card = PersonSummaryCard("各人员清仓情况", CLOSED_PERSON_SUMMARY_COLUMNS, self.closed_dashboard)
+        self.closed_person_card.setObjectName("ClosedPersonCard")
+        self.closed_person_title_lbl = self.closed_person_card.title_lbl
+        self.closed_person_table = self.closed_person_card.table
+        self.closed_person_model = self.closed_person_card.model
+        self.closed_person_card.person_clicked.connect(self._on_closed_person_selected)
+        self.closed_person_card.hide()
+        self.closed_dashboard.attach_person_summary_widget(self.closed_person_card)
+
         self.closed_dashboard.hide()
         lt_layout.addWidget(self.closed_dashboard)
 
         self.detail_info = QLabel("统一持仓明细 · 点击任意标的行在右侧抽屉查看交易流水与收益分析")
         self.detail_info.setObjectName("secondary")
         lt_layout.addWidget(self.detail_info)
+
+        # 已清仓明细列表顶部标题与 全部 / 盈利 / 亏损 快捷切换栏
+        self.closed_table_header = QFrame(self)
+        self.closed_table_header.setObjectName("ClosedTableHeader")
+        self.closed_table_header.setStyleSheet("""
+            QFrame#ClosedTableHeader {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-bottom: none;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }
+        """)
+        cth_layout = QHBoxLayout(self.closed_table_header)
+        cth_layout.setContentsMargins(14, 10, 14, 6)
+        cth_layout.setSpacing(10)
+
+        self.closed_table_title_lbl = QLabel("已清仓明细 (共 0 条)")
+        self.closed_table_title_lbl.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 700; border: none; background: transparent;")
+        cth_layout.addWidget(self.closed_table_title_lbl)
+        cth_layout.addStretch()
+
+        self._closed_pnl_btns: dict[str, QPushButton] = {}
+        for key, label in (("", "全部 (0)"), ("win", "盈利 (0)"), ("loss", "亏损 (0)")):
+            btn = QPushButton(label, self.closed_table_header)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, k=key: self._on_structure_clicked(k))
+            self._closed_pnl_btns[key] = btn
+            cth_layout.addWidget(btn)
+        self._update_closed_pnl_btn_styles()
+        self.closed_table_header.hide()
+        lt_layout.addWidget(self.closed_table_header)
 
         self.detail_table = FinanceTable(freeze=False)
         self.detail_model = HoldingsTableModel(self.detail_table)
@@ -1726,6 +1822,8 @@ class HoldingsPage(QWidget):
         if self._selected_person_filter != state.person:
             self._open_person_drill_id = None
             self._open_person_drill_name = ""
+            self._closed_person_drill_id = None
+            self._closed_person_drill_name = ""
         self._apply_global_filter_to_local(state)
         self._close_drawer()
         if self.analytics is not None:
@@ -1878,6 +1976,8 @@ class HoldingsPage(QWidget):
         if closed:
             self._closed_pnl_filter = ""
             self._closed_ticker_filter = ""
+            self._closed_person_drill_id = None
+            self._closed_person_drill_name = ""
             self.structure_chip.hide()
             self.closed_ticker_chip.hide()
             self._on_filter_changed()
@@ -1946,19 +2046,22 @@ class HoldingsPage(QWidget):
         self._close_drawer()
         self.refresh_detail()
 
-    def _update_open_pnl_btn_styles(self):
-        for key, btn in self._open_pnl_btns.items():
-            active = key == self._open_pnl_filter
+    @staticmethod
+    def _apply_pnl_filter_btn_styles(btns: dict[str, QPushButton], active_key: str):
+        for key, btn in btns.items():
+            active = key == active_key
             btn.blockSignals(True)
             btn.setChecked(active)
             btn.blockSignals(False)
+            is_profit = key in ("profit", "win")
+            is_loss = key == "loss"
             if active:
-                if key == "profit":
+                if is_profit:
                     style = (
                         "QPushButton { background: #16A34A; color: #FFFFFF; border: 1px solid #16A34A; "
                         "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 700; }"
                     )
-                elif key == "loss":
+                elif is_loss:
                     style = (
                         "QPushButton { background: #DC2626; color: #FFFFFF; border: 1px solid #DC2626; "
                         "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 700; }"
@@ -1969,13 +2072,13 @@ class HoldingsPage(QWidget):
                         "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 700; }"
                     )
             else:
-                if key == "profit":
+                if is_profit:
                     style = (
                         "QPushButton { background: #F0FDF4; color: #16A34A; border: 1px solid #BBF7D0; "
                         "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; }"
                         "QPushButton:hover { background: #DCFCE7; }"
                     )
-                elif key == "loss":
+                elif is_loss:
                     style = (
                         "QPushButton { background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; "
                         "border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600; }"
@@ -1988,6 +2091,12 @@ class HoldingsPage(QWidget):
                         "QPushButton:hover { background: #DBEAFE; }"
                     )
             btn.setStyleSheet(style)
+
+    def _update_open_pnl_btn_styles(self):
+        self._apply_pnl_filter_btn_styles(self._open_pnl_btns, self._open_pnl_filter)
+
+    def _update_closed_pnl_btn_styles(self):
+        self._apply_pnl_filter_btn_styles(self._closed_pnl_btns, self._closed_pnl_filter)
 
     def _on_open_page_size_changed(self, *_):
         sz = self.open_page_size_combo.currentData()
@@ -2188,25 +2297,9 @@ class HoldingsPage(QWidget):
                 tot_loss,
             ), {"is_total": True}))
 
-        self.open_person_model.replace(p_rows)
-        row_cnt = max(1, len(p_rows))
-        table_h = min(260, 38 + row_cnt * 34 + 6)
-        self.open_person_table.setFixedHeight(table_h)
-        self.open_person_table.clearSelection()
-        if self._open_person_drill_id is not None:
-            for row_idx, r in enumerate(p_rows):
-                if r.metadata.get("person_id") == self._open_person_drill_id:
-                    self.open_person_table.selectRow(row_idx)
-                    break
+        self.open_person_card.set_rows(p_rows, selected_person_id=self._open_person_drill_id)
 
-    def _on_open_person_table_clicked(self, index):
-        if not index.isValid():
-            return
-        row = self.open_person_model.rows[index.row()]
-        if row.values[0] == "合计" or row.metadata.get("is_total"):
-            return
-        pid = row.metadata.get("person_id")
-        pname = str(row.values[0] or "")
+    def _on_open_person_selected(self, pid, pname: str):
         if self._open_person_drill_id == pid:
             self._open_person_drill_id = None
             self._open_person_drill_name = ""
@@ -2214,6 +2307,83 @@ class HoldingsPage(QWidget):
             self._open_person_drill_id = pid
             self._open_person_drill_name = pname
         self._open_page = 1
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _on_open_person_table_clicked(self, index):
+        if not index.isValid():
+            return
+        row = self.open_person_model.rows[index.row()]
+        if row.values[0] == "合计" or row.metadata.get("is_total"):
+            return
+        self._on_open_person_selected(row.metadata.get("person_id"), str(row.values[0] or ""))
+
+    def _populate_closed_person_summary_table(self, person_summary: list[dict[str, Any]]):
+        """填充已清仓『各人员清仓情况』汇总表，并附上合计行。"""
+        def to_dec(val):
+            return Decimal(str(val)) if val is not None else None
+
+        p_rows: list[ReportRow] = []
+        tot_buy = Decimal(0)
+        tot_sell = Decimal(0)
+        tot_pnl = Decimal(0)
+        tot_records = 0
+        tot_profit = 0
+        tot_loss = 0
+
+        for pr in person_summary:
+            p_buy = to_dec(pr.get("buy_amount")) or Decimal(0)
+            p_sell = to_dec(pr.get("sell_amount")) or Decimal(0)
+            p_pnl = to_dec(pr.get("realized_pnl")) or Decimal(0)
+            p_rate = to_dec(pr.get("return_rate"))
+            p_weight = to_dec(pr.get("weight")) or Decimal(0)
+            c_cnt = int(pr.get("closed_count") or pr.get("record_count") or 0)
+            w_cnt = int(pr.get("profit_count") or 0)
+            l_cnt = int(pr.get("loss_count") or 0)
+
+            tot_buy += p_buy
+            tot_sell += p_sell
+            tot_pnl += p_pnl
+            tot_records += c_cnt
+            tot_profit += w_cnt
+            tot_loss += l_cnt
+
+            p_rows.append(ReportRow((
+                pr.get("person_name") or pr.get("name") or "未归属人员",
+                p_buy,
+                p_sell,
+                p_pnl,
+                p_rate,
+                p_weight,
+                c_cnt,
+                w_cnt,
+                l_cnt,
+            ), {"person_id": pr.get("person_id")}))
+
+        if p_rows:
+            tot_rate = ratio(tot_pnl, tot_buy) if tot_buy > 0 else None
+            tot_weight = Decimal(1) if tot_records > 0 else "—"
+            p_rows.append(ReportRow((
+                "合计",
+                tot_buy,
+                tot_sell,
+                tot_pnl,
+                tot_rate,
+                tot_weight,
+                tot_records,
+                tot_profit,
+                tot_loss,
+            ), {"is_total": True}))
+
+        self.closed_person_card.set_rows(p_rows, selected_person_id=self._closed_person_drill_id)
+
+    def _on_closed_person_selected(self, pid, pname: str):
+        if self._closed_person_drill_id == pid:
+            self._closed_person_drill_id = None
+            self._closed_person_drill_name = ""
+        else:
+            self._closed_person_drill_id = pid
+            self._closed_person_drill_name = pname
         self._close_drawer()
         self.refresh_detail()
 
@@ -2468,6 +2638,7 @@ class HoldingsPage(QWidget):
         if closed:
             self.open_person_card.hide()
         self.open_table_header.setVisible(not closed)
+        self.closed_table_header.setVisible(closed)
         self.open_table_footer.setVisible(not closed)
         self.detail_info.setVisible(closed)
         self.detail_table.setMinimumHeight(360 if closed else 340)
@@ -2557,16 +2728,46 @@ class HoldingsPage(QWidget):
                 trend_window=self._closed_trend_window,
                 active_ticker=self._closed_ticker_filter,
             )
-            raw_rows = filter_closed_rows(scoped_closed_rows, pnl_status=self._closed_pnl_filter)
+            closed_person_summary = dash_payload.get("person_summary", [])
+            show_closed_person = (mode == "person") and self._is_multi_person_scope() and bool(closed_person_summary)
+            if not show_closed_person:
+                self._closed_person_drill_id = None
+                self._closed_person_drill_name = ""
+            elif self._closed_person_drill_id is not None and not any(
+                pr.get("person_id") == self._closed_person_drill_id for pr in closed_person_summary
+            ):
+                self._closed_person_drill_id = None
+                self._closed_person_drill_name = ""
+            self.closed_person_card.setVisible(show_closed_person)
+            if show_closed_person:
+                self._populate_closed_person_summary_table(closed_person_summary)
+
+            closed_base_rows = list(scoped_closed_rows)
             if self._closed_ticker_filter:
-                raw_rows = [
-                    r for r in raw_rows
+                closed_base_rows = [
+                    r for r in closed_base_rows
                     if str(r.get("ticker") or "").strip().upper() == self._closed_ticker_filter
                 ]
                 self.closed_ticker_chip.setText(f"股票筛选: {self._closed_ticker_filter} ✕")
                 self.closed_ticker_chip.show()
             else:
                 self.closed_ticker_chip.hide()
+            if mode == "person" and self._closed_person_drill_id is not None:
+                closed_base_rows = [r for r in closed_base_rows if r.get("person_id") == self._closed_person_drill_id]
+
+            c_closed_all = len(closed_base_rows)
+            c_closed_win = len(filter_closed_rows(closed_base_rows, pnl_status="win"))
+            c_closed_loss = len(filter_closed_rows(closed_base_rows, pnl_status="loss"))
+            if mode == "person" and self._closed_person_drill_id is not None and self._closed_person_drill_name:
+                self.closed_table_title_lbl.setText(f"已清仓明细 · {self._closed_person_drill_name} (共 {c_closed_all} 条)")
+            else:
+                self.closed_table_title_lbl.setText(f"已清仓明细 (共 {c_closed_all} 条)")
+            self._closed_pnl_btns[""].setText(f"全部 ({c_closed_all})")
+            self._closed_pnl_btns["win"].setText(f"盈利 ({c_closed_win})")
+            self._closed_pnl_btns["loss"].setText(f"亏损 ({c_closed_loss})")
+            self._update_closed_pnl_btn_styles()
+
+            raw_rows = filter_closed_rows(closed_base_rows, pnl_status=self._closed_pnl_filter)
             if self._closed_pnl_filter:
                 lbl_map = {"win": "盈利股票", "flat": "持平股票", "loss": "亏损股票"}
                 self.structure_chip.setText(f"盈亏筛选: {lbl_map.get(self._closed_pnl_filter, self._closed_pnl_filter)} ✕")
@@ -2574,6 +2775,9 @@ class HoldingsPage(QWidget):
             else:
                 self.structure_chip.hide()
         else:
+            self.closed_person_card.hide()
+            self._closed_person_drill_id = None
+            self._closed_person_drill_name = ""
             self.structure_chip.hide()
             self.closed_ticker_chip.hide()
             if open_payload is not None:
@@ -2584,9 +2788,11 @@ class HoldingsPage(QWidget):
                     active_industry=self._open_industry,
                     trend_window=self._open_trend_window,
                 )
+                mv_trend = open_payload.get("mv_trend") or {}
                 self.open_top10_card.set_data(
                     open_payload.get("ticker_top10") or {},
                     active_ticker=self._open_ticker_filter,
+                    trend_points=mv_trend.get("series") or mv_trend.get("points") or [],
                 )
                 if self._open_ticker_filter:
                     raw_rows = [
@@ -2706,11 +2912,11 @@ class HoldingsPage(QWidget):
                     to_dec(item.get("weight")),
                     item.get("buy_count"),
                     item.get("sell_count"),
-                    "查看 >",
                 ), {
                     "person_id": item.get("person_id"),
                     "account_id": item.get("account_id"),
                     "instrument_id": item.get("instrument_id"),
+                    "channel": item.get("channel"),
                     "ticker": item.get("ticker"),
                     "currency": item.get("currency"),
                     "quote_status": item.get("quote_status"),
@@ -2734,12 +2940,13 @@ class HoldingsPage(QWidget):
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(f"[桌面端持仓] 明细表格刷新完成 (状态: {status_filter})，耗时 {elapsed_ms:.1f}ms，共加载 {len(rows)} 条标的记录")
         view_title = ("已清仓 · " + self.closed_mode.tabText(self.closed_mode.currentIndex())) if closed else "当前持仓明细"
+        person_tag = f" · {self._closed_person_drill_name}" if (closed and mode == "person" and self._closed_person_drill_id is not None and self._closed_person_drill_name) else ""
         broker_tag = f" · 渠道：{channel_label(broker_filter)}" if broker_filter else ""
         if not rows:
-            self.detail_info.setText(f"{view_title}{broker_tag} · 没有符合筛选条件的记录")
+            self.detail_info.setText(f"{view_title}{person_tag}{broker_tag} · 没有符合筛选条件的记录")
             return
         note = "沿用原清仓收益报表的账本口径，操作笔数可包含划转" if mode == "account" else "点击任意行查看交易记录"
-        self.detail_info.setText(f"{view_title}{broker_tag} · 共 {len(rows)} 条标的记录 · {note}")
+        self.detail_info.setText(f"{view_title}{person_tag}{broker_tag} · 共 {len(rows)} 条标的记录 · {note}")
 
     def _sync_open_filter_options(self, available_filters: dict[str, list[str]]):
         """根据真实持有中数据动态更新券商、股票类型、行业、币种下拉框选项。"""
@@ -2836,7 +3043,7 @@ class HoldingsPage(QWidget):
             return
         row = self.detail_model.rows[index.row()]
         ticker = row.metadata["ticker"]
-        if self._detail_mode in ("account", "person"):
+        if self._detail_mode in ("open", "account", "person"):
             self.open_stock_drawer(ticker, row=row.metadata)
         else:
             self.open_stock_drawer(ticker)
@@ -2854,13 +3061,15 @@ class HoldingsPage(QWidget):
             return
         if row and analytics.scope.reporting_currency != "USD" and self.main_window and self.main_window.analytics_service:
             analytics = self.main_window.analytics_service.calculate(replace(analytics.scope, reporting_currency="USD"))
+        row_account_id = row.get("account_id") if row else None
+        row_broker = row.get("channel") if (row and row_account_id is None) else None
         drawer_data = HoldingsManagementService.get_stock_drawer_data(
             src_path,
             analytics,
             ticker,
             person_id=row.get("person_id") if row else self._selected_person_filter,
-            broker=None if row else self.broker_combo.currentData() or None,
-            account_id=row.get("account_id") if row else None,
+            broker=row_broker if row else (self.broker_combo.currentData() or None),
+            account_id=row_account_id,
             instrument_id=row.get("instrument_id") if row else None,
         )
         self.drawer.set_data(drawer_data)

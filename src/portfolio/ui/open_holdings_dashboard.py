@@ -33,6 +33,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -1754,16 +1755,18 @@ class OpenTop10Card(QFrame):
             }
         """)
         self._raw_top10_data: dict[str, Any] = {}
+        self._trend_points: list[dict[str, Any]] = []
         self._active_ticker: str = ""
+        self._dim_mode: str = "stock"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 9, 12, 9)
         layout.setSpacing(6)
 
         hdr = QHBoxLayout()
         hdr.setSpacing(6)
-        title_prefix = QLabel("持有中股票盈亏贡献 Top")
-        title_prefix.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
-        hdr.addWidget(title_prefix)
+        self.title_prefix = QLabel("持有中股票盈亏贡献 Top")
+        self.title_prefix.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
+        hdr.addWidget(self.title_prefix)
 
         self.top_n_spin = QSpinBox()
         self.top_n_spin.setRange(1, 50)
@@ -1796,9 +1799,32 @@ class OpenTop10Card(QFrame):
         self.top_n_spin.valueChanged.connect(self._on_top_n_changed)
         hdr.addWidget(self.top_n_spin)
 
-        sub = QLabel("按浮动盈亏排序，可点击联动下方明细")
-        sub.setStyleSheet("font-size: 11px; color: #94A3B8; margin-left: 2px;")
-        hdr.addWidget(sub)
+        self.sub_lbl = QLabel("按浮动盈亏排序，可点击联动下方明细")
+        self.sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8; margin-left: 2px;")
+        hdr.addWidget(self.sub_lbl)
+
+        dim_wrap = QFrame()
+        dim_wrap.setStyleSheet("background: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 6px;")
+        dim_lay = QHBoxLayout(dim_wrap)
+        dim_lay.setContentsMargins(2, 2, 2, 2)
+        dim_lay.setSpacing(2)
+        self.dim_group = QButtonGroup(self)
+        self.dim_stock_btn = QPushButton("股票盈亏")
+        self.dim_daily_btn = QPushButton("每日盈亏")
+        for idx, btn in enumerate((self.dim_stock_btn, self.dim_daily_btn)):
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(20)
+            btn.setStyleSheet("""
+                QPushButton { background: transparent; border: none; border-radius: 4px; color: #64748B; font-size: 11px; font-weight: 600; padding: 0 8px; }
+                QPushButton:checked { background: #2563EB; color: #FFFFFF; }
+            """)
+            self.dim_group.addButton(btn, idx)
+            dim_lay.addWidget(btn)
+        self.dim_stock_btn.setChecked(True)
+        self.dim_group.idClicked.connect(self._on_dim_changed)
+        hdr.addWidget(dim_wrap)
+
         hdr.addStretch()
 
         self.toggle_btn = QPushButton("⌄")
@@ -1837,10 +1863,18 @@ class OpenTop10Card(QFrame):
         b_layout.addLayout(sum_row)
 
         self.chart = OpenTop10Chart(self.body_widget)
-        self.chart.ticker_clicked.connect(self.ticker_clicked.emit)
+        self.chart.ticker_clicked.connect(self._on_chart_clicked)
         b_layout.addWidget(self.chart)
 
         layout.addWidget(self.body_widget)
+
+    def _on_chart_clicked(self, key: str):
+        if self._dim_mode == "stock":
+            self.ticker_clicked.emit(key)
+
+    def _on_dim_changed(self, btn_id: int):
+        self._dim_mode = "daily" if btn_id == 1 else "stock"
+        self._refresh_display()
 
     def _on_toggle(self):
         expanded = self.toggle_btn.isChecked()
@@ -1851,9 +1885,30 @@ class OpenTop10Card(QFrame):
         self._refresh_display()
 
     def _refresh_display(self):
-        if not hasattr(self, "_raw_top10_data") or not self._raw_top10_data:
-            return
         n = max(1, self.top_n_spin.value())
+        if self._dim_mode == "daily":
+            self.title_prefix.setText("每日盈亏极值 Top")
+            self.sub_lbl.setText("按单日盈亏金额排序，展示区间最爽/最惨交易日")
+            day_rows = []
+            for p in self._trend_points:
+                dp = p.get("daily_pnl")
+                d_str = str(p.get("date") or "")
+                if dp is not None and d_str:
+                    day_rows.append({"ticker": d_str, "floating_pnl": float(dp)})
+            wins = sorted([r for r in day_rows if r["floating_pnl"] > 0], key=lambda x: -x["floating_pnl"])
+            losses = sorted([r for r in day_rows if r["floating_pnl"] < 0], key=lambda x: x["floating_pnl"])
+            tot_win = sum(r["floating_pnl"] for r in wins)
+            tot_loss = sum(r["floating_pnl"] for r in losses)
+            self.loss_pill.setText(f"最惨交易日 (Top {n})  |  区间全部亏损日合计 {_fmt_usd(tot_loss, signed=True)} USD")
+            self.win_pill.setText(f"最爽交易日 (Top {n})  |  区间全部盈利日合计 {_fmt_usd(tot_win, signed=True)} USD")
+            self.chart.set_data({"winners": wins[:n], "losers": losses[:n]}, active_ticker="")
+            return
+
+        self.title_prefix.setText("持有中股票盈亏贡献 Top")
+        self.sub_lbl.setText("按浮动盈亏排序，可点击联动下方明细")
+        if not hasattr(self, "_raw_top10_data") or not self._raw_top10_data:
+            self.chart.set_data({}, active_ticker="")
+            return
         tot_loss = self._raw_top10_data.get("total_floating_loss") if self._raw_top10_data.get("total_floating_loss") is not None else self._raw_top10_data.get("total_realized_loss")
         tot_win = self._raw_top10_data.get("total_floating_profit") if self._raw_top10_data.get("total_floating_profit") is not None else self._raw_top10_data.get("total_realized_profit")
         self.loss_pill.setText(f"亏损贡献 (Top {n})  |  当前筛选全部亏损合计 {_fmt_usd(tot_loss, signed=True)} USD")
@@ -1873,7 +1928,9 @@ class OpenTop10Card(QFrame):
         }
         self.chart.set_data(sliced_top10, active_ticker=getattr(self, "_active_ticker", ""))
 
-    def set_data(self, top10: dict[str, Any], *, active_ticker: str = ""):
+    def set_data(self, top10: dict[str, Any], *, active_ticker: str = "", trend_points: list[dict[str, Any]] | None = None):
         self._raw_top10_data = dict(top10 or {})
+        if trend_points is not None:
+            self._trend_points = list(trend_points)
         self._active_ticker = (active_ticker or "").strip().upper()
         self._refresh_display()
