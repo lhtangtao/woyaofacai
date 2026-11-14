@@ -822,3 +822,14 @@ INITIAL_601633_CYCLE1_RECORDS = [
     {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-21 10:29:48", "confirmation_date": "2020-12-21", "transaction_type_raw": "卖出", "confirmed_nav": "30.530", "confirmed_shares": "-300", "confirmed_amount": "9159.00", "fee": "14.34"},
     {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-22 09:57:46", "confirmation_date": "2020-12-22", "transaction_type_raw": "清仓", "confirmed_nav": "31.200", "confirmed_shares": "-200", "confirmed_amount": "6240.00", "fee": "11.36"},
 ]
+
+INITIAL_513300_CYCLE1_RECORDS = [
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-01-12 10:05:02", "confirmation_date": "2024-01-12", "transaction_type_raw": "建仓", "confirmed_nav": "1.519", "confirmed_shares": "5400", "confirmed_amount": "8202.60", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-01-16 09:52:02", "confirmation_date": "2024-01-16", "transaction_type_raw": "买入", "confirmed_nav": "1.525", "confirmed_shares": "5800", "confirmed_amount": "8845.00", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-01-17 11:24:40", "confirmation_date": "2024-01-17", "transaction_type_raw": "买入", "confirmed_nav": "1.523", "confirmed_shares": "600", "confirmed_amount": "913.80", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-01-23 13:10:45", "confirmation_date": "2024-01-23", "transaction_type_raw": "买入", "confirmed_nav": "1.590", "confirmed_shares": "4000", "confirmed_amount": "6360.00", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-07-04 09:43:59", "confirmation_date": "2024-07-04", "transaction_type_raw": "买入", "confirmed_nav": "1.975", "confirmed_shares": "4000", "confirmed_amount": "7900.00", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-08-05 14:46:10", "confirmation_date": "2024-08-05", "transaction_type_raw": "买入", "confirmed_nav": "1.654", "confirmed_shares": "4900", "confirmed_amount": "8104.60", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-09-12 11:08:37", "confirmation_date": "2024-09-12", "transaction_type_raw": "卖出", "confirmed_nav": "1.800", "confirmed_shares": "-6000", "confirmed_amount": "10800.00", "fee": "5.00"},
+    {"fund_code": "513300", "fund_name": "纳斯达克ETF华夏", "fund_type": "指数型-海外股票", "transaction_time": "2024-10-08 09:36:16", "confirmation_date": "2024-10-08", "transaction_type_raw": "清仓", "confirmed_nav": "1.736", "confirmed_shares": "-18700", "confirmed_amount": "32463.20", "fee": "8.12"},
+]
