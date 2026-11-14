@@ -6,7 +6,7 @@ from portfolio.ui.icons import icon
 
 # Existing page indices retained as routing identities, independent of visual order.
 GROUPS = (
-    ("资产管理", (("资产总览", 2, "grid", None), ("今日盈亏", 3, "chart", "今日盈亏"), ("持仓管理", 22, "wallet", None),
+    ("美股资产", (("资产总览", 2, "grid", None), ("今日盈亏", 3, "chart", "今日盈亏"), ("持仓管理", 22, "wallet", None),
               ("每日持仓收益", 23, "calendar", "每日持仓收益"), ("每月持仓收益", 24, "calendar", "每月持仓收益"),
               ("交易明细", 0, "trade", None), ("股票归属", 3, "pie", "股票归属"), ("持仓财报日历", 14, "calendar", None))),
     ("国内资产", (("持仓管理", 27, "wallet", None),)),

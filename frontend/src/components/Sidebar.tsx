@@ -34,7 +34,7 @@ export interface NavGroup {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
-    title: "资产管理",
+    title: "美股资产",
     entries: [
       { id: "overview", label: "资产总览", icon: <LayoutGrid size={16} /> },
       { id: "reports:今日盈亏", label: "今日盈亏", icon: <TrendingUp size={16} /> },
