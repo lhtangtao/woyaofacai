@@ -202,3 +202,16 @@ def test_trend_combo_points_computes_cumulative_and_daily_pnl():
     assert pts[0]["cumulative_pnl"] == 100.0 and pts[0]["daily_pnl"] is None
     assert pts[1]["cumulative_pnl"] == 150.0 and pts[1]["daily_pnl"] == 50.0
     assert pts[2]["cumulative_pnl"] == 130.0 and pts[2]["daily_pnl"] == -20.0
+
+
+def test_closed_trend_extends_last_confirmed_result_to_cutoff():
+    from datetime import date
+    from decimal import Decimal
+    from portfolio.ui.domestic_holdings_dashboard import closed_trend_points
+
+    rows = [{'closed_events': [('2026-10-09', '-100')]}]
+    points, covered = closed_trend_points(rows, 'year', date(2026, 11, 14))
+    assert points[-1] == (date(2026, 11, 14), Decimal('-100'))
+    assert covered == 1
+    recent, _ = closed_trend_points(rows, 1, date(2026, 11, 14))
+    assert recent == [(date(2026, 10, 14), Decimal('-100')), (date(2026, 11, 14), Decimal('-100'))]

@@ -131,12 +131,20 @@ def closed_trend_points(rows, period, today, *, zeroed=False):
     cumulative = Decimal(0)
     points = []
     base = None
+    seen = False
     for day, amount in sorted(events.items()):
+        if day > today:
+            break
+        seen = True
         cumulative += amount
         if day <= today and (start is None or day >= start):
             if zeroed and base is None:
                 base = cumulative
             points.append((day, (cumulative - base) if zeroed else cumulative))
+    if not points and seen and start and start <= today:
+        points.append((start, Decimal(0) if zeroed else cumulative))
+    if points and points[-1][0] < today:
+        points.append((today, points[-1][1]))
     return points, covered
 
 
