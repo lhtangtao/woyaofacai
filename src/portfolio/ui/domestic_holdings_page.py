@@ -35,6 +35,7 @@ CLOSED_POSITIONS = dict(fund_name="基金名称", platform="交易平台", fund_
                         buy_amount="累计买入（CNY）", sell_amount="确认赎回（CNY）",
                         transfer_out_amount="转换转出（CNY）",
                         realized="已实现盈亏（CNY）", realized_rate="收益率", holding_days="持有天数",
+                        average_sell_price="已导入卖出均价", last_sell_price="最后卖出价", nav="最新价格",
                         last_confirmed_close_date="清仓日期", arrow="详情")
 METRICS = (
     ("market", "持仓总市值（CNY）", money), ("cost", "持仓总成本（CNY）", money),
@@ -176,6 +177,8 @@ class FundTable(QWidget):
                                 val += f"\n{row.get('nav_date') or '日期未知'}"
                         else:
                             val = "—"
+                    elif key in ("average_sell_price", "last_sell_price"):
+                        val = money(val, 4)
                     elif key in ("average", "shares"):
                         val = money(val, 4 if key == "average" else 2)
                 item = QTableWidgetItem(("查看 ›" if self.open_positions else "›") if key == "arrow" else str(val) if val is not None else "—")

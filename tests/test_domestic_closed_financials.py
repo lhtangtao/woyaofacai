@@ -53,7 +53,23 @@ def test_closed_profit_is_weighted_and_events_keep_real_confirmation_dates():
     assert stats['buy']==100 and stats['sell']==120 and stats['realized']==10
     assert stats['rate']==Decimal(10)/Decimal(300)*100 and stats['holding_days']==15
     points,covered=closed_trend_points(rows,'year',date(2024,12,31))
-    assert covered==2 and points==[(date(2024,3,1),Decimal(20)),(date(2024,4,1),Decimal(10))]
+    assert covered==2 and points==[(date(2024,3,1),Decimal(20)),(date(2024,4,1),Decimal(10)),(date(2024,12,31),Decimal(10))]
+
+
+def test_alipay_sell_prices_use_gross_cash_and_weighted_shares():
+    from portfolio.domestic.closed_fund_analytics import closed_transaction_summaries
+    raw = sqlite3.connect(':memory:'); raw.row_factory = sqlite3.Row
+    calc = sqlite3.connect(':memory:'); calc.row_factory = sqlite3.Row
+    raw.execute('CREATE TABLE raw_fund_transactions (account_id TEXT, fund_code TEXT, source_platform TEXT, confirmation_date TEXT, transaction_time TEXT, id TEXT)')
+    raw.execute("INSERT INTO raw_fund_transactions VALUES ('A','123456','ALIPAY','2024-01-01','','1')")
+    calc.execute('CREATE TABLE calc_fund_transactions (account_id TEXT, fund_code TEXT, effective_date TEXT, transaction_date TEXT, raw_transaction_id TEXT, transaction_type TEXT, confirmed_amount TEXT, confirmed_shares TEXT, fee TEXT, status TEXT)')
+    calc.executemany('INSERT INTO calc_fund_transactions VALUES (?,?,?,?,?,?,?,?,?,?)', [
+        ('A','123456','2024-01-01','2024-01-01','1','SELL','99','10','1','正常'),
+        ('A','123456','2024-02-01','2024-02-01','2','SELL','58','5','2','正常')])
+    result = closed_transaction_summaries(raw, calc, [('A','123456')], '2024-12-31')[('A','123456')]
+    assert result['average_sell_price'] == Decimal(160) / Decimal(15)
+    assert result['last_sell_price'] == Decimal(12)
+    raw.close(); calc.close()
 
 
 def test_realized_timeline_replays_each_sale_and_dividend_date():

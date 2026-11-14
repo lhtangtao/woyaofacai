@@ -78,8 +78,9 @@ def closed_transaction_summaries(raw, calc, keys, cutoff):
             groups[key].append(row)
     alipay = defaultdict(list)
     if calc is not None and calc.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='calc_fund_transactions'").fetchone():
-        for item in calc.execute("""SELECT account_id,fund_code,effective_date,transaction_type,confirmed_amount,fee,status
-                FROM calc_fund_transactions WHERE effective_date IS NOT NULL AND effective_date<=?""", (cutoff,)):
+        for item in calc.execute("""SELECT account_id,fund_code,effective_date,transaction_type,confirmed_amount,confirmed_shares,fee,status
+                FROM calc_fund_transactions WHERE effective_date IS NOT NULL AND effective_date<=?
+                ORDER BY effective_date,transaction_date,raw_transaction_id""", (cutoff,)):
             key = item['account_id'], item['fund_code']
             if key in keys:
                 alipay[key].append(dict(item))
@@ -88,6 +89,7 @@ def closed_transaction_summaries(raw, calc, keys, cutoff):
         buckets = defaultdict(list)
         issues = []
         dates = []
+        sells = []
         if groups[key] and groups[key][0]['source_platform'] == 'ALIPAY':
             transactions = alipay[key]
             classified = ((row, row['transaction_type'] if row['status'] == '正常' else None) for row in transactions)
@@ -126,6 +128,14 @@ def closed_transaction_summaries(raw, calc, keys, cutoff):
             if kind is None:
                 issues.append('存在无法确认或待核对的交易')
                 continue
+            if kind == 'SELL':
+                shares = _number(abs(Decimal(str(row['confirmed_shares'])))) if row.get('confirmed_shares') is not None else None
+                price = _number(row.get('confirmed_nav'))
+                if price is None and groups[key][0]['source_platform'] == 'ALIPAY' and shares:
+                    cash, fee = _number(row.get('confirmed_amount')), _number(row.get('fee'))
+                    if cash is not None and fee is not None:
+                        price = (cash + fee) / shares
+                sells.append((row.get('effective_date') or row.get('confirmation_date'), shares, price if price and price > 0 else None))
             field = {'BUY':'buy_amount', 'SELL':'sell_amount', 'TRANSFER_IN':'transfer_in_amount',
                      'TRANSFER_OUT':'transfer_out_amount', 'CASH_DIVIDEND':'dividend_amount'}.get(kind)
             if field:
@@ -145,6 +155,12 @@ def closed_transaction_summaries(raw, calc, keys, cutoff):
         summary.update(first_trade_date=min((day for day in dates if day), default=None),
                        cash_summary_issue='；'.join(dict.fromkeys(issues)) or None,
                        cash_summary_scope='已导入且确认的流水；转换和分红单独统计，可能不含缺失历史')
+        sells.sort(key=lambda item: item[0] or '')
+        if sells:
+            last_prices = {price for day, _, price in sells if day == sells[-1][0]}
+            summary['last_sell_price'] = next(iter(last_prices)) if len(last_prices) == 1 else None
+            if not issues and all(shares and price is not None for _, shares, price in sells):
+                summary['average_sell_price'] = sum(shares * price for _, shares, price in sells) / sum(shares for _, shares, _ in sells)
         result[key] = summary
     return result
 
