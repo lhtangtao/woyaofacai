@@ -316,7 +316,7 @@ class PlatformList(QWidget):
         self.table.setHorizontalHeaderLabels(["交易平台", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
                                              ["交易平台", "市值占比", "持仓成本", "持仓市值", "浮动盈亏", "基金数"])
         self.table.setRowCount(len(self.names) + 1)
-        market = total(row.get("market_value") for row in rows)
+        market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):
             group = rows if name == "合计" else groups[name]
             values = [row.get(value_key) for row in group]

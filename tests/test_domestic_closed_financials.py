@@ -143,8 +143,8 @@ def test_platform_list_excludes_historical_baseline_from_fund_count():
     app = QApplication.instance() or QApplication([])
     widget = PlatformList(lambda _name: None)
     rows = [
-        {"platform": "支付宝", "fund_code": "161725", "buy_amount": Decimal("100"), "sell_amount": Decimal("60"), "realized": Decimal("-40")},
-        {"platform": "支付宝", "fund_code": "ALIPAY_PRE_2022_CLOSED", "buy_amount": None, "sell_amount": None, "realized": Decimal("20"), "is_historical_baseline": True},
+        {"platform": "支付宝", "fund_code": "161725", "market_value": "0", "buy_amount": Decimal("100"), "sell_amount": Decimal("60"), "realized": Decimal("-40")},
+        {"platform": "支付宝", "fund_code": "ALIPAY_PRE_2022_CLOSED", "market_value": "0", "buy_amount": None, "sell_amount": None, "realized": Decimal("20"), "is_historical_baseline": True},
     ]
     widget.render(rows, closed=True)
     # 支付宝基金数只计真实基金 1 只，历史收益包含基线合计 -20.00
