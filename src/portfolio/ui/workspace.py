@@ -441,6 +441,9 @@ def build_workspace(self):
     self.pages.addWidget(self.domestic_daily_performance_page)
     self.domestic_monthly_performance_page = DomesticMonthlyPerformancePage(self)
     self.pages.addWidget(self.domestic_monthly_performance_page)
+    from portfolio.ui.domestic_trades_page import DomesticTradesPage
+    self.domestic_trades_page = DomesticTradesPage(self)
+    self.pages.addWidget(self.domestic_trades_page)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

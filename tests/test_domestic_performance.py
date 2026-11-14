@@ -2,7 +2,9 @@
 from PySide6.QtWidgets import QApplication
 
 from portfolio.domestic.performance import DomesticPerformanceData
+from portfolio.domestic.trades_query import classify_direction
 from portfolio.ui.domestic_performance_page import DomesticDailyPerformancePage, DomesticMonthlyPerformancePage
+from portfolio.ui.domestic_trades_page import DomesticTradesPage
 
 
 def _sample_data() -> DomesticPerformanceData:
@@ -88,3 +90,47 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     daily_page._drill_period_from_top("2026-01-05")
     assert daily_page._attr_dim == "fund"
     assert daily_page._selected_period == "2026-01-05"
+
+
+def test_domestic_trades_page_filters_and_kpis(qtbot):
+    assert classify_direction("定时定额投资") == "买入"
+    assert classify_direction("卖基金") == "卖出"
+    assert classify_direction("红利再投资") == "分红"
+
+    page = DomesticTradesPage()
+    qtbot.addWidget(page)
+    sample_trades = {
+        "rows": [
+            {
+                "id": "1", "trade_date": "2026-11-11", "transaction_time": "2026-11-11 14:30:00",
+                "confirmation_date": "2026-11-11", "platform": "天天基金",
+                "fund_code": "016452", "fund_name": "南方纳斯达克100", "fund_type": "指数型-海外股票",
+                "direction": "买入", "transaction_type_raw": "定时定额投资",
+                "application_amount": 100.0, "confirmed_amount": 100.0,
+                "confirmed_shares": 46.4, "confirmed_nav": 2.1552, "fee": 0.1,
+                "status": "成功", "order_id": "ORD001",
+            },
+            {
+                "id": "2", "trade_date": "2026-10-15", "transaction_time": "2026-10-15 10:00:00",
+                "confirmation_date": "2026-10-15", "platform": "支付宝",
+                "fund_code": "019172", "fund_name": "摩根纳斯达克100", "fund_type": "指数型-海外股票",
+                "direction": "卖出", "transaction_type_raw": "用户卖出",
+                "application_amount": None, "confirmed_amount": 500.0,
+                "confirmed_shares": 300.0, "confirmed_nav": 1.6667, "fee": 0.5,
+                "status": "成功", "order_id": "ORD002",
+            },
+        ],
+        "platforms": ["天天基金", "支付宝"],
+        "directions": ["买入", "卖出"],
+        "raw_types": ["定时定额投资", "用户卖出"],
+        "fund_types": ["指数型-海外股票"],
+    }
+    page._on_loaded(sample_trades, "")
+    assert page.model.rowCount() == 2
+    assert page._kpi_labels["count"][0].text() == "2"
+
+    page.platform_combo.setCurrentIndex(page.platform_combo.findData("支付宝"))
+    assert page.model.rowCount() == 1
+    assert page._kpi_labels["sell"][0].text() == "¥500.00"
+    page._reset_filters()
+    assert page.model.rowCount() == 2
