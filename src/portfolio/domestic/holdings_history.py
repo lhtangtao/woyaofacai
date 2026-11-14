@@ -1,5 +1,6 @@
 """Read-only daily valuation inputs for the Mac domestic holdings dashboard."""
 from bisect import bisect_right
+from collections import Counter
 from datetime import date, timedelta
 from importlib.resources import files
 import json
@@ -7,7 +8,8 @@ from decimal import Decimal, localcontext
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .holdings_query import ESTIMATED_NAV_SOURCES, daily_nav, positive
-from .storage import CALC_FILE, RAW_FILE, connect
+from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
+from .tiantian_positions import BUY, SELL, movement, subscription_key
 
 
 class HistoricalValues(dict):
@@ -16,8 +18,78 @@ class HistoricalValues(dict):
         self.nav_dates = {}
         self.nav_sources = {}
         self.missing = {}
+        self.cum_pnl = {}
         self.money_funds = set()
         self.calendar_incomplete = False
+
+
+def _build_cum_net_cash_series(raw, calc, raw_tables, calc_tables, rows, cutoff):
+    """为已核对成本的基金构建按日期递增的累计净投入现金序列。"""
+    opening_costs = {}
+    if "raw_fund_opening_cost_baselines" in raw_tables:
+        for r in raw.execute("SELECT account_id, snapshot_date, fund_code, opening_cost FROM raw_fund_opening_cost_baselines"):
+            opening_costs[(r[0], r[2])] = (r[1], Decimal(r[3]))
+
+    series_by_key = {}
+    for row in rows:
+        if row.get("is_historical_baseline"):
+            continue
+        has_verified = (not row.get("return_issue")) or (row.get("pnl") is not None) or (row.get("last_confirmed_total_pnl") is not None)
+        if not has_verified:
+            continue
+        key = row["account_id"], row["fund_code"]
+        events = {}
+        if key[0] == ACCOUNT and "calc_fund_transactions" in calc_tables:
+            open_day, open_cost = opening_costs.get(key, ("2021-11-11", Decimal(0)))
+            if open_cost != 0:
+                events[open_day] = events.get(open_day, Decimal(0)) + open_cost
+            for t in calc.execute(
+                """SELECT effective_date, transaction_type, confirmed_amount, status
+                   FROM calc_fund_transactions
+                   WHERE account_id=? AND fund_code=? AND effective_date IS NOT NULL
+                   AND effective_date>? AND effective_date<=?
+                   ORDER BY effective_date, raw_transaction_id""",
+                (*key, open_day, cutoff),
+            ):
+                if t[3] != "正常" or t[2] is None:
+                    continue
+                amt = Decimal(t[2])
+                if t[1] in ("BUY", "TRANSFER_IN"):
+                    events[t[0]] = events.get(t[0], Decimal(0)) + amt
+                elif t[1] in ("SELL", "TRANSFER_OUT", "CASH_DIVIDEND"):
+                    events[t[0]] = events.get(t[0], Decimal(0)) - amt
+        elif row["platform"] == "天天基金" and "raw_fund_transactions" in raw_tables:
+            trades = [dict(r) for r in raw.execute(
+                """SELECT * FROM raw_fund_transactions
+                   WHERE account_id=? AND fund_code=? AND source_platform='TIANTIAN'
+                   AND confirmation_date IS NOT NULL AND confirmation_date<=?
+                   ORDER BY confirmation_date, transaction_time, id""",
+                (*key, cutoff),
+            )]
+            confirmations = Counter(
+                subscription_key(r) for r in trades
+                if r["transaction_type_raw"] == "认购结果"
+                and r["confirmation_status"] == "成功" and r["parse_status"] == "正常"
+            )
+            for t in trades:
+                delta = movement(t, confirmations)
+                if delta is None:
+                    continue
+                kind = t["transaction_type_raw"]
+                amt = Decimal(t["confirmed_amount"] or 0)
+                day = t["confirmation_date"]
+                if kind in BUY | {"超级转换-转入"} and delta > 0:
+                    events[day] = events.get(day, Decimal(0)) + amt
+                elif kind in SELL | {"超级转换-转出", "现金分红"}:
+                    events[day] = events.get(day, Decimal(0)) - amt
+        sorted_days = sorted(events)
+        running = Decimal(0)
+        cum_vals = []
+        for d in sorted_days:
+            running += events[d]
+            cum_vals.append(running)
+        series_by_key[key] = (sorted_days, cum_vals)
+    return series_by_key
 
 
 def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
@@ -145,8 +217,10 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                                   or "货币" in (row.get("fund_name") or ""))
         with localcontext() as precision:
             precision.prec = 60
+            net_cash_series = _build_cum_net_cash_series(raw, calc, raw_tables, calc_tables, rows, cutoff)
             for key, balances in quantities.items():
                 prices = navs.get(key[1], {})
+                cash_days, cash_vals = net_cash_series.get(key, ([], []))
                 for day in days:
                     quantity = balances.get(day)
                     if day not in balances and key in beginnings:
@@ -159,15 +233,21 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                     price_entry = prices.get(price_day) if price_day and (
                         date.fromisoformat(day) - date.fromisoformat(price_day )).days <= 7 else None
                     price = price_entry[0] if price_entry else None
-                    item = (date.fromisoformat(day), key)
-                    result.nav_dates[item] = price_entry[2] if price is not None else None
-                    result.nav_sources[item] = price_entry[1] if price is not None else None
+                    day_obj = date.fromisoformat(day)
+                    item = (day_obj, key)
+                    result.nav_dates[item] = price_entry[2] if price_entry is not None else None
+                    result.nav_sources[item] = price_entry[1] if price_entry is not None else None
                     if quantity is None or quantity < 0:
                         result.missing[item] = "历史份额缺失或覆盖不足"
                     elif quantity > 0 and price is None:
                         result.missing[item] = "单位净值缺失、冲突或超过7天"
-                    result.setdefault(date.fromisoformat(day), {})[key] = (
+                    mv = (
                         Decimal(0) if quantity == 0 else
                         quantity * price if quantity is not None and quantity > 0 and price is not None else None
                     )
+                    result.setdefault(day_obj, {})[key] = mv
+                    if mv is not None and key in net_cash_series:
+                        c_idx = bisect_right(cash_days, day) - 1
+                        net_in = cash_vals[c_idx] if c_idx >= 0 else Decimal(0)
+                        result.cum_pnl.setdefault(day_obj, {})[key] = mv - net_in
         return result

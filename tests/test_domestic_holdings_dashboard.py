@@ -181,3 +181,24 @@ def test_holding_metrics_includes_partial_realized_pnl_when_available():
     assert prepared[0]["floating_rate"] == Decimal("40")
     assert stats["floating"] == Decimal("80")
     assert stats["rate"] == Decimal("40")
+
+
+def test_trend_combo_points_computes_cumulative_and_daily_pnl():
+    from portfolio.domestic.holdings_history import HistoricalValues
+    from portfolio.ui.domestic_holdings_dashboard import trend_combo_points
+
+    history = HistoricalValues()
+    d1, d2, d3 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+    key = ("ALIPAY_FUND", "019172")
+    history[d1] = {key: Decimal("1000")}
+    history[d2] = {key: Decimal("1050")}
+    history[d3] = {key: Decimal("1030")}
+    history.cum_pnl[d1] = {key: Decimal("100")}
+    history.cum_pnl[d2] = {key: Decimal("150")}
+    history.cum_pnl[d3] = {key: Decimal("130")}
+
+    pts = trend_combo_points(history, [dict(account_id="ALIPAY_FUND", fund_code="019172")], "year", d3)
+    assert len(pts) == 3
+    assert pts[0]["cumulative_pnl"] == 100.0 and pts[0]["daily_pnl"] is None
+    assert pts[1]["cumulative_pnl"] == 150.0 and pts[1]["daily_pnl"] == 50.0
+    assert pts[2]["cumulative_pnl"] == 130.0 and pts[2]["daily_pnl"] == -20.0

@@ -14,12 +14,12 @@ from PySide6.QtWidgets import (
 
 from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
-from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard
+from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard, OpenMvTrendChart
 from portfolio.ui.holdings_page import ModernMetricCard
 from portfolio.ui.theme import numeric_font
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
-    closed_metrics, closed_trend_points, holding_metrics, money, panel, percent, trend_points,
+    closed_metrics, closed_trend_points, holding_metrics, money, panel, percent, trend_combo_points, trend_points,
 )
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
@@ -324,6 +324,53 @@ class DomesticHoldingsPage(QWidget):
         self.history_ranges.button(3).setChecked(True)
         self.history_ranges.idClicked.connect(lambda _: self.render_history())
         trend_body.addLayout(trend_header)
+        self.trend_controls_widget = QWidget()
+        ctrl_row = QHBoxLayout(self.trend_controls_widget)
+        ctrl_row.setContentsMargins(0, 0, 0, 0)
+        ctrl_row.setSpacing(6)
+        ctrl_row.addWidget(QLabel("收益指标:", objectName="domesticCaption"))
+        self.pnl_metric_group = QButtonGroup(self)
+        for i, label in enumerate(("累计盈亏", "每日盈亏")):
+            btn = QPushButton(label, checkable=True)
+            self.pnl_metric_group.addButton(btn, i)
+            ctrl_row.addWidget(btn)
+        self.pnl_metric_group.button(0).setChecked(True)
+        ctrl_row.addSpacing(8)
+        self.cum_mode_label = QLabel("累计模式:", objectName="domesticCaption")
+        ctrl_row.addWidget(self.cum_mode_label)
+        self.cum_mode_group = QButtonGroup(self)
+        for i, label in enumerate(("真实累计", "区间归零")):
+            btn = QPushButton(label, checkable=True)
+            self.cum_mode_group.addButton(btn, i)
+            ctrl_row.addWidget(btn)
+        self.cum_mode_group.button(0).setChecked(True)
+        ctrl_row.addStretch()
+        trend_body.addWidget(self.trend_controls_widget)
+
+        self.open_trend_chart = OpenMvTrendChart(currency_symbol="¥")
+        trend_body.addWidget(self.open_trend_chart, 1)
+
+        self.trend_legend_widget = QWidget()
+        legend_row = QHBoxLayout(self.trend_legend_widget)
+        legend_row.setContentsMargins(0, 0, 0, 0)
+        legend_row.setSpacing(14)
+        legend_row.addStretch()
+        self.legend_mv_btn = QPushButton("● 持仓市值 (左轴)", checkable=True)
+        self.legend_mv_btn.setChecked(True)
+        self.legend_pnl_btn = QPushButton("● 累计盈亏 (右轴)", checkable=True)
+        self.legend_pnl_btn.setChecked(True)
+        for btn, color in ((self.legend_mv_btn, "#2563EB"), (self.legend_pnl_btn, "#F59E0B")):
+            btn.setStyleSheet(f"QPushButton {{ border:0; background:transparent; color:{color}; font-size:11px; padding:2px 4px; }}"
+                              f"QPushButton:!checked {{ color:#94A3B8; }}")
+            legend_row.addWidget(btn)
+        legend_row.addStretch()
+        trend_body.addWidget(self.trend_legend_widget)
+
+        self.pnl_metric_group.idClicked.connect(self._on_trend_mode_changed)
+        self.cum_mode_group.idClicked.connect(self._on_trend_mode_changed)
+        self.legend_mv_btn.clicked.connect(self._on_trend_legend_toggled)
+        self.legend_pnl_btn.clicked.connect(self._on_trend_legend_toggled)
+
         self.history_plot = TrendView()
         trend_body.addWidget(self.history_plot, 1)
         self.history_note = QLabel("", objectName="domesticCaption", wordWrap=True)
@@ -721,8 +768,26 @@ class DomesticHoldingsPage(QWidget):
             + ("　· 部分数据未核算" if totals["matched"] < len(shown) else "")
         )
 
+    def _on_trend_mode_changed(self, _id=None):
+        is_daily = self.pnl_metric_group.checkedId() == 1
+        cum_mode = "zeroed" if self.cum_mode_group.checkedId() == 1 else "real"
+        self.cum_mode_label.setVisible(not is_daily)
+        for btn in self.cum_mode_group.buttons():
+            btn.setVisible(not is_daily)
+        self.legend_pnl_btn.setText("● 每日盈亏 (右轴)" if is_daily else "● 累计盈亏 (右轴)")
+        self.open_trend_chart.set_mode(pnl_metric="daily" if is_daily else "cum", cum_mode=cum_mode)
+
+    def _on_trend_legend_toggled(self):
+        self.open_trend_chart.set_visibility(
+            show_mv=self.legend_mv_btn.isChecked(),
+            show_pnl=self.legend_pnl_btn.isChecked(),
+        )
+
     def render_history(self):
         if self.modes.checkedId() == 1:
+            self.trend_controls_widget.hide()
+            self.open_trend_chart.hide()
+            self.trend_legend_widget.hide()
             rows = getattr(self, "closed_scope", [])
             cutoff = date.fromisoformat(rows[0]["valuation_date"]) if rows else date.today()
             points, covered = closed_trend_points(rows, self.history_periods[self.history_ranges.checkedId()], cutoff)
@@ -733,26 +798,17 @@ class DomesticHoldingsPage(QWidget):
             self.history_note.show()
             return
         self.history_note.hide()
-        self.history_plot.show()
+        self.history_plot.hide()
+        self.trend_controls_widget.show()
+        self.open_trend_chart.show()
+        self.trend_legend_widget.show()
         cutoff = self.history_scope[0]["valuation_date"] if self.history_scope else None
-        points = trend_points(self.data.get("daily_values", {}), self.history_scope,
-                              self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff)) if cutoff else []
         history = self.data.get("daily_values", {})
-        keys = {(row["account_id"], row["fund_code"]) for row in self.history_scope}
-        details = {}
-        reasons = {}
-        for day, value in points:
-            if value is None:
-                for key in keys:
-                    if history.get(day, {}).get(key) is None:
-                        reason = getattr(history, "missing", {}).get((day, key), "历史数据缺失")
-                        reasons.setdefault(reason, set()).add(key[1])
-            else:
-                dates = [history.nav_dates.get((day, key)) for key in keys
-                         if history.get(day, {}).get(key) not in (None, 0)]
-                dates = sorted({day for day in dates if day})
-                details[day] = "、".join(dates) if dates else "当日无持仓"
-        self.history_plot.render(points, details)
+        combo_points = trend_combo_points(
+            history, self.history_scope,
+            self.history_periods[self.history_ranges.checkedId()], date.fromisoformat(cutoff),
+        ) if cutoff else []
+        self.open_trend_chart.set_data(combo_points)
         if getattr(history, "calendar_incomplete", False):
             self.message.setText("部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。")
         elif self.message.text() == "部分日期的交易日历尚未覆盖，按工作日显示，请核对节假日。":

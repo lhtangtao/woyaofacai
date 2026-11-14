@@ -151,6 +151,30 @@ def trend_points(values, rows, period, today):
     return result
 
 
+def trend_combo_points(values, rows, period, today):
+    """构建国内基金双轴趋势图所需的每日市值、累计盈亏与每日盈亏序列。"""
+    mv_points = trend_points(values, rows, period, today)
+    keys = {(row["account_id"], row["fund_code"]) for row in rows}
+    cum_pnl_map = getattr(values, "cum_pnl", {})
+    series = []
+    prev_cum = None
+    with localcontext() as precision:
+        precision.prec = 60
+        for day, mv in mv_points:
+            pnl_vals = [cum_pnl_map.get(day, {}).get(key) for key in keys]
+            cum_pnl = sum(pnl_vals, Decimal(0)) if keys and None not in pnl_vals else None
+            daily_pnl = (cum_pnl - prev_cum) if (cum_pnl is not None and prev_cum is not None) else None
+            if cum_pnl is not None:
+                prev_cum = cum_pnl
+            series.append({
+                "date": day.isoformat(),
+                "market_value": float(mv) if mv is not None else None,
+                "cumulative_pnl": float(cum_pnl) if cum_pnl is not None else None,
+                "daily_pnl": float(daily_pnl) if daily_pnl is not None else None,
+            })
+    return series
+
+
 
 def panel(title=None):
     frame = QFrame(objectName="domesticPanel")
