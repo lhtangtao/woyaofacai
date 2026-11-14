@@ -110,7 +110,7 @@ def closed_metrics(rows):
 DOMESTIC_TREND_START = date(2022, 1, 1)
 
 
-def closed_trend_points(rows, period, today):
+def closed_trend_points(rows, period, today, *, zeroed=False):
     """Cumulative verified event amounts; never invent missing event dates."""
     events = defaultdict(Decimal)
     covered = 0
@@ -130,10 +130,13 @@ def closed_trend_points(rows, period, today):
         start = max(start, p_start) if start else p_start
     cumulative = Decimal(0)
     points = []
+    base = None
     for day, amount in sorted(events.items()):
         cumulative += amount
         if day <= today and (start is None or day >= start):
-            points.append((day, cumulative))
+            if zeroed and base is None:
+                base = cumulative
+            points.append((day, (cumulative - base) if zeroed else cumulative))
     return points, covered
 
 
@@ -365,6 +368,7 @@ class PlatformList(QWidget):
         else:
             for col in range(6):
                 header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
+            self.table.setColumnWidth(1, max(108, self.table.columnWidth(1)))
         self.table.setRowCount(len(self.names) + 1)
         market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):
@@ -401,6 +405,8 @@ class PlatformList(QWidget):
                         ratio_text,
                         is_total=(name == "合计"),
                     )
+                    cell.layout().setContentsMargins(4, 2, 4, 2)
+                    cell.pbar.setMinimumWidth(14)
                     self.table.setCellWidget(index, column, cell)
                     continue
                 self.table.removeCellWidget(index, column)

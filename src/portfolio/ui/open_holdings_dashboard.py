@@ -424,10 +424,11 @@ class OpenDistributionDonut(QWidget):
 class OpenMvTrendChart(QWidget):
     """持仓市值趋势双 Y 轴组合图：左侧持仓市值（始终非负），右侧可切换累计盈亏（真实累计/区间归零）或每日盈亏柱状图。"""
 
-    def __init__(self, parent=None, *, currency_symbol: str = "$"):
+    def __init__(self, parent=None, *, currency_symbol: str = "$", currency_code: str | None = None):
         super().__init__(parent)
         self.currency_symbol = currency_symbol
-        self.setMinimumHeight(135)
+        self.currency_code = currency_code or ("CNY" if currency_symbol == "¥" else "USD")
+        self.setMinimumHeight(125)
         self.setMouseTracking(True)
         self.points: list[dict[str, Any]] = []
         self._hover_idx: int = -1
@@ -582,9 +583,9 @@ class OpenMvTrendChart(QWidget):
         painter.setFont(QFont(".AppleSystemUIFont", 9, QFont.Weight.DemiBold))
         if self.show_mv:
             painter.setPen(QColor("#2563EB"))
-            painter.drawText(QRectF(2, 2, 110, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "持仓市值 (USD)")
+            painter.drawText(QRectF(2, 2, 110, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"持仓市值 ({self.currency_code})")
         if self.show_pnl:
-            r_title = "每日盈亏 (USD)" if self.pnl_metric == "daily" else "累计盈亏 (USD)"
+            r_title = f"每日盈亏 ({self.currency_code})" if self.pnl_metric == "daily" else f"累计盈亏 ({self.currency_code})"
             painter.setPen(QColor("#16A34A" if self.pnl_metric == "daily" else "#F59E0B"))
             painter.drawText(QRectF(w - 122, 2, 120, 16), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, r_title)
 

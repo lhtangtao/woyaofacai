@@ -333,6 +333,7 @@ class DomesticHoldingsPage(QWidget):
             self.pnl_metric_group.addButton(btn, i)
             ctrl_row.addWidget(btn)
         self.pnl_metric_group.button(0).setChecked(True)
+        self.pnl_metric_label = ctrl_row.itemAt(0).widget()
         ctrl_row.addSpacing(8)
         self.cum_mode_label = QLabel("累计模式:", objectName="domesticCaption")
         ctrl_row.addWidget(self.cum_mode_label)
@@ -767,11 +768,15 @@ class DomesticHoldingsPage(QWidget):
         )
 
     def _on_trend_mode_changed(self, _id=None):
-        is_daily = self.pnl_metric_group.checkedId() == 1
+        is_closed = self.modes.checkedId() == 1
+        is_daily = (not is_closed) and (self.pnl_metric_group.checkedId() == 1)
         cum_mode = "zeroed" if self.cum_mode_group.checkedId() == 1 else "real"
-        self.cum_mode_label.setVisible(not is_daily)
+        self.cum_mode_label.setEnabled(not is_daily)
         for btn in self.cum_mode_group.buttons():
-            btn.setVisible(not is_daily)
+            btn.setEnabled(not is_daily)
+        if is_closed:
+            self.render_history()
+            return
         self.legend_pnl_btn.setText("● 每日盈亏 (右轴)" if is_daily else "● 累计盈亏 (右轴)")
         self.open_trend_chart.set_mode(pnl_metric="daily" if is_daily else "cum", cum_mode=cum_mode)
 
@@ -783,13 +788,21 @@ class DomesticHoldingsPage(QWidget):
 
     def render_history(self):
         if self.modes.checkedId() == 1:
-            self.trend_controls_widget.hide()
+            self.trend_controls_widget.show()
+            self.pnl_metric_label.hide()
+            for btn in self.pnl_metric_group.buttons():
+                btn.hide()
+            self.cum_mode_label.setEnabled(True)
+            for btn in self.cum_mode_group.buttons():
+                btn.setEnabled(True)
             self.open_trend_chart.hide()
             self.trend_legend_widget.hide()
             rows = getattr(self, "closed_scope", [])
             cutoff = date.fromisoformat(rows[0]["valuation_date"]) if rows else date.today()
-            points, covered = closed_trend_points(rows, self.history_periods[self.history_ranges.checkedId()], cutoff)
-            self.history_plot.render(points, calendar_spacing=True, step_series=True, value_label="累计历史已实现盈亏")
+            zeroed = self.cum_mode_group.checkedId() == 1
+            points, covered = closed_trend_points(rows, self.history_periods[self.history_ranges.checkedId()], cutoff, zeroed=zeroed)
+            self.history_plot.render(points, calendar_spacing=True, step_series=True,
+                                     value_label="区间归零已实现盈亏" if zeroed else "累计历史已实现盈亏")
             self.history_plot.setVisible(bool(points))
             self.history_note.setText((f"按确认日累计，仅包含有逐笔收益依据的 {covered}/{len(rows)} 条记录。" if points else
                                        f"当前范围没有可展示的收益确认事件；有逐笔依据 {covered}/{len(rows)} 条。"))
@@ -798,6 +811,13 @@ class DomesticHoldingsPage(QWidget):
         self.history_note.hide()
         self.history_plot.hide()
         self.trend_controls_widget.show()
+        self.pnl_metric_label.show()
+        for btn in self.pnl_metric_group.buttons():
+            btn.show()
+        is_daily = self.pnl_metric_group.checkedId() == 1
+        self.cum_mode_label.setEnabled(not is_daily)
+        for btn in self.cum_mode_group.buttons():
+            btn.setEnabled(not is_daily)
         self.open_trend_chart.show()
         self.trend_legend_widget.show()
         cutoff = self.history_scope[0]["valuation_date"] if self.history_scope else None
