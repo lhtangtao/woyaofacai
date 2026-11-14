@@ -889,3 +889,15 @@ INITIAL_BATCH7_RECORDS: list[dict[str, str]] = [
     {"fund_code": "002210", "fund_name": "*ST飞马", "fund_type": "股票-主板", "transaction_time": "2019-07-03 13:35:56", "confirmation_date": "2019-07-03", "transaction_type_raw": "买入", "confirmed_nav": "1.760", "confirmed_shares": "200", "confirmed_amount": "352.00", "fee": "5.00"},
     {"fund_code": "002210", "fund_name": "*ST飞马", "fund_type": "股票-主板", "transaction_time": "2019-07-19 13:47:03", "confirmation_date": "2019-07-19", "transaction_type_raw": "清仓", "confirmed_nav": "1.470", "confirmed_shares": "-700", "confirmed_amount": "1029.00", "fee": "6.03"},
 ]
+
+INITIAL_BATCH8_RECORDS: list[dict[str, str]] = [
+    # 东吴证券 (601555) - 2020-07-07 ~ 2020-11-12 (总盈亏 +30.44)
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-07-07 14:10:54", "confirmation_date": "2020-07-07", "transaction_type_raw": "建仓", "confirmed_nav": "10.190", "confirmed_shares": "600", "confirmed_amount": "6114.00", "fee": "5.12"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-08-07 10:20:34", "confirmation_date": "2020-08-07", "transaction_type_raw": "买入", "confirmed_nav": "10.760", "confirmed_shares": "100", "confirmed_amount": "1076.00", "fee": "5.02"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-08-28 13:55:02", "confirmation_date": "2020-08-28", "transaction_type_raw": "卖出", "confirmed_nav": "10.530", "confirmed_shares": "-200", "confirmed_amount": "2106.00", "fee": "7.15"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-09-18 14:21:49", "confirmation_date": "2020-09-18", "transaction_type_raw": "卖出", "confirmed_nav": "10.150", "confirmed_shares": "-100", "confirmed_amount": "1015.00", "fee": "6.04"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-09-21 09:55:40", "confirmation_date": "2020-09-21", "transaction_type_raw": "卖出", "confirmed_nav": "10.550", "confirmed_shares": "-100", "confirmed_amount": "1055.00", "fee": "6.08"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-10-23 11:16:04", "confirmation_date": "2020-10-23", "transaction_type_raw": "卖出", "confirmed_nav": "10.710", "confirmed_shares": "-100", "confirmed_amount": "1071.00", "fee": "6.09"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-11-09 11:06:47", "confirmation_date": "2020-11-09", "transaction_type_raw": "卖出", "confirmed_nav": "10.190", "confirmed_shares": "-100", "confirmed_amount": "1019.00", "fee": "6.04"},
+    {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-11-12 11:02:28", "confirmation_date": "2020-11-12", "transaction_type_raw": "清仓", "confirmed_nav": "10.020", "confirmed_shares": "-100", "confirmed_amount": "1002.00", "fee": "6.02"},
+]
