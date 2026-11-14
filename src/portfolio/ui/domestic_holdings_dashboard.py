@@ -8,7 +8,7 @@ from decimal import Decimal, localcontext
 from PySide6.QtCharts import QAreaSeries, QChart, QChartView, QCategoryAxis, QLineSeries, QPieSeries, QValueAxis
 from PySide6.QtCore import QMargins, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QSpinBox, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget
 
 BLUE = "#2563EB"
 GREEN = "#15803D"
@@ -453,9 +453,34 @@ class Contribution(QWidget):
         self.top_n.setToolTip("分别显示盈利和亏损排名前 N 条基金记录")
         self.top_n.valueChanged.connect(self._top_changed)
         heading.addWidget(self.top_n)
+
+        self._dim_mode = "fund"
+        self.dim_wrap = QFrame()
+        self.dim_wrap.setStyleSheet("background:#F1F5F9; border:1px solid #E2E8F0; border-radius:6px;")
+        dim_lay = QHBoxLayout(self.dim_wrap)
+        dim_lay.setContentsMargins(2, 2, 2, 2)
+        dim_lay.setSpacing(2)
+        self.dim_group = QButtonGroup(self)
+        self.dim_fund_btn = QPushButton("基金收益")
+        self.dim_daily_btn = QPushButton("每日盈亏")
+        for idx, btn in enumerate((self.dim_fund_btn, self.dim_daily_btn)):
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(22)
+            btn.setStyleSheet(
+                "QPushButton { background:transparent; border:none; border-radius:4px; color:#64748B; font-size:11px; font-weight:600; padding:0 8px; }"
+                "QPushButton:checked { background:#2563EB; color:#FFFFFF; }"
+            )
+            self.dim_group.addButton(btn, idx)
+            dim_lay.addWidget(btn)
+        self.dim_fund_btn.setChecked(True)
+        self.dim_group.idClicked.connect(self._on_dim_changed)
+        heading.addWidget(self.dim_wrap)
+
         heading.addStretch()
         self.body.addLayout(heading)
         self.rows = []
+        self.daily_points = []
         self.closed = False
         labels = QHBoxLayout()
         self.loss_label, self.gain_label = QLabel(), QLabel()
@@ -466,12 +491,38 @@ class Contribution(QWidget):
         self.chart = ContributionPlot(selected)
         self.body.addWidget(self.chart)
 
+    def _on_dim_changed(self, btn_id):
+        self._dim_mode = "daily" if btn_id == 1 else "fund"
+        self.render(self.rows, self.closed)
+
     def _top_changed(self, _value):
         self.render(self.rows, self.closed)
 
+    def set_daily_points(self, points):
+        self.daily_points = list(points or [])
+        if not self.closed and self._dim_mode == "daily":
+            self.render(self.rows, self.closed)
+
     def render(self, rows, closed=False):
         self.rows, self.closed = list(rows), closed
+        self.dim_wrap.setVisible(not closed)
         n = self.top_n.value()
+        if not closed and self._dim_mode == "daily":
+            self.title.setText("每日盈亏极值 Top")
+            day_rows = []
+            for p in self.daily_points:
+                dp = p.get("daily_pnl")
+                d_str = str(p.get("date") or "")
+                if dp is not None and d_str:
+                    val = Decimal(str(dp))
+                    if val != 0:
+                        day_rows.append({"fund_name": d_str, "fund_code": d_str, "floating": val, "is_daily_top": True})
+            losses = sorted((r for r in day_rows if r["floating"] < 0), key=lambda r: r["floating"])
+            gains = sorted((r for r in day_rows if r["floating"] > 0), key=lambda r: r["floating"], reverse=True)
+            self.loss_label.setText(f"最惨交易日（Top {n}） · 区间亏损日合计 {money(total(r['floating'] for r in losses))} CNY")
+            self.gain_label.setText(f"最爽交易日（Top {n}） · 区间盈利日合计 {money(total(r['floating'] for r in gains))} CNY")
+            self.chart.set_data(losses[:n], gains[:n], "floating")
+            return
         self.title.setText(("已清仓基金历史收益" if closed else "持有中基金收益") + "贡献 Top")
         key = "realized" if closed else "floating"
         losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
@@ -534,7 +585,8 @@ class ContributionPlot(QWidget):
     def mousePressEvent(self, event):
         for rect, row in self.hits:
             if rect.contains(event.position()):
-                self.selected(row)
+                if not row.get("is_daily_top"):
+                    self.selected(row)
                 return
         super().mousePressEvent(event)
 
