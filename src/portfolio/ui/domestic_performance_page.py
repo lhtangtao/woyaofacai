@@ -324,7 +324,7 @@ class DomesticStructureDonut(QWidget):
         rect = QRectF(12.0, 12.0, self.width() - 24.0, self.height() - 24.0)
         total = self._profit_sum + self._loss_sum
 
-        pen_bg = QPen(QColor("#E2E8F0"), 14, Qt.PenStyle.SolidLine, Qt.CapStyle.FlatCap)
+        pen_bg = QPen(QColor("#E2E8F0"), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap)
         painter.setPen(pen_bg)
         painter.drawArc(rect, 0, 360 * 16)
 
@@ -332,10 +332,10 @@ class DomesticStructureDonut(QWidget):
             p_span = int(round((self._profit_sum / total) * 360 * 16))
             l_span = 360 * 16 - p_span
             if p_span > 0:
-                painter.setPen(QPen(QColor("#10B981"), 14, Qt.PenStyle.SolidLine, Qt.CapStyle.FlatCap))
+                painter.setPen(QPen(QColor("#10B981"), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
                 painter.drawArc(rect, 90 * 16, -p_span)
             if l_span > 0:
-                painter.setPen(QPen(QColor("#EF4444"), 14, Qt.PenStyle.SolidLine, Qt.CapStyle.FlatCap))
+                painter.setPen(QPen(QColor("#EF4444"), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
                 painter.drawArc(rect, 90 * 16 - p_span, -l_span)
 
         painter.setPen(QColor("#10B981" if self._net_sum >= 0 else "#EF4444"))

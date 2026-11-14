@@ -79,6 +79,8 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     for idx in range(4):
         monthly_page.chart_tab_group.button(idx).click()
         monthly_page.trend_canvas.repaint()
+    daily_page.donut.repaint()
+    monthly_page.donut.repaint()
 
     # 切换 按基金 / 按日期(Top 10) 维度并下钻
     daily_page.attr_dim_group.button(1).click()
