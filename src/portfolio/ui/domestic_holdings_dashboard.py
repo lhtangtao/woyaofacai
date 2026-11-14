@@ -375,8 +375,8 @@ class PlatformList(QWidget):
                 header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 0 else QHeaderView.ResizeMode.ResizeToContents)
         else:
             for col in range(6):
-                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
-            self.table.setColumnWidth(1, max(108, self.table.columnWidth(1)))
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
+            self.table.setColumnWidth(1, 130)
         self.table.setRowCount(len(self.names) + 1)
         market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):

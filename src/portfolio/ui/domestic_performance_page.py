@@ -496,7 +496,8 @@ class DomesticPerformanceBasePage(QWidget):
         self.export_btn = QPushButton("导出 CSV")
         self.export_btn.clicked.connect(self.export_csv)
         header.addWidget(self.export_btn)
-        root.addLayout(header)
+        if self.is_day:
+            root.addLayout(header)
 
         # 2. 筛选栏
         filter_card = QFrame(objectName="perfCard")
@@ -530,6 +531,10 @@ class DomesticPerformanceBasePage(QWidget):
         fl.addWidget(self.search_edit, 1)
         fl.addWidget(query_btn)
         fl.addWidget(reset_btn)
+        if not self.is_day:
+            fl.addWidget(self.refresh_btn)
+            fl.addWidget(self.export_btn)
+            fl.addWidget(self.as_of_lbl)
         root.addWidget(filter_card)
 
         self.status_lbl = QLabel("")
