@@ -901,3 +901,9 @@ INITIAL_BATCH8_RECORDS: list[dict[str, str]] = [
     {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-11-09 11:06:47", "confirmation_date": "2020-11-09", "transaction_type_raw": "卖出", "confirmed_nav": "10.190", "confirmed_shares": "-100", "confirmed_amount": "1019.00", "fee": "6.04"},
     {"fund_code": "601555", "fund_name": "东吴证券", "fund_type": "股票-主板", "transaction_time": "2020-11-12 11:02:28", "confirmation_date": "2020-11-12", "transaction_type_raw": "清仓", "confirmed_nav": "10.020", "confirmed_shares": "-100", "confirmed_amount": "1002.00", "fee": "6.02"},
 ]
+
+INITIAL_BATCH9_RECORDS: list[dict[str, str]] = [
+    # 光伏ETF (515790) 补录周期 1 - 2021-08-02 ~ 2021-09-02 (周期盈亏 +709.40)
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "股票-ETF", "transaction_time": "2021-08-02 09:35:36", "confirmation_date": "2021-08-02", "transaction_type_raw": "建仓", "confirmed_nav": "1.646", "confirmed_shares": "3300", "confirmed_amount": "5431.80", "fee": "5.00"},
+    {"fund_code": "515790", "fund_name": "光伏ETF", "fund_type": "股票-ETF", "transaction_time": "2021-09-02 14:35:12", "confirmation_date": "2021-09-02", "transaction_type_raw": "清仓", "confirmed_nav": "1.864", "confirmed_shares": "-3300", "confirmed_amount": "6151.20", "fee": "5.00"},
+]
