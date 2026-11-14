@@ -79,3 +79,10 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     for idx in range(4):
         monthly_page.chart_tab_group.button(idx).click()
         monthly_page.trend_canvas.repaint()
+
+    # 切换 按基金 / 按日期(Top 10) 维度并下钻
+    daily_page.attr_dim_group.button(1).click()
+    assert "极值排行" in daily_page.attr_title_lbl.text()
+    daily_page._drill_period_from_top("2026-01-05")
+    assert daily_page._attr_dim == "fund"
+    assert daily_page._selected_period == "2026-01-05"
