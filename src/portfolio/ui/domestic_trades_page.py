@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from portfolio.domestic.trades_query import query_domestic_trades
+from portfolio.ui.trade_center_style import StatCard, STYLE as TRADE_CENTER_STYLE
 
 
 def _ui_font(size: int = 12, *, bold: bool = False) -> QFont:
@@ -186,7 +187,7 @@ class DomesticTradesPage(QWidget):
 
     def _build_ui(self):
         self.setObjectName("domesticTradesPage")
-        self.setStyleSheet("""
+        self.setStyleSheet(TRADE_CENTER_STYLE.replace('#tradeCenter', '#domesticTradesPage') + """
             QWidget#domesticTradesPage { background: #F8FAFC; }
             QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; }
             QComboBox, QLineEdit {
@@ -203,8 +204,8 @@ class DomesticTradesPage(QWidget):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 14, 20, 16)
-        root.setSpacing(10)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
 
         # 1. 顶部操作栏
         top_bar = QHBoxLayout()
@@ -268,29 +269,19 @@ class DomesticTradesPage(QWidget):
         kpi_row = QHBoxLayout()
         kpi_row.setSpacing(10)
         self._kpi_labels: dict[str, tuple[QLabel, QLabel]] = {}
-        for key, title in (
-            ("count", "筛选交易笔数"),
-            ("buy", "买入合计 (CNY)"),
-            ("sell", "卖出合计 (CNY)"),
-            ("net", "净投入金额 (CNY)"),
-            ("fee", "手续费合计 (CNY)"),
+        self._kpi_cards = {}
+        for key, title, glyph, color in (
+            ("count", "筛选交易笔数", "layers", "#2563EB"),
+            ("buy", "买入合计 (CNY)", "buy", "#16A34A"),
+            ("sell", "卖出合计 (CNY)", "sell", "#DC2626"),
+            ("net", "净投入金额 (CNY)", "layers", "#2563EB"),
+            ("fee", "手续费合计 (CNY)", "fees", "#2563EB"),
         ):
-            card = QFrame(objectName="card")
-            cl = QVBoxLayout(card)
-            cl.setContentsMargins(12, 9, 12, 9)
-            cl.setSpacing(2)
-            t_lbl = QLabel(title)
-            t_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 600;")
-            v_lbl = QLabel("—")
-            v_lbl.setFont(_ui_font(16, bold=True))
-            v_lbl.setStyleSheet("color: #0F172A;")
-            s_lbl = QLabel("")
-            s_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
-            cl.addWidget(t_lbl)
-            cl.addWidget(v_lbl)
-            cl.addWidget(s_lbl)
+            card = StatCard(title, glyph, color, interactive=False)
+            v_lbl, s_lbl = card.value, card.hint
             kpi_row.addWidget(card, 1)
             self._kpi_labels[key] = (v_lbl, s_lbl)
+            self._kpi_cards[key] = card
         root.addLayout(kpi_row)
 
         # 4. 交易明细表格 + 分页栏
@@ -457,6 +448,10 @@ class DomesticTradesPage(QWidget):
         net_sub.setText("买入减卖出总额")
         self._kpi_labels["fee"][0].setText(f"¥{fee_sum:,.2f}")
         self._kpi_labels["fee"][1].setText("已记录确认手续费")
+        for key, card in self._kpi_cards.items():
+            value, hint = self._kpi_labels[key]
+            card.display = [value.text(), hint.text()]
+            card.fit_text()
 
     def _on_page_size_changed(self):
         size = self.page_size_combo.currentData() or 50
