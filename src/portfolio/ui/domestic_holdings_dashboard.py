@@ -530,13 +530,6 @@ class ContributionPlot(QWidget):
                 return
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        for rect, row in self.hits:
-            if rect.contains(event.position()):
-                QToolTip.showText(event.globalPosition().toPoint(), f"{row['fund_name']}（{row['fund_code']}） · {row['platform']}\n{money(row[self.key])} CNY", self)
-                return
-        QToolTip.hideText()
-
 
 class HoldingsDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
