@@ -26,12 +26,12 @@ POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="�
                  shares="持有份额", nav="最新净值", nav_date="净值日期", market_value="持仓市值（CNY）",
                  pnl="累计盈亏", rate="收益率", weight="持仓占比", status="状态", arrow="详情")
 OPEN_POSITIONS = dict(
-    fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型", shares="持有份额",
+    fund_name="基金名称", platform="交易平台", fund_type="基金类型", shares="持有份额",
     average="持仓均价", nav="最新单位净值\n（净值日期）", market_value="持仓市值（CNY）",
     cost="持仓成本（CNY）", floating="持有收益（CNY）", floating_rate="收益率",
     weight="持仓占比", arrow="详情",
 )
-CLOSED_POSITIONS = dict(fund_name="基金名称 / 代码", platform="交易平台", fund_type="基金类型",
+CLOSED_POSITIONS = dict(fund_name="基金名称", platform="交易平台", fund_type="基金类型",
                         buy_amount="累计买入（CNY）", sell_amount="确认赎回（CNY）",
                         transfer_out_amount="转换转出（CNY）",
                         realized="已实现盈亏（CNY）", realized_rate="收益率", holding_days="持有天数",
@@ -169,9 +169,7 @@ class FundTable(QWidget):
                 elif key in ("weight", "rate", "floating_rate", "realized_rate") and val is not None:
                     val = f"{Decimal(val):.2f}%"
                 if self.open_positions:
-                    if key == "fund_name":
-                        val = f"{val}\n{row['fund_code']}"
-                    elif key == "nav":
+                    if key == "nav":
                         if val is not None:
                             val = money(Decimal(val), 4)
                             if row.get("nav_date") != nav_date:
