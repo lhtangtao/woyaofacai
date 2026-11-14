@@ -813,3 +813,12 @@ INITIAL_BATCH5_RECORDS = [
     {"fund_code": "002241", "fund_name": "歌尔股份", "fund_type": "股票-主板", "transaction_time": "2021-08-23 09:59:27", "confirmation_date": "2021-08-23", "transaction_type_raw": "清仓", "confirmed_nav": "40.000", "confirmed_shares": "-200", "confirmed_amount": "8000.00", "fee": "13.00"},
     {"fund_code": "002241", "fund_name": "歌尔股份", "fund_type": "股票-主板", "transaction_time": "2021-08-24 00:00:00", "confirmation_date": "2021-08-24", "transaction_type_raw": "股息红利税补缴", "confirmed_nav": "0.000", "confirmed_shares": "0", "confirmed_amount": "3.00", "fee": "0.00"},
 ]
+
+INITIAL_601633_CYCLE1_RECORDS = [
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-11-09 09:33:57", "confirmation_date": "2020-11-09", "transaction_type_raw": "建仓", "confirmed_nav": "27.790", "confirmed_shares": "200", "confirmed_amount": "5558.00", "fee": "5.11"},
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-02 14:21:08", "confirmation_date": "2020-12-02", "transaction_type_raw": "买入", "confirmed_nav": "26.500", "confirmed_shares": "100", "confirmed_amount": "2650.00", "fee": "5.05"},
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-02 14:36:24", "confirmation_date": "2020-12-02", "transaction_type_raw": "买入", "confirmed_nav": "26.380", "confirmed_shares": "100", "confirmed_amount": "2638.00", "fee": "5.05"},
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-10 14:20:18", "confirmation_date": "2020-12-10", "transaction_type_raw": "买入", "confirmed_nav": "24.370", "confirmed_shares": "100", "confirmed_amount": "2437.00", "fee": "5.05"},
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-21 10:29:48", "confirmation_date": "2020-12-21", "transaction_type_raw": "卖出", "confirmed_nav": "30.530", "confirmed_shares": "-300", "confirmed_amount": "9159.00", "fee": "14.34"},
+    {"fund_code": "601633", "fund_name": "长城汽车", "fund_type": "股票-主板", "transaction_time": "2020-12-22 09:57:46", "confirmation_date": "2020-12-22", "transaction_type_raw": "清仓", "confirmed_nav": "31.200", "confirmed_shares": "-200", "confirmed_amount": "6240.00", "fee": "11.36"},
+]
