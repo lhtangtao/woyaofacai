@@ -436,6 +436,11 @@ def build_workspace(self):
     from portfolio.ui.domestic_holdings_page import DomesticHoldingsPage
     self.domestic_holdings_page = DomesticHoldingsPage(self)
     self.pages.addWidget(self.domestic_holdings_page)
+    from portfolio.ui.domestic_performance_page import DomesticDailyPerformancePage, DomesticMonthlyPerformancePage
+    self.domestic_daily_performance_page = DomesticDailyPerformancePage(self)
+    self.pages.addWidget(self.domestic_daily_performance_page)
+    self.domestic_monthly_performance_page = DomesticMonthlyPerformancePage(self)
+    self.pages.addWidget(self.domestic_monthly_performance_page)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

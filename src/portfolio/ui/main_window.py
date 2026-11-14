@@ -1065,6 +1065,12 @@ class MainWindow(InteractionMixin, QMainWindow):
         if self.pages.currentIndex() == 27:
             self.domestic_holdings_page.reload()
             return
+        if self.pages.currentIndex() == 28:
+            self.domestic_daily_performance_page.reload(force=True)
+            return
+        if self.pages.currentIndex() == 29:
+            self.domestic_monthly_performance_page.reload(force=True)
+            return
         if self.service:
             state = self.capture_state()
             self.open_database(self.service.path, restore=state)
