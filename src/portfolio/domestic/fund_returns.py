@@ -4,9 +4,15 @@ from decimal import Decimal
 from .calculate import ZERO, exact
 
 
-def confirmed_returns(transactions, shares, market_value):
+def confirmed_returns(transactions, shares, market_value, *, opening_shares=ZERO, opening_cost=ZERO,
+                      allow_transfer_amount=False):
     """Use cash paid/received as recorded by Alipay and moving-average remaining cost."""
-    quantity = cost = contributed = realized = dividends = ZERO
+    quantity = opening_shares
+    cost = opening_cost
+    contributed = opening_cost
+    realized = dividends = ZERO
+    buy_kinds = ("BUY", "TRANSFER_IN") if allow_transfer_amount else ("BUY",)
+    sell_kinds = ("SELL", "TRANSFER_OUT") if allow_transfer_amount else ("SELL",)
     for trade in transactions:
         kind, signed, cash = trade["transaction_type"], trade["signed_shares"], trade["confirmed_amount"]
         if trade["status"] != "正常" or signed is None:
@@ -20,11 +26,11 @@ def confirmed_returns(transactions, shares, market_value):
         cash = Decimal(cash)
         if cash < ZERO:
             return {}
-        if kind == "BUY" and change > ZERO:
+        if kind in buy_kinds and change > ZERO:
             quantity += change
             contributed += cash
             cost += cash
-        elif kind == "SELL" and ZERO < -change <= quantity:
+        elif kind in sell_kinds and ZERO < -change <= quantity:
             released = cost if -change == quantity else cost * -change / quantity
             cost -= released
             quantity += change
@@ -39,6 +45,44 @@ def confirmed_returns(transactions, shares, market_value):
     pnl = (market_value or ZERO) - cost + realized + dividends
     return dict(cost=exact(cost), contributed=exact(contributed), realized_pnl=exact(realized), cash_dividend=exact(dividends),
                 pnl=exact(pnl), rate=exact(pnl / contributed * 100))
+
+
+def alipay_realized_events(transactions, *, opening_shares=ZERO, opening_cost=ZERO, allow_transfer_amount=False):
+    """按确认日期生成支付宝单只基金的已实现盈亏事件序列。"""
+    quantity = opening_shares
+    cost = opening_cost
+    buy_kinds = ("BUY", "TRANSFER_IN") if allow_transfer_amount else ("BUY",)
+    sell_kinds = ("SELL", "TRANSFER_OUT") if allow_transfer_amount else ("SELL",)
+    events = []
+    for trade in transactions:
+        kind, signed, cash = trade["transaction_type"], trade["signed_shares"], trade["confirmed_amount"]
+        day = trade.get("effective_date")
+        if trade["status"] != "正常" or signed is None:
+            return None
+        change = Decimal(signed)
+        if kind == "REINVEST" and change > ZERO:
+            quantity += change
+            continue
+        if cash is None:
+            return None
+        cash = Decimal(cash)
+        if cash < ZERO:
+            return None
+        if kind in buy_kinds and change > ZERO:
+            quantity += change
+            cost += cash
+        elif kind in sell_kinds and ZERO < -change <= quantity:
+            released = cost if -change == quantity else cost * -change / quantity
+            cost -= released
+            quantity += change
+            if day:
+                events.append((day, exact(cash - released)))
+        elif kind == "CASH_DIVIDEND" and change == ZERO:
+            if day and cash != ZERO:
+                events.append((day, exact(cash)))
+        else:
+            return None
+    return events or None
 
 
 def tiantian_returns(rows, shares, market_value):

@@ -109,3 +109,46 @@ def test_holding_days_excludes_zero_periods_and_requires_complete_history():
     db.execute("DELETE FROM calc_fund_positions_daily WHERE trade_date='2024-01-02'")
     assert confirmed_holding_days(db,'calc_fund_positions_daily','A','012414',start,end) is None
     db.close()
+
+
+def test_alipay_opening_cost_transfer_returns_and_events():
+    from portfolio.domestic.fund_returns import alipay_realized_events, confirmed_returns
+
+    trades = [
+        {"effective_date": "2022-01-10", "transaction_type": "BUY", "signed_shares": "100", "confirmed_amount": "200", "status": "正常"},
+        {"effective_date": "2022-02-10", "transaction_type": "TRANSFER_OUT", "signed_shares": "-100", "confirmed_amount": "180", "status": "正常"},
+        {"effective_date": "2022-03-10", "transaction_type": "SELL", "signed_shares": "-100", "confirmed_amount": "250", "status": "正常"},
+        {"effective_date": "2022-03-20", "transaction_type": "CASH_DIVIDEND", "signed_shares": "0", "confirmed_amount": "15", "status": "正常"},
+    ]
+    res = confirmed_returns(
+        trades, Decimal("0"), Decimal("0"),
+        opening_shares=Decimal("100"), opening_cost=Decimal("150"), allow_transfer_amount=True,
+    )
+    # 总投入 = 150 + 200 = 350；总收回 = 180 + 250 + 15 = 445；净收益 = 95
+    assert Decimal(res["pnl"]) == Decimal("95")
+    assert Decimal(res["contributed"]) == Decimal("350")
+    events = alipay_realized_events(
+        trades, opening_shares=Decimal("100"), opening_cost=Decimal("150"), allow_transfer_amount=True,
+    )
+    assert len(events) == 3
+    assert sum(Decimal(v) for _, v in events) == Decimal("95")
+
+
+def test_platform_list_excludes_historical_baseline_from_fund_count():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from portfolio.ui.domestic_holdings_dashboard import PlatformList
+
+    app = QApplication.instance() or QApplication([])
+    widget = PlatformList(lambda _name: None)
+    rows = [
+        {"platform": "支付宝", "fund_code": "161725", "buy_amount": Decimal("100"), "sell_amount": Decimal("60"), "realized": Decimal("-40")},
+        {"platform": "支付宝", "fund_code": "ALIPAY_PRE_2022_CLOSED", "buy_amount": None, "sell_amount": None, "realized": Decimal("20"), "is_historical_baseline": True},
+    ]
+    widget.render(rows, closed=True)
+    # 支付宝基金数只计真实基金 1 只，历史收益包含基线合计 -20.00
+    assert widget.table.item(0, 0).text() == "支付宝"
+    assert widget.table.item(0, 3).text() == "-20.00"
+    assert widget.table.item(0, 4).text() == "1"
+    app.processEvents()

@@ -323,9 +323,10 @@ class PlatformList(QWidget):
             value = total(values)
             incomplete = sum(v is None for v in values)
             if closed:
+                fund_count = len({r['fund_code'] for r in group if not r.get('is_historical_baseline')})
                 columns = (name, money(total(r.get("buy_amount") for r in group)),
                            money(total(r.get("sell_amount") for r in group)), money(value),
-                           str(len({r['fund_code'] for r in group})))
+                           str(fund_count))
             else:
                 matched = [r for r in group if r.get("floating") is not None]
                 incomplete = sum(r.get("floating") is None for r in group)

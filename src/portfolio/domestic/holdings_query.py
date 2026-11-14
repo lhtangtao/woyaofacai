@@ -6,9 +6,9 @@ from itertools import groupby
 from zoneinfo import ZoneInfo
 
 from portfolio.paths import DOMESTIC_ASSETS_DIR
-from .calculate import ALIPAY_ZERO_OPENINGS
+from .calculate import ALIPAY_ZERO_OPENINGS, ZERO
 from .closed_fund_analytics import closed_transaction_summaries, confirmed_holding_days, tiantian_realized_events, tiantian_return_issue
-from .fund_returns import confirmed_returns, tiantian_returns
+from .fund_returns import alipay_realized_events, confirmed_returns, tiantian_returns
 from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 
@@ -131,6 +131,10 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             key = row["account_id"], row["fund_code"]
             openings[key] = row
             records.setdefault(key, dict(row, fund_type=None))
+        opening_costs = {}
+        if "raw_fund_opening_cost_baselines" in tables:
+            for row in raw.execute("SELECT * FROM raw_fund_opening_cost_baselines"):
+                opening_costs[(row["account_id"], row["snapshot_date"], row["fund_code"])] = dict(row)
         accounts = {r["account_id"]: dict(r) for r in raw.execute("SELECT * FROM raw_asset_accounts")}
         positions = {}
         confirmed = {}
@@ -280,31 +284,54 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
             returns = {}
             closed_events = None
             tt_trades = None
+            alipay_trades = None
+            alipay_opening_shares = ZERO
+            alipay_opening_cost = ZERO
             historical_close = qty is None and last_confirmed_status == "已清仓"
             return_shares = Decimal(0) if historical_close else qty
             return_day = last_confirmed_date if historical_close else as_of
             return_value = Decimal(0) if historical_close else Decimal(value) if value is not None else None
-            if (key[0] == ACCOUNT and position and return_shares is not None
-                    and key[1] in ALIPAY_ZERO_OPENINGS.get(date(2021, 11, 11), ()) and not opening):
-                trades = calc.execute("""SELECT t.transaction_type,t.confirmed_amount,t.status,m.signed_shares
+            opening_cost_row = opening_costs.get((key[0], opening["snapshot_date"], key[1])) if opening else None
+            if (key[0] == ACCOUNT and position and return_shares is not None and (
+                    (key[1] in ALIPAY_ZERO_OPENINGS.get(date(2021, 11, 11), ()) and not opening)
+                    or (opening and opening_cost_row is not None))):
+                since_day = opening["snapshot_date"] if opening else "2021-11-11"
+                alipay_opening_shares = Decimal(opening["total_shares"]) if opening else ZERO
+                alipay_opening_cost = Decimal(opening_cost_row["opening_cost"]) if opening_cost_row else ZERO
+                alipay_trades = [dict(r) for r in calc.execute("""SELECT t.effective_date,t.transaction_type,t.confirmed_amount,t.status,m.signed_shares
                     FROM calc_fund_transactions t LEFT JOIN calc_fund_share_movements m
                     ON m.raw_transaction_id=t.raw_transaction_id
                     WHERE t.account_id=? AND t.fund_code=? AND
                     (t.effective_date IS NULL OR t.effective_date>? AND t.effective_date<=?)
-                    ORDER BY t.effective_date,t.raw_transaction_id""", (*key, "2021-11-11", return_day))
-                returns = confirmed_returns(trades, return_shares, return_value)
+                    ORDER BY t.effective_date,t.raw_transaction_id""", (*key, since_day, return_day))]
+                returns = confirmed_returns(
+                    alipay_trades, return_shares, return_value,
+                    opening_shares=alipay_opening_shares, opening_cost=alipay_opening_cost,
+                    allow_transfer_amount=True,
+                )
             elif recent and not recent["issue"] and return_shares is not None and Decimal(recent["observed_shares"]) == return_shares:
                 trades = [dict(r) for r in raw.execute("""SELECT * FROM raw_fund_transactions
                     WHERE account_id=? AND fund_code=? AND source_platform='TIANTIAN'
                     AND confirmation_date<=? ORDER BY confirmation_date,transaction_time,id""", (*key, return_day))]
                 tt_trades = trades
                 returns = tiantian_returns(trades, return_shares, return_value)
-            if (not historical_close and current_status == "已清仓" and returns and tt_trades is not None and calc):
-                closed_events = tiantian_realized_events(calc, tt_trades, *key, return_day, returns["pnl"])
+            if not historical_close and current_status == "已清仓" and returns:
+                if tt_trades is not None and calc:
+                    closed_events = tiantian_realized_events(calc, tt_trades, *key, return_day, returns["pnl"])
+                elif alipay_trades is not None:
+                    closed_events = alipay_realized_events(
+                        alipay_trades, opening_shares=alipay_opening_shares,
+                        opening_cost=alipay_opening_cost, allow_transfer_amount=True,
+                    )
             if historical_close:
                 if returns:
                     if recent and calc:
                         closed_events = tiantian_realized_events(calc, trades, *key, return_day, returns["pnl"])
+                    elif alipay_trades is not None:
+                        closed_events = alipay_realized_events(
+                            alipay_trades, opening_shares=alipay_opening_shares,
+                            opening_cost=alipay_opening_cost, allow_transfer_amount=True,
+                        )
                     returns = {"last_confirmed_realized_pnl": returns["realized_pnl"],
                                "last_confirmed_total_pnl": returns["pnl"],
                                "last_confirmed_cash_dividend": returns["cash_dividend"],
@@ -364,6 +391,32 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 observed_shares=recent["observed_shares"] if recent and recent["issue"] else None,
                 closed_events=closed_events, holding_days=holding_days,
                 first_confirmed_holding_date=first_confirmed_holding, **summary))
+        if "raw_account_historical_pnl_baselines" in tables:
+            for item in raw.execute(
+                "SELECT * FROM raw_account_historical_pnl_baselines WHERE as_of_date<=? ORDER BY as_of_date,scope",
+                (cutoff,),
+            ):
+                if account and (account != item["account_id"] or fund != item["fund_code"]):
+                    continue
+                meta = accounts.get(item["account_id"], {})
+                result["rows"].append(dict(
+                    account_id=item["account_id"], fund_code=item["fund_code"], fund_name=item["fund_name"],
+                    fund_type=item["fund_type"], platform=meta.get("platform", "—"),
+                    account_name=meta.get("account_name", "—"), shares="0", nav=None, nav_date=None,
+                    market_value="0", as_of=item["as_of_date"], position_as_of=item["as_of_date"],
+                    coverage_through=item["as_of_date"], valuation_date=cutoff,
+                    last_confirmed_shares="0", last_confirmed_date=item["as_of_date"],
+                    last_confirmed_status="已清仓", last_confirmed_close_date=item["as_of_date"],
+                    current_position_status="已清仓", position_status="用户确认历史基线",
+                    status="已清仓", review_reason=None, confirmation_note=item["basis_note"],
+                    user_confirmation_date=item["as_of_date"], latest_transaction_id=None,
+                    valuation_status="已清仓", issue=None, accumulated_nav=None, daily_return_rate=None,
+                    nav_source=None, nav_status="净值有效", nav_field_status=None, observed_shares=None,
+                    pnl=item["realized_pnl"], realized_pnl=item["realized_pnl"],
+                    closed_events=[(item["as_of_date"], item["realized_pnl"])],
+                    holding_days=None, first_confirmed_holding_date=None, return_issue=None,
+                    is_historical_baseline=True,
+                ))
         if account and result["rows"]:
             result["transactions"] = [dict(r) for r in raw.execute(
                 f"SELECT * FROM ({source}) WHERE account_id=? AND fund_code=? AND (confirmation_date IS NULL OR confirmation_date<=?) ORDER BY confirmation_date DESC,id",

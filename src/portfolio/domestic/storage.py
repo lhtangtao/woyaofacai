@@ -55,6 +55,29 @@ CREATE TABLE IF NOT EXISTS raw_parse_issues (
     id INTEGER PRIMARY KEY, import_batch_id TEXT NOT NULL REFERENCES raw_import_batches,
     source_page INTEGER NOT NULL, source_row_no INTEGER NOT NULL, reason TEXT NOT NULL, raw_data TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS raw_fund_opening_cost_baselines (
+    account_id TEXT NOT NULL REFERENCES raw_asset_accounts,
+    snapshot_date TEXT NOT NULL,
+    fund_code TEXT NOT NULL,
+    fund_name TEXT NOT NULL,
+    opening_cost TEXT NOT NULL,
+    verified_closed_pnl TEXT,
+    basis_note TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, snapshot_date, fund_code)
+);
+CREATE TABLE IF NOT EXISTS raw_account_historical_pnl_baselines (
+    account_id TEXT NOT NULL REFERENCES raw_asset_accounts,
+    as_of_date TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    fund_code TEXT NOT NULL,
+    fund_name TEXT NOT NULL,
+    fund_type TEXT NOT NULL,
+    realized_pnl TEXT NOT NULL,
+    basis_note TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, as_of_date, scope)
+);
 """
 
 CALC_SCHEMA = """

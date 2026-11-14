@@ -654,7 +654,8 @@ class DomesticHoldingsPage(QWidget):
             closed_titles = ("历史已实现盈亏（CNY）", "已清仓基金数量", "已导入买入（CNY）", "已导入赎回（CNY）", "基金成本加权收益率", "已确认平均持有时长")
             stats = closed_metrics(prepared)
             self.closed_total.setText(f"合计　{len(prepared)} 条　买入 {money(stats['buy'])}　赎回 {money(stats['sell'])}　历史收益 {money(stats['realized'])} CNY")
-            numbers = (stats['realized'], len({r["fund_code"] for r in prepared}), stats['buy'], stats['sell'], stats['rate'], stats['holding_days'])
+            closed_fund_count = len({r["fund_code"] for r in prepared if not r.get("is_historical_baseline")})
+            numbers = (stats['realized'], closed_fund_count, stats['buy'], stats['sell'], stats['rate'], stats['holding_days'])
             for (key, _, _), title, number, icon in zip(METRICS, closed_titles, numbers, ("¥", "#", "买", "卖", "%", "◷")):
                 self.metric_captions[key].setText(title)
                 self.metric_cards[key].icon_badge.setText(icon)
