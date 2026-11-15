@@ -440,6 +440,9 @@ class DomesticPerformanceBasePage(QWidget):
         self._selected_period: str = ""
         self._selected_platform: str = ""
         self._drill_metric_key: str = ""
+        self._fund_pnl_filter: str = ""
+        self._selected_fund_code: str = ""
+        self._plat_scope: str = "period"
 
         self._build_ui()
 
@@ -586,9 +589,22 @@ class DomesticPerformanceBasePage(QWidget):
         pl.setContentsMargins(14, 12, 14, 12)
         pl.setSpacing(8)
         p_head = QHBoxLayout()
-        p_title = QLabel("渠道收益贡献（期间累计）")
-        p_title.setFont(_cny_font(13, bold=True))
-        p_head.addWidget(p_title, 1)
+        self.plat_scope_group = QButtonGroup(self)
+        scope_labels = (
+            ("当日渠道收益" if self.is_day else "当月渠道收益"),
+            "累计渠道收益",
+        )
+        for idx, lbl in enumerate(scope_labels):
+            btn = QPushButton(lbl, objectName="tabBtn", checkable=True)
+            self.plat_scope_group.addButton(btn, idx)
+            p_head.addWidget(btn)
+            if idx == 0:
+                btn.setChecked(True)
+        self.plat_scope_group.idClicked.connect(self._on_plat_scope_changed)
+        self.plat_period_lbl = QLabel("")
+        self.plat_period_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+        p_head.addWidget(self.plat_period_lbl)
+        p_head.addStretch(1)
         p_tip = QLabel("点击行可筛选平台")
         p_tip.setStyleSheet("color: #94A3B8; font-size: 11px;")
         p_head.addWidget(p_tip)
@@ -641,20 +657,43 @@ class DomesticPerformanceBasePage(QWidget):
 
         # 左：盈亏结构环形图
         struct_box = QFrame()
-        struct_box.setStyleSheet("QFrame { background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 8px; }")
+        struct_box.setStyleSheet("QFrame { background: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px; }")
         sl = QVBoxLayout(struct_box)
-        sl.setContentsMargins(12, 10, 12, 10)
-        s_lbl = QLabel("当日盈亏结构" if self.is_day else "当月盈亏结构")
-        s_lbl.setFont(_cny_font(12, bold=True))
-        sl.addWidget(s_lbl)
+        sl.setContentsMargins(10, 8, 10, 8)
+        self.struct_hdr_lbl = QLabel("当日盈亏结构" if self.is_day else "当月盈亏结构")
+        self.struct_hdr_lbl.setFont(_cny_font(12, bold=True))
+        self.struct_hdr_lbl.setStyleSheet("color: #1E293B; border: none;")
+        sl.addWidget(self.struct_hdr_lbl)
         s_inner = QHBoxLayout()
+        s_inner.setSpacing(8)
         self.donut = DomesticStructureDonut(unit=self.unit, parent=struct_box)
         s_inner.addWidget(self.donut)
         s_stats = QVBoxLayout()
-        self.struct_win_lbl = QLabel("● 盈利基金：—")
-        self.struct_win_lbl.setStyleSheet("color: #0F172A; font-size: 12px; border: none;")
-        self.struct_loss_lbl = QLabel("● 亏损基金：—")
-        self.struct_loss_lbl.setStyleSheet("color: #0F172A; font-size: 12px; border: none;")
+        s_stats.setSpacing(6)
+        self.struct_win_lbl = QPushButton("● 盈利基金：—")
+        self.struct_loss_lbl = QPushButton("● 亏损基金：—")
+        for btn, hover_color in ((self.struct_win_lbl, "#10B981"), (self.struct_loss_lbl, "#EF4444")):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(34)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #FFFFFF;
+                    border: 1px solid #E2E8F0;
+                    border-radius: 6px;
+                    padding: 4px 10px;
+                    text-align: left;
+                    font-size: 11.5px;
+                    font-weight: 500;
+                    color: #1E293B;
+                }}
+                QPushButton:hover {{
+                    background-color: #F1F5F9;
+                    border-color: #CBD5E1;
+                    color: {hover_color};
+                }}
+            """)
+        self.struct_win_lbl.clicked.connect(lambda: self._filter_table_by_pnl("profit"))
+        self.struct_loss_lbl.clicked.connect(lambda: self._filter_table_by_pnl("loss"))
         s_stats.addStretch(1)
         s_stats.addWidget(self.struct_win_lbl)
         s_stats.addWidget(self.struct_loss_lbl)
@@ -665,35 +704,50 @@ class DomesticPerformanceBasePage(QWidget):
 
         # 中：亏损 Top5
         loss_box = QFrame()
-        loss_box.setStyleSheet("QFrame { background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 8px; }")
+        loss_box.setStyleSheet("QFrame { background: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px; }")
         ll = QVBoxLayout(loss_box)
-        ll.setContentsMargins(12, 10, 12, 10)
+        ll.setContentsMargins(10, 8, 10, 8)
+        ll.setSpacing(4)
         self.loss_top_header = QLabel("↓ 亏损贡献排行 Top 5")
         self.loss_top_header.setFont(_cny_font(12, bold=True))
-        self.loss_top_header.setStyleSheet("color: #DC2626; border: none;")
+        self.loss_top_header.setStyleSheet("color: #EF4444; border: none;")
         ll.addWidget(self.loss_top_header)
+        loss_th, self.loss_th_name, self.loss_th_plat, self.loss_th_pnl = self._build_top_header_row()
+        ll.addLayout(loss_th)
         self.loss_top_layout = QVBoxLayout()
-        self.loss_top_layout.setSpacing(4)
+        self.loss_top_layout.setSpacing(3)
         ll.addLayout(self.loss_top_layout)
         ll.addStretch(1)
         a_body.addWidget(loss_box, 35)
 
         # 右：盈利 Top5
         win_box = QFrame()
-        win_box.setStyleSheet("QFrame { background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 8px; }")
+        win_box.setStyleSheet("QFrame { background: #FAFCFF; border: 1px solid #E2E8F0; border-radius: 6px; }")
         wl = QVBoxLayout(win_box)
-        wl.setContentsMargins(12, 10, 12, 10)
+        wl.setContentsMargins(10, 8, 10, 8)
+        wl.setSpacing(4)
         self.win_top_header = QLabel("↑ 盈利贡献排行 Top 5")
         self.win_top_header.setFont(_cny_font(12, bold=True))
-        self.win_top_header.setStyleSheet("color: #16A34A; border: none;")
+        self.win_top_header.setStyleSheet("color: #10B981; border: none;")
         wl.addWidget(self.win_top_header)
+        win_th, self.win_th_name, self.win_th_plat, self.win_th_pnl = self._build_top_header_row()
+        wl.addLayout(win_th)
         self.win_top_layout = QVBoxLayout()
-        self.win_top_layout.setSpacing(4)
+        self.win_top_layout.setSpacing(3)
         wl.addLayout(self.win_top_layout)
         wl.addStretch(1)
         a_body.addWidget(win_box, 35)
 
         al.addLayout(a_body)
+
+        hint_bar = QFrame()
+        hint_bar.setStyleSheet("QFrame { background-color: #F8FAFC; border: none; border-radius: 4px; padding: 2px 8px; }")
+        hb_layout = QHBoxLayout(hint_bar)
+        hb_layout.setContentsMargins(6, 3, 6, 3)
+        hint_lbl = QLabel("ⓘ 点击日期走势、渠道概览、盈亏结构或基金排行可联动筛选下方明细。")
+        hint_lbl.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
+        hb_layout.addWidget(hint_lbl)
+        al.addWidget(hint_bar)
         root.addWidget(attr_card)
 
         # 6. 底部明细表（3 个 Tab）
@@ -719,7 +773,7 @@ class DomesticPerformanceBasePage(QWidget):
         self.table_count_lbl = QLabel("0 条")
         self.table_count_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
         tab_bar.addWidget(self.table_count_lbl)
-        self.table_tab_group.idClicked.connect(lambda _: self._refresh_table())
+        self.table_tab_group.idClicked.connect(self._on_table_tab_changed)
         tbl_l.addLayout(tab_bar)
 
         self.table_view = QTableView()
@@ -830,6 +884,59 @@ class DomesticPerformanceBasePage(QWidget):
             self.type_combo.addItem(ft, ft)
         self.type_combo.blockSignals(False)
 
+    def _build_top_header_row(self):
+        """构建亏损/盈利贡献排行卡片的表头行，与美股页面保持一致。"""
+        th = QHBoxLayout()
+        th.setContentsMargins(4, 2, 4, 2)
+        th.setSpacing(6)
+        r_lbl = QLabel("排名")
+        r_lbl.setFixedWidth(24)
+        r_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; border: none;")
+        name_lbl = QLabel("基金名称")
+        name_lbl.setMinimumWidth(90)
+        name_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; border: none;")
+        plat_lbl = QLabel("券商渠道")
+        plat_lbl.setFixedWidth(54)
+        plat_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; border: none;")
+        pnl_lbl = QLabel("当日收益" if self.is_day else "当月收益")
+        pnl_lbl.setFixedWidth(74)
+        pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        pnl_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; border: none;")
+        bar_lbl = QLabel("贡献度")
+        bar_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8; font-weight: 600; padding-left: 8px; border: none;")
+        th.addWidget(r_lbl)
+        th.addWidget(name_lbl, 1)
+        th.addWidget(plat_lbl)
+        th.addWidget(pnl_lbl)
+        th.addWidget(bar_lbl, 1)
+        return th, name_lbl, plat_lbl, pnl_lbl
+
+    @staticmethod
+    def _build_empty_top_box(title: str, subtitle: str) -> QFrame:
+        """构建与美股一致的排行空状态卡片。"""
+        empty_box = QFrame()
+        empty_box.setStyleSheet("QFrame { background: transparent; border: none; }")
+        eb_lay = QVBoxLayout(empty_box)
+        eb_lay.setContentsMargins(10, 18, 10, 18)
+        eb_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        eb_lay.setSpacing(4)
+
+        icon_lbl = QLabel("📊")
+        icon_lbl.setStyleSheet("font-size: 26px; border: none;")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t_lbl = QLabel(title)
+        t_lbl.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #1E293B; border: none;")
+        t_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub_lbl = QLabel(subtitle)
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8; border: none;")
+        sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        eb_lay.addWidget(icon_lbl)
+        eb_lay.addWidget(t_lbl)
+        eb_lay.addWidget(sub_lbl)
+        return empty_box
+
     def _reset_filters(self):
         if self.start_combo.count() > 0:
             self.start_combo.setCurrentIndex(0)
@@ -840,6 +947,8 @@ class DomesticPerformanceBasePage(QWidget):
         self.search_edit.clear()
         self._selected_platform = ""
         self._drill_metric_key = ""
+        self._fund_pnl_filter = ""
+        self._selected_fund_code = ""
         self._apply_filters()
 
     def _apply_filters(self):
@@ -961,17 +1070,28 @@ class DomesticPerformanceBasePage(QWidget):
         mode = self._chart_mode_keys[idx] if 0 <= idx < len(self._chart_mode_keys) else "pnl"
         self.trend_canvas.set_data(self._period_series, mode=mode, selected_key=self._selected_period)
 
+    def _on_plat_scope_changed(self, btn_id: int):
+        self._plat_scope = "cum" if btn_id == 1 else "period"
+        self._refresh_platform_contrib()
+
     def _refresh_platform_contrib(self):
         while self.platform_list_layout.count():
             w = self.platform_list_layout.takeAt(0).widget()
             if w is not None:
                 w.deleteLater()
 
+        is_period_scope = self._plat_scope == "period" and bool(self._selected_period)
+        self.plat_period_lbl.setText(self._selected_period if is_period_scope else "期间累计")
+
         by_plat: dict[str, float] = defaultdict(float)
         for r in self._filtered_rows:
+            if is_period_scope and r[self.period_key] != self._selected_period:
+                continue
             by_plat[r["platform"]] += float(r[self.pnl_key])
         if not by_plat:
-            self.platform_list_layout.addWidget(QLabel("暂无平台数据"))
+            empty_plat = QLabel("暂无平台数据")
+            empty_plat.setStyleSheet("color: #94A3B8; font-size: 12px; border: none; padding: 12px 0;")
+            self.platform_list_layout.addWidget(empty_plat)
             return
         total_abs = sum(abs(v) for v in by_plat.values()) or 1.0
         for plat, pnl in sorted(by_plat.items(), key=lambda kv: -kv[1]):
@@ -1037,6 +1157,8 @@ class DomesticPerformanceBasePage(QWidget):
             self.period_picker.setCurrentIndex(idx)
             self.period_picker.blockSignals(False)
         self._refresh_chart()
+        if self._plat_scope == "period":
+            self._refresh_platform_contrib()
         self._refresh_attribution()
         if self.table_tab_group.checkedId() == 0:
             self._refresh_table()
@@ -1064,27 +1186,58 @@ class DomesticPerformanceBasePage(QWidget):
         self.attr_dim_group.button(0).setChecked(True)
         self._on_period_selected(pk)
 
+    def _filter_table_by_pnl(self, mode: str):
+        """点击左侧盈亏结构按钮，联动下方明细表按盈利/亏损筛选（再次点击取消）。"""
+        self._fund_pnl_filter = "" if self._fund_pnl_filter == mode else mode
+        self._selected_fund_code = ""
+        target_tab = 2 if self._attr_dim == "period" else 0
+        self.table_tab_group.button(target_tab).setChecked(True)
+        self._refresh_table()
+
+    def _on_top_fund_clicked(self, fund_code: str):
+        """点击 Top 5 基金排行行，联动下方明细表定位/筛选该基金（再次点击取消）。"""
+        self._selected_fund_code = "" if self._selected_fund_code == fund_code else fund_code
+        self._fund_pnl_filter = ""
+        self.table_tab_group.button(0).setChecked(True)
+        self._refresh_attribution()
+        self._refresh_table()
+
+    def _set_top_headers_mode(self, *, is_period: bool):
+        name_text = ("交易日期" if self.is_day else "交易月份") if is_period else "基金名称"
+        pnl_text = "当日收益" if self.is_day else "当月收益"
+        for name_lbl, plat_lbl, pnl_lbl in (
+            (self.loss_th_name, self.loss_th_plat, self.loss_th_pnl),
+            (self.win_th_name, self.win_th_plat, self.win_th_pnl),
+        ):
+            name_lbl.setText(name_text)
+            plat_lbl.setVisible(not is_period)
+            pnl_lbl.setText(pnl_text)
+
     def _refresh_attribution(self):
         if self._attr_dim == "period":
             series = self._period_series
             unit_word = "天" if self.is_day else "月"
             self.attr_title_lbl.setText(f"期间{'每日' if self.is_day else '每月'}极值排行 (共 {len(series)} {unit_word})")
+            self.struct_hdr_lbl.setText(f"期间盈亏{unit_word}数结构")
             self.loss_top_header.setText(f"↓ 最惨 10 {unit_word}（{'单日' if self.is_day else '单月'}最低收益）")
             self.win_top_header.setText(f"↑ 最爽 10 {unit_word}（{'单日' if self.is_day else '单月'}最高收益）")
+            self._set_top_headers_mode(is_period=True)
             wins = sorted([s for s in series if s["pnl"] > 0], key=lambda s: -s["pnl"])
             losses = sorted([s for s in series if s["pnl"] < 0], key=lambda s: s["pnl"])
             win_sum = sum(s["pnl"] for s in wins)
             loss_sum = sum(s["pnl"] for s in losses)
             net_sum = sum(s["pnl"] for s in series)
             self.donut.set_data(win_sum, loss_sum, net_sum)
-            self.struct_win_lbl.setText(f"● 盈利{unit_word}数：{len(wins)} {unit_word}  {_fmt_signed_cny(win_sum)}")
-            self.struct_loss_lbl.setText(f"● 亏损{unit_word}数：{len(losses)} {unit_word}  {_fmt_signed_cny(loss_sum)}")
+            self.struct_win_lbl.setText(f"● 盈利{unit_word}数   {len(wins)} {unit_word}   {_fmt_signed_cny(win_sum)}")
+            self.struct_loss_lbl.setText(f"● 亏损{unit_word}数   {len(losses)} {unit_word}   {_fmt_signed_cny(loss_sum)}")
             self._fill_top_period_list(self.loss_top_layout, losses[:10], is_loss=True, denom=abs(loss_sum) or 1.0)
             self._fill_top_period_list(self.win_top_layout, wins[:10], is_loss=False, denom=abs(win_sum) or 1.0)
             return
 
+        self.struct_hdr_lbl.setText("当日盈亏结构" if self.is_day else "当月盈亏结构")
         self.loss_top_header.setText("↓ 亏损贡献排行 Top 5")
         self.win_top_header.setText("↑ 盈利贡献排行 Top 5")
+        self._set_top_headers_mode(is_period=False)
         pk = self._selected_period
         prefix = "单日收益归因" if self.is_day else "单月收益归因"
         self.attr_title_lbl.setText(f"{prefix} ({pk})" if pk else prefix)
@@ -1097,8 +1250,8 @@ class DomesticPerformanceBasePage(QWidget):
         net_sum = sum(float(r[self.pnl_key]) for r in p_rows)
 
         self.donut.set_data(win_sum, loss_sum, net_sum)
-        self.struct_win_lbl.setText(f"● 盈利基金：{len(wins)} 只  {_fmt_signed_cny(win_sum)}")
-        self.struct_loss_lbl.setText(f"● 亏损基金：{len(losses)} 只  {_fmt_signed_cny(loss_sum)}")
+        self.struct_win_lbl.setText(f"● 盈利基金   {len(wins)} 只   {_fmt_signed_cny(win_sum)}")
+        self.struct_loss_lbl.setText(f"● 亏损基金   {len(losses)} 只   {_fmt_signed_cny(loss_sum)}")
 
         self._fill_top_list(self.loss_top_layout, losses[:5], is_loss=True, denom=abs(loss_sum) or 1.0)
         self._fill_top_list(self.win_top_layout, wins[:5], is_loss=False, denom=abs(win_sum) or 1.0)
@@ -1109,38 +1262,61 @@ class DomesticPerformanceBasePage(QWidget):
             if w is not None:
                 w.deleteLater()
         if not items:
-            empty = QLabel("当期无" + ("亏损" if is_loss else "盈利") + ("日" if self.is_day else "月"))
-            empty.setStyleSheet("color: #94A3B8; font-size: 12px; border: none;")
-            layout.addWidget(empty)
+            unit_noun = "交易日" if self.is_day else "月份"
+            title = f"当前区间无{'亏损' if is_loss else '盈利'}{unit_noun}"
+            sub = f"当前筛选区间内无{'亏损' if is_loss else '盈利'}{unit_noun}记录。"
+            layout.addWidget(self._build_empty_top_box(title, sub))
             return
-        color = "#DC2626" if is_loss else "#16A34A"
-        for idx, s in enumerate(items, start=1):
+        rank_bg = ["#EF4444", "#F97316", "#FB923C", "#94A3B8", "#CBD5E1"] if is_loss else ["#10B981", "#34D399", "#6EE7B7", "#94A3B8", "#CBD5E1"]
+        color = "#EF4444" if is_loss else "#10B981"
+        bar_bg = "#FEE2E2" if is_loss else "#D1FAE5"
+        hover_bg = "#FEF2F2" if is_loss else "#ECFDF5"
+        hover_bd = "#FECACA" if is_loss else "#A7F3D0"
+        for idx, s in enumerate(items):
             row_w = QFrame()
             row_w.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_w.setStyleSheet("QFrame { border: none; border-radius: 4px; } QFrame:hover { background: #EFF6FF; }")
+            row_w.setStyleSheet(
+                f"QFrame {{ background: #FFFFFF; border: 1px solid #F1F5F9; border-radius: 4px; padding: 1px 4px; }}"
+                f"QFrame:hover {{ background: {hover_bg}; border-color: {hover_bd}; }}"
+            )
             rl = QHBoxLayout(row_w)
             rl.setContentsMargins(4, 2, 4, 2)
             rl.setSpacing(6)
-            num = QLabel(str(idx))
-            num.setFixedWidth(18)
-            num.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 700; border: none;")
+            num = QLabel(str(idx + 1))
+            num.setFixedSize(18, 18)
+            num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bg_c = rank_bg[idx] if idx < len(rank_bg) else "#CBD5E1"
+            txt_c = "#FFFFFF" if idx < 3 else "#475569"
+            num.setStyleSheet(f"background: {bg_c}; color: {txt_c}; border-radius: 9px; font-size: 10px; font-weight: 700; border: none;")
             rl.addWidget(num)
 
             name = QLabel(s["key"])
-            name.setStyleSheet("color: #0F172A; font-size: 12px; font-weight: 600; border: none;")
+            name.setStyleSheet("color: #1E293B; font-size: 11.5px; font-weight: 700; border: none;")
             rl.addWidget(name, 1)
 
             val = float(s["pnl"])
+            contrib = abs(val) / denom * 100.0
             val_lbl = QLabel(_fmt_signed_cny(val))
             val_lbl.setFont(_cny_font(11, bold=True))
             val_lbl.setStyleSheet(f"color: {color}; border: none;")
-            val_lbl.setFixedWidth(92)
+            val_lbl.setFixedWidth(74)
             val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             rl.addWidget(val_lbl)
 
-            pct_lbl = QLabel(f"{abs(val)/denom*100:.1f}%")
-            pct_lbl.setStyleSheet("color: #64748B; font-size: 11px; border: none;")
-            pct_lbl.setFixedWidth(44)
+            bar = QProgressBar()
+            bar.setFixedHeight(7)
+            bar.setTextVisible(False)
+            bar.setRange(0, 1000)
+            bar.setValue(int(max(1, min(100, contrib)) * 10))
+            bar.setStyleSheet(
+                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 3.5px; }}"
+                f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3.5px; }}"
+            )
+            rl.addWidget(bar, 1)
+
+            pct_lbl = QLabel(f"{contrib:.1f}%")
+            pct_lbl.setStyleSheet("color: #64748B; font-size: 10.5px; border: none;")
+            pct_lbl.setFixedWidth(40)
             pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             rl.addWidget(pct_lbl)
             row_w.mousePressEvent = lambda _e, pk=s["key"]: self._drill_period_from_top(pk)
@@ -1152,45 +1328,84 @@ class DomesticPerformanceBasePage(QWidget):
             if w is not None:
                 w.deleteLater()
         if not items:
-            empty = QLabel("当期无" + ("亏损" if is_loss else "盈利") + "基金")
-            empty.setStyleSheet("color: #94A3B8; font-size: 12px; border: none;")
-            layout.addWidget(empty)
+            period_word = "当日" if self.is_day else "当月"
+            title = f"{period_word}无{'亏损' if is_loss else '盈利'}标的"
+            opp = "盈利或持平" if is_loss else "亏损或持平"
+            sub = f"{period_word}在持标的均为{opp}，暂无{'亏损' if is_loss else '盈利'}贡献。"
+            layout.addWidget(self._build_empty_top_box(title, sub))
             return
-        color = "#DC2626" if is_loss else "#16A34A"
-        for idx, r in enumerate(items, start=1):
-            row_w = QWidget()
+        rank_bg = ["#EF4444", "#F97316", "#FB923C", "#94A3B8", "#CBD5E1"] if is_loss else ["#10B981", "#34D399", "#6EE7B7", "#94A3B8", "#CBD5E1"]
+        color = "#EF4444" if is_loss else "#10B981"
+        bar_bg = "#FEE2E2" if is_loss else "#D1FAE5"
+        hover_bg = "#FEF2F2" if is_loss else "#ECFDF5"
+        hover_bd = "#FECACA" if is_loss else "#A7F3D0"
+        for idx, r in enumerate(items):
+            row_w = QFrame()
+            row_w.setCursor(Qt.CursorShape.PointingHandCursor)
+            is_sel = bool(self._selected_fund_code and r["fund_code"] == self._selected_fund_code)
+            row_w.setStyleSheet(
+                "QFrame { background: #EFF6FF; border: 1px solid #93C5FD; border-radius: 4px; padding: 1px 4px; }"
+                if is_sel else
+                f"QFrame {{ background: #FFFFFF; border: 1px solid #F1F5F9; border-radius: 4px; padding: 1px 4px; }}"
+                f"QFrame:hover {{ background: {hover_bg}; border-color: {hover_bd}; }}"
+            )
             rl = QHBoxLayout(row_w)
-            rl.setContentsMargins(0, 2, 0, 2)
+            rl.setContentsMargins(4, 2, 4, 2)
             rl.setSpacing(6)
-            num = QLabel(str(idx))
-            num.setFixedWidth(16)
-            num.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 700; border: none;")
+            num = QLabel(str(idx + 1))
+            num.setFixedSize(18, 18)
+            num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bg_c = rank_bg[idx] if idx < len(rank_bg) else "#CBD5E1"
+            txt_c = "#FFFFFF" if idx < 3 else "#475569"
+            num.setStyleSheet(f"background: {bg_c}; color: {txt_c}; border-radius: 9px; font-size: 10px; font-weight: 700; border: none;")
             rl.addWidget(num)
 
             name = QLabel(r["fund_name"])
-            name.setStyleSheet("color: #0F172A; font-size: 12px; border: none;")
-            name.setMinimumWidth(110)
+            name.setToolTip(f"{r['fund_name']} ({r['fund_code']})")
+            name.setStyleSheet("color: #1E293B; font-size: 11.5px; font-weight: 700; border: none;")
+            name.setMinimumWidth(90)
             rl.addWidget(name, 1)
 
             plat = QLabel(r["platform"])
             plat.setStyleSheet("color: #64748B; font-size: 11px; border: none;")
-            plat.setFixedWidth(52)
+            plat.setFixedWidth(54)
             rl.addWidget(plat)
 
             val = float(r[self.pnl_key])
+            contrib = abs(val) / denom * 100.0
             val_lbl = QLabel(_fmt_signed_cny(val))
             val_lbl.setFont(_cny_font(11, bold=True))
             val_lbl.setStyleSheet(f"color: {color}; border: none;")
-            val_lbl.setFixedWidth(84)
+            val_lbl.setFixedWidth(74)
             val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             rl.addWidget(val_lbl)
 
-            pct_lbl = QLabel(f"{abs(val)/denom*100:.1f}%")
-            pct_lbl.setStyleSheet("color: #64748B; font-size: 11px; border: none;")
+            bar = QProgressBar()
+            bar.setFixedHeight(7)
+            bar.setTextVisible(False)
+            bar.setRange(0, 1000)
+            bar.setValue(int(max(1, min(100, contrib)) * 10))
+            bar.setStyleSheet(
+                f"QProgressBar {{ background-color: {bar_bg}; border: none; border-radius: 3.5px; }}"
+                f"QProgressBar::chunk {{ background-color: {color}; border-radius: 3.5px; }}"
+            )
+            rl.addWidget(bar, 1)
+
+            pct_lbl = QLabel(f"{contrib:.1f}%")
+            pct_lbl.setStyleSheet("color: #64748B; font-size: 10.5px; border: none;")
             pct_lbl.setFixedWidth(40)
             pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             rl.addWidget(pct_lbl)
+
+            row_w.mousePressEvent = lambda _e, fc=r["fund_code"]: self._on_top_fund_clicked(fc)
             layout.addWidget(row_w)
+
+    def _on_table_tab_changed(self, idx: int):
+        if idx != 0:
+            self._selected_fund_code = ""
+        if idx == 1:
+            self._fund_pnl_filter = ""
+        self._refresh_table()
 
     def _refresh_table(self):
         tab_idx = self.table_tab_group.checkedId()
@@ -1201,6 +1416,12 @@ class DomesticPerformanceBasePage(QWidget):
 
         if tab_idx == 0:
             rows = [r for r in self._filtered_rows if r[self.period_key] == self._selected_period] if self._selected_period else []
+            if self._selected_fund_code:
+                rows = [r for r in rows if r["fund_code"] == self._selected_fund_code]
+            elif self._fund_pnl_filter == "profit":
+                rows = [r for r in rows if float(r[self.pnl_key]) > 0]
+            elif self._fund_pnl_filter == "loss":
+                rows = [r for r in rows if float(r[self.pnl_key]) < 0]
             rows = sorted(rows, key=lambda r: -abs(float(r[self.pnl_key])))
         elif tab_idx == 1:
             grouped: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1227,6 +1448,10 @@ class DomesticPerformanceBasePage(QWidget):
             rows = sorted(grouped.values(), key=lambda r: (r[self.period_key], r["platform"]), reverse=True)
         else:
             rows = list(reversed(self._period_series))
+            if self._fund_pnl_filter == "profit":
+                rows = [r for r in rows if float(r["pnl"]) > 0]
+            elif self._fund_pnl_filter == "loss":
+                rows = [r for r in rows if float(r["pnl"]) < 0]
 
         model.set_rows(rows)
         self.table_count_lbl.setText(f"{len(rows)} 条")

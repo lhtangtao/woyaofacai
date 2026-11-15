@@ -91,6 +91,33 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     assert daily_page._attr_dim == "fund"
     assert daily_page._selected_period == "2026-01-05"
 
+    # 2026-01-05 仅有盈利无亏损 -> 验证亏损排行空状态卡片与提示文案
+    loss_empty_texts = [lbl.text() for lbl in daily_page.loss_top_layout.itemAt(0).widget().findChildren(type(daily_page.attr_title_lbl))]
+    assert "当日无亏损标的" in loss_empty_texts
+
+    # 切换到 2026-01-06（仅有亏损无盈利）-> 验证盈利排行空状态与美股红框一致
+    daily_page._on_period_selected("2026-01-06")
+    win_empty_texts = [lbl.text() for lbl in daily_page.win_top_layout.itemAt(0).widget().findChildren(type(daily_page.attr_title_lbl))]
+    assert "当日无盈利标的" in win_empty_texts
+    assert any("暂无盈利贡献" in t for t in win_empty_texts)
+
+    # 盈亏结构按钮点击过滤与取消、当日/累计渠道切换、Top 5 行点击联动
+    daily_page.struct_loss_lbl.click()
+    assert daily_page._fund_pnl_filter == "loss"
+    assert daily_page._models[0].rowCount() == 1
+    daily_page.struct_loss_lbl.click()
+    assert daily_page._fund_pnl_filter == ""
+
+    daily_page._on_top_fund_clicked("000001")
+    assert daily_page._selected_fund_code == "000001"
+    daily_page._on_top_fund_clicked("000001")
+    assert daily_page._selected_fund_code == ""
+
+    daily_page.plat_scope_group.button(1).click()
+    assert daily_page._plat_scope == "cum"
+    daily_page.plat_scope_group.button(0).click()
+    assert daily_page._plat_scope == "period"
+
 
 def test_domestic_trades_page_filters_and_kpis(qtbot):
     assert classify_direction("定时定额投资") == "买入"
