@@ -143,3 +143,32 @@ def ths_returns_and_events(trades, shares, market_value, is_closed):
                     events.append((t["effective_date"], str(-amt)))
             events.sort(key=lambda item: item[0])
     return returns, events
+
+
+def ths_daily_holdings_and_cash_events(raw, account_id, fund_code, cutoff):
+    """提取同花顺标的按日期聚合的份额变动与净投入现金流事件。"""
+    info = ths_trade_events(raw, account_id, fund_code, cutoff)
+    if info.get("issue") or not info.get("trades"):
+        return None
+    trade_deltas: dict[str, Decimal] = {}
+    cash_events: dict[str, Decimal] = {}
+    for trade in info["trades"]:
+        day = trade["effective_date"]
+        delta = Decimal(trade["signed_shares"])
+        if delta != ZERO:
+            trade_deltas[day] = trade_deltas.get(day, ZERO) + delta
+        amt = Decimal(trade["confirmed_amount"])
+        tx_type = trade["transaction_type"]
+        if tx_type in ("BUY", "DIVIDEND_TAX"):
+            cash_events[day] = cash_events.get(day, ZERO) + amt
+        elif tx_type in ("SELL", "CASH_DIVIDEND"):
+            cash_events[day] = cash_events.get(day, ZERO) - amt
+    all_trade_days = sorted({trade["effective_date"] for trade in info["trades"]})
+    if not all_trade_days:
+        return None
+    return {
+        "first_day": all_trade_days[0],
+        "trade_deltas": trade_deltas,
+        "cash_events": cash_events,
+        "trade_days": all_trade_days,
+    }

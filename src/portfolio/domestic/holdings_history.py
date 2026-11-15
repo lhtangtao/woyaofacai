@@ -9,6 +9,7 @@ from decimal import Decimal, localcontext
 from portfolio.paths import DOMESTIC_ASSETS_DIR
 from .holdings_query import ESTIMATED_NAV_SOURCES, daily_nav, positive
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
+from .ths_analytics import ths_daily_holdings_and_cash_events
 from .tiantian_positions import BUY, SELL, movement, subscription_key
 
 
@@ -82,6 +83,11 @@ def _build_cum_net_cash_series(raw, calc, raw_tables, calc_tables, rows, cutoff)
                     events[day] = events.get(day, Decimal(0)) + amt
                 elif kind in SELL | {"超级转换-转出", "现金分红"}:
                     events[day] = events.get(day, Decimal(0)) - amt
+        elif row.get("platform") == "同花顺" and "raw_fund_transactions" in raw_tables:
+            ths_info = ths_daily_holdings_and_cash_events(raw, key[0], key[1], cutoff)
+            if ths_info:
+                for day, net_amt in ths_info["cash_events"].items():
+                    events[day] = events.get(day, Decimal(0)) + net_amt
         sorted_days = sorted(events)
         running = Decimal(0)
         cum_vals = []
@@ -104,6 +110,7 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
         calc_tables = {r[0] for r in calc.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         navs = {}
         quantities = {}
+        ths_events = {}
         days = set()
         beginnings = {}
         nav_dates = {}
@@ -118,27 +125,34 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                 periods.setdefault(account, []).append((date.fromisoformat(start), date.fromisoformat(end)))
         for row in rows:
             key = row["account_id"], row["fund_code"]
-            table = "calc_tiantian_positions" if row["platform"] == "天天基金" else "calc_fund_positions_daily"
-            if table not in calc_tables or not row["position_as_of"]:
+            if row.get("platform") == "同花顺" and "raw_fund_transactions" in raw_tables:
+                ths_info = ths_daily_holdings_and_cash_events(raw, key[0], key[1], cutoff)
                 quantities[key] = {}
-                continue
-            balances = calc.execute(f"""SELECT trade_date, holding_shares FROM {table}
-                WHERE account_id=? AND fund_code=? AND trade_date<=?""", (*key, row["position_as_of"]))
-            quantities[key] = {r[0]: Decimal(r[1]) if r[1] is not None else None for r in balances}
-            if quantities[key]:
-                first = min(quantities[key])
-                if row["platform"] == "天天基金" and not row.get("observed_shares"):
-                    first_trade = raw.execute("""SELECT confirmation_date,transaction_type_raw,parse_status,
-                        confirmation_status FROM raw_fund_transactions WHERE account_id=? AND fund_code=?
-                        ORDER BY confirmation_date,id LIMIT 1""", key).fetchone()
-                    if first_trade and first_trade[0] == first and first_trade[1] in (
-                            "买新基金", "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功" and (
-                            first_trade[1] != "买新基金" or quantities[key][first] == 0):
-                        covered_from = date.fromisoformat(first)
-                        for start, end in sorted(periods.get(key[0], []), reverse=True):
-                            if start <= covered_from and end + timedelta(days=1) >= covered_from:
-                                covered_from = min(covered_from, start)
-                        beginnings[key] = (covered_from.isoformat(), first)
+                if ths_info:
+                    ths_events[key] = ths_info
+                    days.update(ths_info["trade_days"])
+            else:
+                table = "calc_tiantian_positions" if row["platform"] == "天天基金" else "calc_fund_positions_daily"
+                if table not in calc_tables or not row["position_as_of"]:
+                    quantities[key] = {}
+                    continue
+                balances = calc.execute(f"""SELECT trade_date, holding_shares FROM {table}
+                    WHERE account_id=? AND fund_code=? AND trade_date<=?""", (*key, row["position_as_of"]))
+                quantities[key] = {r[0]: Decimal(r[1]) if r[1] is not None else None for r in balances}
+                if quantities[key]:
+                    first = min(quantities[key])
+                    if row["platform"] == "天天基金" and not row.get("observed_shares"):
+                        first_trade = raw.execute("""SELECT confirmation_date,transaction_type_raw,parse_status,
+                            confirmation_status FROM raw_fund_transactions WHERE account_id=? AND fund_code=?
+                            ORDER BY confirmation_date,id LIMIT 1""", key).fetchone()
+                        if first_trade and first_trade[0] == first and first_trade[1] in (
+                                "买新基金", "买基金", "定时定额投资", "认购结果", "超级转换-转入") and first_trade[2] == "正常" and first_trade[3] == "成功" and (
+                                first_trade[1] != "买新基金" or quantities[key][first] == 0):
+                            covered_from = date.fromisoformat(first)
+                            for start, end in sorted(periods.get(key[0], []), reverse=True):
+                                if start <= covered_from and end + timedelta(days=1) >= covered_from:
+                                    covered_from = min(covered_from, start)
+                            beginnings[key] = (covered_from.isoformat(), first)
             if key[1] not in navs:
                 navs[key[1]] = {}
                 for r in daily_nav(raw, raw_tables, key[1], cutoff, history=True):
@@ -207,6 +221,19 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
                     if current.weekday() < 5:
                         days.append(current.isoformat())
                     current += timedelta(days=1)
+        for key, ths_info in ths_events.items():
+            sorted_deltas = sorted(ths_info["trade_deltas"].items())
+            first_day = ths_info["first_day"]
+            running = Decimal(0)
+            d_idx = 0
+            bal = {}
+            for day in days:
+                while d_idx < len(sorted_deltas) and sorted_deltas[d_idx][0] <= day:
+                    running += sorted_deltas[d_idx][1]
+                    d_idx += 1
+                if day >= first_day:
+                    bal[day] = running
+            quantities[key] = bal
         if "raw_fund_nav_daily" in raw_tables:
             result.money_funds = {r[0] for r in raw.execute("""
                 SELECT DISTINCT fund_code FROM raw_fund_nav_daily

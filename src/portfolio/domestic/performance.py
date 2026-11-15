@@ -101,7 +101,7 @@ def _collect_daily_cash_flows(rows, cutoff: str, *, root=DOMESTIC_ASSETS_DIR):
                 for t in ths_info.get("trades", ()):
                     amt = Decimal(t["confirmed_amount"])
                     fkey = (t["effective_date"], key[0], key[1])
-                    if t["transaction_type"] == "BUY":
+                    if t["transaction_type"] in ("BUY", "DIVIDEND_TAX"):
                         entry = flows.setdefault(fkey, {"buy": Decimal(0), "sell": Decimal(0), "count": 0})
                         entry["buy"] += amt
                         entry["count"] += 1
