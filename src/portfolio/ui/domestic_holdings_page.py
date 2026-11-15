@@ -590,12 +590,7 @@ class DomesticHoldingsPage(QWidget):
         body.addLayout(range_row)
         self.trend_body = QVBoxLayout()
         body.addLayout(self.trend_body)
-        holdings_layout.addWidget(box)
-        overview_box, overview_body = card("持仓概览")
-        self.fund_overview = QLabel()
-        self.fund_overview.setWordWrap(True)
-        overview_body.addWidget(self.fund_overview)
-        holdings_layout.addWidget(overview_box)
+        holdings_layout.addWidget(box, 1)
         pnl_tab = QWidget()
         pnl_layout = QVBoxLayout(pnl_tab)
         pnl_layout.setContentsMargins(0, 8, 0, 0)
@@ -971,7 +966,6 @@ class DomesticHoldingsPage(QWidget):
         self.monthly.rows = self.detail.get("history", [])
         self.monthly.set_page(0)
         rows = self.detail.get("rows", [])
-        self.fund_overview.clear()
         if not rows:
             self.breadcrumb.setText("国内资产 / 持仓管理 / 持仓明细")
             self.detail_identity.setText("正在加载基金详情…")
@@ -1004,28 +998,6 @@ class DomesticHoldingsPage(QWidget):
         note = row.get("confirmation_note") or row.get("return_issue") or "累计盈亏包含已实现收益及现金分红；浮动盈亏为市值减剩余持仓成本。"
         historical = f"历史收益截至 {row['historical_returns_as_of']}；" if row.get("historical_returns_as_of") and not row.get("confirmation_note") else ""
         self.pnl_note.setText(historical + note)
-        self.fund_overview.setText(
-            f"平台  {row['platform']}\n账户  {row['account_name']}\n基金代码  {row['fund_code']}\n"
-            f"交易资料覆盖截至  {row['coverage_through'] or '—'}\n{row['status']}\n"
-            f"净值状态  {row['nav_status']}\n"
-            f"最早可确认持有日  {row.get('first_confirmed_holding_date') or '—'}\n"
-            f"首次确认买入或转入日  {row.get('first_trade_date') or '—'}\n"
-            f"最近确认清仓日  {row['last_confirmed_close_date'] or '—'}\n\n"
-            f"当前份额  {row['shares'] or '—'}\n当前市值  {amount(row['market_value'])}\n"
-            f"累计买入份额  {row.get('buy_shares', '—')}\n累计卖出份额  {row.get('sell_shares', '—')}\n"
-            f"确认买入金额  {amount(row.get('buy_amount'))}\n确认赎回金额  {amount(row.get('sell_amount'))}\n"
-            f"转换转入金额  {amount(row.get('transfer_in_amount'))}\n转换转出金额  {amount(row.get('transfer_out_amount'))}\n"
-            f"历史现金分红  {amount(row.get('dividend_amount'))}\n交易手续费  {amount(row.get('fee_amount'))}\n"
-            f"剩余持仓成本  {amount(row.get('cost'))}\n已实现盈亏  {amount(row.get('realized_pnl'))}\n"
-            + (f"最近确认已实现盈亏  {amount(row['last_confirmed_realized_pnl'])}\n" if row.get("last_confirmed_realized_pnl") is not None else "")
-            + (f"{row['confirmation_note']}\n" if row.get("confirmation_note") else "")
-            + (f"流水说明  {row['cash_summary_scope']}\n" if row.get("cash_summary_scope") else "")
-            + (f"流水异常  {row['cash_summary_issue']}\n" if row.get("cash_summary_issue") else "")
-            + f"收益说明  {row.get('return_issue') or '累计盈亏 ÷ 累计买入金额（非年化）'}\n"
-            f"累计分红  {amount(row.get('cash_dividend'))}\n"
-            f"数据说明  {row.get('issue') or '—'}\n"
-            f"最近可核对份额  {row.get('last_confirmed_shares', '—')}  {row.get('last_confirmed_date', '')}\n"
-            f"累计净值  {row.get('accumulated_nav') or '—'}  ·  来源  {row.get('nav_source') or '—'}")
 
     def render_trades(self, *_):
         start, end = self.start.text().strip(), self.end.text().strip()
