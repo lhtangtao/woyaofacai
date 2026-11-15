@@ -55,28 +55,44 @@ def _fmt_cost_tick(val: float) -> str:
     return f"{val:,.2f}"
 
 
-def _fmt_qty_value(val: float | None) -> str:
+def _fmt_qty_value(val: float | None, unit: str = "股") -> str:
     if val is None:
         return "—"
     if abs(val - round(val)) < 1e-6:
-        return f"{int(round(val)):,} 股"
-    return f"{val:,.2f} 股"
+        return f"{int(round(val)):,} {unit}"
+    return f"{val:,.2f} {unit}"
 
 
-def _fmt_cost_value(val: float | None) -> str:
+def _fmt_cost_value(val: float | None, prefix: str = "$", suffix: str = "/股") -> str:
     if val is None:
         return "—"
-    return f"${val:,.2f}/股"
+    return f"{prefix}{val:,.2f}{suffix}"
 
 
 class _HoldingCostCanvas(QWidget):
     """内部绘图画布：双 Y 轴、真实时间比例 X 轴、阶梯股数、真实历史成本、悬停 Tooltip。"""
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        qty_label: str = "持仓股数",
+        qty_unit: str = "股",
+        cost_label: str = "持仓成本价",
+        cost_axis_label: str = "成本价 (USD/股)",
+        cost_prefix: str = "$",
+        cost_suffix: str = "/股",
+    ):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(210)
+        self._qty_label = qty_label
+        self._qty_unit = qty_unit
+        self._cost_label = cost_label
+        self._cost_axis_label = cost_axis_label
+        self._cost_prefix = cost_prefix
+        self._cost_suffix = cost_suffix
 
         self._dates: list[str] = []
         self._ordinals: list[int] = []
@@ -102,7 +118,8 @@ class _HoldingCostCanvas(QWidget):
         for idx, raw_d in enumerate(dates or ()):
             d_str = str(raw_d or "")[:10]
             try:
-                d_obj = datetime.strptime(d_str, "%Y-%m-%d").date()
+                parse_str = f"{d_str}-01" if len(d_str) == 7 else d_str
+                d_obj = datetime.strptime(parse_str, "%Y-%m-%d").date()
             except ValueError:
                 continue
             q = quantities[idx] if idx < len(quantities) else None
@@ -239,10 +256,10 @@ class _HoldingCostCanvas(QWidget):
         painter.setFont(hdr_font)
         if self.show_qty:
             painter.setPen(QColor(BLUE))
-            painter.drawText(QRectF(4, 4, left_pad + 90, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "持仓股数 (股)")
+            painter.drawText(QRectF(4, 4, left_pad + 90, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{self._qty_label} ({self._qty_unit})")
         if self.show_cost:
             painter.setPen(QColor(ORANGE))
-            painter.drawText(QRectF(w - right_pad - 110, 4, right_pad + 106, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "成本价 (USD/股)")
+            painter.drawText(QRectF(w - right_pad - 110, 4, right_pad + 106, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._cost_axis_label)
 
         # 5 条水平网格线与左右 Y 轴刻度（共用绘图区顶部与底部）
         painter.setFont(axis_font)
@@ -370,9 +387,9 @@ class _HoldingCostCanvas(QWidget):
 
             lines: list[tuple[str, str, str]] = [("", f"日期：{self._dates[hi]}", TEXT_HEADING)]
             if self.show_qty:
-                lines.append((BLUE, f"持仓股数：{_fmt_qty_value(hv_qty)}", TEXT_HEADING))
+                lines.append((BLUE, f"{self._qty_label}：{_fmt_qty_value(hv_qty, self._qty_unit)}", TEXT_HEADING))
             if self.show_cost:
-                lines.append((ORANGE, f"持仓成本价：{_fmt_cost_value(hv_cost)}", TEXT_HEADING))
+                lines.append((ORANGE, f"{self._cost_label}：{_fmt_cost_value(hv_cost, self._cost_prefix, self._cost_suffix)}", TEXT_HEADING))
 
             tip_font = QFont(".AppleSystemUIFont", 11)
             tip_bold = QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold)
@@ -409,14 +426,34 @@ class _HoldingCostCanvas(QWidget):
 class HoldingCostDualAxisChart(QWidget):
     """持仓与成本轨迹组件：包含双轴画布与底部可点击交互图例。"""
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        qty_label: str = "持仓股数",
+        qty_unit: str = "股",
+        cost_label: str = "持仓成本价",
+        cost_axis_label: str = "成本价 (USD/股)",
+        cost_prefix: str = "$",
+        cost_suffix: str = "/股",
+    ):
         super().__init__(parent)
+        self._qty_label = qty_label
+        self._cost_label = cost_label
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self.canvas = _HoldingCostCanvas(self)
+        self.canvas = _HoldingCostCanvas(
+            self,
+            qty_label=qty_label,
+            qty_unit=qty_unit,
+            cost_label=cost_label,
+            cost_axis_label=cost_axis_label,
+            cost_prefix=cost_prefix,
+            cost_suffix=cost_suffix,
+        )
         layout.addWidget(self.canvas, 1)
 
         legend_row = QHBoxLayout()
@@ -424,19 +461,19 @@ class HoldingCostDualAxisChart(QWidget):
         legend_row.setSpacing(12)
         legend_row.addStretch(1)
 
-        self.qty_legend_btn = QPushButton("●  持仓股数")
+        self.qty_legend_btn = QPushButton(f"●  {qty_label}")
         self.qty_legend_btn.setCheckable(True)
         self.qty_legend_btn.setChecked(True)
         self.qty_legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.qty_legend_btn.setToolTip("点击隐藏或恢复「持仓股数」曲线")
+        self.qty_legend_btn.setToolTip(f"点击隐藏或恢复「{qty_label}」曲线")
         self.qty_legend_btn.clicked.connect(self._on_legend_toggled)
         legend_row.addWidget(self.qty_legend_btn)
 
-        self.cost_legend_btn = QPushButton("●  持仓成本价")
+        self.cost_legend_btn = QPushButton(f"●  {cost_label}")
         self.cost_legend_btn.setCheckable(True)
         self.cost_legend_btn.setChecked(True)
         self.cost_legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cost_legend_btn.setToolTip("点击隐藏或恢复「持仓成本价」曲线")
+        self.cost_legend_btn.setToolTip(f"点击隐藏或恢复「{cost_label}」曲线")
         self.cost_legend_btn.clicked.connect(self._on_legend_toggled)
         legend_row.addWidget(self.cost_legend_btn)
 
@@ -461,8 +498,8 @@ class HoldingCostDualAxisChart(QWidget):
 
     def _sync_legend_styles(self):
         for btn, label, color in (
-            (self.qty_legend_btn, "持仓股数", BLUE),
-            (self.cost_legend_btn, "持仓成本价", ORANGE),
+            (self.qty_legend_btn, self._qty_label, BLUE),
+            (self.cost_legend_btn, self._cost_label, ORANGE),
         ):
             active = btn.isChecked()
             btn.setText(f"●  {label}" if active else f"○  {label}（已隐藏）")

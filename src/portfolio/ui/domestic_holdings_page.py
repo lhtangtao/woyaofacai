@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from portfolio.domestic.holdings_history import daily_values
 from portfolio.domestic.holdings_query import holdings
 from portfolio.ui.open_holdings_dashboard import HoldingsKpiCard, OpenMvTrendChart
+from portfolio.ui.holding_cost_chart import HoldingCostDualAxisChart
 from portfolio.ui.holdings_page import ModernMetricCard
 from portfolio.ui.theme import numeric_font
 from portfolio.ui.domestic_holdings_dashboard import (
@@ -576,21 +577,29 @@ class DomesticHoldingsPage(QWidget):
         holdings_tab = QWidget()
         holdings_layout = QVBoxLayout(holdings_tab)
         holdings_layout.setContentsMargins(0, 8, 0, 0)
-        holdings_layout.setSpacing(8)
+        holdings_layout.setSpacing(6)
         self.detail_tabs.addTab(holdings_tab, "持仓分析")
-        box, body = card("份额 / 市值变化")
-        range_row = QHBoxLayout()
+        th_lbl = QLabel("持仓与市值轨迹")
+        th_lbl.setStyleSheet("color: #0F172A; font-size: 13px; font-weight: 700;")
+        holdings_layout.addWidget(th_lbl)
         self.trend_range = combo([("近6个月", 6), ("近1年", 12), ("全部", 0), ("自定义", -1)])
-        self.trend_range.setCurrentIndex(1)
+        self.trend_range.setCurrentIndex(2)
         self.trend_start, self.trend_end = (QLineEdit(placeholderText=label) for label in ("起月 YYYY-MM", "止月 YYYY-MM"))
         for widget in (self.trend_range, self.trend_start, self.trend_end):
-            range_row.addWidget(widget)
+            widget.hide()
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(self.render_trend)
-        body.addLayout(range_row)
-        self.trend_body = QVBoxLayout()
-        body.addLayout(self.trend_body)
-        holdings_layout.addWidget(box, 1)
+        self.holdings_canvas = HoldingCostDualAxisChart(
+            holdings_tab,
+            qty_label="持仓份额",
+            qty_unit="份",
+            cost_label="持仓市值",
+            cost_axis_label="市值 (CNY)",
+            cost_prefix="¥",
+            cost_suffix="",
+        )
+        self.holdings_canvas.setMinimumHeight(260)
+        holdings_layout.addWidget(self.holdings_canvas, 1)
         pnl_tab = QWidget()
         pnl_layout = QVBoxLayout(pnl_tab)
         pnl_layout.setContentsMargins(0, 8, 0, 0)
@@ -1041,50 +1050,14 @@ class DomesticHoldingsPage(QWidget):
         layout.addWidget(view)
 
     def render_trend(self, *_):
-        clear(self.trend_body)
         period = self.trend_range.currentData()
-        for field in (self.trend_start, self.trend_end):
-            field.setVisible(period == -1)
         rows = self.detail.get("history", [])
         if period == -1:
             start, end = self.trend_start.text(), self.trend_end.text()
             rows = [r for r in rows if (not start or r["month"] >= start) and (not end or r["month"] <= end)]
         elif period:
             rows = rows[-period:]
-        chart = QChart()
-        axis = QCategoryAxis()
-        axis.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
-        axis.setStartValue(-1)
-        for i, row in enumerate(rows):
-            if i % max(1, len(rows) // 6) == 0 or i == len(rows) - 1:
-                axis.append(row["month"], i)
-        axis.setRange(-.2, max(1, len(rows) - 1) + .2)
-        chart.addAxis(axis, Qt.AlignmentFlag.AlignBottom)
-        for key, label, side in (("holding_shares", "份额", Qt.AlignmentFlag.AlignLeft),
-                                 ("market_value", "市值（CNY）", Qt.AlignmentFlag.AlignRight)):
-            values = [float(r[key]) for r in rows if r[key] is not None]
-            if not values:
-                continue
-            y_axis = QValueAxis()
-            y_axis.setTitleText(label)
-            y_axis.setRange(min(0, min(values)), max(1, max(values)))
-            chart.addAxis(y_axis, side)
-            line = None
-            for i, row in enumerate(rows):
-                if row[key] is None:
-                    line = None
-                    continue
-                if line is None:
-                    line = QLineSeries(name=label)
-                    line.setPointsVisible(True)
-                    chart.addSeries(line)
-                    line.attachAxis(axis)
-                    line.attachAxis(y_axis)
-                line.append(i, float(row[key]))
-        chart.legend().hide()
-        if chart.series():
-            self.add_chart(self.trend_body, chart)
-            if not any(r["market_value"] is not None for r in rows):
-                self.trend_body.addWidget(QLabel("缺少历史净值，市值曲线暂无数据。"))
-        else:
-            self.trend_body.addWidget(QLabel("当前范围没有可用的历史持仓快照。"))
+        dates = [str(r["month"]) for r in rows]
+        quantities = [float(r["holding_shares"]) if r.get("holding_shares") is not None else None for r in rows]
+        costs = [float(r["market_value"]) if r.get("market_value") is not None else None for r in rows]
+        self.holdings_canvas.set_data({"dates": dates, "quantities": quantities, "costs": costs})
