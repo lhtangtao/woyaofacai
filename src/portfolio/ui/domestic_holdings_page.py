@@ -26,10 +26,11 @@ POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="�
                  shares="持有份额", nav="最新净值", nav_date="净值日期", market_value="持仓市值（CNY）",
                  pnl="累计盈亏", rate="收益率", weight="持仓占比", status="状态", arrow="详情")
 OPEN_POSITIONS = dict(
-    fund_name="基金名称", platform="交易平台", fund_type="基金类型", shares="持有份额",
-    average="持仓均价", nav="最新单位净值\n（净值日期）", market_value="持仓市值（CNY）",
-    cost="持仓成本（CNY）", floating="持有收益（CNY）", floating_rate="收益率",
-    weight="持仓占比", arrow="详情",
+    platform="券商渠道", fund_name="名称", fund_type="类型", shares="持仓数量",
+    average="持仓均价", nav="当前价格\n（净值日期）", recovery_pct="离回本需涨",
+    market_value="持仓市值", cost="持仓成本", floating="浮动盈亏",
+    floating_rate="收益率", weight="持仓占比", buy_count="买入次数",
+    sell_count="卖出次数", arrow="详情",
 )
 CLOSED_POSITIONS = dict(fund_name="基金名称", platform="交易平台", fund_type="基金类型",
                         buy_amount="累计买入（CNY）", sell_amount="确认赎回（CNY）",
@@ -39,13 +40,13 @@ CLOSED_POSITIONS = dict(fund_name="基金名称", platform="交易平台", fund_
                         last_confirmed_close_date="清仓日期", arrow="详情")
 METRICS = (
     ("market", "持仓总市值（CNY）", money), ("cost", "持仓总成本（CNY）", money),
-    ("floating", "持有收益（CNY）", money), ("rate", "持仓收益率", percent),
+    ("floating", "浮动盈亏（CNY）", money), ("rate", "持仓收益率", percent),
     ("count", "持有基金数量", lambda count: f"{count} 只"), ("top", "前五大基金集中度", percent),
 )
 TRADES = dict(confirmation_date="确认日期", platform="交易平台", kind="交易类型", confirmed_shares="确认份额",
               confirmed_amount="确认金额", fee="手续费", confirmed_nav="确认净值", confirmation_status="确认状态",
               parse_error="备注")
-NUMERIC = {"pnl", "rate", "shares", "holding_shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "buy_amount", "sell_amount", "transfer_out_amount", "realized", "realized_rate", "holding_days"}
+NUMERIC = {"pnl", "rate", "shares", "holding_shares", "nav", "market_value", "weight", "confirmed_shares", "confirmed_amount", "fee", "confirmed_nav", "average", "cost", "floating", "floating_rate", "recovery_pct", "buy_count", "sell_count", "buy_amount", "sell_amount", "transfer_out_amount", "realized", "realized_rate", "holding_days"}
 
 
 def amount(value):
@@ -109,11 +110,14 @@ class FundTable(QWidget):
             self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setAlternatingRowColors(True)
         if self.open_positions:
+            col_keys = list(columns)
+            self.name_col = col_keys.index("fund_name") if "fund_name" in col_keys else 0
+            self.platform_col = col_keys.index("platform") if "platform" in col_keys else 1
             self.table.verticalHeader().setDefaultSectionSize(54)
             self.table.horizontalHeader().setMinimumHeight(39)
-            self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-            self.table.setColumnWidth(0, 320)
-            self.table.setItemDelegate(HoldingsDelegate(self.table))
+            self.table.horizontalHeader().setSectionResizeMode(self.name_col, QHeaderView.ResizeMode.Interactive)
+            self.table.setColumnWidth(self.name_col, 280)
+            self.table.setItemDelegate(HoldingsDelegate(self.table, name_col=self.name_col, platform_col=self.platform_col))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
@@ -148,13 +152,13 @@ class FundTable(QWidget):
         self.visible_rows = (known + missing)[self.page * size:(self.page + 1) * size]
         if self.open_positions and self.visible_rows:
             metrics = self.table.fontMetrics()
-            self.table.setColumnWidth(0, max(320, max(metrics.horizontalAdvance(str(row.get("fund_name") or ""))
-                                                       for row in self.visible_rows) + 32))
+            self.table.setColumnWidth(self.name_col, max(280, max(metrics.horizontalAdvance(str(row.get("fund_name") or ""))
+                                                                    for row in self.visible_rows) + 32))
         nav_date = max((row["nav_date"] for row in self.rows if row.get("nav_date")), default=None) if self.open_positions else None
         headers = []
         for key, label in self.columns.items():
             if self.open_positions and key == "nav":
-                label = f"最新单位净值\n（{nav_date or '日期未知'}）"
+                label = f"当前价格\n（{nav_date or '日期未知'}）"
             headers.append(label + (" ↓" if self.descending else " ↑") if key == self.sort else label)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.visible_rows))
@@ -177,6 +181,14 @@ class FundTable(QWidget):
                                 val += f"\n{row.get('nav_date') or '日期未知'}"
                         else:
                             val = "—"
+                    elif key == "recovery_pct":
+                        if val is not None:
+                            rec_val = Decimal(val)
+                            val = "已回本" if rec_val <= 0 else f"+{rec_val:.2f}%"
+                        else:
+                            val = "—"
+                    elif key in ("buy_count", "sell_count"):
+                        val = f"{int(val):,d}" if val is not None else "—"
                     elif key in ("average_sell_price", "last_sell_price"):
                         val = money(val, 4)
                     elif key in ("average", "shares"):
@@ -185,6 +197,8 @@ class FundTable(QWidget):
                 if self.open_positions:
                     if key in ("floating", "floating_rate", "realized", "realized_rate") and row.get(key) is not None and row[key]:
                         item.setForeground(QBrush(QColor(GREEN if row[key] > 0 else RED)))
+                    elif key == "recovery_pct" and row.get(key) is not None:
+                        item.setForeground(QBrush(QColor(GREEN if Decimal(row[key]) <= 0 else RED)))
                     elif key == "arrow":
                         item.setForeground(QBrush(QColor(BLUE)))
                 if key in NUMERIC:
@@ -750,7 +764,9 @@ class DomesticHoldingsPage(QWidget):
             self.metric_captions[key].setText(title)
             self.metric_cards[key].icon_badge.setText(icon)
             value, note = self.metric_labels[key]
-            metric = summary[key]
+            floating_rows = [r for r in prepared if r.get('market_value') is not None and r.get('cost') is not None]
+            metric = (sum((r['market_value'] - r['cost'] for r in floating_rows), Decimal(0))
+                      if floating_rows else None) if key == 'floating' else summary[key]
             value.setText(formatter(metric))
             sign = ("positive" if metric > 0 else "negative") if key in ("floating", "rate") and metric else ""
             self.metric_cards[key].set_value(value.text(), GREEN if sign == "positive" else RED if sign == "negative" else "#0F172A",
@@ -759,7 +775,7 @@ class DomesticHoldingsPage(QWidget):
             value.setProperty("sign", sign)
             value.style().unpolish(value)
             value.style().polish(value)
-            covered = summary["valued"] if key in ("market", "top") else summary["matched"]
+            covered = len(floating_rows) if key == 'floating' else summary["valued"] if key in ("market", "top") else summary["matched"]
             partial = key != "count" and covered < len(rows)
             note.setText(f"部分数据未核算 · {covered}/{len(rows)} 条" if partial else "")
             note.setVisible(partial)

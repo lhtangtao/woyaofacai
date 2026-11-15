@@ -76,8 +76,17 @@ def holding_metrics(rows):
             rate = Decimal(row["rate"]) if total_pnl is not None and row.get("rate") is not None else (
                 pnl / basis * 100 if pnl is not None and basis is not None and basis > 0 else None
             )
+            nav_dec = Decimal(row["nav"]) if row.get("nav") is not None else None
+            average = cost / shares if cost is not None and shares and shares > 0 else None
+            recovery_pct = (
+                Decimal(0)
+                if average is not None and nav_dec is not None and nav_dec > 0 and nav_dec >= average
+                else (average - nav_dec) / nav_dec * 100
+                if average is not None and nav_dec is not None and nav_dec > 0
+                else None
+            )
             prepared.append(dict(row, market_value=value, cost=cost, shares=shares,
-                                 average=cost / shares if cost is not None and shares and shares > 0 else None,
+                                 average=average, recovery_pct=recovery_pct,
                                  floating=pnl, floating_rate=rate, _basis=basis))
         market = total(row["market_value"] for row in prepared)
         matched = [row for row in prepared if row["floating"] is not None]
@@ -367,8 +376,8 @@ class PlatformList(QWidget):
             groups[row["platform"]].append(row)
         self.names = sorted(groups)
         self.table.setColumnCount(5 if closed else 6)
-        self.table.setHorizontalHeaderLabels(["交易平台", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
-                                             ["交易平台", "市值占比", "持仓成本", "持仓市值", "持有收益", "基金数"])
+        self.table.setHorizontalHeaderLabels(["券商渠道", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
+                                             ["券商渠道", "市值占比", "持仓成本", "持仓市值", "持有收益", "基金数"])
         header = self.table.horizontalHeader()
         if closed:
             for col in range(5):
@@ -592,8 +601,14 @@ class ContributionPlot(QWidget):
 
 
 class HoldingsDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None, *, name_col=0, platform_col=1):
+        super().__init__(parent)
+        self.name_col = name_col
+        self.platform_col = platform_col
+
     def paint(self, painter, option, index):
-        if index.column() != 1 and not (index.column() == 0 and "\n" in str(index.data() or "")):
+        col = index.column()
+        if col != self.platform_col and not (col == self.name_col and "\n" in str(index.data() or "")):
             super().paint(painter, option, index)
             return
         styled = QStyleOptionViewItem(option)
@@ -605,7 +620,7 @@ class HoldingsDelegate(QStyledItemDelegate):
         painter.save()
         rect = option.rect.adjusted(8, 2, -8, -2)
         painter.setClipRect(rect)
-        if index.column() == 0:
+        if col == self.name_col:
             name, _, code = text.partition("\n")
             font = painter.font()
             font.setBold(True)

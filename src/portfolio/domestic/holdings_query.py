@@ -12,6 +12,7 @@ from .fund_returns import alipay_realized_events, confirmed_returns, tiantian_re
 from .position_confirmation import read_confirmations
 from .storage import ACCOUNT, CALC_FILE, RAW_FILE, connect
 from .ths_analytics import THS_SOURCE, ths_returns_and_events, ths_trade_events
+from .trades_query import classify_direction
 
 REVIEW = "待核对"
 SOURCE_PRIORITY = {"AKShare/Eastmoney": 0, "AKShare/Eastmoney Hong Kong": 0}
@@ -182,6 +183,28 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 records.setdefault(key, dict(row))
         confirmations = read_confirmations(calc, cutoff)
         summaries = closed_transaction_summaries(raw, calc, records, cutoff) if unified and calc else {}
+        trade_counts = {}
+        count_sql = (
+            """SELECT account_id, fund_code, transaction_type_raw AS kind, confirmation_status, parse_status
+               FROM raw_fund_transactions
+               WHERE COALESCE(confirmation_date, substr(transaction_time, 1, 10)) <= ?"""
+            if unified
+            else f"""SELECT account_id, fund_code, kind, confirmation_status, parse_status
+                     FROM ({source})
+                     WHERE confirmation_date IS NULL OR confirmation_date <= ?"""
+        )
+        for tr in raw.execute(count_sql, (cutoff,)):
+            if tr["parse_status"] != "正常" or str(tr["confirmation_status"] or "") in ("失败", "撤单", "已撤单", "作废"):
+                continue
+            direction = classify_direction(tr["kind"])
+            if direction not in ("买入", "卖出"):
+                continue
+            tkey = (tr["account_id"], tr["fund_code"])
+            counts = trade_counts.setdefault(tkey, [0, 0])
+            if direction == "买入":
+                counts[0] += 1
+            else:
+                counts[1] += 1
         for key, record in records.items():
             if account and key != (account, fund):
                 continue
@@ -419,6 +442,8 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
                 nav_field_status=nav_record.get("field_status"),
                 observed_shares=recent["observed_shares"] if recent and recent["issue"] else None,
                 closed_events=closed_events, holding_days=holding_days,
+                buy_count=trade_counts.get(key, [0, 0])[0],
+                sell_count=trade_counts.get(key, [0, 0])[1],
                 first_confirmed_holding_date=first_confirmed_holding, **summary))
         if "raw_account_historical_pnl_baselines" in tables:
             for item in raw.execute(
