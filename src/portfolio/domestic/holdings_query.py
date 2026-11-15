@@ -139,8 +139,10 @@ def holdings(account="", fund="", *, root=DOMESTIC_ASSETS_DIR, valuation_date=No
         accounts = {r["account_id"]: dict(r) for r in raw.execute("SELECT * FROM raw_asset_accounts")}
         positions = {}
         confirmed = {}
-        latest_import = raw.execute("""SELECT MAX(created_at) FROM raw_import_batches
-            WHERE source_type IN ('opening_asset','transaction')""").fetchone()[0]
+        latest_import = raw.execute("""SELECT MAX(b.created_at) FROM raw_import_batches b
+            WHERE b.source_type='opening_asset' OR EXISTS (
+                SELECT 1 FROM raw_alipay_fund_transactions t WHERE t.import_batch_id=b.id
+            )""").fetchone()[0]
         if calc:
             run = calc.execute("SELECT MAX(completed_at) FROM calc_runs WHERE status='完成'").fetchone()[0]
             if run and (not latest_import or run >= latest_import):
