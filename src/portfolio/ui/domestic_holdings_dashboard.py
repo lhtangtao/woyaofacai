@@ -493,8 +493,8 @@ class Contribution(QWidget):
         self.closed = False
         labels = QHBoxLayout()
         self.loss_label, self.gain_label = QLabel(), QLabel()
-        self.loss_label.setStyleSheet("color:#DC2626; background:#FEF2F2; border-radius:4px; padding:4px;")
-        self.gain_label.setStyleSheet("color:#16A34A; background:#F0FDF4; border-radius:4px; padding:4px;")
+        self.loss_label.setStyleSheet("color:#DC2626; background:#FEF2F2; border:1px solid #FECACA; border-radius:12px; padding:3px 10px; font-size:11px; font-weight:600;")
+        self.gain_label.setStyleSheet("color:#16A34A; background:#ECFDF5; border:1px solid #BBF7D0; border-radius:12px; padding:3px 10px; font-size:11px; font-weight:600;")
         labels.addWidget(self.loss_label); labels.addStretch(); labels.addWidget(self.gain_label)
         self.body.addLayout(labels)
         self.chart = ContributionPlot(selected)
@@ -536,9 +536,12 @@ class Contribution(QWidget):
         key = "realized" if closed else "floating"
         losses = sorted((r for r in rows if r.get(key) is not None and r[key] < 0), key=lambda r: r[key])
         gains = sorted((r for r in rows if r.get(key) is not None and r[key] > 0), key=lambda r: r[key], reverse=True)
-        label = "可核对合计" if closed else "全部"
-        self.loss_label.setText(f"亏损贡献（Top {n}） · {label} {money(total(r[key] for r in losses))} CNY")
-        self.gain_label.setText(f"盈利贡献（Top {n}） · {label} {money(total(r[key] for r in gains))} CNY")
+        label = "可核对合计" if closed else "当前筛选全部"
+        loss_sum = total(r[key] for r in losses)
+        gain_sum = total(r[key] for r in gains)
+        gain_prefix = "+" if gain_sum is not None and gain_sum > 0 else ""
+        self.loss_label.setText(f"亏损贡献 (Top {n}) | {label}亏损合计 {money(loss_sum)} CNY")
+        self.gain_label.setText(f"盈利贡献 (Top {n}) | {label}盈利合计 {gain_prefix}{money(gain_sum)} CNY")
         self.chart.set_data(losses[:n], gains[:n], key)
 
 
@@ -564,31 +567,40 @@ class ContributionPlot(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无已核算的盈亏数据")
             return
         width = float(self.width())
-        side = max(160.0, min(330.0, width * .30))
+        side = max(180.0, min(250.0, width * 0.24))
         center = width / 2
-        half = max(10.0, center - side - 12)
+        half = max(12.0, center - side - 14)
         maximum = max(abs(r[self.key]) for r in self.losses + self.gains)
-        painter.setPen(QPen(QColor("#CBD5E1"), 1, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(QColor("#CBD5E1"), 1, Qt.PenStyle.SolidLine))
         painter.drawLine(int(center), 5, int(center), self.height() - 5)
         for sign, rows in ((-1, self.losses), (1, self.gains)):
             for index, row in enumerate(rows):
                 y = 8 + index * 26
                 length = float(abs(row[self.key]) / maximum) * half
                 bar = QRectF(center - length if sign < 0 else center, y + 5, max(2, length), 15)
-                label = QRectF(4 if sign < 0 else width - side, y, side - 4, 25)
+                label = QRectF(6 if sign < 0 else width - side, y, side - 6, 25)
                 self.hits.extend(((bar, row), (label, row)))
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor("#EF4444" if sign < 0 else "#22C55E"))
+                painter.setBrush(QColor("#EF4444" if sign < 0 else "#10B981"))
                 painter.drawRoundedRect(bar, 3, 3)
-                painter.setPen(QColor(RED if sign < 0 else GREEN))
-                value = money(row[self.key])
+
+                raw_val = row[self.key]
+                value = f"+{money(raw_val)}" if raw_val > 0 else money(raw_val)
                 value_width = painter.fontMetrics().horizontalAdvance(value) + 8
-                name_width = max(0, int(label.width() - value_width))
-                name = f"{index + 1}  {row.get('fund_name') or row['fund_code']}"
+                rank_str = f"{index + 1}"
+                rank_width = 18.0
+                name_width = max(0, int(label.width() - value_width - rank_width))
+                name = str(row.get('fund_name') or row['fund_code'])
                 name = painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, name_width)
-                painter.drawText(QRectF(label.x(), label.y(), name_width, label.height()),
+
+                painter.setPen(QColor("#94A3B8"))
+                painter.drawText(QRectF(label.x(), label.y(), rank_width, label.height()),
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, rank_str)
+                painter.setPen(QColor("#1E293B"))
+                painter.drawText(QRectF(label.x() + rank_width, label.y(), name_width, label.height()),
                                  Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
-                painter.drawText(QRectF(label.x() + name_width, label.y(), value_width, label.height()),
+                painter.setPen(QColor(RED if sign < 0 else GREEN))
+                painter.drawText(QRectF(label.x() + rank_width + name_width, label.y(), value_width, label.height()),
                                  Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, value)
 
     def mousePressEvent(self, event):
@@ -601,26 +613,28 @@ class ContributionPlot(QWidget):
 
 
 class HoldingsDelegate(QStyledItemDelegate):
-    def __init__(self, parent=None, *, name_col=0, platform_col=1):
+    def __init__(self, parent=None, *, name_col=0, platform_col=1, recovery_col=-1):
         super().__init__(parent)
         self.name_col = name_col
         self.platform_col = platform_col
+        self.recovery_col = recovery_col
 
     def paint(self, painter, option, index):
         col = index.column()
-        if col != self.platform_col and not (col == self.name_col and "\n" in str(index.data() or "")):
+        text = str(index.data() or "")
+        is_recovery_badge = (col == self.recovery_col and text == "已回本")
+        is_multiline_name = (col == self.name_col and "\n" in text)
+        if not is_recovery_badge and not is_multiline_name:
             super().paint(painter, option, index)
             return
         styled = QStyleOptionViewItem(option)
         self.initStyleOption(styled, index)
-        # Qt converts newlines to U+2028 in style options; use the model's
-        # original value so the name and code remain two separate lines.
-        text, styled.text = str(index.data() or ""), ""
+        styled.text = ""
         styled.widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, styled, painter, styled.widget)
         painter.save()
         rect = option.rect.adjusted(8, 2, -8, -2)
         painter.setClipRect(rect)
-        if col == self.name_col:
+        if is_multiline_name:
             name, _, code = text.partition("\n")
             font = painter.font()
             font.setBold(True)
@@ -641,14 +655,14 @@ class HoldingsDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(QColor("#64748B"))
             painter.drawText(rect.x(), top + bold_metrics.height() + normal_metrics.ascent(), code)
-        else:
-            width = min(rect.width(), painter.fontMetrics().horizontalAdvance(text) + 14)
-            badge = QRect(rect.center().x() - width // 2, rect.center().y() - 10, width, 20)
+        elif is_recovery_badge:
+            badge_w = min(rect.width(), painter.fontMetrics().horizontalAdvance(text) + 18)
+            badge = QRect(rect.center().x() - badge_w // 2, rect.center().y() - 11, badge_w, 22)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(Qt.PenStyle.NoPen)
-            bg = "#FFF2DE" if text == "天天基金" else "#FFE4E6" if text == "同花顺" else "#EAF2FF"
-            painter.setBrush(QColor(bg))
-            painter.drawRoundedRect(badge, 5, 5)
-            painter.setPen(QColor(PLATFORM_COLORS.get(text, BLUE)))
+            painter.setBrush(QColor("#ECFDF5"))
+            painter.drawRoundedRect(badge, 6, 6)
+            painter.setPen(QColor("#10B981"))
             painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
 

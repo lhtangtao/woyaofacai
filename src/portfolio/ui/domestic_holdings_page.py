@@ -30,7 +30,7 @@ OPEN_POSITIONS = dict(
     average="持仓均价", nav="当前价格\n（净值日期）", recovery_pct="离回本需涨",
     market_value="持仓市值", cost="持仓成本", floating="浮动盈亏",
     floating_rate="收益率", weight="持仓占比", buy_count="买入次数",
-    sell_count="卖出次数", arrow="详情",
+    sell_count="卖出次数",
 )
 CLOSED_POSITIONS = dict(fund_name="基金名称", platform="交易平台", fund_type="基金类型",
                         buy_amount="累计买入（CNY）", sell_amount="确认赎回（CNY）",
@@ -90,37 +90,79 @@ def card(title, value=None):
 
 
 class FundTable(QWidget):
-    def __init__(self, columns, default_sort, *, expand_rows=False):
+    def __init__(self, columns, default_sort, *, expand_rows=False, paginated=True):
         super().__init__()
         self.columns, self.sort = columns, default_sort
         self.open_positions = columns in (OPEN_POSITIONS, CLOSED_POSITIONS)
+        self.is_trades = columns == TRADES
         self.expand_rows = expand_rows
+        self.paginated = paginated
         self.descending = True
         self.rows = []
         self.visible_rows = []
         self.page = 0
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
         self.table = QTableWidget(0, len(columns))
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().sectionClicked.connect(self.change_sort)
-        self.table.horizontalHeader().setMinimumSectionSize(72)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch if (self.open_positions or self.is_trades) else QHeaderView.ResizeMode.ResizeToContents)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        header.sectionClicked.connect(self.change_sort)
+        header.setMinimumSectionSize(56)
         self.table.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(False)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                gridline-color: transparent;
+            }
+            QTableWidget::item {
+                border-bottom: 1px solid #F1F5F9;
+                padding: 4px 6px;
+            }
+            QTableWidget::item:selected {
+                background: #EFF6FF;
+                color: #0F172A;
+            }
+            QHeaderView::section {
+                background: #F8FAFC;
+                color: #475569;
+                font-weight: 600;
+                font-size: 12px;
+                border: none;
+                border-bottom: 1px solid #E2E8F0;
+                padding: 8px 6px;
+            }
+        """)
         if expand_rows:
             self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.setAlternatingRowColors(True)
         if self.open_positions:
             col_keys = list(columns)
             self.name_col = col_keys.index("fund_name") if "fund_name" in col_keys else 0
             self.platform_col = col_keys.index("platform") if "platform" in col_keys else 1
-            self.table.verticalHeader().setDefaultSectionSize(54)
-            self.table.horizontalHeader().setMinimumHeight(39)
-            self.table.horizontalHeader().setSectionResizeMode(self.name_col, QHeaderView.ResizeMode.Interactive)
-            self.table.setColumnWidth(self.name_col, 280)
-            self.table.setItemDelegate(HoldingsDelegate(self.table, name_col=self.name_col, platform_col=self.platform_col))
+            self.recovery_col = col_keys.index("recovery_pct") if "recovery_pct" in col_keys else -1
+            self.table.verticalHeader().setDefaultSectionSize(42)
+            header.setMinimumHeight(40)
+            self.table.setItemDelegate(
+                HoldingsDelegate(
+                    self.table,
+                    name_col=self.name_col,
+                    platform_col=self.platform_col,
+                    recovery_col=self.recovery_col,
+                )
+            )
+        elif self.is_trades:
+            self.table.verticalHeader().setDefaultSectionSize(34)
+            header.setMinimumHeight(34)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        layout.addWidget(self.table)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        layout.addWidget(self.table, 1)
         footer = QHBoxLayout()
         self.note = QLabel()
         self.size = combo([(f"{n} 条/页", n) for n in (10, 20, 50, 100)])
@@ -132,7 +174,11 @@ class FundTable(QWidget):
         footer.addWidget(self.note, 1)
         for w in (self.size, self.prev, self.next):
             footer.addWidget(w)
-        layout.addLayout(footer)
+        if not self.paginated:
+            for w in (self.note, self.size, self.prev, self.next):
+                w.hide()
+        else:
+            layout.addLayout(footer)
 
     def change_sort(self, section):
         key = list(self.columns)[section]
@@ -142,7 +188,7 @@ class FundTable(QWidget):
             self.set_page(0)
 
     def set_page(self, page):
-        size = self.size.currentData()
+        size = max(1, len(self.rows)) if not self.paginated else self.size.currentData()
         pages = max(1, (len(self.rows) + size - 1) // size)
         self.page = min(max(0, page), pages - 1)
         known = [row for row in self.rows if row.get(self.sort) is not None]
@@ -150,10 +196,6 @@ class FundTable(QWidget):
         known.sort(key=lambda row: Decimal(row[self.sort]) if self.sort in NUMERIC else row[self.sort],
                    reverse=self.descending)
         self.visible_rows = (known + missing)[self.page * size:(self.page + 1) * size]
-        if self.open_positions and self.visible_rows:
-            metrics = self.table.fontMetrics()
-            self.table.setColumnWidth(self.name_col, max(280, max(metrics.horizontalAdvance(str(row.get("fund_name") or ""))
-                                                                    for row in self.visible_rows) + 32))
         nav_date = max((row["nav_date"] for row in self.rows if row.get("nav_date")), default=None) if self.open_positions else None
         headers = []
         for key, label in self.columns.items():
@@ -163,24 +205,24 @@ class FundTable(QWidget):
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.visible_rows))
         if self.expand_rows:
-            header_height = max(39, self.table.horizontalHeader().sizeHint().height())
+            header_height = max(40, self.table.horizontalHeader().sizeHint().height())
             rows_height = len(self.visible_rows) * self.table.verticalHeader().defaultSectionSize()
-            self.table.setFixedHeight(max(100, header_height + rows_height + 18))
+            self.table.setFixedHeight(max(100, header_height + rows_height + 12))
         for i, row in enumerate(self.visible_rows):
             for j, key in enumerate(self.columns):
                 val = row.get(key)
                 if key in ("market_value", "confirmed_amount", "fee", "pnl", "cost", "floating", "buy_amount", "sell_amount", "transfer_out_amount", "realized"):
-                    val = amount(val)
+                    if key in ("floating", "realized", "pnl") and val is not None and Decimal(val) > 0:
+                        val = f"+{amount(val)}"
+                    else:
+                        val = amount(val)
                 elif key in ("weight", "rate", "floating_rate", "realized_rate") and val is not None:
-                    val = f"{Decimal(val):.2f}%"
+                    d_val = Decimal(val)
+                    sign = "+" if key in ("rate", "floating_rate", "realized_rate") and d_val > 0 else ""
+                    val = f"{sign}{d_val:.2f}%"
                 if self.open_positions:
                     if key == "nav":
-                        if val is not None:
-                            val = money(Decimal(val), 4)
-                            if row.get("nav_date") != nav_date:
-                                val += f"\n{row.get('nav_date') or '日期未知'}"
-                        else:
-                            val = "—"
+                        val = money(Decimal(val), 4) if val is not None else "—"
                     elif key == "recovery_pct":
                         if val is not None:
                             rec_val = Decimal(val)
@@ -195,15 +237,28 @@ class FundTable(QWidget):
                         val = money(val, 4 if key == "average" else 2)
                 item = QTableWidgetItem(("查看 ›" if self.open_positions else "›") if key == "arrow" else str(val) if val is not None else "—")
                 if self.open_positions:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
                     if key in ("floating", "floating_rate", "realized", "realized_rate") and row.get(key) is not None and row[key]:
                         item.setForeground(QBrush(QColor(GREEN if row[key] > 0 else RED)))
                     elif key == "recovery_pct" and row.get(key) is not None:
                         item.setForeground(QBrush(QColor(GREEN if Decimal(row[key]) <= 0 else RED)))
                     elif key == "arrow":
                         item.setForeground(QBrush(QColor(BLUE)))
-                if key in NUMERIC:
+                elif self.is_trades:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                    if key == "kind" and val is not None:
+                        t_str = str(val)
+                        if any(k in t_str for k in ("买", "定投", "申购", "转入")):
+                            item.setForeground(QBrush(QColor(GREEN)))
+                        elif any(k in t_str for k in ("卖", "赎回", "转出")):
+                            item.setForeground(QBrush(QColor(RED)))
+                elif key in NUMERIC:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 tooltip = row.get("cash_summary_scope") if key in ("buy_amount", "sell_amount", "transfer_out_amount") else row.get("return_issue") if key in ("pnl", "rate", "average", "cost", "floating", "floating_rate", "realized", "realized_rate") else row.get("issue")
+                if self.open_positions and key == "fund_name":
+                    tooltip = f"{row.get('fund_name') or ''} ({row.get('fund_code') or ''})"
+                elif self.open_positions and key == "nav" and row.get("nav_date") and row.get("nav_date") != nav_date:
+                    tooltip = f"净值日期：{row.get('nav_date')}"
                 if key == "sell_amount" and row.get("sell_amount") is None and row.get("transfer_out_amount") is not None:
                     tooltip = "未发现普通赎回；该基金通过转换转出，金额单独列示。"
                 if key in ("realized", "realized_rate") and row.get("historical_returns_as_of"):
@@ -473,44 +528,55 @@ class DomesticHoldingsPage(QWidget):
         self.detail_metric_grid = ResponsiveGrid(detail_metrics, 100, 6)
         detail.addLayout(self.detail_metric_grid)
         self.detail_tabs = QTabWidget()
-        detail.addWidget(self.detail_tabs)
+        self.detail_tabs.setStyleSheet("""
+            QTabWidget::pane { border: none; border-top: 1px solid #E2E8F0; background: transparent; }
+            QTabBar::tab {
+                padding: 8px 14px;
+                font-size: 12.5px;
+                font-weight: 600;
+                color: #64748B;
+                border: none;
+                border-bottom: 2px solid transparent;
+                margin-right: 12px;
+            }
+            QTabBar::tab:selected { color: #2563EB; border-bottom: 2px solid #2563EB; }
+            QTabBar::tab:hover:!selected { color: #1E293B; }
+        """)
+        detail.addWidget(self.detail_tabs, 1)
         trade_tab = QWidget()
         trade_layout = QVBoxLayout(trade_tab)
         trade_layout.setContentsMargins(0, 8, 0, 0)
+        trade_layout.setSpacing(6)
         self.detail_tabs.addTab(trade_tab, "交易记录")
-        middle = QVBoxLayout()
-        box, body = card("交易明细")
-        filter_row = QHBoxLayout()
+
+        # 隐藏的筛选控件保留属性兼容，界面与美股抽屉保持简洁一致
         self.tx_kind = combo([("全部交易类型", "")])
         self.start, self.end = (QLineEdit(placeholderText=label) for label in ("确认起日 YYYY-MM-DD", "确认止日 YYYY-MM-DD"))
         for widget in (self.start, self.end, self.tx_kind):
-            filter_row.addWidget(widget)
+            widget.hide()
             signal = widget.textChanged if isinstance(widget, QLineEdit) else widget.currentIndexChanged
             signal.connect(self.render_trades)
-        body.addLayout(filter_row)
-        trade_actions = QHBoxLayout()
-        trade_actions.addStretch()
+
+        trade_bar = QHBoxLayout()
+        self.trade_count_lbl = QLabel("共 0 笔交易明细 (降序)")
+        self.trade_count_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
+        trade_bar.addWidget(self.trade_count_lbl)
+        trade_bar.addStretch()
         export_trades = QPushButton("导出 CSV")
         export_trades.clicked.connect(self.export_trades)
-        trade_actions.addWidget(export_trades)
-        body.addLayout(trade_actions)
+        trade_bar.addWidget(export_trades)
+        trade_layout.addLayout(trade_bar)
+
         self.trade_source_note = QLabel("原始交易记录未提供确认净值。")
         self.trade_source_note.setWordWrap(True)
         self.trade_source_note.hide()
-        body.addWidget(self.trade_source_note)
-        self.trades = FundTable(TRADES, "confirmation_date")
-        body.addWidget(self.trades)
-        middle.addWidget(box, 1)
-        box, body = card("持仓概览")
-        self.fund_overview = QLabel()
-        self.fund_overview.setWordWrap(True)
-        body.addWidget(self.fund_overview)
-        body.addStretch()
-        middle.addWidget(box)
-        trade_layout.addLayout(middle)
+        self.trades = FundTable(TRADES, "confirmation_date", paginated=False)
+        trade_layout.addWidget(self.trades, 1)
+
         holdings_tab = QWidget()
         holdings_layout = QVBoxLayout(holdings_tab)
         holdings_layout.setContentsMargins(0, 8, 0, 0)
+        holdings_layout.setSpacing(8)
         self.detail_tabs.addTab(holdings_tab, "持仓分析")
         box, body = card("份额 / 市值变化")
         range_row = QHBoxLayout()
@@ -525,6 +591,11 @@ class DomesticHoldingsPage(QWidget):
         self.trend_body = QVBoxLayout()
         body.addLayout(self.trend_body)
         holdings_layout.addWidget(box)
+        overview_box, overview_body = card("持仓概览")
+        self.fund_overview = QLabel()
+        self.fund_overview.setWordWrap(True)
+        overview_body.addWidget(self.fund_overview)
+        holdings_layout.addWidget(overview_box)
         pnl_tab = QWidget()
         pnl_layout = QVBoxLayout(pnl_tab)
         pnl_layout.setContentsMargins(0, 8, 0, 0)
@@ -973,6 +1044,8 @@ class DomesticHoldingsPage(QWidget):
                                 r["confirmation_date"] and (not start or r["confirmation_date"] >= start)
                                 and (not end or r["confirmation_date"] <= end))]
         self.trades.set_page(0)
+        order_lbl = "降序" if self.trades.descending else "升序"
+        self.trade_count_lbl.setText(f"共 {len(self.trades.rows)} 笔交易明细 ({order_lbl})")
 
     def export_trades(self):
         if not self.trades.rows:
