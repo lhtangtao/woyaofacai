@@ -57,12 +57,17 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     qtbot.addWidget(daily_page)
     daily_page._on_loaded(sample, "")
     assert len(daily_page._period_series) == 2
-    assert daily_page._models[0].rowCount() == 1
+    assert daily_page._models[0].rowCount() == 2  # 默认首屏展示按日期汇总
+    assert [c[1] for c in daily_page._models[0].columns] == [
+        "日期", "期初市值", "期末市值", "当日买入", "当日卖出",
+        "当日净投入", "当日收益", "当日收益率", "累计收益率", "累计收益",
+        "上涨基金数", "下跌基金数",
+    ]
     assert daily_page._models[2].rowCount() == 0  # 未切到 Tab 2 时不填充
 
-    # 切换到 按日总览 Tab
+    # 切换到 单日基金明细 Tab
     daily_page.table_tab_group.button(2).click()
-    assert daily_page._models[2].rowCount() == 2
+    assert daily_page._models[2].rowCount() == 1
 
     # 点击渠道筛选
     daily_page._toggle_platform("支付宝")
@@ -74,7 +79,7 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     qtbot.addWidget(monthly_page)
     monthly_page._on_loaded(sample, "")
     assert len(monthly_page._period_series) == 1
-    assert monthly_page._models[0].rowCount() == 2
+    assert monthly_page._models[0].rowCount() == 1
     assert "2026-01" in monthly_page.attr_title_lbl.text()
 
     # 切换图表模式并重绘
@@ -104,12 +109,14 @@ def test_domestic_daily_and_monthly_pages_render_and_filter(qtbot):
     # 盈亏结构按钮点击过滤与取消、当日/累计渠道切换、Top 5 行点击联动
     daily_page.struct_loss_lbl.click()
     assert daily_page._fund_pnl_filter == "loss"
-    assert daily_page._models[0].rowCount() == 1
+    assert daily_page.table_tab_group.checkedId() == 2
+    assert daily_page._models[2].rowCount() == 1
     daily_page.struct_loss_lbl.click()
     assert daily_page._fund_pnl_filter == ""
 
     daily_page._on_top_fund_clicked("000001")
     assert daily_page._selected_fund_code == "000001"
+    assert daily_page.table_tab_group.checkedId() == 2
     daily_page._on_top_fund_clicked("000001")
     assert daily_page._selected_fund_code == ""
 

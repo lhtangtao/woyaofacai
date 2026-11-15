@@ -358,9 +358,11 @@ class DomesticPerfTableModel(QAbstractTableModel):
         self._sort_col: int = -1
         self._sort_order: Qt.SortOrder = Qt.SortOrder.DescendingOrder
 
-    def set_rows(self, rows: list[dict[str, Any]]):
+    def set_rows(self, rows: list[dict[str, Any]], *, highlight_key: str = "", highlight_field: str = ""):
         self.beginResetModel()
         self._rows = list(rows)
+        self._highlight_key = highlight_key
+        self._highlight_field = highlight_field
         self.endResetModel()
         if 0 <= self._sort_col < len(self.columns):
             self.sort(self._sort_col, self._sort_order)
@@ -387,7 +389,7 @@ class DomesticPerfTableModel(QAbstractTableModel):
         key, _, fmt = self.columns[column]
         self.layoutAboutToBeChanged.emit()
         self._rows.sort(
-            key=lambda r: (float(r.get(key) or 0.0) if fmt in ("money", "signed", "int") else str(r.get(key) or "")),
+            key=lambda r: (float(r.get(key) or 0.0) if fmt in ("money", "signed", "int", "percent", "count") else str(r.get(key) or "")),
             reverse=(order == Qt.SortOrder.DescendingOrder),
         )
         self.layoutChanged.emit()
@@ -403,21 +405,28 @@ class DomesticPerfTableModel(QAbstractTableModel):
                 return _fmt_signed_money(float(val) if val is not None else None)
             if fmt == "money":
                 return _fmt_money(float(val) if val is not None else None)
+            if fmt == "percent":
+                return "—" if val is None else f"{float(val):+.2f}%"
+            if fmt == "count":
+                return f"{int(val or 0)} 只"
             if fmt == "int":
                 return str(int(val or 0))
             return str(val or "—")
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            if fmt in ("money", "signed", "int"):
+            if fmt in ("money", "signed", "int", "percent", "count"):
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        if role == Qt.ItemDataRole.ForegroundRole and fmt == "signed" and val is not None:
+        if role == Qt.ItemDataRole.ForegroundRole and fmt in ("signed", "percent") and val is not None:
             v = float(val)
             if v > 0:
                 return QColor("#16A34A")
             if v < 0:
                 return QColor("#DC2626")
-        if role == Qt.ItemDataRole.FontRole and fmt in ("money", "signed", "int"):
-            return _cny_font(12, bold=(fmt == "signed"))
+        if role == Qt.ItemDataRole.BackgroundRole and getattr(self, "_highlight_key", "") and getattr(self, "_highlight_field", ""):
+            if row.get(self._highlight_field) == self._highlight_key:
+                return QColor("#EFF6FF")
+        if role == Qt.ItemDataRole.FontRole and fmt in ("money", "signed", "int", "percent", "count"):
+            return _cny_font(12, bold=(fmt in ("signed", "percent")))
         return None
 
 
@@ -750,77 +759,108 @@ class DomesticPerformanceBasePage(QWidget):
         al.addWidget(hint_bar)
         root.addWidget(attr_card)
 
-        # 6. 底部明细表（3 个 Tab）
+        # 6. 底部明细表（3 个 Tab，与美股顺序及交互一致）
         table_card = QFrame(objectName="perfCard")
         tbl_l = QVBoxLayout(table_card)
-        tbl_l.setContentsMargins(14, 12, 14, 12)
-        tbl_l.setSpacing(8)
+        tbl_l.setContentsMargins(12, 8, 12, 8)
+        tbl_l.setSpacing(6)
 
         tab_bar = QHBoxLayout()
+        tab_bar.setSpacing(12)
         self.table_tab_group = QButtonGroup(self)
         t_names = (
-            "单日基金明细" if self.is_day else "单月基金明细",
-            "按平台汇总",
-            "按日总览" if self.is_day else "按月总览",
+            "📅 按日期汇总" if self.is_day else "📅 按月份汇总",
+            "🏛️ 按平台汇总",
+            "📈 单日基金明细" if self.is_day else "📈 单月基金明细",
         )
         for idx, tname in enumerate(t_names):
-            btn = QPushButton(tname, objectName="tabBtn", checkable=True)
+            btn = QPushButton(tname, checkable=True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    border-bottom: 2.5px solid transparent;
+                    border-radius: 0px;
+                    background: transparent;
+                    padding: 6px 12px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: #64748B;
+                }
+                QPushButton:hover { color: #1E293B; }
+                QPushButton:checked {
+                    color: #2563EB;
+                    border-bottom: 2.5px solid #2563EB;
+                }
+            """)
             self.table_tab_group.addButton(btn, idx)
             tab_bar.addWidget(btn)
             if idx == 0:
                 btn.setChecked(True)
         tab_bar.addStretch(1)
-        self.table_count_lbl = QLabel("0 条")
-        self.table_count_lbl.setStyleSheet("color: #64748B; font-size: 12px;")
+        self.table_count_lbl = QLabel("共 0 条记录")
+        self.table_count_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
         tab_bar.addWidget(self.table_count_lbl)
         self.table_tab_group.idClicked.connect(self._on_table_tab_changed)
         tbl_l.addLayout(tab_bar)
 
         self.table_view = QTableView()
         self.table_view.setAlternatingRowColors(True)
+        self.table_view.setShowGrid(False)
+        self.table_view.setWordWrap(False)
         self.table_view.setSortingEnabled(True)
         self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_view.verticalHeader().hide()
+        self.table_view.verticalHeader().setDefaultSectionSize(34)
         self.table_view.setMinimumHeight(320)
+        self.table_view.clicked.connect(self._on_table_row_clicked)
         self.table_view.doubleClicked.connect(self._on_table_double_clicked)
         tbl_l.addWidget(self.table_view)
         root.addWidget(table_card)
 
+        period_word = "当日" if self.is_day else "当月"
         self._models = {
             0: DomesticPerfTableModel([
-                ("fund_name", "基金名称", "text"),
-                ("fund_code", "代码", "text"),
-                ("platform", "平台", "text"),
-                ("fund_type", "基金类型", "text"),
-                (self.mv_key, "期末市值(CNY)", "money"),
-                (self.pnl_key, "当日收益(CNY)" if self.is_day else "当月收益(CNY)", "signed"),
-                ("cum_pnl", "累计收益(CNY)", "signed"),
-                ("buy_amount", "买入(CNY)", "money"),
-                ("sell_amount", "卖出(CNY)", "money"),
-                ("net_cash_in", "净投入(CNY)", "signed"),
-                ("trade_count", "笔数", "int"),
+                ("key", "日期" if self.is_day else "月份", "text"),
+                ("init_mv", "期初市值", "money"),
+                ("market_value", "期末市值", "money"),
+                ("buy_amount", f"{period_word}买入", "money"),
+                ("sell_amount", f"{period_word}卖出", "money"),
+                ("net_cash_in", f"{period_word}净投入", "signed"),
+                ("pnl", f"{period_word}收益", "signed"),
+                ("period_rate", f"{period_word}收益率", "percent"),
+                ("cum_rate", "累计收益率", "percent"),
+                ("cum_pnl", "累计收益", "signed"),
+                ("up_count", "上涨基金数", "count"),
+                ("down_count", "下跌基金数", "count"),
             ]),
             1: DomesticPerfTableModel([
                 (self.period_key, "日期" if self.is_day else "月份", "text"),
-                ("platform", "平台", "text"),
+                ("platform", "券商渠道", "text"),
+                ("init_mv", "期初市值", "money"),
+                (self.mv_key, "期末市值", "money"),
+                ("buy_amount", f"{period_word}买入", "money"),
+                ("sell_amount", f"{period_word}卖出", "money"),
+                ("net_cash_in", f"{period_word}净投入", "signed"),
+                (self.pnl_key, f"{period_word}收益", "signed"),
+                ("period_rate", f"{period_word}收益率", "percent"),
+                ("cum_pnl", "累计收益", "signed"),
+                ("up_count", "上涨基金数", "count"),
+                ("down_count", "下跌基金数", "count"),
+            ]),
+            2: DomesticPerfTableModel([
+                ("fund_name", "基金名称", "text"),
+                ("fund_code", "代码", "text"),
+                ("platform", "券商渠道", "text"),
+                ("fund_type", "基金类型", "text"),
                 (self.mv_key, "期末市值(CNY)", "money"),
-                (self.pnl_key, "当期收益(CNY)", "signed"),
+                (self.pnl_key, f"{period_word}收益(CNY)", "signed"),
                 ("cum_pnl", "累计收益(CNY)", "signed"),
                 ("buy_amount", "买入(CNY)", "money"),
                 ("sell_amount", "卖出(CNY)", "money"),
                 ("net_cash_in", "净投入(CNY)", "signed"),
-                ("trade_count", "笔数", "int"),
-            ]),
-            2: DomesticPerfTableModel([
-                ("key", "日期" if self.is_day else "月份", "text"),
-                ("market_value", "期末总市值(CNY)", "money"),
-                ("pnl", "当期总收益(CNY)", "signed"),
-                ("cum_pnl", "累计总收益(CNY)", "signed"),
-                ("buy_amount", "买入(CNY)", "money"),
-                ("sell_amount", "卖出(CNY)", "money"),
-                ("net_cash_in", "净投入(CNY)", "signed"),
-                ("cum_net_cash_in", "累计净投入(CNY)", "money"),
                 ("trade_count", "笔数", "int"),
             ]),
         }
@@ -987,6 +1027,7 @@ class DomesticPerformanceBasePage(QWidget):
             pk = r[self.period_key]
             item = by_period.setdefault(pk, {
                 "key": pk,
+                "init_mv": 0.0,
                 "market_value": 0.0,
                 "pnl": 0.0,
                 "cum_pnl": 0.0,
@@ -995,17 +1036,37 @@ class DomesticPerformanceBasePage(QWidget):
                 "net_cash_in": 0.0,
                 "cum_net_cash_in": 0.0,
                 "trade_count": 0,
+                "up_count": 0,
+                "down_count": 0,
             })
-            item["market_value"] += float(r[self.mv_key])
-            item["pnl"] += float(r[self.pnl_key])
+            end_mv = float(r[self.mv_key])
+            pnl = float(r[self.pnl_key])
+            net_in = float(r["net_cash_in"])
+            item["init_mv"] += end_mv - net_in - pnl
+            item["market_value"] += end_mv
+            item["pnl"] += pnl
             item["cum_pnl"] += float(r["cum_pnl"])
             item["buy_amount"] += float(r["buy_amount"])
             item["sell_amount"] += float(r["sell_amount"])
-            item["net_cash_in"] += float(r["net_cash_in"])
+            item["net_cash_in"] += net_in
             item["cum_net_cash_in"] += float(r["cum_net_cash_in"])
             item["trade_count"] += int(r["trade_count"])
+            if pnl > 0:
+                item["up_count"] += 1
+            elif pnl < 0:
+                item["down_count"] += 1
 
-        series = [by_period[k] for k in sorted(by_period)]
+        cum_buy = 0.0
+        series = []
+        for k in sorted(by_period):
+            item = by_period[k]
+            cum_buy += item["buy_amount"]
+            base = item["init_mv"] if item["init_mv"] > 0 else item["buy_amount"]
+            item["period_rate"] = (item["pnl"] / base * 100.0) if base > 0 else None
+            cum_base = item["cum_net_cash_in"] if item["cum_net_cash_in"] > 0 else cum_buy
+            item["cum_rate"] = (item["cum_pnl"] / cum_base * 100.0) if cum_base > 0 else None
+            series.append(item)
+
         if self._drill_metric_key == "up":
             series = [s for s in series if s["pnl"] > 0]
         elif self._drill_metric_key == "down":
@@ -1160,7 +1221,7 @@ class DomesticPerformanceBasePage(QWidget):
         if self._plat_scope == "period":
             self._refresh_platform_contrib()
         self._refresh_attribution()
-        if self.table_tab_group.checkedId() == 0:
+        if self.table_tab_group.checkedId() in (0, 2):
             self._refresh_table()
 
     def _on_picker_changed(self):
@@ -1190,7 +1251,7 @@ class DomesticPerformanceBasePage(QWidget):
         """点击左侧盈亏结构按钮，联动下方明细表按盈利/亏损筛选（再次点击取消）。"""
         self._fund_pnl_filter = "" if self._fund_pnl_filter == mode else mode
         self._selected_fund_code = ""
-        target_tab = 2 if self._attr_dim == "period" else 0
+        target_tab = 0 if self._attr_dim == "period" else 2
         self.table_tab_group.button(target_tab).setChecked(True)
         self._refresh_table()
 
@@ -1198,7 +1259,7 @@ class DomesticPerformanceBasePage(QWidget):
         """点击 Top 5 基金排行行，联动下方明细表定位/筛选该基金（再次点击取消）。"""
         self._selected_fund_code = "" if self._selected_fund_code == fund_code else fund_code
         self._fund_pnl_filter = ""
-        self.table_tab_group.button(0).setChecked(True)
+        self.table_tab_group.button(2).setChecked(True)
         self._refresh_attribution()
         self._refresh_table()
 
@@ -1401,7 +1462,7 @@ class DomesticPerformanceBasePage(QWidget):
             layout.addWidget(row_w)
 
     def _on_table_tab_changed(self, idx: int):
-        if idx != 0:
+        if idx != 2:
             self._selected_fund_code = ""
         if idx == 1:
             self._fund_pnl_filter = ""
@@ -1414,7 +1475,53 @@ class DomesticPerformanceBasePage(QWidget):
         model = self._models[tab_idx]
         self.table_view.setModel(model)
 
+        highlight_key = self._selected_period or ""
+        highlight_field = ""
+
         if tab_idx == 0:
+            rows = list(reversed(self._period_series))
+            if self._fund_pnl_filter == "profit":
+                rows = [r for r in rows if float(r["pnl"]) > 0]
+            elif self._fund_pnl_filter == "loss":
+                rows = [r for r in rows if float(r["pnl"]) < 0]
+            highlight_field = "key"
+        elif tab_idx == 1:
+            grouped: dict[tuple[str, str], dict[str, Any]] = {}
+            for r in self._filtered_rows:
+                gk = (r[self.period_key], r["platform"])
+                item = grouped.setdefault(gk, {
+                    self.period_key: gk[0],
+                    "platform": gk[1],
+                    "init_mv": 0.0,
+                    self.mv_key: 0.0,
+                    self.pnl_key: 0.0,
+                    "cum_pnl": 0.0,
+                    "buy_amount": 0.0,
+                    "sell_amount": 0.0,
+                    "net_cash_in": 0.0,
+                    "up_count": 0,
+                    "down_count": 0,
+                })
+                end_mv = float(r[self.mv_key])
+                pnl = float(r[self.pnl_key])
+                net_in = float(r["net_cash_in"])
+                item["init_mv"] += end_mv - net_in - pnl
+                item[self.mv_key] += end_mv
+                item[self.pnl_key] += pnl
+                item["cum_pnl"] += float(r["cum_pnl"])
+                item["buy_amount"] += float(r["buy_amount"])
+                item["sell_amount"] += float(r["sell_amount"])
+                item["net_cash_in"] += net_in
+                if pnl > 0:
+                    item["up_count"] += 1
+                elif pnl < 0:
+                    item["down_count"] += 1
+            for item in grouped.values():
+                base = item["init_mv"] if item["init_mv"] > 0 else item["buy_amount"]
+                item["period_rate"] = (item[self.pnl_key] / base * 100.0) if base > 0 else None
+            rows = sorted(grouped.values(), key=lambda r: (r[self.period_key], r["platform"]), reverse=True)
+            highlight_field = self.period_key
+        else:
             rows = [r for r in self._filtered_rows if r[self.period_key] == self._selected_period] if self._selected_period else []
             if self._selected_fund_code:
                 rows = [r for r in rows if r["fund_code"] == self._selected_fund_code]
@@ -1423,41 +1530,24 @@ class DomesticPerformanceBasePage(QWidget):
             elif self._fund_pnl_filter == "loss":
                 rows = [r for r in rows if float(r[self.pnl_key]) < 0]
             rows = sorted(rows, key=lambda r: -abs(float(r[self.pnl_key])))
-        elif tab_idx == 1:
-            grouped: dict[tuple[str, str], dict[str, Any]] = {}
-            for r in self._filtered_rows:
-                gk = (r[self.period_key], r["platform"])
-                item = grouped.setdefault(gk, {
-                    self.period_key: gk[0],
-                    "platform": gk[1],
-                    self.mv_key: 0.0,
-                    self.pnl_key: 0.0,
-                    "cum_pnl": 0.0,
-                    "buy_amount": 0.0,
-                    "sell_amount": 0.0,
-                    "net_cash_in": 0.0,
-                    "trade_count": 0,
-                })
-                item[self.mv_key] += float(r[self.mv_key])
-                item[self.pnl_key] += float(r[self.pnl_key])
-                item["cum_pnl"] += float(r["cum_pnl"])
-                item["buy_amount"] += float(r["buy_amount"])
-                item["sell_amount"] += float(r["sell_amount"])
-                item["net_cash_in"] += float(r["net_cash_in"])
-                item["trade_count"] += int(r["trade_count"])
-            rows = sorted(grouped.values(), key=lambda r: (r[self.period_key], r["platform"]), reverse=True)
-        else:
-            rows = list(reversed(self._period_series))
-            if self._fund_pnl_filter == "profit":
-                rows = [r for r in rows if float(r["pnl"]) > 0]
-            elif self._fund_pnl_filter == "loss":
-                rows = [r for r in rows if float(r["pnl"]) < 0]
 
-        model.set_rows(rows)
-        self.table_count_lbl.setText(f"{len(rows)} 条")
+        model.set_rows(rows, highlight_key=highlight_key, highlight_field=highlight_field)
+        self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
         header = self.table_view.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(True)
+
+    def _on_table_row_clicked(self, index: QModelIndex):
+        tab_idx = self.table_tab_group.checkedId()
+        if tab_idx not in (0, 1):
+            return
+        model = self._models.get(tab_idx)
+        row = model.row_at(index.row()) if model else None
+        if not row:
+            return
+        pk = row.get("key") if tab_idx == 0 else row.get(self.period_key)
+        if pk and pk != self._selected_period:
+            self._on_period_selected(pk)
 
     def _on_table_double_clicked(self, index: QModelIndex):
         tab_idx = self.table_tab_group.checkedId()
@@ -1467,7 +1557,7 @@ class DomesticPerformanceBasePage(QWidget):
         row = model.row_at(index.row())
         if not row:
             return
-        pk = row.get("key") if tab_idx == 2 else row.get(self.period_key)
+        pk = row.get("key") if tab_idx == 0 else row.get(self.period_key)
         if pk:
             self._on_period_selected(pk)
 
