@@ -31,6 +31,19 @@ def _fetch_daily_closes(code: str, fund_type: str, start_day: str, end_day: str)
     records: list[tuple[str, str, dict]] = []
 
     if is_etf:
+        # 优先使用新浪场内 ETF 历史日线（不复权、不触发东方财富 push2 限流）
+        try:
+            df_sina = ak.fund_etf_hist_sina(symbol=_sina_symbol(code))
+        except Exception:
+            df_sina = None
+        if df_sina is not None and not df_sina.empty:
+            for row in df_sina.to_dict("records"):
+                d_str = str(row.get("date") or "")[:10]
+                close = row.get("close")
+                if d_str and start_day <= d_str <= end_day and close is not None:
+                    records.append((d_str, str(Decimal(str(close))), {"close": str(close), "api": "fund_etf_hist_sina"}))
+            if records:
+                return records
         try:
             df = ak.fund_etf_hist_em(
                 symbol=code,
@@ -47,18 +60,6 @@ def _fetch_daily_closes(code: str, fund_type: str, start_day: str, end_day: str)
                 close = row.get("收盘")
                 if d_str and close is not None:
                     records.append((d_str, str(Decimal(str(close))), {"close": str(close), "api": "fund_etf_hist_em"}))
-            return records
-        # 兜底使用新浪 ETF 历史日线（不复权）
-        try:
-            df_sina = ak.fund_etf_hist_sina(symbol=_sina_symbol(code))
-        except Exception:
-            df_sina = None
-        if df_sina is not None and not df_sina.empty:
-            for row in df_sina.to_dict("records"):
-                d_str = str(row.get("date") or "")[:10]
-                close = row.get("close")
-                if d_str and start_day <= d_str <= end_day and close is not None:
-                    records.append((d_str, str(Decimal(str(close))), {"close": str(close), "api": "fund_etf_hist_sina"}))
         return records
 
     try:
@@ -105,6 +106,8 @@ def sync_ths_nav_daily(
     root=DOMESTIC_ASSETS_DIR,
     create_backup: bool = True,
     end_date: str | None = None,
+    open_only: bool = False,
+    recent_days: int | None = None,
 ) -> dict[str, object]:
     """为所有同花顺标的补充持仓期间的历史不复权收盘价到 raw_fund_nav_daily。"""
     db_path = root / RAW_FILE
@@ -138,9 +141,16 @@ def sync_ths_nav_daily(
         for r in rows:
             code = r["fund_code"]
             fund_type = r["fund_type"] or ""
-            start_day = r["min_day"]
-            # 若仍有持仓或后续还有净值需要，延展至 cutoff
             is_open = abs(float(r["net_shares"] or 0.0)) > 1e-6
+            if open_only and not is_open:
+                continue
+            start_day = r["min_day"]
+            if recent_days is not None and recent_days > 0:
+                from datetime import timedelta
+                recent_start = (date.fromisoformat(cutoff) - timedelta(days=recent_days)).isoformat()
+                if recent_start > start_day:
+                    start_day = recent_start
+            # 若仍有持仓或后续还有净值需要，延展至 cutoff
             target_end = cutoff if is_open else (r["max_day"] or cutoff)
             if target_end < start_day:
                 target_end = start_day

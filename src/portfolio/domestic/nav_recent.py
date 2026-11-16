@@ -45,7 +45,7 @@ def expected_gaps(first, last, calendar, money, fields, stored):
     return gaps
 
 
-def check(root, *, today=None):
+def check(root, *, today=None, include_today: bool = False):
     root = Path(root)
     path = root / RAW_FILE
     if not path.is_file():
@@ -57,14 +57,19 @@ def check(root, *, today=None):
         except BlockingIOError:
             print("国内基金净值检查正在运行。", flush=True)
             return False
-        return _check(root, path, today or datetime.now(ZoneInfo("Asia/Shanghai")).date())
+        return _check(
+            root,
+            path,
+            today or datetime.now(ZoneInfo("Asia/Shanghai")).date(),
+            include_today=include_today,
+        )
 
 
-def _check(root, path, today):
+def _check(root, path, today, *, include_today: bool = False):
     import akshare as ak
 
     first = max(START, today - timedelta(days=30))
-    last = today - timedelta(days=1)
+    last = today if include_today else (today - timedelta(days=1))
     collector = Collector(ak, last, 3)
     funds = fund_list(path)
     if not funds:
@@ -74,6 +79,20 @@ def _check(root, path, today):
         info = ({r["fund_code"]: dict(r) for r in db.execute("SELECT * FROM raw_fund_info")}
                 if "raw_fund_info" in tables else {})
         stored = {}
+        ths_only_codes = set()
+        if "raw_fund_transactions" in tables:
+            ths_only_codes = {
+                r[0]
+                for r in db.execute(
+                    """
+                    SELECT fund_code
+                    FROM raw_fund_transactions
+                    WHERE fund_code IS NOT NULL
+                    GROUP BY fund_code
+                    HAVING SUM(CASE WHEN source_platform <> 'THS' THEN 1 ELSE 0 END) = 0
+                    """
+                )
+            }
         if "raw_fund_nav_daily" in tables:
             for row in db.execute("""SELECT * FROM raw_fund_nav_daily
                 WHERE nav_date BETWEEN ? AND ? AND source IN (?,?)""",
@@ -96,6 +115,8 @@ def _check(root, path, today):
     candidates, requested, gaps_before = [], 0, 0
     for fund in funds:
         code = fund["code"]
+        if code in ths_only_codes:
+            continue
         metadata = info.get(code, {})
         hk = code.startswith("968")
         kind = metadata.get("fund_type") or fund["kind"] or types.get(code)

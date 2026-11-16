@@ -273,6 +273,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             from portfolio.services.intraday_pipeline import start_pipeline
             start_pipeline(info.path)
             self.check_monthly_history()
+            self._start_domestic_auto_sync()
         else:
             self.history_coverage_button.setText('历史行情：合成演示不检查')
         if self.settings and not info.is_demo:
@@ -1060,6 +1061,35 @@ class MainWindow(InteractionMixin, QMainWindow):
         worker.signals.error.connect(failure, Qt.ConnectionType.QueuedConnection)
         worker.signals.finished.connect(lambda: setattr(self, "_fx_busy", False), Qt.ConnectionType.QueuedConnection)
         self.pool.start(worker)
+
+    def _start_domestic_auto_sync(self, *, force: bool = False):
+        if getattr(self, "_domestic_sync_started", False) and not force:
+            return
+        self._domestic_sync_started = True
+
+        def task(_cancel):
+            from portfolio.domestic.auto_sync import sync_domestic_market_data
+            return sync_domestic_market_data()
+
+        def ready(res):
+            if not isinstance(res, dict) or not res.get("updated"):
+                return
+            latest = res.get("latest_nav_date") or ""
+            self.banner.show_status(
+                f"已自动同步国内资产最新行情/净值（截至 {latest}）",
+                "success",
+            )
+            cur = self.pages.currentIndex()
+            if cur == 27 and hasattr(self, "domestic_holdings_page"):
+                self.domestic_holdings_page.reload()
+            elif cur == 28 and hasattr(self, "domestic_daily_performance_page"):
+                self.domestic_daily_performance_page.reload(force=True)
+            elif cur == 29 and hasattr(self, "domestic_monthly_performance_page"):
+                self.domestic_monthly_performance_page.reload(force=True)
+            elif cur == 31 and hasattr(self, "domestic_overview_page"):
+                self.domestic_overview_page.reload(force=True)
+
+        self._submit("domestic_auto_sync", task, ready)
 
     def reconnect(self):
         if self.pages.currentIndex() == 27:
