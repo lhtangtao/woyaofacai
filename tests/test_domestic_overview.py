@@ -32,6 +32,18 @@ def test_build_domestic_overview_aggregates_and_filters():
     for p_name in ("天天基金", "支付宝", "同花顺"):
         assert plat_map[p_name]["closed_pnl"] is not None, f"{p_name} closed_pnl should not be None"
 
+    # 平台汇总之和与顶部 KPI 严格一致（误差 < 0.01）
+    assert abs(sum((r["asset"] or Decimal(0) for r in data["platform_summary"]), Decimal(0)) - kpis["当前总资产"]["value"]) < Decimal("0.01")
+    assert abs(sum((r["closed_pnl"] or Decimal(0) for r in data["platform_summary"]), Decimal(0)) - kpis["已清仓收益"]["value"]) < Decimal("0.01")
+    assert abs(sum((r["floating_pnl"] or Decimal(0) for r in data["platform_summary"]), Decimal(0)) - kpis["浮动盈亏"]["value"]) < Decimal("0.01")
+    assert abs(sum((r["total_pnl"] or Decimal(0) for r in data["platform_summary"]), Decimal(0)) - kpis["全时期总盈亏"]["value"]) < Decimal("0.01")
+    assert abs(sum((r["year_pnl"] or Decimal(0) for r in data["platform_summary"]), Decimal(0)) - kpis["本年盈亏"]["value"]) < Decimal("0.01")
+
+    # 季度合计与全年盈亏严格一致
+    for q_row in data["quarterly_rows"]:
+        q_sum = sum((q_row[k] for k in ("q1", "q2", "q3", "q4") if q_row[k] is not None), Decimal(0))
+        assert abs(q_sum - q_row["year_pnl"]) < Decimal("0.01")
+
     # 按渠道过滤联动
     ths_only = build_domestic_overview(platform="同花顺")
     assert len(ths_only["kpis"]) == 18

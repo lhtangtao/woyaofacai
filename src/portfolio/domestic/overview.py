@@ -154,9 +154,8 @@ def build_domestic_overview(
         total_cost = _sum_known(r.get("cost") for r in open_rows)
         floating_pnl = _sum_known(
             (_d(r.get("market_value")) - _d(r.get("cost")))
-            if (_d(r.get("market_value")) is not None and _d(r.get("cost")) is not None)
-            else _d(r.get("pnl"))
             for r in open_rows
+            if _d(r.get("market_value")) is not None and _d(r.get("cost")) is not None
         )
         closed_pnl = _sum_known(_closed_pnl_of(r) for r in closed_rows)
         # 回本缺口：在持亏损标的亏损绝对值之和
@@ -200,20 +199,17 @@ def build_domestic_overview(
             by_day_rows[r["date"]].append(r)
 
         sorted_days = sorted(by_day_rows.keys())
-        prev_day_end_mv: Decimal | None = None
         for d_str in sorted_days:
             d_rows = by_day_rows[d_str]
             d_pnl = _sum_known(r.get("daily_pnl") for r in d_rows)
             d_end_mv = _sum_known(r.get("market_value") for r in d_rows)
             d_net = _sum_known(r.get("net_cash_in") for r in d_rows)
-            if prev_day_end_mv is not None:
-                d_begin_mv = prev_day_end_mv
-            elif d_end_mv is not None and d_pnl is not None:
-                d_begin_mv = d_end_mv - d_pnl - (d_net or Decimal(0))
-            else:
-                d_begin_mv = None
-            if d_end_mv is not None:
-                prev_day_end_mv = d_end_mv
+            # 当日参与计算盈亏的那批标的各自期初市值之和，避免未出净值标的稀释当日收益率分母
+            d_begin_mv = _sum_known(
+                (_d(r.get("market_value")) - _d(r.get("daily_pnl")) - (_d(r.get("net_cash_in")) or Decimal(0)))
+                for r in d_rows
+                if _d(r.get("market_value")) is not None and _d(r.get("daily_pnl")) is not None
+            )
             d_base = (d_begin_mv + max(d_net or Decimal(0), Decimal(0))) if d_begin_mv is not None else None
             d_rate = _ratio(d_pnl, d_base)
             day_agg[d_str] = {
@@ -514,9 +510,8 @@ def build_domestic_overview(
                 g_cost = _sum_known(x.get("cost") for x in g_open)
                 g_float = _sum_known(
                     (_d(x.get("market_value")) - _d(x.get("cost")))
-                    if (_d(x.get("market_value")) is not None and _d(x.get("cost")) is not None)
-                    else _d(x.get("pnl"))
                     for x in g_open
+                    if _d(x.get("market_value")) is not None and _d(x.get("cost")) is not None
                 )
                 g_closed_pnl = _sum_known(_closed_pnl_of(x) for x in g_closed)
                 g_open_total_pnl = _sum_known(_open_total_pnl_of(x) for x in g_open)
