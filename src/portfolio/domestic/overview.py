@@ -175,12 +175,20 @@ def build_domestic_overview(
             by_day_rows[r["date"]].append(r)
 
         sorted_days = sorted(by_day_rows.keys())
+        prev_day_end_mv: Decimal | None = None
         for d_str in sorted_days:
             d_rows = by_day_rows[d_str]
             d_pnl = _sum_known(r.get("daily_pnl") for r in d_rows)
-            d_begin_mv = _sum_known(r.get("begin_mv") for r in d_rows)
-            d_end_mv = _sum_known(r.get("end_mv") for r in d_rows)
-            d_net = _sum_known(r.get("net_flow") for r in d_rows)
+            d_end_mv = _sum_known(r.get("market_value") for r in d_rows)
+            d_net = _sum_known(r.get("net_cash_in") for r in d_rows)
+            if prev_day_end_mv is not None:
+                d_begin_mv = prev_day_end_mv
+            elif d_end_mv is not None and d_pnl is not None:
+                d_begin_mv = d_end_mv - d_pnl - (d_net or Decimal(0))
+            else:
+                d_begin_mv = None
+            if d_end_mv is not None:
+                prev_day_end_mv = d_end_mv
             d_base = (d_begin_mv + max(d_net or Decimal(0), Decimal(0))) if d_begin_mv is not None else None
             d_rate = _ratio(d_pnl, d_base)
             day_agg[d_str] = {
@@ -218,28 +226,38 @@ def build_domestic_overview(
         month_agg: dict[str, dict[str, Any]] = {}
         all_months = sorted(set(by_month_rows.keys()) | {d[:7] for d in sorted_days})
         cum_running = Decimal(0)
+        prev_month_end_mv: Decimal | None = None
         for m_str in all_months:
             m_rows = by_month_rows.get(m_str, [])
             if m_rows:
-                m_pnl = _sum_known(r.get("monthly_pnl") for r in m_rows)
-                m_begin = _sum_known(r.get("begin_mv") for r in m_rows)
+                m_pnl = _sum_known(r.get("month_pnl") for r in m_rows)
                 m_end = _sum_known(r.get("end_mv") for r in m_rows)
                 m_buy = _sum_known(r.get("buy_amount") for r in m_rows)
                 m_sell = _sum_known(r.get("sell_amount") for r in m_rows)
-                m_net = _sum_known(r.get("net_flow") for r in m_rows)
+                m_net = _sum_known(r.get("net_cash_in") for r in m_rows)
             else:
                 d_in_m = [day_agg[d] for d in sorted_days if d.startswith(m_str)]
                 m_pnl = _sum_known(x["pnl"] for x in d_in_m)
-                m_begin = d_in_m[0]["begin_mv"] if d_in_m else None
                 m_end = d_in_m[-1]["end_mv"] if d_in_m else None
                 m_buy = None
                 m_sell = None
                 m_net = _sum_known(x["net_flow"] for x in d_in_m)
 
+            if prev_month_end_mv is not None:
+                m_begin = prev_month_end_mv
+            elif m_end is not None and m_pnl is not None:
+                m_begin = m_end - m_pnl - (m_net or Decimal(0))
+            else:
+                m_begin = None
+            if m_end is not None:
+                prev_month_end_mv = m_end
+
             if m_pnl is not None:
                 cum_running += m_pnl
 
             m_base = (m_begin + max(m_net or Decimal(0), Decimal(0))) if m_begin is not None else None
+            if m_base is not None and m_base <= 0 and m_net is not None and m_net > 0:
+                m_base = m_net
             m_rate = _ratio(m_pnl, m_base)
             month_agg[m_str] = {
                 "month": m_str,

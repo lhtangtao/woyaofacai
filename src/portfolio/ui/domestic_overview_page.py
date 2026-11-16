@@ -75,24 +75,7 @@ class DomesticOverviewPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
-        # 顶部标题行
-        header = QHBoxLayout()
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
-        self.title_lbl = QLabel("国内资产 · 资产总览")
-        self.title_lbl.setStyleSheet("font-size: 20px; font-weight: 700;")
-        self.sub_lbl = QLabel("合并支付宝、天天基金与同花顺 A 股（不含现金/余额宝，严格净值/收盘价估值，2022-01-01 起）。")
-        self.sub_lbl.setObjectName("secondary")
-        title_box.addWidget(self.title_lbl)
-        title_box.addWidget(self.sub_lbl)
-        header.addLayout(title_box, 1)
-
-        self.refresh_btn = QPushButton("刷新")
-        self.refresh_btn.clicked.connect(lambda: self.reload(force=True))
-        header.addWidget(self.refresh_btn)
-        outer.addLayout(header)
-
-        # 筛选栏（无人员下拉框）
+        # 筛选栏（无人员下拉框，主窗口顶部已有页面标题与全局刷新）
         filter_bar = QFrame()
         filter_bar.setObjectName("card")
         f_layout = QHBoxLayout(filter_bar)
@@ -285,7 +268,6 @@ class DomesticOverviewPage(QWidget):
         if self._loading and not force:
             return
         self._loading = True
-        self.refresh_btn.setEnabled(False)
         self.status_lbl.setText("正在加载国内资产总览…")
         for card in self.cards:
             card.setText("计算中…")
@@ -301,7 +283,6 @@ class DomesticOverviewPage(QWidget):
         def ready(result: dict[str, Any]):
             self._loading = False
             self._loaded_once = True
-            self.refresh_btn.setEnabled(True)
             self._data = result
             self._sync_filter_options(result)
             self._render_all(result)

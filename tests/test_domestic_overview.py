@@ -21,6 +21,11 @@ def test_build_domestic_overview_aggregates_and_filters():
     assert "累计净投入" in names and "累计现金分红" in names
     assert "本月微操收益" not in names
 
+    kpis = {k["name"]: k for k in data["kpis"]}
+    for required in ("当前总资产", "最新日收益率", "最新日盈亏", "本月盈亏", "上月盈亏", "本年盈亏", "去年盈亏", "本月收益率", "本年收益率"):
+        assert kpis[required]["value"] is not None, f"{required} should not be None"
+    assert data["monthly_trend"] and data["monthly_trend"][0]["pnl"] is not None
+
     # 平台汇总应包含同级别渠道（支付宝、天天基金、同花顺等）
     plat_names = {r["name"] for r in data["platform_summary"]}
     assert "天天基金" in plat_names
