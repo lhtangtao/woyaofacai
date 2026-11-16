@@ -440,13 +440,13 @@ class PlatformList(QWidget):
         self.table.setHorizontalHeaderLabels(["券商渠道", "确认买入", "确认赎回", "历史收益", "基金数"] if closed else
                                              ["券商渠道", "市值占比", "持仓成本", "持仓市值", "持有收益", "基金数"])
         header = self.table.horizontalHeader()
+        header.setMinimumSectionSize(56 if closed else 110)
         if closed:
             for col in range(5):
                 header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 0 else QHeaderView.ResizeMode.ResizeToContents)
         else:
             for col in range(6):
-                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
-            self.table.setColumnWidth(1, 130)
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
         self.table.setRowCount(len(self.names) + 1)
         market = None if closed else total(row.get("market_value") for row in rows)
         for index, name in enumerate(self.names + ["合计"]):
@@ -484,6 +484,8 @@ class PlatformList(QWidget):
                         is_total=(name == "合计"),
                     )
                     cell.layout().setContentsMargins(4, 2, 4, 2)
+                    if cell.lbl is not None:
+                        cell.lbl.setFixedWidth(cell.lbl.fontMetrics().horizontalAdvance(ratio_text) + 16)
                     cell.pbar.setMinimumWidth(14)
                     self.table.setCellWidget(index, column, cell)
                     continue
