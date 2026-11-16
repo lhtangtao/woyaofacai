@@ -451,6 +451,15 @@ def build_workspace(self):
     from portfolio.ui.domestic_trades_page import DomesticTradesPage
     self.domestic_trades_page = DomesticTradesPage(self)
     self.pages.addWidget(self.domestic_trades_page)
+    from portfolio.ui.domestic_overview_page import DomesticOverviewPage
+    self.domestic_overview_page = DomesticOverviewPage(self)
+    self.pages.addWidget(self.domestic_overview_page)
+
+    def _jump_domestic_day(day_str: str):
+        self.domestic_daily_performance_page.select_period(day_str)
+        self.navigation.select(28, None)
+
+    self.domestic_overview_page.jump_to_day.connect(_jump_domestic_day)
     layout.addWidget(self.pages, 1)
     root.addWidget(body, 1)
     self.navigation.routeChanged.connect(self.route_changed)

@@ -447,6 +447,7 @@ class DomesticPerformanceBasePage(QWidget):
         self._filtered_rows: list[dict[str, Any]] = []
         self._period_series: list[dict[str, Any]] = []
         self._selected_period: str = ""
+        self._pending_select_period: str = ""
         self._selected_platform: str = ""
         self._drill_metric_key: str = ""
         self._fund_pnl_filter: str = ""
@@ -886,6 +887,17 @@ class DomesticPerformanceBasePage(QWidget):
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
         self._worker_thread.start()
 
+    def select_period(self, period_key: str):
+        """外部联动跳转到指定日期/月份并选中对应明细。"""
+        if not period_key:
+            return
+        if self._raw_data is not None:
+            self._selected_period = period_key
+            self._apply_filters()
+        else:
+            self._pending_select_period = period_key
+            self.reload()
+
     def _on_loaded(self, data: DomesticPerformanceData | None, error: str):
         self._loading = False
         self.refresh_btn.setEnabled(True)
@@ -896,6 +908,9 @@ class DomesticPerformanceBasePage(QWidget):
         self._raw_data = data
         self.as_of_lbl.setText(f"数据截至：{data.as_of or '—'}")
         self._populate_filter_options(data)
+        if self._pending_select_period:
+            self._selected_period = self._pending_select_period
+            self._pending_select_period = ""
         self._apply_filters()
 
     def _populate_filter_options(self, data: DomesticPerformanceData):
