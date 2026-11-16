@@ -55,19 +55,26 @@ class Sidebar(QWidget):
         self.items.setIconSize(QSize(18, 18))
         self.items.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.groups, self.entries = [], []
+        self.group_entries, self.group_buttons, self.closed_groups = {}, {}, set()
         for group, entries in GROUPS:
             item = QListWidgetItem("", self.items)
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setSizeHint(QSize(190, 30))
-            label = QLabel(group)
+            label = QPushButton(f"▾  {group}")
             label.setObjectName("navGroup")
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
+            label.setStyleSheet("QPushButton { text-align:left; border:0; background:transparent; padding-left:20px; color:#94A3B8; } QPushButton:hover { color:#2563EB; }")
+            label.clicked.connect(lambda _checked=False, name=group: self.toggle_group(name))
             self.items.setItemWidget(item, label)
             self.groups.append(item)
+            self.group_buttons[group] = label
+            self.group_entries[group] = []
             for text, page, kind, target in entries:
                 item = QListWidgetItem(icon(kind, self), text, self.items)
                 item.setSizeHint(QSize(190, 36))
                 item.setData(Qt.ItemDataRole.UserRole, (page, target))
                 self.entries.append((item, text))
+                self.group_entries[group].append(item)
         self.items.currentItemChanged.connect(self._selected)
         layout.addWidget(self.items, 1)
         self.toggle_button = QPushButton("  收起导航")
@@ -108,6 +115,10 @@ class Sidebar(QWidget):
         for item, _ in self.entries:
             p, t = item.data(Qt.ItemDataRole.UserRole)
             if p == page and (target is None or target == t):
+                for name, items in self.group_entries.items():
+                    if item in items and name in self.closed_groups:
+                        self.toggle_group(name)
+                        break
                 self._selecting_page_only = target is None
                 if self.items.currentItem() is item:
                     self._selected(item, None)
@@ -118,6 +129,16 @@ class Sidebar(QWidget):
 
     def count(self):
         return len(self.entries)
+
+    def toggle_group(self, name):
+        if name in self.closed_groups:
+            self.closed_groups.remove(name)
+        else:
+            self.closed_groups.add(name)
+        closed = name in self.closed_groups
+        self.group_buttons[name].setText(f"{'▸' if closed else '▾'}  {name}")
+        for item in self.group_entries[name]:
+            item.setHidden(closed)
 
     def toggle(self):
         self.collapsed = not self.collapsed
