@@ -69,12 +69,12 @@ def holding_metrics(rows):
                                    for key in ("market_value", "cost", "shares"))
             if value is not None:
                 values_by_code[row["fund_code"]] += value
-            total_pnl = Decimal(row["pnl"]) if row.get("pnl") is not None else None
-            # 持有中统一按累计持有收益（含同基金历史部分卖出已实现与现金分红），缺省时退回市值减成本
-            pnl = total_pnl if total_pnl is not None else (value - cost if value is not None and cost is not None else None)
-            basis = Decimal(row["contributed"]) if total_pnl is not None and row.get("contributed") is not None else cost
-            rate = Decimal(row["rate"]) if total_pnl is not None and row.get("rate") is not None else (
-                pnl / basis * 100 if pnl is not None and basis is not None and basis > 0 else None
+            # 浮动盈亏严格等于「当前持仓市值 - 剩余持仓成本」，与抽屉累计盈亏区分
+            floating_val = value - cost if value is not None and cost is not None else None
+            floating_rate = (
+                floating_val / cost * 100
+                if floating_val is not None and cost is not None and cost > 0
+                else None
             )
             nav_dec = Decimal(row["nav"]) if row.get("nav") is not None else None
             average = cost / shares if cost is not None and shares and shares > 0 else None
@@ -87,7 +87,7 @@ def holding_metrics(rows):
             )
             prepared.append(dict(row, market_value=value, cost=cost, shares=shares,
                                  average=average, recovery_pct=recovery_pct,
-                                 floating=pnl, floating_rate=rate, _basis=basis))
+                                 floating=floating_val, floating_rate=floating_rate, _basis=cost))
         market = total(row["market_value"] for row in prepared)
         matched = [row for row in prepared if row["floating"] is not None]
         cost = total(row["cost"] for row in matched)

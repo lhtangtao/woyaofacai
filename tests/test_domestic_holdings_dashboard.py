@@ -169,7 +169,7 @@ def test_closed_date_filters_share_row_and_chart_legend_is_centered():
     host.close()
 
 
-def test_holding_metrics_includes_partial_realized_pnl_when_available():
+def test_holding_metrics_computes_strict_floating_pnl_from_market_minus_cost():
     rows = [
         dict(
             account_id="a", fund_code="040046", shares="100",
@@ -177,10 +177,11 @@ def test_holding_metrics_includes_partial_realized_pnl_when_available():
         ),
     ]
     prepared, stats = holding_metrics(rows)
-    assert prepared[0]["floating"] == Decimal("80")
-    assert prepared[0]["floating_rate"] == Decimal("40")
-    assert stats["floating"] == Decimal("80")
-    assert stats["rate"] == Decimal("40")
+    assert prepared[0]["floating"] == Decimal("50")
+    assert prepared[0]["cost"] + prepared[0]["floating"] == prepared[0]["market_value"]
+    assert prepared[0]["floating_rate"] == Decimal("50")
+    assert stats["floating"] == Decimal("50")
+    assert stats["rate"] == Decimal("50")
 
 
 def test_trend_combo_points_computes_cumulative_and_daily_pnl():
