@@ -486,6 +486,8 @@ class ChartCanvas(QWidget):
         self.setMinimumSize(360, 260)
         self.setMouseTracking(True)
         self.hover_index = None
+        self._line_hover_key = None
+        self._line_hover_bounds = None
         self.categories_x = []
         self.back_button_rect = None
         self.detail_mode = False
@@ -547,11 +549,126 @@ class ChartCanvas(QWidget):
                         self.hover_index = None
                         self.update()
             return
+        if self.chart and self.chart.kind == "line" and not self.detail_mode and self._line_hover_bounds and self.hits:
+            pos = event.position()
+            left, top, width, height = self._line_hover_bounds
+            new_key = None
+            if (left - 14 <= pos.x() <= left + width + 14) and (top - 14 <= pos.y() <= top + height + 14):
+                best_dist = float("inf")
+                for _hit, key, _val, s_name in self.hits:
+                    pt = self.point_coords.get((s_name, key)) or self.point_coords.get(key)
+                    if pt is None:
+                        continue
+                    dist = abs(pt.x() - pos.x())
+                    if dist < best_dist:
+                        best_dist = dist
+                        new_key = key
+                if best_dist > 28:
+                    new_key = None
+            if self._line_hover_key != new_key:
+                self._line_hover_key = new_key
+                self.update()
+            return
         super().mouseMoveEvent(event)
 
+    def _draw_line_crosshair(self, painter, chart, left, top, width, height, colors, t):
+        """绘制折线图悬停十字准线、交点圆点、轴坐标胶囊与悬浮数值卡片。"""
+        h_key = self._line_hover_key
+        matched = []
+        for idx, series in enumerate(chart.series):
+            val = dict(series.points).get(h_key)
+            pt = self.point_coords.get((series.name, h_key))
+            if val is not None and pt is not None:
+                c = self.series_colors.get(series.name, QColor(colors[idx % len(colors)]))
+                matched.append((series.name, val, pt, c))
+        if not matched:
+            return
+
+        painter.save()
+        hx = matched[0][2].x()
+        hy = matched[0][2].y()
+
+        # 1. 十字虚线
+        cross_pen = QPen(QColor(100, 116, 139, 180), 1, Qt.PenStyle.DashLine)
+        painter.setPen(cross_pen)
+        painter.drawLine(QPointF(hx, top), QPointF(hx, top + height))
+        painter.drawLine(QPointF(left, hy), QPointF(left + width, hy))
+
+        # 2. X 轴时间标签胶囊 & Y 轴数值标签胶囊
+        x_text = chart.x_labels.get(h_key, h_key)
+        if not x_text and "T" in str(h_key):
+            x_text = str(h_key)[11:16]
+        painter.setFont(chart_font(11, bold=True))
+        fm = painter.fontMetrics()
+        xw = max(48, fm.horizontalAdvance(x_text) + 14)
+        x_rect = QRectF(max(left, min(left + width - xw, hx - xw / 2)), top + height + 5, xw, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#1E293B"))
+        painter.drawRoundedRect(x_rect, 4, 4)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(x_rect, Qt.AlignmentFlag.AlignCenter, x_text)
+
+        first_val = matched[0][1]
+        y_text = f"{first_val:+.2%}" if chart.ratio else f"{first_val:+,.2f}"
+        yw = max(56, fm.horizontalAdvance(y_text) + 12)
+        y_rect = QRectF(max(2.0, left - yw - 6), max(top, min(top + height - 20, hy - 10)), yw, 20)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#1E293B"))
+        painter.drawRoundedRect(y_rect, 4, 4)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(y_rect, Qt.AlignmentFlag.AlignCenter, y_text)
+
+        # 3. 交点高亮圆点
+        for _s_name, _val, pt, c in matched:
+            painter.setPen(QPen(c, 2))
+            painter.setBrush(QColor("#FFFFFF"))
+            painter.drawEllipse(pt, 4.5, 4.5)
+
+        # 4. 悬浮 Tooltip 卡片
+        header_text = f"时间：{x_text}" if chart.x_labels else str(h_key)
+        lines = []
+        for s_name, val, _pt, c in matched:
+            val_str = f"{val:+.2%}" if chart.ratio else f"{val:+,.2f}"
+            lines.append((s_name, val_str, val, c))
+
+        box_w = max(170, fm.horizontalAdvance(header_text) + 28)
+        for s_name, val_str, _, _ in lines:
+            box_w = max(box_w, fm.horizontalAdvance(f"● {s_name}  {val_str}") + 30)
+        box_h = 34 + len(lines) * 22
+        bx = hx + 14 if hx + 14 + box_w <= left + width else hx - box_w - 14
+        by = hy - box_h - 10 if hy - box_h - 10 >= top else hy + 14
+        bx = max(float(left), min(float(left + width - box_w), bx))
+        by = max(float(top), min(float(top + height - box_h), by))
+
+        box_rect = QRectF(bx, by, box_w, box_h)
+        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.setBrush(QColor(255, 255, 255, 244))
+        painter.drawRoundedRect(box_rect, 8, 8)
+
+        painter.setPen(QColor("#1E293B"))
+        painter.setFont(chart_font(12, bold=True))
+        painter.drawText(QRectF(bx + 10, by + 6, box_w - 20, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, header_text)
+
+        painter.setFont(chart_font(11))
+        for i, (s_name, val_str, val, c) in enumerate(lines):
+            ry = by + 30 + i * 22
+            painter.setPen(c)
+            painter.drawText(QRectF(bx + 10, ry, box_w - 95, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"● {s_name}")
+            painter.setPen(QColor(t.profit if val > 0 else t.loss if val < 0 else t.heading))
+            painter.setFont(chart_font(11, bold=True))
+            painter.drawText(QRectF(bx + 10, ry, box_w - 20, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val_str)
+            painter.setFont(chart_font(11))
+        painter.restore()
+
     def leaveEvent(self, event):
+        changed = False
         if self.hover_index is not None:
             self.hover_index = None
+            changed = True
+        if self._line_hover_key is not None:
+            self._line_hover_key = None
+            changed = True
+        if changed:
             self.update()
         super().leaveEvent(event)
 
@@ -960,6 +1077,10 @@ class ChartCanvas(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     chart.x_labels.get(key, key),
                 )
+
+        self._line_hover_bounds = (left, top, width, height) if chart.kind == "line" else None
+        if chart.kind == "line" and not self.detail_mode and self._line_hover_key is not None:
+            self._draw_line_crosshair(painter, chart, left, top, width, height, colors, t)
 
         if getattr(chart, "hide_legend", False) or getattr(self, "hide_legend", False):
             return
