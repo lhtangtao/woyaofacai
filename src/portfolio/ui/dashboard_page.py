@@ -159,12 +159,25 @@ class DashboardPage(QWidget):
         self.metrics = None
         for card in self.cards:
             card.setText("计算中…")
+            card.setToolTip("")
         self.summaries.clear()
         self.calendar_table.setRowCount(0)
         self.monthly_table.clearContents()
         self.year.setEnabled(False)
         self.annual_title.setText('本年每月盈亏')
         self.annual_total.setText('年度合计：—')
+
+    def show_error(self, message: str):
+        """持仓/收益计算失败时明确展示错误状态，避免卡片长期停留在“计算中…”。"""
+        self.clear()
+        t = tokens(self)
+        for card in self.cards:
+            card.setText("加载失败")
+            card.setToolTip(message)
+            card.setStyleSheet(
+                f"QPushButton {{text-align:left; padding:12px; font-size:14px; border-radius:12px; "
+                f"border:1px solid {t.border}; background:{t.panel}; color:{t.loss};}}"
+            )
 
     def set_analytics(self, analytics):
         self.analytics = analytics

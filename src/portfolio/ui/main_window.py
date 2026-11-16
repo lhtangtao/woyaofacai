@@ -199,12 +199,16 @@ class MainWindow(InteractionMixin, QMainWindow):
         if lane in ("source", "trades"):
             self._error(message)
         elif lane == "analytics":
+            self.jobs.pop("analytics", None)
             self.clear_analytics()
-            if self.pages.currentIndex() != 0:
-                self.banner.show_status(message, "error")
             if message.startswith('原始数据或参考行情在计算期间变化'):
-                self.banner.show_status('账本或收盘基准正在更新，正在自动重试持仓计算；已有五分钟曲线可独立读取。','loading')
-                QTimer.singleShot(1500,self.ensure_analytics)
+                self.banner.show_status('账本或收盘基准正在更新，正在自动重试持仓计算；已有五分钟曲线可独立读取。', 'loading')
+                QTimer.singleShot(1500, self.ensure_analytics)
+            else:
+                if hasattr(self, "dashboard"):
+                    self.dashboard.show_error(message)
+                if self.pages.currentIndex() != 0:
+                    self.banner.show_status(message, "error")
         elif lane == "provenance":
             self.detail.setPlainText(message)
         else:
@@ -809,7 +813,12 @@ class MainWindow(InteractionMixin, QMainWindow):
         self._analytics_ready(bundle.aggregate)
 
     def _analytics_ready(self, analytics):
-        if self.info is None or analytics.scope != self.make_scope():
+        self.jobs.pop("analytics", None)
+        if self.info is None:
+            return
+        if analytics.scope != self.make_scope():
+            self._analytics_scope = None
+            QTimer.singleShot(0, self.ensure_analytics)
             return
         # [Antigravity] 负仓异常与归属数量告警联动检查，在启动及计算完成时第一时间通知用户
         negative_issues = [r for r in analytics.reports['数据异常'].rows if r.values[0] == 'DQ001' and '当前持仓为负数' in str(r.values[6])]

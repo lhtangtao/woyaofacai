@@ -554,14 +554,23 @@ class InteractionMixin:
             self.banner.show_status('正在按人员回放持仓与收益…', 'loading')
             self._submit('people', lambda cancel: self.analytics_service.calculate_people(scope, cancel=cancel), self._people_ready)
             return
-        if (self.analytics and self.analytics.scope == scope) or self._analytics_scope == scope:
-            if self.analytics and self.analytics.scope == scope and self.pages.currentIndex() == 22:
+        if self.analytics and self.analytics.scope == scope:
+            if self.pages.currentIndex() == 2 and hasattr(self, "dashboard") and self.dashboard.analytics is not self.analytics:
+                self.dashboard.set_analytics(self.analytics)
+            if self.pages.currentIndex() == 22 and hasattr(self, "holdings_page"):
                 self.holdings_page.set_analytics(self.analytics)
-            if self.analytics and self.pages.currentIndex() == 17 and self.top_days_page.analytics is not self.analytics:
+            if self.pages.currentIndex() == 17 and self.top_days_page.analytics is not self.analytics:
                 self.top_days_page.set_analytics(self.analytics)
-            if self.analytics and self.pages.currentIndex() == 18 and hasattr(self, 'monthly_realtime_page'):
+            if self.pages.currentIndex() == 18 and hasattr(self, 'monthly_realtime_page'):
                 self.monthly_realtime_page.set_analytics(self.analytics)
+            if self.banner.property("state") == "loading":
+                self.banner.hide()
             return
+        if self._analytics_scope == scope:
+            active_job = self.jobs.get("analytics")
+            if active_job is not None and not active_job.cancel.is_set():
+                return
+            self._analytics_scope = None
         self._analytics_scope = scope
         if self.pages.currentIndex() == 22 and hasattr(self, "holdings_page"):
             self.banner.hide()
