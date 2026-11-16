@@ -36,6 +36,7 @@ class ReportModel(FinanceModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.columns = ()
+        self.center_aligned = False
 
     def columnCount(self, parent=None):
         return 0 if parent is not None and parent.isValid() else len(self.columns)
@@ -43,6 +44,8 @@ class ReportModel(FinanceModel):
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.ToolTipRole and orientation == Qt.Orientation.Horizontal and section < len(self.columns):
             return self.columns[section]
+        if role == Qt.ItemDataRole.TextAlignmentRole and orientation == Qt.Orientation.Horizontal and self.center_aligned:
+            return int(Qt.AlignmentFlag.AlignCenter)
         if role == Qt.ItemDataRole.DisplayRole:
             return self.columns[section] if orientation == Qt.Orientation.Horizontal and section < len(self.columns) else str(section + 1)
 
@@ -79,6 +82,8 @@ class ReportModel(FinanceModel):
         if role == Qt.ItemDataRole.FontRole and isinstance(value, Decimal):
             return numeric_font(12 if getattr(self.parent(), "compact", False) else 13)
         if role == Qt.ItemDataRole.TextAlignmentRole:
+            if self.center_aligned:
+                return int(Qt.AlignmentFlag.AlignCenter)
             return int(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignRight if isinstance(value, (Decimal, int)) else Qt.AlignmentFlag.AlignLeft))
         if role == Qt.ItemDataRole.ForegroundRole:
             if value is None:
@@ -95,8 +100,9 @@ class ReportPage(QWidget):
     export_requested = Signal(object, object)
     provenance_requested = Signal(object, object)
 
-    def __init__(self, names=(), parent=None, *, broker_people=False, show_selector=True, show_details=True):
+    def __init__(self, names=(), parent=None, *, broker_people=False, show_selector=True, show_details=True, center_aligned=False):
         super().__init__(parent)
+        self._center_aligned = center_aligned
         self.reports, self.report, self.page, self.descending = {}, None, 0, False
         self.sorted_rows = ()
         self.overview_rows = ()
@@ -197,6 +203,7 @@ class ReportPage(QWidget):
         self.split = split
         self.table = ReportTable()
         self.table.finance_model = ReportModel(self.table)
+        self.table.finance_model.center_aligned = self._center_aligned
         self.table.setModel(self.table.finance_model)
         self.table.frozen.setModel(self.table.finance_model)
         self.table.frozen.setSelectionModel(self.table.selectionModel())
@@ -358,10 +365,11 @@ class ReportPage(QWidget):
             rows = (today_summary_row(rows, self.report.columns, self.channel_overview.selected_channel), *rows)
         self.table.finance_model.replace(rows)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded if is_today else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if is_today else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        expand_rows = getattr(self, 'expand_rows', False)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff if is_today or expand_rows else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         for button in self.paging_buttons:
             button.setVisible(not is_today)
-        if is_today:
+        if is_today or expand_rows:
             height = self.table.horizontalHeader().height() + sum(self.table.rowHeight(i) for i in range(len(rows))) + 6
             self.table.setFixedHeight(height)
             self.split.setFixedHeight(height)

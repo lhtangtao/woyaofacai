@@ -54,7 +54,12 @@ def test_domestic_overview_page_renders_and_emits_jump_to_day(qtbot):
     assert len(page.cards) == 18
     assert page.platform_combo.count() >= 2
     assert page.type_combo.count() >= 2
-    assert page.summary_tabs.count() == 4
+    assert page.summaries.selector.count() == 4
+    assert page.summaries.table.finance_model.center_aligned is True
+    idx0 = page.summaries.table.finance_model.index(0, 0)
+    idx1 = page.summaries.table.finance_model.index(0, 1)
+    assert page.summaries.table.finance_model.data(idx0, Qt.ItemDataRole.TextAlignmentRole) == int(Qt.AlignmentFlag.AlignCenter)
+    assert page.summaries.table.finance_model.data(idx1, Qt.ItemDataRole.TextAlignmentRole) == int(Qt.AlignmentFlag.AlignCenter)
     assert page.calendar_table.rowCount() >= 4
     assert page.monthly_table.rowCount() == 4
 

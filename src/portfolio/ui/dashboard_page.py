@@ -42,11 +42,14 @@ class DashboardPage(QWidget):
         self.daily_rows, self.live_day = (), None
         self.cards, self.widgets = [], []
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
+        scroll.setStyleSheet('QScrollArea { border: 0; }')
         self.scroll = scroll
         scroll.setWidgetResizable(True)
         content = QWidget()
         body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 0, 0)
         self.grid = QGridLayout()
         self.grid.setSpacing(12)
         for index in range(18):
@@ -133,7 +136,8 @@ class DashboardPage(QWidget):
         annual_note.setWordWrap(True)
         yearly_layout.addWidget(annual_note)
         daily_layout.addStretch()
-        self.summaries = ReportPage(("渠道汇总", "分类汇总", "季度矩阵", "月度趋势"), show_details=False)
+        self.summaries = ReportPage(("渠道汇总", "分类汇总", "季度矩阵", "月度趋势"), show_details=False, center_aligned=True)
+        self.summaries.expand_rows = True
         self.summaries.setMinimumHeight(480)
         body.addWidget(self.summaries)
         scroll.setWidget(content)

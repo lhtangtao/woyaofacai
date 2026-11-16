@@ -19,13 +19,14 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from portfolio.domain.analytics import Report, ReportRow
 from portfolio.domestic.overview import build_domestic_overview
 from portfolio.ui.metric_card import MetricCard
+from portfolio.ui.report_page import ReportPage
 from portfolio.ui.theme import tokens
 
 
@@ -204,39 +205,16 @@ class DomesticOverviewPage(QWidget):
         annual_note.setWordWrap(True)
         yearly_layout.addWidget(annual_note)
 
-        # 底部 4 个汇总页签
-        self.summary_tabs = QTabWidget()
-        self.summary_tabs.setMinimumHeight(420)
-        self.platform_table = self._make_summary_table(
-            ["平台", "当前资产(¥)", "持仓成本(¥)", "持仓数", "资产占比", "已清仓收益(¥)", "浮动盈亏(¥)", "本年盈亏(¥)", "总盈亏(¥)", "盈利数", "亏损数", "回本缺口(¥)"]
-        )
-        self.category_table = self._make_summary_table(
-            ["分类", "当前资产(¥)", "持仓成本(¥)", "持仓数", "资产占比", "已清仓收益(¥)", "浮动盈亏(¥)", "本年盈亏(¥)", "总盈亏(¥)", "盈利数", "亏损数", "回本缺口(¥)"]
-        )
-        self.quarter_table = self._make_summary_table(
-            ["年份", "一季度(¥)", "二季度(¥)", "三季度(¥)", "四季度(¥)", "全年盈亏(¥)", "全年收益率"]
-        )
-        self.trend_table = self._make_summary_table(
-            ["月份", "月初市值(¥)", "月末市值(¥)", "当月买入(¥)", "当月卖出(¥)", "当月净投入(¥)", "当月收益(¥)", "当月收益率", "累计收益(¥)"]
-        )
-        self.summary_tabs.addTab(self.platform_table, "平台汇总")
-        self.summary_tabs.addTab(self.category_table, "分类汇总")
-        self.summary_tabs.addTab(self.quarter_table, "季度矩阵")
-        self.summary_tabs.addTab(self.trend_table, "月度趋势")
-        body.addWidget(self.summary_tabs)
+        # 底部 4 个汇总视图（交互与美股资产总览完全一致，且全部居中展示）
+        self.summaries = ReportPage(("平台汇总", "分类汇总", "季度矩阵", "月度趋势"), show_details=False, center_aligned=True)
+        self.summaries.expand_rows = True
+        self.summaries.setMinimumHeight(480)
+        if hasattr(self.host, "export_report"):
+            self.summaries.export_requested.connect(self.host.export_report)
+        body.addWidget(self.summaries)
 
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
-
-    @staticmethod
-    def _make_summary_table(headers: list[str]) -> QTableWidget:
-        tbl = QTableWidget(0, len(headers))
-        tbl.setHorizontalHeaderLabels(headers)
-        tbl.verticalHeader().hide()
-        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        tbl.setAlternatingRowColors(True)
-        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        return tbl
 
     def _arrange(self):
         columns = 6 if self.width() >= 1160 else 3 if self.width() >= 720 else 2
@@ -477,73 +455,62 @@ class DomesticOverviewPage(QWidget):
             self.annual_total.setText("年度合计：—")
 
     def _render_summaries(self, data: dict[str, Any]):
-        self._fill_group_table(self.platform_table, data.get("platform_summary", []))
-        self._fill_group_table(self.category_table, data.get("category_summary", []))
-
-        # 季度矩阵
-        q_rows = data.get("quarterly_rows", [])
-        self.quarter_table.setRowCount(len(q_rows))
-        for r_idx, row in enumerate(q_rows):
-            vals = [
-                (row["year"], None, False),
-                (_fmt_money(row["q1"], signed=True), row["q1"], True),
-                (_fmt_money(row["q2"], signed=True), row["q2"], True),
-                (_fmt_money(row["q3"], signed=True), row["q3"], True),
-                (_fmt_money(row["q4"], signed=True), row["q4"], True),
-                (_fmt_money(row["year_pnl"], signed=True), row["year_pnl"], True),
-                (_fmt_pct(row["year_rate"], signed=True), row["year_rate"], True),
-            ]
-            self._set_row(self.quarter_table, r_idx, vals)
-
-        # 月度趋势
-        m_rows = data.get("monthly_trend", [])
-        self.trend_table.setRowCount(len(m_rows))
-        for r_idx, row in enumerate(m_rows):
-            vals = [
-                (row["month"], None, False),
-                (_fmt_money(row["begin_mv"]), None, False),
-                (_fmt_money(row["end_mv"]), None, False),
-                (_fmt_money(row["buy_amount"]), None, False),
-                (_fmt_money(row["sell_amount"]), None, False),
-                (_fmt_money(row["net_flow"], signed=True), None, False),
-                (_fmt_money(row["pnl"], signed=True), row["pnl"], True),
-                (_fmt_pct(row["rate"], signed=True), row["rate"], True),
-                (_fmt_money(row["cum_pnl"], signed=True), row["cum_pnl"], True),
-            ]
-            self._set_row(self.trend_table, r_idx, vals)
-
-    def _fill_group_table(self, tbl: QTableWidget, rows: list[dict[str, Any]]):
-        tbl.setRowCount(len(rows))
-        for r_idx, row in enumerate(rows):
-            vals = [
-                (row["name"], None, False),
-                (_fmt_money(row["asset"]), None, False),
-                (_fmt_money(row["cost"]), None, False),
-                (str(row["open_count"]), None, False),
-                (_fmt_pct(row["weight"]), None, False),
-                (_fmt_money(row["closed_pnl"], signed=True), row["closed_pnl"], True),
-                (_fmt_money(row["floating_pnl"], signed=True), row["floating_pnl"], True),
-                (_fmt_money(row["year_pnl"], signed=True), row["year_pnl"], True),
-                (_fmt_money(row["total_pnl"], signed=True), row["total_pnl"], True),
-                (str(row["win_count"]), None, False),
-                (str(row["loss_count"]), None, False),
-                (_fmt_money(row["gap"]), None, False),
-            ]
-            self._set_row(tbl, r_idx, vals)
-
-    def _set_row(self, tbl: QTableWidget, r_idx: int, cells: list[tuple[str, Decimal | None, bool]]):
-        t = tokens(self)
-        for c_idx, (text, num_val, colored) in enumerate(cells):
-            item = QTableWidgetItem(text)
-            item.setTextAlignment(
-                (Qt.AlignmentFlag.AlignLeft if c_idx == 0 else Qt.AlignmentFlag.AlignRight)
-                | Qt.AlignmentFlag.AlignVCenter
+        def _group_report(report_name: str, first_col: str, rows: list[dict[str, Any]]) -> Report:
+            cols = (first_col, "当前资产(¥)", "持仓成本(¥)", "持仓数", "资产占比", "已清仓收益(¥)",
+                    "浮动盈亏(¥)", "本年盈亏(¥)", "总盈亏(¥)", "盈利数", "亏损数", "回本缺口(¥)")
+            r_rows = tuple(
+                ReportRow(
+                    (
+                        r["name"],
+                        r["asset"],
+                        r["cost"],
+                        r["open_count"],
+                        r["weight"],
+                        r["closed_pnl"],
+                        r["floating_pnl"],
+                        r["year_pnl"],
+                        r["total_pnl"],
+                        r["win_count"],
+                        r["loss_count"],
+                        r["gap"],
+                    ),
+                    {},
+                )
+                for r in rows
             )
-            if colored and num_val is not None:
-                if num_val > 0:
-                    item.setForeground(QColor(t.profit))
-                elif num_val < 0:
-                    item.setForeground(QColor(t.loss))
-                else:
-                    item.setForeground(QColor(t.muted))
-            tbl.setItem(r_idx, c_idx, item)
+            return Report(report_name, cols, r_rows)
+
+        q_cols = ("年份", "一季度盈亏(¥)", "二季度盈亏(¥)", "三季度盈亏(¥)", "四季度盈亏(¥)", "全年盈亏(¥)", "全年收益率")
+        q_rows = tuple(
+            ReportRow(
+                (r["year"], r["q1"], r["q2"], r["q3"], r["q4"], r["year_pnl"], r["year_rate"]),
+                {},
+            )
+            for r in data.get("quarterly_rows", [])
+        )
+
+        m_cols = ("月份", "月初市值(¥)", "月末市值(¥)", "当月买入(¥)", "当月卖出(¥)", "当月净投入(¥)", "当月收益(¥)", "当月收益率", "累计收益(¥)")
+        m_rows = tuple(
+            ReportRow(
+                (
+                    r["month"],
+                    r["begin_mv"],
+                    r["end_mv"],
+                    r["buy_amount"],
+                    r["sell_amount"],
+                    r["net_flow"],
+                    r["pnl"],
+                    r["rate"],
+                    r["cum_pnl"],
+                ),
+                {},
+            )
+            for r in data.get("monthly_trend", [])
+        )
+
+        self.summaries.set_reports({
+            "平台汇总": _group_report("平台汇总", "平台", data.get("platform_summary", [])),
+            "分类汇总": _group_report("分类汇总", "分类", data.get("category_summary", [])),
+            "季度矩阵": Report("季度矩阵", q_cols, q_rows),
+            "月度趋势": Report("月度趋势", m_cols, m_rows),
+        })
