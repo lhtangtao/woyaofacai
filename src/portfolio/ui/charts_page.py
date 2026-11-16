@@ -624,17 +624,23 @@ class ChartCanvas(QWidget):
             painter.setBrush(QColor("#FFFFFF"))
             painter.drawEllipse(pt, 4.5, 4.5)
 
-        # 4. 悬浮 Tooltip 卡片
-        header_text = f"时间：{x_text}" if chart.x_labels else str(h_key)
+        # 4. 悬浮 Tooltip 卡片（单系列时只展示时间与数值，去掉冗余文字）
+        header_text = str(x_text) if chart.x_labels else str(h_key)
         lines = []
         for s_name, val, _pt, c in matched:
             val_str = f"{val:+.2%}" if chart.ratio else f"{val:+,.2f}"
             lines.append((s_name, val_str, val, c))
 
-        box_w = max(170, fm.horizontalAdvance(header_text) + 28)
-        for s_name, val_str, _, _ in lines:
-            box_w = max(box_w, fm.horizontalAdvance(f"● {s_name}  {val_str}") + 30)
-        box_h = 34 + len(lines) * 22
+        single_series = len(lines) == 1
+        if single_series:
+            _, val_str, val, _ = lines[0]
+            box_w = max(96, fm.horizontalAdvance(header_text) + 24, fm.horizontalAdvance(val_str) + 24)
+            box_h = 54
+        else:
+            box_w = max(170, fm.horizontalAdvance(header_text) + 28)
+            for s_name, val_str, _, _ in lines:
+                box_w = max(box_w, fm.horizontalAdvance(f"● {s_name}  {val_str}") + 30)
+            box_h = 34 + len(lines) * 22
         bx = hx + 14 if hx + 14 + box_w <= left + width else hx - box_w - 14
         by = hy - box_h - 10 if hy - box_h - 10 >= top else hy + 14
         bx = max(float(left), min(float(left + width - box_w), bx))
@@ -645,19 +651,29 @@ class ChartCanvas(QWidget):
         painter.setBrush(QColor(255, 255, 255, 244))
         painter.drawRoundedRect(box_rect, 8, 8)
 
-        painter.setPen(QColor("#1E293B"))
-        painter.setFont(chart_font(12, bold=True))
-        painter.drawText(QRectF(bx + 10, by + 6, box_w - 20, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, header_text)
+        painter.setPen(QColor("#64748B") if single_series else QColor("#1E293B"))
+        painter.setFont(chart_font(11 if single_series else 12, bold=not single_series))
+        painter.drawText(
+            QRectF(bx + 10, by + 6, box_w - 20, 18),
+            (Qt.AlignmentFlag.AlignCenter if single_series else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            header_text,
+        )
 
-        painter.setFont(chart_font(11))
-        for i, (s_name, val_str, val, c) in enumerate(lines):
-            ry = by + 30 + i * 22
-            painter.setPen(c)
-            painter.drawText(QRectF(bx + 10, ry, box_w - 95, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"● {s_name}")
+        if single_series:
+            _, val_str, val, _ = lines[0]
             painter.setPen(QColor(t.profit if val > 0 else t.loss if val < 0 else t.heading))
-            painter.setFont(chart_font(11, bold=True))
-            painter.drawText(QRectF(bx + 10, ry, box_w - 20, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val_str)
+            painter.setFont(chart_font(13, bold=True))
+            painter.drawText(QRectF(bx + 10, by + 26, box_w - 20, 22), Qt.AlignmentFlag.AlignCenter, val_str)
+        else:
             painter.setFont(chart_font(11))
+            for i, (s_name, val_str, val, c) in enumerate(lines):
+                ry = by + 30 + i * 22
+                painter.setPen(c)
+                painter.drawText(QRectF(bx + 10, ry, box_w - 95, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"● {s_name}")
+                painter.setPen(QColor(t.profit if val > 0 else t.loss if val < 0 else t.heading))
+                painter.setFont(chart_font(11, bold=True))
+                painter.drawText(QRectF(bx + 10, ry, box_w - 20, 20), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, val_str)
+                painter.setFont(chart_font(11))
         painter.restore()
 
     def leaveEvent(self, event):

@@ -215,10 +215,4 @@ class IntradayPnlChart(QWidget):
             self.status.show()
         else:
             self.status.hide()
-            # 将诊断详情挂载在画布 tooltip，方便需要时悬停查看，不占据界面主视觉
-            tip_parts = []
-            if self.is_fallback:
-                tip_parts.append(f'所选日期 {self.target_day} 非美股交易日，已自动回溯至最近交易日 {self.day}')
-            if self.history_warning:
-                tip_parts.append(self.history_warning)
-            self.canvas.setToolTip('\n'.join(tip_parts) if tip_parts else '')
+            self.canvas.setToolTip('')
