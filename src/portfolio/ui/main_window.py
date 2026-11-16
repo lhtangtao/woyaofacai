@@ -201,14 +201,30 @@ class MainWindow(InteractionMixin, QMainWindow):
         elif lane == "analytics":
             self.jobs.pop("analytics", None)
             self.clear_analytics()
-            if message.startswith('原始数据或参考行情在计算期间变化'):
-                self.banner.show_status('账本或收盘基准正在更新，正在自动重试持仓计算；已有五分钟曲线可独立读取。', 'loading')
+            cur_scope = self.make_scope()
+            if getattr(self, "_analytics_retry_scope", None) != cur_scope:
+                self._analytics_retry_scope = cur_scope
+                self._analytics_retry_count = 0
+            retry_n = getattr(self, "_analytics_retry_count", 0)
+            if retry_n < 3:
+                self._analytics_retry_count = retry_n + 1
+                if message.startswith('原始数据或参考行情在计算期间变化'):
+                    self.banner.show_status(
+                        f'账本或收盘基准正在更新，正在自动重试（第 {self._analytics_retry_count}/3 次）…',
+                        'loading',
+                    )
+                else:
+                    self.banner.show_status(
+                        f'持仓计算失败，正在自动重试（第 {self._analytics_retry_count}/3 次）：{message}',
+                        'loading',
+                    )
                 QTimer.singleShot(1500, self.ensure_analytics)
             else:
                 if hasattr(self, "dashboard"):
                     self.dashboard.show_error(message)
                 if self.pages.currentIndex() != 0:
-                    self.banner.show_status(message, "error")
+                    self.banner.show_status(f'连续重试 3 次仍失败，正在自动重启应用：{message}', "error")
+                QTimer.singleShot(300, self._restart_application)
         elif lane == "provenance":
             self.detail.setPlainText(message)
         else:
@@ -814,6 +830,8 @@ class MainWindow(InteractionMixin, QMainWindow):
 
     def _analytics_ready(self, analytics):
         self.jobs.pop("analytics", None)
+        self._analytics_retry_count = 0
+        self._analytics_retry_scope = None
         if self.info is None:
             return
         if analytics.scope != self.make_scope():
@@ -1070,6 +1088,16 @@ class MainWindow(InteractionMixin, QMainWindow):
         worker.signals.error.connect(failure, Qt.ConnectionType.QueuedConnection)
         worker.signals.finished.connect(lambda: setattr(self, "_fx_busy", False), Qt.ConnectionType.QueuedConnection)
         self.pool.start(worker)
+
+    def _restart_application(self):
+        import sys
+        from PySide6.QtCore import QProcess
+        from PySide6.QtWidgets import QApplication
+        logger.error("[桌面端] 持仓计算连续重试 3 次仍失败，正在自动关闭并重启程序")
+        QProcess.startDetached(sys.executable, ["-m", "portfolio"])
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _start_domestic_auto_sync(self, *, force: bool = False):
         if getattr(self, "_domestic_sync_started", False) and not force:
