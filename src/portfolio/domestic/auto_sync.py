@@ -58,7 +58,7 @@ def sync_domestic_market_data(*, root=DOMESTIC_ASSETS_DIR) -> dict[str, Any]:
             logger.warning("同花顺在持收盘价自动同步失败: %s", exc)
 
         try:
-            check_recent_fund_nav(root_path, include_today=True)
+            check_recent_fund_nav(root_path, include_today=True, verbose=False)
         except Exception as exc:
             logger.warning("国内基金最近净值自动检查失败: %s", exc)
 

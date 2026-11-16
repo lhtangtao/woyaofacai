@@ -45,27 +45,30 @@ def expected_gaps(first, last, calendar, money, fields, stored):
     return gaps
 
 
-def check(root, *, today=None, include_today: bool = False):
+def check(root, *, today=None, include_today: bool = False, verbose: bool = True):
     root = Path(root)
     path = root / RAW_FILE
     if not path.is_file():
-        print("国内资产原始库尚未建立。", flush=True)
+        if verbose:
+            print("国内资产原始库尚未建立。", flush=True)
         return False
     with (root / ".recent-nav.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print("国内基金净值检查正在运行。", flush=True)
+            if verbose:
+                print("国内基金净值检查正在运行。", flush=True)
             return False
         return _check(
             root,
             path,
             today or datetime.now(ZoneInfo("Asia/Shanghai")).date(),
             include_today=include_today,
+            verbose=verbose,
         )
 
 
-def _check(root, path, today, *, include_today: bool = False):
+def _check(root, path, today, *, include_today: bool = False, verbose: bool = True):
     import akshare as ak
 
     first = max(START, today - timedelta(days=30))
@@ -210,8 +213,9 @@ def _check(root, path, today, *, include_today: bool = False):
             with connect(path) as db:
                 db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
                 counts = publish(db, "raw_fund_nav_daily", ("fund_code", "nav_date", "source"), candidates, collector)
-    print(f"{today} · 检查 {first} 至 {last} · {len(funds)} 只基金 · {gaps_before} 个候选缺口 · "
-          f"请求 {requested} 只 · 写入 {counts} · {len(collector.issues)} 项待核实", flush=True)
-    for issue in collector.issues:
-        print(encode(issue))
+    if verbose:
+        print(f"{today} · 检查 {first} 至 {last} · {len(funds)} 只基金 · {gaps_before} 个候选缺口 · "
+              f"请求 {requested} 只 · 写入 {counts} · {len(collector.issues)} 项待核实", flush=True)
+        for issue in collector.issues:
+            print(encode(issue))
     return bool(collector.issues)
