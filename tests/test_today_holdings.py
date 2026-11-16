@@ -223,12 +223,12 @@ def test_pnl_bar_and_asset_bar_share_selection_and_restore_colors(qtbot):
     # Positive/negative columns share one selected channel with the asset chart.
     for channel, normal_color in (('长桥', tokens(chart).profit), ('BBAE', tokens(chart).loss)):
         hit = chart.pnl_hits[channel]
-        sample = QPoint(int(hit.center().x()), 110 if channel == '长桥' else 245)
+        sample = hit.center().toPoint()
         qtbot.mouseClick(chart, Qt.MouseButton.LeftButton, pos=sample)
         assert chart.selected_channel == channel
         assert len(page.sorted_rows) == 1 and page.sorted_rows[0].values[0] == channel
         qtbot.wait(20)
-        assert chart.grab().toImage().pixelColor(sample) == QColor(tokens(chart).subtle)
+        assert chart.grab().toImage().pixelColor(sample) == QColor(normal_color)
         page.set_reports({'今日盈亏': report})
         assert chart.selected_channel == channel
         # Cancel via the other chart, then verify the P/L bar restores its sign color.
@@ -238,6 +238,10 @@ def test_pnl_bar_and_asset_bar_share_selection_and_restore_colors(qtbot):
         assert chart.grab().toImage().pixelColor(sample) == QColor(normal_color)
     qtbot.mouseClick(chart, Qt.MouseButton.LeftButton, pos=chart.pnl_hits['长桥'].center().toPoint())
     qtbot.mouseClick(chart, Qt.MouseButton.LeftButton, pos=chart.pnl_hits['长桥'].center().toPoint())
+    assert chart.selected_channel is None and len(page.sorted_rows) == 2
+    # Clicking white space below/outside the solid P/L bar should be ignored.
+    blank_below = QPoint(int(chart.pnl_hits['长桥'].center().x()), chart.height() - 10)
+    qtbot.mouseClick(chart, Qt.MouseButton.LeftButton, pos=blank_below)
     assert chart.selected_channel is None and len(page.sorted_rows) == 2
 
 

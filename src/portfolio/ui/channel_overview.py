@@ -74,14 +74,15 @@ class ChannelOverview(QWidget):
             selected = self.selected_channel == channel
             p.setOpacity(1 if self.selected_channel is None or selected else .3)
             color = t.profit if pnl is not None and pnl > 0 else t.loss if pnl is not None and pnl < 0 else t.muted
-            self.pnl_hits[channel] = QRectF(x, top, step, self.height()-top)
             text = (f'{"+" if pnl > 0 else "−" if pnl < 0 else ""}{"$" if self.unit == "USD" else "¥"}{abs(pnl):,.2f}'
                     if pnl is not None else '—')
             height = float(abs(pnl)) * scale if pnl is not None else 0
             y = baseline-height if pnl is not None and pnl >= 0 else baseline
+            bar_rect = QRectF(x+step*.25, y, step*.5, max(height, 1) if pnl is not None else 0)
+            self.pnl_hits[channel] = bar_rect
             p.setPen(QPen(QColor(t.brand), 2) if selected else Qt.PenStyle.NoPen)
             p.setBrush(QColor(color))
-            p.drawRect(QRectF(x+step*.25, y, step*.5, max(height, 1) if pnl is not None else 0))
+            p.drawRect(bar_rect)
             p.setPen(QColor(color))
             label_y = y-42
             p.drawText(QRectF(x-8, label_y, step+16, 20), Qt.AlignmentFlag.AlignCenter, text)
