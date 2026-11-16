@@ -91,6 +91,16 @@ def _matches_filter(
     return True
 
 
+def _open_total_pnl_of(row: dict[str, Any]) -> Decimal | None:
+    """读取持有中标的的累计总盈亏（含部分卖出已实现及现金分红），缺省时退回市值减成本。"""
+    pnl = _d(row.get("pnl")) if not row.get("return_issue") else None
+    if pnl is not None:
+        return pnl
+    mv = _d(row.get("market_value"))
+    cost = _d(row.get("cost"))
+    return (mv - cost) if (mv is not None and cost is not None) else None
+
+
 def build_domestic_overview(
     platform: str | None = None,
     asset_type: str | None = None,
@@ -101,14 +111,19 @@ def build_domestic_overview(
 ) -> dict[str, Any]:
     """构建国内资产总览全部数据（18 KPI 卡片、日历、月度/季度矩阵、平台/分类汇总与月度趋势）。"""
     h_data = holdings(root=root, valuation_date=valuation_date)
-    all_holdings = [r for r in h_data.get("rows", []) if not r.get("is_historical_baseline")]
+    # 保留用户确认的 2022 年前历史已清仓汇总基线（如 ALIPAY_PRE_2022_CLOSED +20,986.12），确保全时期总盈亏与已清仓收益完整
+    all_holdings = list(h_data.get("rows", []))
 
     perf = build_domestic_performance(root=root, start_date=start_date, valuation_date=valuation_date)
     all_daily = perf.daily_rows
     all_monthly = perf.monthly_rows
 
     platforms = sorted({str(r.get("platform") or "—") for r in all_holdings if r.get("platform")})
-    raw_types = sorted({str(r.get("fund_type") or "待分类") for r in all_holdings if r.get("fund_type")})
+    raw_types = sorted({
+        str(r.get("fund_type") or "待分类")
+        for r in all_holdings
+        if r.get("fund_type") and not r.get("is_historical_baseline")
+    })
 
     # 过滤持仓与明细
     f_holdings = [
@@ -316,13 +331,9 @@ def build_domestic_overview(
         cur_year_rate = year_agg[cur_year]["rate"] if cur_year in year_agg else None
         prev_year_pnl = year_agg[prev_year]["pnl"] if prev_year in year_agg else None
 
-        # 全时期总盈亏：优先与最新累计总盈亏口径一致（所有已清仓 + 当前持仓盈亏之和，若无则用每日累计）
-        total_all_pnl = _sum_known(
-            [
-                closed_pnl,
-                floating_pnl,
-            ]
-        )
+        # 全时期总盈亏：已清仓累计收益（含2022前历史基线） + 当前持有中标的累计总盈亏（含部分卖出已实现与现金分红）
+        open_total_pnl = _sum_known(_open_total_pnl_of(r) for r in open_rows)
+        total_all_pnl = _sum_known([closed_pnl, open_total_pnl])
         # 同时计算全时期累计收益率（以累计净投入或历史总买入为基数）
         total_buy_base = _sum_known(
             (_d(r.get("buy_amount")) or Decimal(0)) + (_d(r.get("transfer_in_amount")) or Decimal(0))
@@ -508,7 +519,8 @@ def build_domestic_overview(
                     for x in g_open
                 )
                 g_closed_pnl = _sum_known(_closed_pnl_of(x) for x in g_closed)
-                g_total_pnl = _sum_known([g_closed_pnl, g_float])
+                g_open_total_pnl = _sum_known(_open_total_pnl_of(x) for x in g_open)
+                g_total_pnl = _sum_known([g_closed_pnl, g_open_total_pnl])
                 g_year_pnl = _sum_known(x.get("daily_pnl") for x in grouped_d_year.get(name, []))
 
                 w_cnt = 0
