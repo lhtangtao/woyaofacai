@@ -52,6 +52,16 @@ def _ratio(num: Decimal | None, den: Decimal | None) -> Decimal | None:
         return num / den
 
 
+def _closed_pnl_of(row: dict[str, Any]) -> Decimal | None:
+    """统一读取已清仓标的的已实现盈亏（兼容基金 last_confirmed_total_pnl 与同花顺 realized_pnl）。"""
+    val = row.get("last_confirmed_total_pnl")
+    if val is None:
+        val = row.get("realized_pnl")
+    if val is None and not row.get("return_issue"):
+        val = row.get("pnl")
+    return _d(val)
+
+
 def _classify_asset_group(fund_type: str | None) -> str:
     ft = str(fund_type or "").strip()
     if "股票" in ft and ("A股" in ft or ft == "股票" or "同花顺" in ft):
@@ -133,7 +143,7 @@ def build_domestic_overview(
             else _d(r.get("pnl"))
             for r in open_rows
         )
-        closed_pnl = _sum_known(r.get("realized_pnl") for r in closed_rows)
+        closed_pnl = _sum_known(_closed_pnl_of(r) for r in closed_rows)
         # 回本缺口：在持亏损标的亏损绝对值之和
         loss_gaps = []
         for r in visible_open:
@@ -497,7 +507,7 @@ def build_domestic_overview(
                     else _d(x.get("pnl"))
                     for x in g_open
                 )
-                g_closed_pnl = _sum_known(x.get("realized_pnl") for x in g_closed)
+                g_closed_pnl = _sum_known(_closed_pnl_of(x) for x in g_closed)
                 g_total_pnl = _sum_known([g_closed_pnl, g_float])
                 g_year_pnl = _sum_known(x.get("daily_pnl") for x in grouped_d_year.get(name, []))
 

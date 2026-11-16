@@ -26,11 +26,11 @@ def test_build_domestic_overview_aggregates_and_filters():
         assert kpis[required]["value"] is not None, f"{required} should not be None"
     assert data["monthly_trend"] and data["monthly_trend"][0]["pnl"] is not None
 
-    # 平台汇总应包含同级别渠道（支付宝、天天基金、同花顺等）
-    plat_names = {r["name"] for r in data["platform_summary"]}
-    assert "天天基金" in plat_names
-    assert "支付宝" in plat_names
-    assert "同花顺" in plat_names
+    # 平台汇总应包含同级别渠道（支付宝、天天基金、同花顺等），且均包含已清仓收益
+    plat_map = {r["name"]: r for r in data["platform_summary"]}
+    assert {"天天基金", "支付宝", "同花顺"}.issubset(plat_map.keys())
+    for p_name in ("天天基金", "支付宝", "同花顺"):
+        assert plat_map[p_name]["closed_pnl"] is not None, f"{p_name} closed_pnl should not be None"
 
     # 按渠道过滤联动
     ths_only = build_domestic_overview(platform="同花顺")
