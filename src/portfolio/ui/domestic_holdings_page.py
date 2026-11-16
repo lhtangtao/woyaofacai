@@ -20,7 +20,8 @@ from portfolio.ui.holdings_page import ModernMetricCard
 from portfolio.ui.theme import numeric_font
 from portfolio.ui.domestic_holdings_dashboard import (
     BLUE, GREEN, RED, STYLE, Contribution, Distribution, HoldingsDelegate, PlatformList, ResponsiveGrid, TrendView,
-    closed_metrics, closed_trend_points, holding_metrics, money, panel, percent, trend_combo_points, trend_points,
+    build_domestic_holding_analysis, closed_metrics, closed_trend_points, holding_metrics, money, panel, percent,
+    trend_combo_points, trend_points,
 )
 
 POSITIONS = dict(fund_name="基金名称", fund_code="基金代码", platform="交易平台", fund_type="基金类型",
@@ -579,7 +580,7 @@ class DomesticHoldingsPage(QWidget):
         holdings_layout.setContentsMargins(0, 8, 0, 0)
         holdings_layout.setSpacing(6)
         self.detail_tabs.addTab(holdings_tab, "持仓分析")
-        th_lbl = QLabel("持仓与市值轨迹")
+        th_lbl = QLabel("持仓与成本轨迹")
         th_lbl.setStyleSheet("color: #0F172A; font-size: 13px; font-weight: 700;")
         holdings_layout.addWidget(th_lbl)
         self.trend_range = combo([("近6个月", 6), ("近1年", 12), ("全部", 0), ("自定义", -1)])
@@ -593,10 +594,10 @@ class DomesticHoldingsPage(QWidget):
             holdings_tab,
             qty_label="持仓份额",
             qty_unit="份",
-            cost_label="持仓市值",
-            cost_axis_label="市值 (CNY)",
+            cost_label="持仓成本价",
+            cost_axis_label="成本价 (CNY/份)",
             cost_prefix="¥",
-            cost_suffix="",
+            cost_suffix="/份",
         )
         self.holdings_canvas.setMinimumHeight(260)
         holdings_layout.addWidget(self.holdings_canvas, 1)
@@ -1050,14 +1051,10 @@ class DomesticHoldingsPage(QWidget):
         layout.addWidget(view)
 
     def render_trend(self, *_):
-        period = self.trend_range.currentData()
-        rows = self.detail.get("history", [])
-        if period == -1:
-            start, end = self.trend_start.text(), self.trend_end.text()
-            rows = [r for r in rows if (not start or r["month"] >= start) and (not end or r["month"] <= end)]
-        elif period:
-            rows = rows[-period:]
-        dates = [str(r["month"]) for r in rows]
-        quantities = [float(r["holding_shares"]) if r.get("holding_shares") is not None else None for r in rows]
-        costs = [float(r["market_value"]) if r.get("market_value") is not None else None for r in rows]
-        self.holdings_canvas.set_data({"dates": dates, "quantities": quantities, "costs": costs})
+        rows = self.detail.get("rows", [])
+        current_row = rows[0] if rows else None
+        h_data = build_domestic_holding_analysis(
+            self.detail.get("transactions", []),
+            current_row=current_row,
+        )
+        self.holdings_canvas.set_data(h_data)

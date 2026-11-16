@@ -116,6 +116,67 @@ def closed_metrics(rows):
                 profit_count=len(profits), rate_count=len(eligible), day_count=len(days))
 
 
+def build_domestic_holding_analysis(transactions, current_row=None):
+    """按交易日回放基金持有份额与单位持仓成本价，供双轴持仓轨迹图使用。"""
+    valid = [
+        t for t in (transactions or [])
+        if t.get("confirmation_date")
+        and t.get("parse_status", "正常") == "正常"
+        and str(t.get("confirmation_status") or "") not in ("失败", "撤单", "已撤单", "作废")
+    ]
+    valid.sort(key=lambda t: (str(t.get("confirmation_date") or ""), str(t.get("id") or "")))
+
+    qty = Decimal(0)
+    cost = Decimal(0)
+    by_day = {}
+    for t in valid:
+        dt = str(t["confirmation_date"])[:10]
+        kind = str(t.get("kind") or "")
+        sh = Decimal(str(t["confirmed_shares"])) if t.get("confirmed_shares") is not None else Decimal(0)
+        amt = Decimal(str(t["confirmed_amount"])) if t.get("confirmed_amount") is not None else Decimal(0)
+
+        if "红利再投" in kind or "分红转投" in kind:
+            if sh > 0:
+                qty += sh
+        elif any(k in kind for k in ("买", "定投", "申购", "转入", "强增", "建仓")):
+            if sh > 0:
+                qty += sh
+                if amt > 0:
+                    cost += amt
+        elif any(k in kind for k in ("卖", "赎回", "转出", "清仓")):
+            sell_sh = abs(sh)
+            if sell_sh > 0 and qty > 0:
+                released = cost if sell_sh >= qty else cost * sell_sh / qty
+                cost = max(Decimal(0), cost - released)
+                qty = max(Decimal(0), qty - sell_sh)
+                if qty == 0:
+                    cost = Decimal(0)
+        elif "缩" in kind or "折算" in kind:
+            if sh < 0:
+                qty = max(Decimal(0), qty + sh)
+            elif sh > 0:
+                qty += sh
+        avg_cost = (cost / qty) if qty > 0 and cost > 0 else None
+        by_day[dt] = (qty, avg_cost)
+
+    if current_row:
+        end_dt = str(current_row.get("nav_date") or current_row.get("as_of") or "")[:10]
+        cur_sh_raw = current_row.get("shares")
+        cur_cost_raw = current_row.get("cost")
+        if end_dt and cur_sh_raw is not None:
+            cur_sh = Decimal(str(cur_sh_raw))
+            if cur_sh > 0 and (not by_day or end_dt > max(by_day)):
+                cur_avg = (Decimal(str(cur_cost_raw)) / cur_sh) if cur_cost_raw is not None and Decimal(str(cur_cost_raw)) > 0 else None
+                by_day[end_dt] = (cur_sh, cur_avg)
+
+    dates = sorted(by_day)
+    return {
+        "dates": dates,
+        "quantities": [float(by_day[d][0]) for d in dates],
+        "costs": [float(by_day[d][1]) if by_day[d][1] is not None else None for d in dates],
+    }
+
+
 DOMESTIC_TREND_START = date(2022, 1, 1)
 
 
