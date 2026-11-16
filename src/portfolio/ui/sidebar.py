@@ -21,9 +21,8 @@ GROUPS = (
               ("Top日汇总", 17, "chart", "day"),
               ("Top月汇总", 17, "chart", "month"),
               ("收益排行榜", 5, "chart", 15))),
-    ("系统管理", (("数据源检查", 1, "database", None), ("数据中心", 6, "database", None),
-              ("Excel 对账", 8, "table", None), ("指标说明", 9, "table", None),
-              ("数据同步 · 未开放", 11, "refresh", "sync"), ("开发进度", 12, "table", None), ("设置", 13, "grid", None))),
+    ("系统管理", (("数据同步 · 未开放", 11, "refresh", "sync"),
+              ("开发进度", 12, "table", None), ("设置", 13, "grid", None))),
 )
 
 
