@@ -1641,6 +1641,7 @@ class HoldingsPage(QWidget):
         lt_layout.addWidget(self.closed_table_header)
 
         self.detail_table = FinanceTable(freeze=False)
+        self.detail_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.detail_model = HoldingsTableModel(self.detail_table)
         self.detail_model.columns = OPEN_HOLDINGS_COLUMNS
         self.detail_table.setModel(self.detail_model)
@@ -2129,6 +2130,14 @@ class HoldingsPage(QWidget):
         else:
             self.detail_model.toggle_sort(column)
 
+    def _fit_detail_table_height(self):
+        """根据当前显示行数自动撑开持仓明细表高度，禁用内部垂直滚动条以避免双滚动条。"""
+        row_cnt = self.detail_model.rowCount()
+        row_h = self.detail_table.verticalHeader().defaultSectionSize() or 36
+        header_h = self.detail_table.horizontalHeader().height() or 36
+        h_scroll = 16 if self.detail_table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff else 2
+        self.detail_table.setFixedHeight(max(160, header_h + row_cnt * row_h + h_scroll + 4))
+
     def _apply_open_pagination(self):
         self.detail_model.replace(self._open_all_rows)
         sorted_rows = list(self.detail_model.rows)
@@ -2148,6 +2157,7 @@ class HoldingsPage(QWidget):
 
         self.open_page_lbl.setText(f"{self._open_page} / {total_pages}")
         self.open_prev_btn.setEnabled(self._open_page > 1)
+        self._fit_detail_table_height()
         self.open_next_btn.setEnabled(self._open_page < total_pages)
 
     def switch_view_mode(self, mode: str):
@@ -2641,7 +2651,6 @@ class HoldingsPage(QWidget):
         self.closed_table_header.setVisible(closed)
         self.open_table_footer.setVisible(not closed)
         self.detail_info.setVisible(closed)
-        self.detail_table.setMinimumHeight(360 if closed else 340)
         mode = ("account" if self.closed_mode.currentIndex() == 1 else "person") if closed else "open"
         account_ids = self.main_window.accounts.selected_ids() if closed and self.main_window else None
         open_payload = None
@@ -2932,6 +2941,7 @@ class HoldingsPage(QWidget):
 
         if closed:
             self.detail_model.replace(rows)
+            self._fit_detail_table_height()
         else:
             self._open_all_rows = list(rows)
             self._apply_open_pagination()
