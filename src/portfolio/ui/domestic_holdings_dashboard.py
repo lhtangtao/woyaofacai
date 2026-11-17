@@ -65,11 +65,13 @@ def holding_metrics(rows):
         values_by_code = defaultdict(Decimal)
         prepared = []
         for row in rows:
-            value, cost, shares = (Decimal(row[key]) if row.get(key) is not None else None
-                                   for key in ("market_value", "cost", "shares"))
+            value, raw_cost, shares = (Decimal(row[key]) if row.get(key) is not None else None
+                                       for key in ("market_value", "cost", "shares"))
             if value is not None:
                 values_by_code[row["fund_code"]] += value
-            # 浮动盈亏严格等于「当前持仓市值 - 剩余持仓成本」，与抽屉累计盈亏区分
+            pnl_val = Decimal(row["pnl"]) if (row.get("pnl") is not None and not row.get("return_issue")) else None
+            # 统一采用摊薄成本（净投入 = 市值 - 累计盈亏；若缺累计盈亏则退回移动成本）
+            cost = (value - pnl_val) if (value is not None and pnl_val is not None) else raw_cost
             floating_val = value - cost if value is not None and cost is not None else None
             floating_rate = (
                 floating_val / cost * 100
@@ -146,27 +148,37 @@ def build_domestic_holding_analysis(transactions, current_row=None):
         elif any(k in kind for k in ("卖", "赎回", "转出", "清仓")):
             sell_sh = abs(sh)
             if sell_sh > 0 and qty > 0:
-                released = cost if sell_sh >= qty else cost * sell_sh / qty
-                cost = max(Decimal(0), cost - released)
+                # 摊薄成本：卖出/赎回直接扣减净投入金额，高卖减仓时剩余份额成本价随之下降
+                if amt > 0:
+                    cost -= amt
                 qty = max(Decimal(0), qty - sell_sh)
                 if qty == 0:
                     cost = Decimal(0)
+        elif "分红" in kind:
+            if amt > 0:
+                cost -= amt
         elif "缩" in kind or "折算" in kind:
             if sh < 0:
                 qty = max(Decimal(0), qty + sh)
             elif sh > 0:
                 qty += sh
-        avg_cost = (cost / qty) if qty > 0 and cost > 0 else None
+        avg_cost = (cost / qty) if qty > 0 else None
         by_day[dt] = (qty, avg_cost)
 
     if current_row:
         end_dt = str(current_row.get("nav_date") or current_row.get("as_of") or "")[:10]
         cur_sh_raw = current_row.get("shares")
-        cur_cost_raw = current_row.get("cost")
+        mv_raw = current_row.get("market_value")
+        pnl_raw = current_row.get("pnl") if not current_row.get("return_issue") else None
+        cur_cost_raw = (
+            Decimal(str(mv_raw)) - Decimal(str(pnl_raw))
+            if (mv_raw is not None and pnl_raw is not None)
+            else current_row.get("cost")
+        )
         if end_dt and cur_sh_raw is not None:
             cur_sh = Decimal(str(cur_sh_raw))
             if cur_sh > 0 and (not by_day or end_dt > max(by_day)):
-                cur_avg = (Decimal(str(cur_cost_raw)) / cur_sh) if cur_cost_raw is not None and Decimal(str(cur_cost_raw)) > 0 else None
+                cur_avg = (Decimal(str(cur_cost_raw)) / cur_sh) if cur_cost_raw is not None else None
                 by_day[end_dt] = (cur_sh, cur_avg)
 
     dates = sorted(by_day)

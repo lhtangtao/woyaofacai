@@ -1272,34 +1272,75 @@ class HoldingsManagementService:
         sorted_daily_dates = sorted(daily_by_date.keys())
 
         # Tab 2: 持仓分析 (Quantity and Cost changes over time)
+        # 注意：每日持仓收益报表为券商账户维度（不含 person_id），当指定具体 person_id 时必须基于交易回放按人员隔离还原，避免同账户他人操作串入轨迹
         holding_analysis = {"dates": [], "quantities": [], "costs": []}
-        if sorted_daily_dates:
-            for dt in sorted_daily_dates:
-                rec = daily_by_date[dt]
-                qty_val = rec["qty"]
-                c_per_share = None
-                if qty_val > 0:
-                    if rec["net"] > 0:
+        person_replay_built = False
+        if person_id is not None and analytics:
+            replay_rep = analytics.reports.get("交易回放")
+            if replay_rep and getattr(replay_rep, "rows", None):
+                matched_replay = []
+                for rr in replay_rep.rows:
+                    rmeta = getattr(rr, "metadata", {}) or {}
+                    rtk = str(rr.values[3] or "").upper() if len(rr.values) > 3 else ""
+                    if rtk != ticker:
+                        continue
+                    if rmeta.get("person_id") != person_id:
+                        continue
+                    if account_id is not None and rmeta.get("account_id") is not None and rmeta.get("account_id") != account_id:
+                        continue
+                    if instrument_id is not None and rmeta.get("instrument_id") is not None and rmeta.get("instrument_id") != instrument_id:
+                        continue
+                    if broker and not _match_broker(broker, rmeta.get("display_name") or rr.values[1], rr.values[1]):
+                        continue
+                    matched_replay.append(rr)
+                if matched_replay:
+                    # 交易回放通常按时间倒序排列，反转为正序以取每日最后一笔状态
+                    by_day: dict[str, tuple[Decimal, Decimal | None]] = {}
+                    for rr in reversed(matched_replay):
+                        rmeta = getattr(rr, "metadata", {}) or {}
+                        dt = str(rmeta.get("business_date") or rr.values[0])[:10]
+                        raw_q = rr.values[9] if len(rr.values) > 9 and isinstance(rr.values[9], Decimal) else Decimal(0)
+                        raw_avg_cost = rr.values[11] if len(rr.values) > 11 and isinstance(rr.values[11], Decimal) else None
+                        if raw_q <= 0:
+                            raw_avg_cost = None
+                        r_inst = rmeta.get("instrument_id") or instrument_id
+                        r_acc = rmeta.get("account_id") or account_id
+                        sf, is_adj, _ = _compute_split_adjustment(
+                            r_inst, r_acc, dt, as_of_iso, actions_map, accounts_map
+                        )
+                        adj_q = (raw_q * sf) if is_adj else raw_q
+                        adj_c = (raw_avg_cost / sf) if (is_adj and raw_avg_cost is not None) else raw_avg_cost
+                        by_day[dt] = (adj_q, adj_c)
+                    for dt in sorted(by_day.keys()):
+                        q_val, c_val = by_day[dt]
+                        holding_analysis["dates"].append(dt)
+                        holding_analysis["quantities"].append(serialize_val(q_val) if q_val is not None else 0)
+                        holding_analysis["costs"].append(serialize_val(c_val) if c_val is not None else None)
+                    person_replay_built = True
+
+        if not person_replay_built:
+            if sorted_daily_dates and person_id is None:
+                for dt in sorted_daily_dates:
+                    rec = daily_by_date[dt]
+                    qty_val = rec["qty"]
+                    c_per_share = None
+                    if qty_val > 0:
                         c_per_share = rec["net"] / qty_val
-                    else:
-                        valid_costs = [c for c in rec["cost_list"] if c is not None and c > 0]
-                        if valid_costs:
-                            c_per_share = sum(valid_costs) / Decimal(len(valid_costs))
-                holding_analysis["dates"].append(dt)
-                holding_analysis["quantities"].append(serialize_val(qty_val) if qty_val is not None else 0)
-                holding_analysis["costs"].append(serialize_val(c_per_share) if c_per_share is not None else None)
-        else:
-            # 无每日持仓收益记录时，按交易日期聚合当日最终状态（绝不用当前成本价覆盖历史成本）
-            by_trade_day: dict[str, dict[str, Any]] = {}
-            for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
-                dt = str(t["trade_time"])[:10]
-                by_trade_day[dt] = t
-            for dt in sorted(by_trade_day.keys()):
-                t = by_trade_day[dt]
-                q = t.get("post_quantity")
-                holding_analysis["dates"].append(dt)
-                holding_analysis["quantities"].append(q if q is not None else 0)
-                holding_analysis["costs"].append(None)
+                    holding_analysis["dates"].append(dt)
+                    holding_analysis["quantities"].append(serialize_val(qty_val) if qty_val is not None else 0)
+                    holding_analysis["costs"].append(serialize_val(c_per_share) if c_per_share is not None else None)
+            else:
+                # 无按人员区分的回放/持仓记录时，按该人员自己的交易日期聚合当日最终状态
+                by_trade_day: dict[str, dict[str, Any]] = {}
+                for t in sorted(trade_records, key=lambda x: str(x["trade_time"])):
+                    dt = str(t["trade_time"])[:10]
+                    by_trade_day[dt] = t
+                for dt in sorted(by_trade_day.keys()):
+                    t = by_trade_day[dt]
+                    q = t.get("post_quantity")
+                    holding_analysis["dates"].append(dt)
+                    holding_analysis["quantities"].append(q if q is not None else 0)
+                    holding_analysis["costs"].append(None)
 
         # 4. Tab 3: 收益分析 (PnL Analysis - 真实每日盈亏、累计盈亏、剩余持仓浮动盈亏与三类收益率)
         chart_dates = []

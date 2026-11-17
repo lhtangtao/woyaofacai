@@ -99,6 +99,7 @@ class _HoldingCostCanvas(QWidget):
         self._quantities: list[float | None] = []
         self._costs: list[float | None] = []
         self._qty_max: float = 10.0
+        self._cost_min: float = 0.0
         self._cost_max: float = 10.0
         self._spans_years: bool = False
 
@@ -125,7 +126,7 @@ class _HoldingCostCanvas(QWidget):
             q = quantities[idx] if idx < len(quantities) else None
             c = costs[idx] if idx < len(costs) else None
             q_val = float(q) if q is not None else None
-            c_val = float(c) if (c is not None and float(c) > 0) else None
+            c_val = float(c) if c is not None else None
             parsed.append((d_str, d_obj.toordinal(), q_val, c_val))
 
         # 按日期升序并去重（同日保留最后状态）
@@ -143,9 +144,16 @@ class _HoldingCostCanvas(QWidget):
         self._spans_years = len(years) > 1
 
         max_q = max((q for q in self._quantities if q is not None and q > 0), default=0.0)
-        max_c = max((c for c in self._costs if c is not None and c > 0), default=0.0)
+        valid_c = [c for c in self._costs if c is not None]
+        max_c = max(valid_c, default=0.0)
+        min_c = min(valid_c, default=0.0)
         self._qty_max = _nice_upper(max_q * 1.08 if max_q > 0 else 0.0, default=10.0)
-        self._cost_max = _nice_upper(max_c * 1.08 if max_c > 0 else 0.0, default=100.0)
+        if min_c < 0:
+            self._cost_min = -_nice_upper(abs(min_c) * 1.08, default=10.0)
+            self._cost_max = _nice_upper(max_c * 1.08, default=10.0) if max_c > 0 else 0.0
+        else:
+            self._cost_min = 0.0
+            self._cost_max = _nice_upper(max_c * 1.08 if max_c > 0 else 0.0, default=100.0)
         self._hover_idx = None
         self.update()
 
@@ -280,7 +288,8 @@ class _HoldingCostCanvas(QWidget):
 
             if self.show_cost:
                 painter.setPen(QColor(ORANGE))
-                lbl = _fmt_cost_tick(self._cost_max * ratio_y)
+                c_val_tick = self._cost_min + (self._cost_max - self._cost_min) * ratio_y
+                lbl = _fmt_cost_tick(c_val_tick)
                 painter.drawText(QRectF(plot.right() + 6, y - 9, right_pad - 8, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lbl)
 
         xs = self._compute_x_positions(plot)
@@ -305,8 +314,9 @@ class _HoldingCostCanvas(QWidget):
             return plot.bottom() - (clamped / self._qty_max) * plot.height()
 
         def y_cost(c: float) -> float:
-            clamped = max(0.0, min(self._cost_max, c))
-            return plot.bottom() - (clamped / self._cost_max) * plot.height()
+            span = (self._cost_max - self._cost_min) or 1.0
+            clamped = max(self._cost_min, min(self._cost_max, c))
+            return plot.bottom() - ((clamped - self._cost_min) / span) * plot.height()
 
         # 1. 蓝色：持仓股数（阶梯折线 + 柔和填充）
         if self.show_qty:
