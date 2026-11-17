@@ -71,8 +71,15 @@ def load_history(source,quotes,scope,start,end,*,aggregate=False,channels=None,t
         from portfolio.services.derived_store import digest
         checkpoint=store.get('intraday-state',digest((canonical.ledger,canonical.person_ids,canonical.as_of)))
         old=loads(inputs[person,day]) if (person,day) in inputs else None
-        if checkpoint and old and old[2:]==revision[2:] and checkpoint['price_hash']==quotes.prefix_identity(day,checkpoint['last'],checkpoint['price_ids']):
-            valid.add((person,day))
+        if (
+            old
+            and old[1:3] == revision[1:3]
+            and (
+                status == 'NO_EXPOSURE'
+                or (checkpoint and checkpoint['price_hash'] == quotes.prefix_identity(day, checkpoint['last'], checkpoint['price_ids']))
+            )
+        ):
+            valid.add((person, day))
         else:states[person,day]={'state':'INVALID','reason':'D_QUOTE_DEPENDENCY','warning':'依赖已变化或旧计算尚未校验，等待后台重算；不在图表中回放。'}
     if progress:progress('校验历史分区',len(partitions),len(partitions))
     # Reject incomplete owner sets before touching the much larger amount table.
