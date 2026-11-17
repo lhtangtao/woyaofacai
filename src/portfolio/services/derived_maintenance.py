@@ -128,11 +128,16 @@ def schedule_changed(source,start=None):
         if prior and monotonic()-prior[1]<60:return 'RETRY_LATER'
         def work():
             from portfolio.derived import rebuild
+            from portfolio.services.derived_store import SourceChangedError
             try:
                 return rebuild(store.source,mode='changed',start=min(start or date(2025,1,1),date(2025,1,1)),automatic=True)
             except BuildBusyError:
                 # Follow the actual owner's shared progress; never overwrite it.
                 return {'state':'BUILDING'}
+            except SourceChangedError as exc:
+                import logging
+                logging.getLogger(__name__).info('后台派生库生成期间依赖变化，保留原有效代并等待重试：%s', exc)
+                return {'state':'RETRY_LATER'}
             except Exception:
                 import logging
                 logging.getLogger(__name__).exception('Background derived generation failed')

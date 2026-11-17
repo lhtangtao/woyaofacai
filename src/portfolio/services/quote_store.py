@@ -214,7 +214,7 @@ class QuoteStore:
             local = datetime.fromisoformat(stamp).astimezone(NY)
             day = local.date() + (timedelta(days=1) if phase == 'Overnight' and local.hour >= 20 else timedelta())
             values.append((symbol, day.isoformat(), phase, price, stamp))
-        connection.executemany('INSERT INTO daily_quote_snapshots VALUES (?,?,?,?,?) ON CONFLICT(symbol,day,session) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at WHERE excluded.quoted_at>daily_quote_snapshots.quoted_at OR (excluded.quoted_at=daily_quote_snapshots.quoted_at AND excluded.price<>daily_quote_snapshots.price)', values)
+        connection.executemany('INSERT INTO daily_quote_snapshots VALUES (?,?,?,?,?) ON CONFLICT(symbol,day,session) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at WHERE excluded.quoted_at>=daily_quote_snapshots.quoted_at AND excluded.price<>daily_quote_snapshots.price', values)
 
     def historical_quotes(self, as_of, now=None, *, readonly=False):
         """Archive latest-cache migration; completed US days only, never official closes.
