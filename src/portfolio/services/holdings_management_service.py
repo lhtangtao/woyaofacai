@@ -1310,6 +1310,8 @@ class HoldingsManagementService:
                         )
                         adj_q = (raw_q * sf) if is_adj else raw_q
                         adj_c = (raw_avg_cost / sf) if (is_adj and raw_avg_cost is not None) else raw_avg_cost
+                        if adj_c is not None and adj_c < 0:
+                            adj_c = Decimal(0)
                         by_day[dt] = (adj_q, adj_c)
                     for dt in sorted(by_day.keys()):
                         q_val, c_val = by_day[dt]
@@ -1325,7 +1327,7 @@ class HoldingsManagementService:
                     qty_val = rec["qty"]
                     c_per_share = None
                     if qty_val > 0:
-                        c_per_share = rec["net"] / qty_val
+                        c_per_share = max(Decimal(0), rec["net"] / qty_val)
                     holding_analysis["dates"].append(dt)
                     holding_analysis["quantities"].append(serialize_val(qty_val) if qty_val is not None else 0)
                     holding_analysis["costs"].append(serialize_val(c_per_share) if c_per_share is not None else None)

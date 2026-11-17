@@ -194,7 +194,7 @@ def test_holding_metrics_uses_diluted_cost_and_satisfies_cost_plus_pnl_equals_ma
     ]
     curve = build_domestic_holding_analysis(txs)
     assert curve["quantities"] == [100.0, 50.0, 25.0]
-    assert curve["costs"] == [1.0, 0.4, -1.2]
+    assert curve["costs"] == [1.0, 0.4, 0.0]
 
 
 def test_trend_combo_points_computes_cumulative_and_daily_pnl():

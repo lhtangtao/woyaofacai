@@ -162,7 +162,7 @@ def build_domestic_holding_analysis(transactions, current_row=None):
                 qty = max(Decimal(0), qty + sh)
             elif sh > 0:
                 qty += sh
-        avg_cost = (cost / qty) if qty > 0 else None
+        avg_cost = max(Decimal(0), cost / qty) if qty > 0 else None
         by_day[dt] = (qty, avg_cost)
 
     if current_row:
@@ -178,7 +178,7 @@ def build_domestic_holding_analysis(transactions, current_row=None):
         if end_dt and cur_sh_raw is not None:
             cur_sh = Decimal(str(cur_sh_raw))
             if cur_sh > 0 and (not by_day or end_dt > max(by_day)):
-                cur_avg = (Decimal(str(cur_cost_raw)) / cur_sh) if cur_cost_raw is not None else None
+                cur_avg = max(Decimal(0), Decimal(str(cur_cost_raw)) / cur_sh) if cur_cost_raw is not None else None
                 by_day[end_dt] = (cur_sh, cur_avg)
 
     dates = sorted(by_day)
