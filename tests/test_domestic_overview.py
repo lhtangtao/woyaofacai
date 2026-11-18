@@ -44,6 +44,16 @@ def test_build_domestic_overview_aggregates_and_filters():
         q_sum = sum((q_row[k] for k in ("q1", "q2", "q3", "q4") if q_row[k] is not None), Decimal(0))
         assert abs(q_sum - q_row["year_pnl"]) < Decimal("0.01")
 
+    # 资产总览的当前总资产、浮动盈亏必须与持仓管理页面完全一致（均采用摊薄成本）
+    from portfolio.domestic.holdings_query import holdings
+    from portfolio.ui.domestic_holdings_dashboard import holding_metrics
+    from portfolio.ui.domestic_holdings_page import show_in_overview
+
+    open_rows = [r for r in holdings()["rows"] if show_in_overview(r) and r.get("current_position_status") == "持有中"]
+    _, h_stats = holding_metrics(open_rows)
+    assert abs(h_stats["market"] - kpis["当前总资产"]["value"]) < Decimal("0.01")
+    assert abs(h_stats["floating"] - kpis["浮动盈亏"]["value"]) < Decimal("0.01")
+
     # 按渠道过滤联动
     ths_only = build_domestic_overview(platform="同花顺")
     assert len(ths_only["kpis"]) == 18

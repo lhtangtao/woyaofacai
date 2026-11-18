@@ -101,6 +101,16 @@ def _open_total_pnl_of(row: dict[str, Any]) -> Decimal | None:
     return (mv - cost) if (mv is not None and cost is not None) else None
 
 
+def _diluted_open_metrics(row: dict[str, Any]) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    """按与持仓管理一致的摊薄成本口径返回 (market_value, diluted_cost, floating_pnl)。"""
+    mv = _d(row.get("market_value"))
+    raw_cost = _d(row.get("cost"))
+    pnl_val = _d(row.get("pnl")) if not row.get("return_issue") else None
+    cost = (mv - pnl_val) if (mv is not None and pnl_val is not None) else raw_cost
+    fl = (mv - cost) if (mv is not None and cost is not None) else None
+    return mv, cost, fl
+
+
 def build_domestic_overview(
     platform: str | None = None,
     asset_type: str | None = None,
@@ -150,36 +160,18 @@ def build_domestic_overview(
 
     with localcontext() as ctx:
         ctx.prec = 50
-        total_assets = _sum_known(r.get("market_value") for r in open_rows)
-        total_cost = _sum_known(r.get("cost") for r in open_rows)
-        floating_pnl = _sum_known(
-            (_d(r.get("market_value")) - _d(r.get("cost")))
-            for r in open_rows
-            if _d(r.get("market_value")) is not None and _d(r.get("cost")) is not None
-        )
+        open_metrics = [_diluted_open_metrics(r) for r in visible_open]
+        total_assets = _sum_known(m[0] for m in open_metrics)
+        total_cost = _sum_known(m[1] for m in open_metrics if m[2] is not None)
+        floating_pnl = _sum_known(m[2] for m in open_metrics if m[2] is not None)
         closed_pnl = _sum_known(_closed_pnl_of(r) for r in closed_rows)
         # 回本缺口：在持亏损标的亏损绝对值之和
-        loss_gaps = []
-        for r in visible_open:
-            mv = _d(r.get("market_value"))
-            cost = _d(r.get("cost"))
-            fl = (mv - cost) if (mv is not None and cost is not None) else _d(r.get("pnl"))
-            if fl is not None and fl < 0:
-                loss_gaps.append(-fl)
+        loss_gaps = [-fl for _, _, fl in open_metrics if fl is not None and fl < 0]
         breakeven_gap = sum(loss_gaps, Decimal(0)) if visible_open else None
 
         # 持仓胜率
-        win_count = 0
-        loss_count = 0
-        for r in visible_open:
-            mv = _d(r.get("market_value"))
-            cost = _d(r.get("cost"))
-            fl = (mv - cost) if (mv is not None and cost is not None) else _d(r.get("pnl"))
-            if fl is not None:
-                if fl > 0:
-                    win_count += 1
-                elif fl < 0:
-                    loss_count += 1
+        win_count = sum(1 for _, _, fl in open_metrics if fl is not None and fl > 0)
+        loss_count = sum(1 for _, _, fl in open_metrics if fl is not None and fl < 0)
         win_rate = _ratio(Decimal(win_count), Decimal(len(visible_open))) if visible_open else None
 
         # 累计净投入与累计现金分红
@@ -192,10 +184,15 @@ def build_domestic_overview(
         )
         total_cash_dividend = _sum_known(r.get("cash_dividend") or Decimal(0) for r in f_holdings)
 
-        # 按日汇总（保留缺失不补 0）
+        # 按日汇总（保留缺失不补 0；仅保留存在实际净值披露日以内的日期，避免未出净值日沿用昨日价呈现虚假 0.00）
+        max_real_nav_day = max((str(r.get("nav_date") or "")[:10] for r in open_rows if r.get("nav_date")), default="")
         day_agg: dict[str, dict[str, Any]] = {}
         by_day_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in f_daily:
+            if max_real_nav_day and r["date"] > max_real_nav_day:
+                # 仅当当日确实发生了资金交易才保留，否则跳过未出净值的占位日
+                if not (_d(r.get("net_cash_in")) and _d(r.get("net_cash_in")) != 0):
+                    continue
             by_day_rows[r["date"]].append(r)
 
         sorted_days = sorted(by_day_rows.keys())
@@ -506,31 +503,18 @@ def build_domestic_overview(
                     x for x in g_open
                     if (_d(x.get("market_value")) is None or _d(x.get("market_value")) >= Decimal("1"))
                 ]
-                g_asset = _sum_known(x.get("market_value") for x in g_open) or Decimal(0)
-                g_cost = _sum_known(x.get("cost") for x in g_open)
-                g_float = _sum_known(
-                    (_d(x.get("market_value")) - _d(x.get("cost")))
-                    for x in g_open
-                    if _d(x.get("market_value")) is not None and _d(x.get("cost")) is not None
-                )
+                g_metrics = [_diluted_open_metrics(x) for x in g_vis_open]
+                g_asset = _sum_known(m[0] for m in g_metrics) or Decimal(0)
+                g_cost = _sum_known(m[1] for m in g_metrics if m[2] is not None)
+                g_float = _sum_known(m[2] for m in g_metrics if m[2] is not None)
                 g_closed_pnl = _sum_known(_closed_pnl_of(x) for x in g_closed)
                 g_open_total_pnl = _sum_known(_open_total_pnl_of(x) for x in g_open)
                 g_total_pnl = _sum_known([g_closed_pnl, g_open_total_pnl])
                 g_year_pnl = _sum_known(x.get("daily_pnl") for x in grouped_d_year.get(name, []))
 
-                w_cnt = 0
-                l_cnt = 0
-                g_gap = Decimal(0)
-                for x in g_vis_open:
-                    mv = _d(x.get("market_value"))
-                    c = _d(x.get("cost"))
-                    fl = (mv - c) if (mv is not None and c is not None) else _d(x.get("pnl"))
-                    if fl is not None:
-                        if fl > 0:
-                            w_cnt += 1
-                        elif fl < 0:
-                            l_cnt += 1
-                            g_gap += -fl
+                w_cnt = sum(1 for _, _, fl in g_metrics if fl is not None and fl > 0)
+                l_cnt = sum(1 for _, _, fl in g_metrics if fl is not None and fl < 0)
+                g_gap = sum((-fl for _, _, fl in g_metrics if fl is not None and fl < 0), Decimal(0))
 
                 out.append({
                     "name": name,
