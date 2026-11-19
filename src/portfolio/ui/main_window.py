@@ -270,6 +270,10 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "trade_center"):self.trade_center.invalidate()
         self._fx_attempt = None
         self.sensitive.setChecked(False)
+        if self.analytics_service is not None:
+            with self.analytics_service._lock:
+                self.analytics_service._cache.clear()
+                self.analytics_service._ownership_cache.clear()
         self.service = TradesService(path)
         self.analytics_service = AnalyticsService(path, fx_store=self.fx_store, quote_store=self.quote_store)
         self.info = None
@@ -908,7 +912,6 @@ class MainWindow(InteractionMixin, QMainWindow):
             else:
                 self.earnings_page.signature = None
                 logger.debug("[桌面端] 当前不在财报日历页，跳过财报刷新，待切换到该页时再加载")
-        self.preload_people_bundle()
         self.preload_ownership_bundle()
         if self.pages.currentIndex() == 22:
             self.holdings_page.set_inline_status("")

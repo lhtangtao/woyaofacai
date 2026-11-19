@@ -28,7 +28,7 @@ def people_catalog(connection, scope):
     return tuple((row['id'], row['name']) for row in connection.execute(query + ' ORDER BY id', params))
 
 
-def load_snapshot(connection, scope, *, cancel=None, with_prices=True):
+def load_snapshot(connection, scope, *, cancel=None, with_prices=True, with_raw_index=True, raw_index_limit=500):
     # Date-range/search filters must never remove the opening history of a position.
     full_scope = replace(scope, start_date=None, search="", audit=False)
     query, params = _base_query(full_scope, fees_available=has_fee_data(connection))
@@ -117,6 +117,13 @@ def load_snapshot(connection, scope, *, cancel=None, with_prices=True):
         extras[name] = [dict(r) for r in connection.execute(f"SELECT * FROM {name}")]
     extras["raw_review"] = [dict(r) for r in connection.execute("SELECT id,source_locator,parse_status,parse_message,payload_json FROM raw_records WHERE parse_status IN ('PENDING','REVIEW_REQUIRED')")]
     extras["aliases"] = aliases
-    if with_prices:
-        extras["raw_index"] = [dict(r) for r in connection.execute("SELECT id,import_batch_id,source_locator,source_sheet,source_row,record_kind,parse_status FROM raw_records ORDER BY id DESC")]
+    if with_prices and with_raw_index:
+        limit_sql = f" LIMIT {int(raw_index_limit)}" if raw_index_limit and raw_index_limit > 0 else ""
+        extras["raw_index"] = [
+            dict(r)
+            for r in connection.execute(
+                "SELECT id,import_batch_id,source_locator,source_sheet,source_row,record_kind,parse_status "
+                f"FROM raw_records ORDER BY id DESC{limit_sql}"
+            )
+        ]
     return Snapshot(scope, events, instruments, accounts, persons, actions, baselines, prices, extras, issues)

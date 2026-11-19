@@ -82,7 +82,12 @@ class AnalyticsService:
         def _build_book(connection, sub_scope):
             if cancel and cancel.is_set():
                 raise ValueError('计算已取消。')
-            snapshot = load_snapshot(connection, replace(sub_scope, reporting_currency="USD"), cancel=cancel)
+            snapshot = load_snapshot(
+                connection,
+                replace(sub_scope, reporting_currency="USD"),
+                cancel=cancel,
+                with_raw_index=False,
+            )
             if self.quote_store:
                 self.quote_store.supplement(snapshot)
             positions, traces, _ = replay(snapshot, cancel=cancel)
@@ -119,7 +124,10 @@ class AnalyticsService:
             raise ValueError('源库在人员核对期间发生变化，请刷新重试。')
         bundle = PeopleBundle(aggregate, tuple(persons), broker)
         with self._lock:
-            if len(self._ownership_cache) >= 8:
+            stale = [k for k in self._ownership_cache if k[0] != identity]
+            for k in stale:
+                self._ownership_cache.pop(k, None)
+            while len(self._ownership_cache) >= 2:
                 self._ownership_cache.pop(next(iter(self._ownership_cache)))
             self._ownership_cache[key] = bundle
         return bundle
@@ -272,7 +280,11 @@ class AnalyticsService:
                 from portfolio.services.derived_store import SourceChangedError
                 raise SourceChangedError("原始数据或参考行情在计算期间变化，请刷新重试；未发布本次结果。")
             with self._lock:
-                if len(self._cache) >= 32:
+                # 源数据或行情身份变化后，旧身份缓存永不可能再命中，立即驱逐避免数 GB 内存堆积
+                stale = [k for k in self._cache if k[0] != key[0]]
+                for k in stale:
+                    self._cache.pop(k, None)
+                while len(self._cache) >= 8:
                     self._cache.pop(next(iter(self._cache)))
                 self._cache[key] = result
             return result

@@ -32,3 +32,24 @@ def test_ownership_bundle_parity_and_cache(demo_path):
             full_res = analyze(full_bundle, inst_id, catalog, {}, None, now, status=status)
             fast_res = analyze(fast_bundle, inst_id, catalog, {}, None, now, status=status)
             assert fast_res == full_res
+
+
+def test_stale_identity_cache_eviction_prevents_memory_bloat(demo_path, monkeypatch):
+    """源数据/行情身份变化后，旧身份缓存应立即驱逐，且 raw_index 不会全表膨胀。"""
+    service = AnalyticsService(demo_path)
+    rev = ["v1"]
+    orig_id = service.identity
+    monkeypatch.setattr(service, "identity", lambda: (*orig_id(), rev[0]))
+
+    scope1 = QueryScope(date(2026, 11, 14), person_ids=(1,))
+    scope2 = QueryScope(date(2026, 11, 14), person_ids=(2,))
+    res1 = service.calculate(scope1)
+    service.calculate(scope2)
+    assert len(service._cache) == 2
+    assert len(res1.reports["原始记录"].rows) <= 500
+
+    # 身份变更后重新计算，旧身份的 2 条失效缓存必须全部被驱逐，仅保留新身份的 1 条
+    rev[0] = "v2"
+    service.calculate(scope1)
+    assert len(service._cache) == 1
+    assert all(k[0][-1] == "v2" for k in service._cache)

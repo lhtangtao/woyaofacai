@@ -1,3 +1,9 @@
+## 2026-11-20 00:13 修复桌面端长时间运行内存膨胀至 5GB+ 的问题
+
+- 修改者：Antigravity（代码修改）
+- `load_snapshot` 限制 `raw_index` 仅读取最近 500 条（`calculate_ownership_bundle` 完全跳过），单次 `Analytics` 内存由 170.5MB 降至 48.3MB；
+- `AnalyticsService._cache` / `_ownership_cache` 在行情或源库身份变化时立即驱逐旧身份失效缓存并下调上限至 8 / 2；移除主窗口冗余的全量 `preload_people_bundle()` 预热，重连时主动清空旧缓存；真实库实测与 27 项测试通过。
+
 ## 2026-11-19 22:58 升级微操引擎与每月微操收益页（双口径/跨月窗口/正反T拆分/未配对纠偏）
 
 - 修改者：Antigravity（代码修改）
