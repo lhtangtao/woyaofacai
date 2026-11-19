@@ -18,6 +18,13 @@ class DatePicker(QDateEdit):
         self.setToolTip('点击日期打开日历选择。')
         self.month_mode = False
         self.month_end = False
+        self.track_today_max = False
+
+    def _refresh_today_max(self):
+        if getattr(self, 'track_today_max', False):
+            today = QDate.currentDate()
+            if self.maximumDate() < today:
+                self.setMaximumDate(today)
 
     def set_month_mode(self, enabled, *, month_end=False):
         self.month_mode, self.month_end = enabled, month_end
@@ -25,6 +32,7 @@ class DatePicker(QDateEdit):
         self.setToolTip('选择年份和月份。' if enabled else '点击日期打开日历选择。')
 
     def open_months(self):
+        self._refresh_today_max()
         if hasattr(self, '_month_popup'):
             self.month_year.setRange(self.minimumDate().year(), self.maximumDate().year())
             self.month_year.setValue(self.date().year())
@@ -73,6 +81,7 @@ class DatePicker(QDateEdit):
         menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
 
     def open_calendar(self):
+        self._refresh_today_max()
         if self.month_mode:
             self.open_months()
             return

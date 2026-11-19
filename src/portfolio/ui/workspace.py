@@ -153,6 +153,7 @@ def build_workspace(self):
     self.as_of = DatePicker(QDate.currentDate())
     self.holding_date = DatePicker(QDate.currentDate())
     self.holding_date.setDateRange(QDate(2025, 1, 1), QDate.currentDate())
+    self.holding_date.track_today_max = True
     self.holding_date.setDisplayFormat('yyyy-MM-dd')
     self.holding_date.setToolTip('选择估值日期；今天使用实时行情，历史日期查看截至当天的持仓与盈亏。')
     self.holding_date.hide()
@@ -161,6 +162,7 @@ def build_workspace(self):
         control.setCalendarPopup(True)
         control.setDisplayFormat("yyyy-MM-dd")
         control.setDateRange(QDate(2025, 1, 1), QDate.currentDate())
+        control.track_today_max = True
     self.start_enabled = QCheckBox("限制起始日期")
     self.start.setEnabled(False)
     self.date_button = QToolButton()

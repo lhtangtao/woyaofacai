@@ -124,7 +124,10 @@ def test_ui_reloads_completed_history_and_advances_default_today_on_rollover(qtb
     w.quote_store = NS(history_identity=lambda: tuple(version))
     current = [QDate(2026, 10, 19)]
     monkeypatch.setattr(live_quotes, 'QDate', NS(currentDate=lambda: current[0]))
+    w.holding_date.setMaximumDate(current[0])
     w.holding_date.setDate(current[0])
+    w.as_of.setMaximumDate(current[0])
+    w.as_of.setDate(current[0])
     calls = []
     w.clear_analytics = lambda: calls.append('clear')
     w.refresh = lambda: calls.append('refresh')
@@ -136,12 +139,26 @@ def test_ui_reloads_completed_history_and_advances_default_today_on_rollover(qtb
     calls.clear()
     current[0] = QDate(2026, 10, 20)
     assert panel.refresh_history()
+    assert w.holding_date.maximumDate() == current[0]
     assert w.holding_date.date() == current[0]
-    # A manually selected historical date stays historical on the next day.
+    assert w.as_of.maximumDate() == current[0]
+    assert w.as_of.date() == current[0]
+    # A manually selected historical date stays historical on the next day, while maximumDate still advances.
     w.holding_date.setDate(QDate(2026, 10, 16))
     current[0] = QDate(2026, 10, 21)
     assert panel.refresh_history()
+    assert w.holding_date.maximumDate() == current[0]
     assert w.holding_date.date() == QDate(2026, 10, 16)
+    # Clicking refresh (reconnect) or opening calendar when maximumDate was stuck on yesterday unlocks today.
+    yesterday = QDate.currentDate().addDays(-1)
+    w.holding_date.setMaximumDate(yesterday)
+    w.holding_date.setDate(yesterday)
+    w.sync_maximum_dates(advance_default_today=True)
+    assert w.holding_date.maximumDate() == QDate.currentDate()
+    assert w.holding_date.date() == QDate.currentDate()
+    w.holding_date.setMaximumDate(yesterday)
+    w.holding_date._refresh_today_max()
+    assert w.holding_date.maximumDate() == QDate.currentDate()
 
 
 def test_later_calendar_refresh_keeps_old_half_day_snapshot_status(tmp_path):

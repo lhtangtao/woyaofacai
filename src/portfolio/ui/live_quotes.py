@@ -77,6 +77,8 @@ class LiveQuotesPanel(QWidget):
     def refresh_saved_charts(self):
         """Saved curves must not wait for full financial reports or a live feed."""
         window=self.window
+        if hasattr(window,'sync_maximum_dates'):
+            window.sync_maximum_dates(QDate.currentDate())
         if not getattr(window,'info',None) or not getattr(self,'source_path',None) or getattr(self,'is_demo',True) or not window.today_snapshot():return
         scope=window.make_scope()
         if scope.reporting_currency!='USD':return
@@ -282,16 +284,25 @@ class LiveQuotesPanel(QWidget):
         """Rebind on rollover/new completed snapshots, outside the quote loop."""
         if not self.window.quote_store or getattr(self.window, 'info', None) is None or self.analytics is None or getattr(self, 'is_demo', True):
             return False
-        local_day = QDate.currentDate().toString('yyyy-MM-dd')
+        today = QDate.currentDate()
+        local_day = today.toString('yyyy-MM-dd')
         from portfolio.services.derived_dependencies import source_identity
-        signature = (local_day,self.window.quote_store.history_identity(),source_identity(self.source_path,financial_only=True))
+        src_id = source_identity(self.source_path, financial_only=True) if self.source_path else None
+        signature = (local_day, self.window.quote_store.history_identity(), src_id)
         prior, self.history_signature = self.history_signature, signature
         if prior is None or prior == signature:
             return False
-        if prior[0] != local_day and self.window.holding_date.date().toString('yyyy-MM-dd') == prior[0]:
-            self.window.holding_date.blockSignals(True)
-            self.window.holding_date.setDate(QDate.currentDate())
-            self.window.holding_date.blockSignals(False)
+        if prior[0] != local_day:
+            if hasattr(self.window, 'sync_maximum_dates'):
+                self.window.sync_maximum_dates(today)
+            if self.window.holding_date.date().toString('yyyy-MM-dd') == prior[0]:
+                self.window.holding_date.blockSignals(True)
+                self.window.holding_date.setDate(today)
+                self.window.holding_date.blockSignals(False)
+            if hasattr(self.window, 'as_of') and self.window.as_of.date().toString('yyyy-MM-dd') == prior[0]:
+                self.window.as_of.blockSignals(True)
+                self.window.as_of.setDate(today)
+                self.window.as_of.blockSignals(False)
         self.window.clear_analytics()
         self.window.refresh()
         return True

@@ -115,6 +115,13 @@ class OwnershipAnalysisPage(QWidget):
         if not self.isVisible():return
         main=self.window()
         if not getattr(main,'analytics_service',None) or not getattr(main,'info',None):return
+        today=QDate.currentDate()
+        old_max=self.date.maximumDate()
+        if old_max<today:
+            was_at_max=self.date.date()==old_max
+            self.date.blockSignals(True);self.date.setMaximumDate(today)
+            if was_at_max:self.date.setDate(today)
+            self.date.blockSignals(False)
         identity=(str(main.info.path),self.date.date().toString('yyyy-MM-dd'))
         if self.busy:return
         prior=self.bundle if self.identity==identity and not force else None
@@ -296,7 +303,7 @@ class OwnershipAnalysisPage(QWidget):
         self.table.header().setSortIndicator(1,Qt.SortOrder.DescendingOrder)
         if self.bundle:self._populate_stock_combo(choices(self.bundle,status='holding'))
         elif self.stock.count():self.stock.setCurrentIndex(0)
-        self.date.setDate(QDate.currentDate());self.activate(True)
+        self.date.setMaximumDate(QDate.currentDate());self.date.setDate(QDate.currentDate());self.activate(True)
     def export(self):
         if not self.data:return
         path,_=QFileDialog.getSaveFileName(self,'导出股票归属与成本分析','股票归属与成本分析.csv','CSV (*.csv)')

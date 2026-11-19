@@ -137,6 +137,8 @@ class InteractionMixin:
         elif name in CHECKS:
             control.setChecked(False)
             if name == "start_enabled":
+                if hasattr(self, "sync_maximum_dates"):
+                    self.sync_maximum_dates()
                 self.start.setDate(QDate(2025, 1, 1))
                 self.as_of.setDate(QDate.currentDate())
         else:
@@ -166,6 +168,8 @@ class InteractionMixin:
                 self.stock.lineEdit().clear()
         self.source_file.clear()
         self.accounts.reset()
+        if hasattr(self, "sync_maximum_dates"):
+            self.sync_maximum_dates()
         self.start.setDate(QDate(2025, 1, 1))
         self.as_of.setDate(QDate.currentDate())
         self.holding_date.setDate(QDate.currentDate())
@@ -317,6 +321,8 @@ class InteractionMixin:
         self.heading.setToolTip(str(self.info.path) if trade_page and self.info else "")
         if self.fixed_asset_period() and self.start_enabled.isChecked():
             self._filter_batch = True
+            if hasattr(self, "sync_maximum_dates"):
+                self.sync_maximum_dates()
             self.start_enabled.setChecked(False)
             self.start.setDate(QDate(2025, 1, 1))
             self.as_of.setDate(QDate.currentDate())

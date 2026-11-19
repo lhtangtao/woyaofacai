@@ -355,7 +355,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             if identifier in self.accounts.actions_by_id:
                 self.accounts.actions_by_id[identifier].setChecked(True)
         self.as_of.blockSignals(True)
-        self.as_of.setMaximumDate(QDate.currentDate())
+        self.sync_maximum_dates()
         saved_end = QDate.fromString(state.get('as_of', ''), 'yyyy-MM-dd')
         saved_start = QDate.fromString(state.get('start', ''), 'yyyy-MM-dd')
         is_drill = state.get('start_enabled') and saved_start.isValid() and saved_end.isValid() and saved_start == saved_end
@@ -671,7 +671,36 @@ class MainWindow(InteractionMixin, QMainWindow):
             reporting_currency=self.currency.currentData(),
         )
 
+    def sync_maximum_dates(self, today=None, *, advance_default_today=False):
+        if today is None:
+            today = QDate.currentDate()
+        for attr in ("as_of", "holding_date", "start"):
+            control = getattr(self, attr, None)
+            if control is None:
+                continue
+            old_max = control.maximumDate()
+            if old_max < today:
+                was_at_max = attr in ("as_of", "holding_date") and control.date() == old_max
+                control.blockSignals(True)
+                control.setMaximumDate(today)
+                if advance_default_today and was_at_max:
+                    control.setDate(today)
+                control.blockSignals(False)
+            elif old_max != today:
+                control.setMaximumDate(today)
+        if hasattr(self, "asset_page") and getattr(self.asset_page, "ownership_page", None):
+            own_date = self.asset_page.ownership_page.date
+            old_own_max = own_date.maximumDate()
+            if old_own_max < today:
+                was_at_own_max = own_date.date() == old_own_max
+                own_date.blockSignals(True)
+                own_date.setMaximumDate(today)
+                if advance_default_today and was_at_own_max:
+                    own_date.setDate(today)
+                own_date.blockSignals(False)
+
     def refresh(self):
+        self.sync_maximum_dates()
         if hasattr(self, "trade_center") and self.pages.currentIndex() == 0:
             self.filters_widget.hide();self.stat_widget.hide();self.live_panel.hide();self.banner.hide()
             self.side.hide();self.export_button.show()
@@ -953,6 +982,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.navigation.setCurrentRow(0)
             return
         if kind == "live_day":
+            self.sync_maximum_dates()
             self.holding_date.setDate(QDate.currentDate())
             self.navigation.select(3, "今日盈亏")
             return
@@ -1145,6 +1175,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.domestic_overview_page.reload(force=True)
             return
         if self.service:
+            self.sync_maximum_dates(advance_default_today=True)
             state = self.capture_state()
             self.open_database(self.service.path, restore=state)
         else:
