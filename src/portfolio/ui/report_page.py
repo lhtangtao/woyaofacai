@@ -252,7 +252,12 @@ class ReportPage(QWidget):
         self.stock_status_filter.hide()
         self.today_overview.hide()
         self.channel_overview.hide()
-        self.intraday_chart.hide()
+        if self.selector.currentText() == '今日盈亏' and getattr(self, 'trend_mode', 0) == 0:
+            self.intraday_chart.show_loading()
+            self.intraday_chart.show()
+        else:
+            self.intraday_chart.canvas.set_loading('')
+            self.intraday_chart.hide()
         self.intraday_chart.key = None
         if getattr(self, 'trend_widget', None) is not None:
             self.trend_widget.hide()

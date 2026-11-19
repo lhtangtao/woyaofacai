@@ -74,11 +74,71 @@ class IntradayPnlChart(QWidget):
         self.target_day = ''
         self.is_fallback = False
         self.history, self.history_warning, self.key = (), '', None
+        self.history_state = None
+        self.session = None
+        self.has_report = False
         self.hide()
+
+    def show_loading(self, message: str = ''):
+        text = message or '正在加载当日五分钟走势…\n正在计算持仓与获取五分钟行情，完成后将自动展示'
+        self.alert.hide()
+        self.status.hide()
+        self.canvas.set_loading(text)
+
+    def _loading_message(self, search: str = '', channel=None) -> str:
+        if self.error:
+            return ''
+        # 已有当日五分钟数据时，若因搜索或渠道筛选导致无匹配点，则直接显示空状态而非加载中
+        if self.history and (search.strip() or channel is not None):
+            return ''
+        state = self.history_state if isinstance(self.history_state, dict) else {}
+        overall = state.get('state', '')
+        pipe = state.get('pipeline') if isinstance(state.get('pipeline'), dict) else {}
+        pipe_state = pipe.get('state', '')
+        pipe_running = bool(pipe.get('running', False))
+        if overall == 'EMPTY_AUTHORIZED_SCOPE' or pipe_state in (
+            'NO_HOLDINGS', 'NO_SESSION', 'CREDENTIALS_MISSING',
+            'CONNECTION_FAILED', 'CALCULATION_FAILED', 'FAILED',
+        ):
+            return ''
+        win = self.window()
+        analytics_job = getattr(win, 'jobs', {}).get('analytics') if win else None
+        analytics_busy = analytics_job is not None and not analytics_job.cancel.is_set()
+        live_status = ''
+        if win and hasattr(win, 'live_panel') and getattr(win.live_panel, 'status', None):
+            live_status = win.live_panel.status.text() or ''
+        live_connecting = live_status.startswith(('正在', '等待'))
+        active_pipe = pipe_state in (
+            'INITIALIZING', 'STARTING', 'COLLECTING', 'CONNECTING',
+            'FETCHING', 'CALCULATING', 'WAITING_RESPONSE',
+        )
+        is_loading = (
+            overall == 'BUILDING'
+            or active_pipe
+            or analytics_busy
+            or (not self.has_report)
+            or live_connecting
+            or (pipe_running and overall in ('', 'NOT_GENERATED', 'INVALID', 'PARTIAL'))
+        )
+        if not is_loading:
+            return ''
+        pipe_msg = (pipe.get('message') or '').strip()
+        if active_pipe and pipe_msg:
+            detail = pipe_msg
+        elif overall == 'BUILDING' and state.get('message'):
+            detail = str(state['message']).strip()
+        elif live_connecting:
+            detail = f'{live_status}，五分钟走势计算完成后将自动展示'
+        else:
+            detail = '正在获取五分钟K线并计算当日盈亏，完成后将自动展示'
+        return f'正在加载当日五分钟走势…\n{detail}'
 
     def bind(self, store, source_path, scope, report, session, now, *, record=False, trading_days=()):
         self.error = ''
         self.scope = scope
+        self.session = session
+        self.has_report = report is not None
+        self.history_state = None
         self.person_names = {}
         self.day, self.target_day, self.is_fallback = _resolve_effective_day(
             scope.as_of, session, report, trading_days
@@ -98,12 +158,14 @@ class IntradayPnlChart(QWidget):
         try:
             from portfolio.services.derived_queries import day_history
             self.history, state = day_history(source_path, store, scope, self.day)
+            self.history_state = state
             self.history_warning = state.get('message', '')
             report_day = next((r.metadata.get('trading_day') for r in report.rows if r.metadata.get('trading_day')), '') if report and report.rows else ''
             if not self.history and report_day and report_day != self.day and session is None:
                 fallback_history, fallback_state = day_history(source_path, store, scope, report_day)
                 if fallback_history:
                     self.history = fallback_history
+                    self.history_state = fallback_state
                     self.day = report_day
                     self.is_fallback = True
                     self.history_warning = fallback_state.get('message', '')
@@ -203,16 +265,38 @@ class IntradayPnlChart(QWidget):
                                   show_points=False,
                                   vertical_lines=tuple(vertical_lines),
                                   highlight_extremes=True)
-        self.canvas.update()
         # 底层行情采集诊断、五分钟K线断线补全与数据库落库等调试信息不打扰用户
         self.alert.hide()
         fallback_tag = f'［所选日期 {self.target_day} 非美股交易日，已自动回溯至最近交易日 {self.day}］ ' if self.is_fallback else ''
-        if self.error:
-            self.status.setText(fallback_tag + self.error)
-            self.status.show()
-        elif not complete:
-            self.status.setText(fallback_tag + '暂无完整当日走势数据')
-            self.status.show()
-        else:
+        if complete:
+            self.canvas.empty_message = None
+            self.canvas.set_loading('')
             self.status.hide()
             self.canvas.setToolTip('')
+        else:
+            loading_msg = self._loading_message(search, channel)
+            if loading_msg:
+                self.canvas.empty_message = None
+                self.canvas.set_loading(loading_msg)
+                self.status.hide()
+            else:
+                self.canvas.set_loading('')
+                pipe_state = (self.history_state or {}).get('pipeline', {}).get('state', '') if isinstance(self.history_state, dict) else ''
+                if self.error:
+                    self.canvas.empty_message = self.error
+                    self.status.setText(fallback_tag + self.error)
+                    self.status.show()
+                elif self.history and (search.strip() or channel is not None):
+                    self.canvas.empty_message = '当前筛选条件下暂无当日走势数据'
+                    self.status.hide()
+                elif pipe_state == 'NO_HOLDINGS':
+                    self.canvas.empty_message = '当日暂无需要五分钟行情的美股持仓'
+                    self.status.hide()
+                elif pipe_state == 'CREDENTIALS_MISSING':
+                    self.canvas.empty_message = '未找到长桥行情凭证，无法获取当日五分钟走势'
+                    self.status.hide()
+                else:
+                    self.canvas.empty_message = '暂无完整当日走势数据\n请稍候刷新或检查行情日期'
+                    self.status.setText(fallback_tag + '暂无完整当日走势数据')
+                    self.status.show()
+            self.canvas.update()

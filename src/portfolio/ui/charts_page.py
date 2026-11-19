@@ -503,18 +503,30 @@ class ChartCanvas(QWidget):
         if not hasattr(self, "loading_timer"):
             self.loading_angle = 0
             self.loading_timer = QTimer(self)
-            self.loading_timer.setInterval(80)
+            self.loading_timer.setInterval(60)
 
             def advance():
-                self.loading_angle = (self.loading_angle + 24) % 360
+                self.loading_angle = (self.loading_angle - 18) % 360
                 self.update()
 
             self.loading_timer.timeout.connect(advance)
         if message:
-            self.loading_timer.start()
+            if self.isVisible() and not self.loading_timer.isActive():
+                self.loading_timer.start()
         else:
             self.loading_timer.stop()
         self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "loading_message", "") and hasattr(self, "loading_timer"):
+            if not self.loading_timer.isActive():
+                self.loading_timer.start()
+
+    def hideEvent(self, event):
+        if hasattr(self, "loading_timer") and self.loading_timer.isActive():
+            self.loading_timer.stop()
+        super().hideEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.detail_mode and self.chart and self.chart.kind != "capital_assets":
@@ -717,26 +729,62 @@ class ChartCanvas(QWidget):
         self.back_button_rect = None
         chart = self.chart
         if getattr(self, "loading_message", ""):
+            if chart and self.card_mode:
+                painter.setPen(QColor(t.heading))
+                painter.setFont(chart_font(15, bold=True))
+                painter.drawText(
+                    QRectF(20, 14, self.width() - 40, 32),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    chart.title,
+                )
+                if chart.note:
+                    painter.setFont(chart_font(11))
+                    painter.setPen(QColor(t.muted))
+                    painter.drawText(
+                        QRectF(20, self.height() - 44, self.width() - 40, 38),
+                        Qt.AlignmentFlag.AlignLeft
+                        | Qt.AlignmentFlag.AlignTop
+                        | Qt.TextFlag.TextWordWrap,
+                        chart.note,
+                    )
             center = self.rect().center()
-            painter.setPen(QPen(QColor(t.brand), 3))
+            spinner_rect = QRectF(center.x() - 16, center.y() - 52, 32, 32)
+            track_pen = QPen(QColor(t.border), 3)
+            painter.setPen(track_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(spinner_rect)
+            arc_pen = QPen(QColor(t.brand), 3)
+            arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(arc_pen)
             painter.drawArc(
-                QRectF(center.x() - 14, center.y() - 50, 28, 28),
+                spinner_rect,
                 self.loading_angle * 16,
-                260 * 16,
+                135 * 16,
             )
+            lines = [line for line in str(self.loading_message).splitlines() if line.strip()]
+            headline = lines[0] if lines else str(self.loading_message)
+            subline = "\n".join(lines[1:]) if len(lines) > 1 else ""
             painter.setPen(QColor(t.heading))
-            painter.setFont(chart_font(14))
+            painter.setFont(chart_font(14, bold=True))
             painter.drawText(
-                QRectF(30, center.y() - 10, self.width() - 60, 85),
-                Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,
-                self.loading_message,
+                QRectF(30, center.y() - 6, self.width() - 60, 28),
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                headline,
             )
+            if subline:
+                painter.setPen(QColor(t.muted))
+                painter.setFont(chart_font(12))
+                painter.drawText(
+                    QRectF(40, center.y() + 26, self.width() - 80, 56),
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                    subline,
+                )
             done, total = self.loading_progress
             if total:
                 fraction = max(0, min(1, (done or 0) / total))
                 bar = QRectF(
                     center.x() - min(180, self.width() / 3),
-                    center.y() + 80,
+                    center.y() + 86,
                     min(360, self.width() * 2 / 3),
                     8,
                 )
@@ -750,7 +798,7 @@ class ChartCanvas(QWidget):
                 painter.setPen(QColor(t.muted))
                 painter.setFont(chart_font(12))
                 painter.drawText(
-                    QRectF(30, center.y() + 98, self.width() - 60, 30),
+                    QRectF(30, center.y() + 102, self.width() - 60, 30),
                     Qt.AlignmentFlag.AlignHCenter,
                     f"{done or 0}/{total}（{int(fraction*100)}%）",
                 )
