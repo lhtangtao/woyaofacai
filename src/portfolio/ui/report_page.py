@@ -37,6 +37,7 @@ class ReportModel(FinanceModel):
         super().__init__(parent)
         self.columns = ()
         self.center_aligned = False
+        self.center_empty = False
 
     def columnCount(self, parent=None):
         return 0 if parent is not None and parent.isValid() else len(self.columns)
@@ -82,6 +83,8 @@ class ReportModel(FinanceModel):
         if role == Qt.ItemDataRole.FontRole and isinstance(value, Decimal):
             return numeric_font(12 if getattr(self.parent(), "compact", False) else 13)
         if role == Qt.ItemDataRole.TextAlignmentRole:
+            if self.center_empty and (value is None or value in ('—', '-')):
+                return int(Qt.AlignmentFlag.AlignCenter)
             if self.center_aligned:
                 return int(Qt.AlignmentFlag.AlignCenter)
             return int(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignRight if isinstance(value, (Decimal, int)) else Qt.AlignmentFlag.AlignLeft))
@@ -344,6 +347,7 @@ class ReportPage(QWidget):
         self.sorted_rows = self.report.rows if self.report else ()
         model = self.table.finance_model
         model.beginResetModel()
+        model.center_empty = is_today
         model.columns = self.report.columns if self.report else ()
         model.rows = ()
         model.endResetModel()
