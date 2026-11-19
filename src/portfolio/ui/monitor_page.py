@@ -1345,33 +1345,19 @@ class MonitoringPage(QWidget):
                 if two_line_payloads.get(col) is not None:
                     item.setData(TWO_LINE_ROLE, two_line_payloads[col])
 
-                if col in (2, 3):
-                    dd_pct_str = fmt(abs(drawdown_val), suffix="%") if drawdown_val is not None else "—"
-                    item.setToolTip(
-                        f"历史最高价: {fmt(eff_high)}\n高点日期: {eff_date or '—'} ({days_info})\n较最高点回撤: {dd_pct_str}\n当前现价: {fmt(curr_p)}"
-                    )
-                elif col in (4, 5, 6, 7):
-                    period_n = (20, 50, 200, 250)[col - 4]
-                    item.setToolTip(f"MA{period_n}: {fmt(m.get(f'MA{period_n}'))}\n偏离度: {value.splitlines()[-1] if chr(10) in value else '—'}\n点击表头可按偏离度排序")
-                else:
-                    item.setToolTip(value + "\n" + data.get("error", ""))
-
                 if col in (1, 2, 4, 5, 6, 7):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 elif col in (3, 8, 9):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
-                clean_sym = symbol.removesuffix(".US")
                 if col == 9:
                     if act_rules > 0:
                         item.setForeground(QColor("#16A34A"))
                         font = item.font()
                         font.setBold(True)
                         item.setFont(font)
-                        item.setToolTip(f"【{clean_sym}】已启用 {act_rules} 条监控预警规则，点击管理")
                     else:
                         item.setForeground(QColor("#94A3B8"))
-                        item.setToolTip(f"【{clean_sym}】暂未启用监控规则，点击新建")
                 self.table.setItem(row, col, item)
 
             actions = QWidget()
