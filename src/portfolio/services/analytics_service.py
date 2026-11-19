@@ -16,7 +16,7 @@ from portfolio.engine.fx import convert_reports
 from portfolio.engine.holdings import position_reports
 from portfolio.engine.performance import DAILY_COLUMNS, MONTHLY_COLUMNS, NET_COLUMNS, performance
 from portfolio.engine.replay import grain_conflicts
-from portfolio.engine.scalping import scalping
+from portfolio.engine.scalping import scalping, short_term_scalping
 from portfolio.services.charts_service import build_charts
 
 
@@ -232,15 +232,41 @@ class AnalyticsService:
             review = any(i.severity in ("ERROR", "WARN") for i in snapshot.issues)
             metrics = tuple(replace(m, status="REVIEW_REQUIRED" if review else "COMPLETE")
                             if m.value is not None and m.status in ("COMPLETE", "REVIEW_REQUIRED") else m for m in metrics)
+            scalping_modes = {
+                "EXCEL_COMPAT": {
+                    "mode": "EXCEL_COMPAT",
+                    "max_days": None,
+                    "report": reports["每月微操收益"],
+                    "pairs_report": reports["微操配对证据"],
+                    "pairs": (),
+                    "expired_buys": (),
+                    "expired_sells": (),
+                    "pending_buys": (),
+                    "pending_sells": (),
+                }
+            }
+            for win_days in (0, 5, 20):
+                scalping_modes[f"SHORT_{win_days}"] = short_term_scalping(snapshot, max_days=win_days, cancel=cancel)
             result = Analytics(scope, reports, metrics, snapshot.issues, positions, traces, latest, valuation_days,
                                calculated_at=datetime.now(timezone.utc).isoformat(), source_identity=snapshot.source_identity,
-                               trading_days=snapshot.extras.get("trading_days", ()))
+                               trading_days=snapshot.extras.get("trading_days", ()),
+                               scalping_modes=scalping_modes)
             # Filter display rows only AFTER replay and dashboard calculations.
             if scope.start_date:
+                cutoff_m = scope.start_date.isoformat()[:7]
                 for name in ("每日持仓收益", "每月持仓收益", "每月微操收益", "月度净投入明细", "完整交易净投入", "微操配对证据", "交易回放"):
                     report = reports[name]
-                    cutoff = scope.start_date.isoformat()[:7] if name != "每日持仓收益" and name != "交易回放" else scope.start_date.isoformat()
+                    cutoff = cutoff_m if name != "每日持仓收益" and name != "交易回放" else scope.start_date.isoformat()
                     reports[name] = replace(report, rows=tuple(r for r in report.rows if str(r.values[0])[:len(cutoff)] >= cutoff))
+                scalping_modes["EXCEL_COMPAT"]["report"] = reports["每月微操收益"]
+                scalping_modes["EXCEL_COMPAT"]["pairs_report"] = reports["微操配对证据"]
+                for mk in ("SHORT_0", "SHORT_5", "SHORT_20"):
+                    bundle = scalping_modes[mk]
+                    bundle["report"] = replace(bundle["report"], rows=tuple(r for r in bundle["report"].rows if str(r.values[0])[:7] >= cutoff_m))
+                    bundle["pairs_report"] = replace(bundle["pairs_report"], rows=tuple(r for r in bundle["pairs_report"].rows if str(r.values[0])[:7] >= cutoff_m))
+                    bundle["pairs"] = tuple(p for p in bundle["pairs"] if p["month"] >= cutoff_m)
+                    bundle["expired_buys"] = tuple(x for x in bundle["expired_buys"] if x["month"] >= cutoff_m)
+                    bundle["expired_sells"] = tuple(x for x in bundle["expired_sells"] if x["month"] >= cutoff_m)
             result.charts = build_charts(result)
             if self.identity() != key[0]:
                 from portfolio.services.derived_store import SourceChangedError

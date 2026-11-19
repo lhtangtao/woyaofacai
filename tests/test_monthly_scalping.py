@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from portfolio.domain.models import QueryScope, Ledger
-from portfolio.engine.scalping import _scalping
+from portfolio.engine.scalping import _scalping, short_term_scalping
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.ui.monthly_scalping_page import (
     MonthlyScalpingPage,
@@ -358,3 +358,129 @@ def test_stock_drawer_data_completeness_and_clean_cards(app, demo_path):
     assert not drawer.m_mv.sub_lbl.isVisible()
     assert drawer.monthly_model.rowCount() > 0
     drawer.close()
+
+
+# =========================================================================
+# 实战短线微操引擎（SHORT_TERM）与 UI 双口径切换测试
+# =========================================================================
+
+def _make_short_snapshot(events, *, broker_code="LONGBRIDGE", actions=(), as_of=date(2026, 12, 31)):
+    return SimpleNamespace(
+        scope=QueryScope(as_of=as_of, ledger=Ledger.PERSON),
+        events=events,
+        actions=list(actions),
+        baselines=[],
+        accounts={1: {'broker_code': broker_code, 'broker_name': broker_code}},
+        instruments={1: {'symbol': 'TEST', 'category': '杠杆'}},
+        extras={},
+        issues=[],
+        prices=[],
+    )
+
+
+def test_short_term_cross_month_and_window_boundary():
+    """跨月短线（11-30买、12-01卖）在 <=5 天口径归属 2026-12，T+0 口径不配对并记入超时转长持"""
+    e1 = Event(1, (1, 1, 1), '2026-11-30', '2026-11-30 10:00:00', 1, 'MARKET_TRADE', Decimal('1000'), Decimal('10'), True, 1, 1, {'fees_e8': 131000000})
+    e2 = Event(2, (1, 1, 1), '2026-12-01', '2026-12-01 10:00:00', 2, 'MARKET_TRADE', Decimal('1100'), Decimal('10'), False, 1, 2, {'fees_e8': 112000000})
+    snap = _make_short_snapshot([e1, e2], broker_code="LONGBRIDGE")
+
+    res5 = short_term_scalping(snap, max_days=5)
+    assert len(res5["pairs"]) == 1
+    p = res5["pairs"][0]
+    assert p["month"] == "2026-12"
+    assert p["cross_month"] is True
+    assert p["hold_days"] == 1
+    assert p["mode"] == "POS_T"
+    assert p["fee"] == Decimal("2.43")
+    assert p["fee_verified"] is True
+    assert p["pnl"] == Decimal("97.57")
+    assert len(res5["expired_buys"]) == 0
+
+    # 日内 T+0：跨日不配对，11-30 买入转为超时转长持
+    res0 = short_term_scalping(snap, max_days=0)
+    assert len(res0["pairs"]) == 0
+    assert len(res0["expired_buys"]) == 1
+    assert res0["expired_buys"][0]["open_day"] == "2026-11-30"
+
+
+def test_short_term_pos_t_rev_t_split_and_expired_tracking():
+    """严格区分正T（先买后卖）与反T（先卖后买），超过窗口的买入/卖出计入未配对纠偏"""
+    # 10-01 建底仓 100 股（超过 5 天未平 -> 正T转长持）
+    # 10-15 反T卖出 40 股 @ 120 -> 10-16 买回 30 股 @ 110（30股反T成功，剩余10股超过5交易日超时 -> 反T未接回）
+    # 10-26 正T买入 20 股 @ 100 -> 10-27 卖出 20 股 @ 108（20股正T成功）
+    events = [
+        Event(1, (1, 1, 1), '2026-10-01', '2026-10-01 10:00:00', 1, 'MARKET_TRADE', Decimal('10000'), Decimal('100'), True, 1, 1, {'fees_e8': 0}),
+        Event(2, (1, 1, 1), '2026-10-15', '2026-10-15 10:00:00', 2, 'MARKET_TRADE', Decimal('4800'), Decimal('40'), False, 1, 2, {'fees_e8': 0}),
+        Event(3, (1, 1, 1), '2026-10-16', '2026-10-16 10:00:00', 3, 'MARKET_TRADE', Decimal('3300'), Decimal('30'), True, 1, 3, {'fees_e8': 0}),
+        Event(4, (1, 1, 1), '2026-10-26', '2026-10-26 10:00:00', 4, 'MARKET_TRADE', Decimal('2000'), Decimal('20'), True, 1, 4, {'fees_e8': 0}),
+        Event(5, (1, 1, 1), '2026-10-27', '2026-10-27 10:00:00', 5, 'MARKET_TRADE', Decimal('2160'), Decimal('20'), False, 1, 5, {'fees_e8': 0}),
+    ]
+    snap = _make_short_snapshot(events, broker_code="SCHWAB")
+    res = short_term_scalping(snap, max_days=5)
+
+    assert len(res["pairs"]) == 2
+    rev = next(p for p in res["pairs"] if p["mode"] == "REV_T")
+    pos = next(p for p in res["pairs"] if p["mode"] == "POS_T")
+    assert rev["qty"] == Decimal("30") and rev["pnl"] == Decimal("300")
+    assert pos["qty"] == Decimal("20") and pos["pnl"] == Decimal("160")
+    assert len(res["expired_buys"]) == 1 and res["expired_buys"][0]["qty"] == Decimal("100")
+    assert len(res["expired_sells"]) == 1 and res["expired_sells"][0]["qty"] == Decimal("10")
+
+    row = res["report"].rows[0]
+    assert row.metadata["pos_t_count"] == 1 and row.metadata["pos_t_pnl"] == Decimal("160")
+    assert row.metadata["rev_t_count"] == 1 and row.metadata["rev_t_pnl"] == Decimal("300")
+    assert row.metadata["win_rate"] == Decimal("1")
+
+
+def test_short_term_split_and_net_broker_fee_handling():
+    """跨拆股按比例折算股数；净额渠道（SCHWAB）不重复扣费，总价渠道缺费显式标记未核实"""
+    e1 = Event(1, (1, 1, 1), '2026-10-12', '2026-10-12 10:00:00', 1, 'MARKET_TRADE', Decimal('1000'), Decimal('10'), True, 1, 1, {'fees_e8': 2000000})
+    e2 = Event(2, (1, 1, 1), '2026-10-14', '2026-10-14 10:00:00', 2, 'MARKET_TRADE', Decimal('1100'), Decimal('20'), False, 1, 2, {'fees_e8': 2000000})
+    actions = [{'id': 1, 'instrument_id': 1, 'broker_scope': 'ALL', 'effective_date': '2026-10-13', 'ratio_numerator': 2, 'ratio_denominator': 1}]
+
+    # SCHWAB：amount 已净额，不重复扣费
+    snap_schwab = _make_short_snapshot([e1, e2], broker_code="SCHWAB", actions=actions)
+    res_s = short_term_scalping(snap_schwab, max_days=5)
+    assert len(res_s["pairs"]) == 1
+    assert res_s["pairs"][0]["qty"] == Decimal("20")
+    assert res_s["pairs"][0]["fee"] == Decimal("0")
+    assert res_s["pairs"][0]["reported_fee"] == Decimal("0.04")
+    assert res_s["pairs"][0]["fee_verified"] is True
+    assert res_s["pairs"][0]["pnl"] == Decimal("100")
+
+    # LONGBRIDGE 缺费：标记 fee_verified=False，不编造费用
+    e1_nofee = Event(1, (1, 1, 1), '2026-10-12', '2026-10-12 10:00:00', 1, 'MARKET_TRADE', Decimal('1000'), Decimal('10'), True, 1, 1, {})
+    e2_nofee = Event(2, (1, 1, 1), '2026-10-14', '2026-10-14 10:00:00', 2, 'MARKET_TRADE', Decimal('1100'), Decimal('20'), False, 1, 2, {})
+    snap_lb = _make_short_snapshot([e1_nofee, e2_nofee], broker_code="LONGBRIDGE", actions=actions)
+    res_lb = short_term_scalping(snap_lb, max_days=5)
+    assert res_lb["pairs"][0]["fee_verified"] is False
+    assert res_lb["report"].rows[0].metadata["fee_unverified_count"] == 1
+
+
+def test_monthly_scalping_mode_switching_ui(app, demo_path):
+    """UI 支持在 SHORT_5 / SHORT_0 / SHORT_20 / EXCEL_COMPAT 之间实时切换并联动卡片与抽屉"""
+    service = AnalyticsService(demo_path)
+    analytics = service.calculate(QueryScope(as_of=date.today(), ledger=Ledger.PERSON))
+
+    page = MonthlyScalpingPage()
+    page.show()
+    page.update_data(analytics)
+    assert page.scalping_mode == "SHORT_5"
+    assert not page.unpaired_card.isHidden()
+    assert "微操净收益($)" in page.table_model.columns
+
+    # 切到月内兼容口径
+    page.set_scalping_mode("EXCEL_COMPAT")
+    assert page.scalping_mode == "EXCEL_COMPAT"
+    assert page.unpaired_card.isHidden()
+    assert "月内微操收益($)" in page.table_model.columns
+
+    # 切回超短线并展开未配对明细与抽屉
+    page.set_scalping_mode("SHORT_5")
+    assert not page.unpaired_card.isHidden()
+    if page.table_model.rows:
+        page.open_drawer(page.table_model.rows[0])
+        assert not page.drawer_frame.isHidden()
+        page.close_drawer()
+    page.close()
+

@@ -137,6 +137,7 @@ class Analytics:
     trading_days: tuple[str, ...] = ()
     calculated_at: str = ""
     source_identity: str = ""
+    scalping_modes: dict = field(default_factory=dict)
 
 
 def strict_sum(values):

@@ -122,10 +122,11 @@ def calc_weighted_spread(rows: List[Tuple]) -> Tuple[Optional[float], str]:
 # -------------------------------------------------------------------------
 class MonthSummaryCard(QFrame):
     """
-    展示当前选中月份的微操关键指标：
-    1. 月内微操收益（正绿负红，无配对显示 —）
-    2. 微操次数
-    3. 微操数量
+    展示当前选中月份的微操关键指标与质量诊断：
+    1. 微操净收益（正绿负红，无配对显示 —）、微操次数、微操数量
+    2. 正T（先买后卖）与反T（先卖后买）收益拆分
+    3. 胜率、盈亏比、平均持仓交易日
+    4. 超时未配对纠偏（正T转长持 / 反T未接回）
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -140,8 +141,8 @@ class MonthSummaryCard(QFrame):
         """)
 
         vbox = QVBoxLayout(self)
-        vbox.setContentsMargins(18, 14, 18, 14)
-        vbox.setSpacing(10)
+        vbox.setContentsMargins(16, 12, 16, 12)
+        vbox.setSpacing(8)
 
         # 顶部标题：📅 已选月份：YYYY-MM
         top_h = QHBoxLayout()
@@ -157,59 +158,118 @@ class MonthSummaryCard(QFrame):
         self.title_lbl.setStyleSheet("color: #0F172A;")
         top_h.addWidget(self.title_lbl)
         top_h.addStretch()
-        vbox.addLayout(top_h)
 
-        vbox.addSpacing(4)
+        self.mode_badge = QLabel("≤5交易日")
+        self.mode_badge.setStyleSheet(
+            "background: #EFF6FF; color: #1D4ED8; font-size: 10.5px; font-weight: 600; "
+            "padding: 2px 7px; border-radius: 4px;"
+        )
+        top_h.addWidget(self.mode_badge)
+        vbox.addLayout(top_h)
 
         # 3 个核心指标横向并排
         grid = QHBoxLayout()
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(14)
+        grid.setSpacing(12)
 
-        # 1. 月内微操收益
         col1 = QVBoxLayout()
-        col1.setSpacing(4)
-        lbl_pnl_title = QLabel("月内微操收益")
-        lbl_pnl_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;")
-        col1.addWidget(lbl_pnl_title)
+        col1.setSpacing(2)
+        self.lbl_pnl_title = QLabel("微操净收益")
+        self.lbl_pnl_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;")
+        col1.addWidget(self.lbl_pnl_title)
 
         self.val_pnl = QLabel("—")
-        self.val_pnl.setFont(numeric_font(20, bold=True))
+        self.val_pnl.setFont(numeric_font(18, bold=True))
         self.val_pnl.setStyleSheet("color: #0F172A;")
         col1.addWidget(self.val_pnl)
         grid.addLayout(col1, 1)
 
-        # 2. 微操次数
         col2 = QVBoxLayout()
-        col2.setSpacing(4)
+        col2.setSpacing(2)
         lbl_cnt_title = QLabel("微操次数")
         lbl_cnt_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;")
         col2.addWidget(lbl_cnt_title)
 
         self.val_trades = QLabel("0")
-        self.val_trades.setFont(numeric_font(20, bold=True))
+        self.val_trades.setFont(numeric_font(18, bold=True))
         self.val_trades.setStyleSheet("color: #0F172A;")
         col2.addWidget(self.val_trades)
         grid.addLayout(col2, 1)
 
-        # 3. 微操数量
         col3 = QVBoxLayout()
-        col3.setSpacing(4)
+        col3.setSpacing(2)
         lbl_qty_title = QLabel("微操数量")
         lbl_qty_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 500;")
         col3.addWidget(lbl_qty_title)
 
         self.val_qty = QLabel("0.00")
-        self.val_qty.setFont(numeric_font(20, bold=True))
+        self.val_qty.setFont(numeric_font(18, bold=True))
         self.val_qty.setStyleSheet("color: #0F172A;")
         col3.addWidget(self.val_qty)
         grid.addLayout(col3, 1)
 
         vbox.addLayout(grid)
+
+        # 分隔线
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        div.setStyleSheet("background-color: #E2E8F0; max-height: 1px; border: none;")
+        vbox.addWidget(div)
+
+        # 实战质量诊断区（正T/反T、胜率/盈亏比/持仓天数、超时未配对纠偏）
+        self.diag_widget = QWidget()
+        diag_lay = QVBoxLayout(self.diag_widget)
+        diag_lay.setContentsMargins(0, 0, 0, 0)
+        diag_lay.setSpacing(6)
+
+        split_row = QHBoxLayout()
+        split_row.setSpacing(8)
+        self.pos_t_lbl = QLabel("正T(先买后卖): —")
+        self.pos_t_lbl.setStyleSheet("color: #334155; font-size: 11.5px; font-weight: 500;")
+        split_row.addWidget(self.pos_t_lbl, 1)
+
+        self.rev_t_lbl = QLabel("反T(先卖后买): —")
+        self.rev_t_lbl.setStyleSheet("color: #334155; font-size: 11.5px; font-weight: 500;")
+        split_row.addWidget(self.rev_t_lbl, 1)
+        diag_lay.addLayout(split_row)
+
+        self.quality_lbl = QLabel("胜率: —  ·  盈亏比: —  ·  均持: —")
+        self.quality_lbl.setStyleSheet("color: #475569; font-size: 11.5px;")
+        diag_lay.addWidget(self.quality_lbl)
+
+        self.unpaired_lbl = QLabel("防幸存者偏差：本月无超时未配对记录")
+        self.unpaired_lbl.setStyleSheet(
+            "background: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
+            "border-radius: 4px; padding: 4px 8px; font-size: 11px;"
+        )
+        self.unpaired_lbl.setWordWrap(True)
+        diag_lay.addWidget(self.unpaired_lbl)
+
+        vbox.addWidget(self.diag_widget)
         vbox.addStretch()
 
-    def set_month_data(self, month: str, pnl: Optional[float], trades: int, qty: float, has_pair: bool):
+    def set_month_data(
+        self,
+        month: str,
+        pnl: Optional[float],
+        trades: int,
+        qty: float,
+        has_pair: bool,
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+    ):
         self.title_lbl.setText(f"已选月份：{month}" if month else "已选月份：全周期汇总")
+        extra = extra or {}
+        mode_label = extra.get("mode_label", "")
+        if mode_label:
+            self.mode_badge.setText(mode_label)
+            self.mode_badge.show()
+        else:
+            self.mode_badge.hide()
+
+        is_compat = extra.get("is_compat", False)
+        self.lbl_pnl_title.setText("月内微操收益" if is_compat else "微操净收益")
+
         if not has_pair or pnl is None:
             self.val_pnl.setText("—")
             self.val_pnl.setStyleSheet("color: #94A3B8;")
@@ -225,6 +285,57 @@ class MonthSummaryCard(QFrame):
                 self.val_pnl.setStyleSheet("color: #0F172A;")
             self.val_trades.setText(str(trades))
             self.val_qty.setText(fmt_money(qty, 2))
+
+        if is_compat:
+            self.pos_t_lbl.setText("口径：同自然月 LIFO/FIFO 兼容")
+            self.rev_t_lbl.setText("跨月交易不计入")
+            self.quality_lbl.setText("可切回「超短线 ≤5天」查看跨月做T、正反T拆分与胜率诊断")
+            self.unpaired_lbl.hide()
+            return
+
+        pos_cnt = int(extra.get("pos_t_count", 0))
+        pos_pnl = float(extra.get("pos_t_pnl", 0.0))
+        rev_cnt = int(extra.get("rev_t_count", 0))
+        rev_pnl = float(extra.get("rev_t_pnl", 0.0))
+        pos_color = "#10B981" if pos_pnl > 0 else "#EF4444" if pos_pnl < 0 else "#475569"
+        rev_color = "#10B981" if rev_pnl > 0 else "#EF4444" if rev_pnl < 0 else "#475569"
+        pos_txt = f"{fmt_signed_money(pos_pnl, 2)} ({pos_cnt}笔)" if pos_cnt else "0笔"
+        rev_txt = f"{fmt_signed_money(rev_pnl, 2)} ({rev_cnt}笔)" if rev_cnt else "0笔"
+        self.pos_t_lbl.setText(f"正T: <b style='color:{pos_color};'>{pos_txt}</b>")
+        self.rev_t_lbl.setText(f"反T: <b style='color:{rev_color};'>{rev_txt}</b>")
+
+        wins = int(extra.get("win_count", 0))
+        losses = int(extra.get("loss_count", 0))
+        total_p = int(extra.get("pair_count", 0))
+        win_rate = f"{(wins / total_p * 100):.1f}% ({wins}胜/{losses}负)" if total_p > 0 else "—"
+        pl_ratio_val = extra.get("pl_ratio")
+        pl_ratio_str = f"{pl_ratio_val:.2f}" if pl_ratio_val is not None else "—"
+        avg_days = extra.get("avg_hold_days")
+        avg_days_str = f"{avg_days:.1f}天" if avg_days is not None and total_p > 0 else "—"
+        cross_cnt = int(extra.get("cross_month_count", 0))
+        cross_hint = f" · 跨月{cross_cnt}笔" if cross_cnt else ""
+        self.quality_lbl.setText(f"胜率 {win_rate} · 盈亏比 {pl_ratio_str} · 均持 {avg_days_str}{cross_hint}")
+
+        exp_b_cnt = int(extra.get("expired_buy_count", 0))
+        exp_b_amt = float(extra.get("expired_buy_amount", 0.0))
+        exp_s_cnt = int(extra.get("expired_sell_count", 0))
+        exp_s_amt = float(extra.get("expired_sell_amount", 0.0))
+        self.unpaired_lbl.show()
+        if exp_b_cnt or exp_s_cnt:
+            self.unpaired_lbl.setText(
+                f"未配对纠偏：正T转长持 {exp_b_cnt} 笔 (${fmt_money(exp_b_amt, 0)}) · "
+                f"反T未接回 {exp_s_cnt} 笔 (${fmt_money(exp_s_amt, 0)})"
+            )
+            self.unpaired_lbl.setStyleSheet(
+                "background: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
+                "border-radius: 4px; padding: 4px 8px; font-size: 11px;"
+            )
+        else:
+            self.unpaired_lbl.setText("未配对纠偏：本月无超时转长持或未接回记录")
+            self.unpaired_lbl.setStyleSheet(
+                "background: #F8FAFC; color: #64748B; border: 1px solid #E2E8F0; "
+                "border-radius: 4px; padding: 4px 8px; font-size: 11px;"
+            )
 
 
 # -------------------------------------------------------------------------
@@ -547,12 +658,14 @@ class ModernScalpingTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole:
             if col_name == "Ticker":
                 return QColor("#2563EB")
-            if col_name in ("每股价差($)", "月内微操收益($)", "当前浮动盈亏($)"):
+            if col_name in ("每股价差($)", "月内微操收益($)", "微操净收益($)", "当前浮动盈亏($)"):
                 if val_str.startswith("+"):
                     return QColor("#10B981")
                 if val_str.startswith("-") or val_str.startswith("−"):
                     return QColor("#EF4444")
             if col_name == "说明":
+                if "⚠" in val_str or "转长持" in val_str:
+                    return QColor("#B45309")
                 return QColor("#059669")
             if val_str in ("$0.00", "0.00", "0", "—"):
                 return QColor("#64748B")
@@ -561,8 +674,8 @@ class ModernScalpingTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.FontRole:
             if col_name == "Ticker":
                 return numeric_font(12, bold=True)
-            if col_name in ("微操数量", "微操均买价($)", "微操均卖价($)", "每股价差($)", "买入金额($)", "卖出金额($)", "月内微操收益($)", "当前浮动盈亏($)"):
-                bold = col_name in ("月内微操收益($)", "当前浮动盈亏($)")
+            if col_name in ("微操数量", "微操均买价($)", "微操均卖价($)", "每股价差($)", "买入金额($)", "卖出金额($)", "月内微操收益($)", "微操净收益($)", "当前浮动盈亏($)"):
+                bold = col_name in ("月内微操收益($)", "微操净收益($)", "当前浮动盈亏($)")
                 return numeric_font(12, bold=bold)
             return QFont(".AppleSystemUIFont", 12)
 
@@ -627,11 +740,22 @@ class ModernScalpingTableModel(QAbstractTableModel):
 class MonthlyScalpingPage(QWidget):
     drill = Signal(str, str, object)  # 信号：下钻或历史回放
 
+    MODE_SPECS = (
+        ("SHORT_5", "超短线 ≤5天", "实战短线口径（≤5 交易日 · 支持跨月配对）：同一「人员·渠道·标的」按连续时间轴配对，收益归属平仓/接回日所在月份；严格区分正T（先买后卖）与反T（先卖后买），追踪超时转长持/未接回，并优先采用已核实真实手续费。"),
+        ("SHORT_0", "日内 T+0", "日内 T+0 口径（同交易日内买卖配对）：仅统计同一交易日完成高抛低吸或低吸高抛的交易；严格拆分正T与反T，隔夜未平仓计入超时转长持/未接回，手续费优先采用已核实真实费用。"),
+        ("SHORT_20", "短波段 ≤20天", "短波段口径（≤20 交易日 · 支持跨月配对）：适合复盘约一个月交易周期内的快进快出操作；归属平仓/接回日所在月份，拆出正T/反T收益与胜率，并追踪超过 20 个交易日未平仓/未接回记录。"),
+        ("EXCEL_COMPAT", "月内兼容口径", "月内兼容口径（Excel 对账）：保留原自然月一刀切规则，仅统计同一自然月内完成买卖配对的交易；跨月持仓盈亏不计入微操收益，用于历史账本核对。"),
+    )
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.analytics = None
+        self.scalping_mode: str = "SHORT_5"
+        self.active_bundle: Dict[str, Any] = {}
         self.raw_rows: List[Tuple] = []
+        self.row_meta_map: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         self.unrealized_pnl_map: Dict[str, float] = {}  # ticker -> 当前持仓浮动盈亏
+        self._unpaired_expanded: bool = False
 
         # 待查询与已生效筛选分离
         self.applied_person: Any = None
@@ -669,7 +793,7 @@ class MonthlyScalpingPage(QWidget):
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.recalculate_and_refresh)
 
-        # 2. 统计口径说明卡片 (浅蓝色背景置顶展示)
+        # 2. 口径切换与说明卡片 (浅蓝色背景置顶展示)
         desc_card = QFrame()
         desc_card.setStyleSheet("""
             QFrame {
@@ -678,17 +802,42 @@ class MonthlyScalpingPage(QWidget):
                 border-radius: 6px;
             }
         """)
-        desc_layout = QHBoxLayout(desc_card)
-        desc_layout.setContentsMargins(14, 8, 14, 8)
-        desc_layout.setSpacing(8)
+        desc_vbox = QVBoxLayout(desc_card)
+        desc_vbox.setContentsMargins(14, 8, 14, 8)
+        desc_vbox.setSpacing(6)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        mode_lbl = QLabel("微操统计口径")
+        mode_lbl.setStyleSheet("color: #1E3A8A; font-size: 12px; font-weight: 700; border: none; background: transparent;")
+        mode_row.addWidget(mode_lbl)
+
+        self.mode_buttons: Dict[str, QPushButton] = {}
+        for mode_key, label_text, _ in self.MODE_SPECS:
+            btn = QPushButton(label_text)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(26)
+            btn.clicked.connect(lambda checked=False, mk=mode_key: self.set_scalping_mode(mk))
+            self.mode_buttons[mode_key] = btn
+            mode_row.addWidget(btn)
+        mode_row.addStretch()
+        desc_vbox.addLayout(mode_row)
+
+        desc_layout = QHBoxLayout()
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        desc_layout.setSpacing(6)
 
         info_icon = QLabel("ℹ")
-        info_icon.setStyleSheet("color: #2563EB; font-size: 14px; font-weight: bold;")
+        info_icon.setStyleSheet("color: #2563EB; font-size: 13px; font-weight: bold; border: none; background: transparent;")
         desc_layout.addWidget(info_icon)
 
-        desc_text = QLabel("统计口径：仅统计同一自然月内完成买卖配对的交易；跨月持仓盈亏不计入微操收益，请在持仓管理或已实现盈亏中查看。")
-        desc_text.setStyleSheet("color: #1E40AF; font-size: 12px;")
-        desc_layout.addWidget(desc_text, 1)
+        self.desc_text = QLabel(self.MODE_SPECS[0][2])
+        self.desc_text.setWordWrap(True)
+        self.desc_text.setStyleSheet("color: #1E40AF; font-size: 11.5px; border: none; background: transparent;")
+        desc_layout.addWidget(self.desc_text, 1)
+        desc_vbox.addLayout(desc_layout)
+        self._sync_mode_buttons()
 
         content_layout.addWidget(desc_card)
 
@@ -889,9 +1038,9 @@ class MonthlyScalpingPage(QWidget):
         trend_vbox.addWidget(self.trend_canvas, 1)
 
         # 底部说明文本
-        trend_note = QLabel("ⓘ 说明：若某月只有买入或只有卖出，未形成月内配对，则该月不计入微操收益。")
-        trend_note.setStyleSheet("color: #94A3B8; font-size: 11px;")
-        trend_vbox.addWidget(trend_note)
+        self.trend_note = QLabel("ⓘ 说明：短线口径按平仓/接回日归属月份并支持跨月配对；若某月无完成配对则不计入微操收益。")
+        self.trend_note.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        trend_vbox.addWidget(self.trend_note)
 
         self.mid_splitter.addWidget(trend_card)
 
@@ -916,10 +1065,10 @@ class MonthlyScalpingPage(QWidget):
         profit_vbox.setSpacing(4)
 
         p_hdr = QHBoxLayout()
-        p_title = QLabel("月内微操收益 TOP 5")
-        p_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
-        p_title.setStyleSheet("color: #0F172A;")
-        p_hdr.addWidget(p_title)
+        self.profit_top_title = QLabel("短线微操收益 TOP 5")
+        self.profit_top_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
+        self.profit_top_title.setStyleSheet("color: #0F172A;")
+        p_hdr.addWidget(self.profit_top_title)
 
         p_tag = QLabel("仅看已选月份")
         p_tag.setStyleSheet("background: #ECFDF5; color: #10B981; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;")
@@ -931,7 +1080,7 @@ class MonthlyScalpingPage(QWidget):
         p_th.setContentsMargins(4, 2, 4, 2)
         p_th.addWidget(self._make_th_label("#", 24))
         p_th.addWidget(self._make_th_label("Ticker", 70))
-        p_th.addWidget(self._make_th_label("月内微操收益", 90, align_right=True))
+        p_th.addWidget(self._make_th_label("微操净收益", 90, align_right=True))
         p_th.addWidget(self._make_th_label("微操次数", 65, align_right=True))
         p_th.addWidget(self._make_th_label("微操数量", 80, align_right=True))
         p_th.addWidget(self._make_th_label("当前浮动盈亏", 95, align_right=True))
@@ -943,7 +1092,7 @@ class MonthlyScalpingPage(QWidget):
         profit_vbox.addStretch()
         rank_row.addWidget(profit_card, 1)
 
-        # 右侧：月内微操亏损 TOP 5
+        # 右侧：短线微操亏损 TOP 5
         loss_card = QFrame()
         loss_card.setFixedHeight(205)
         loss_card.setStyleSheet("background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 6px;")
@@ -952,10 +1101,10 @@ class MonthlyScalpingPage(QWidget):
         loss_vbox.setSpacing(4)
 
         l_hdr = QHBoxLayout()
-        l_title = QLabel("月内微操亏损 TOP 5")
-        l_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
-        l_title.setStyleSheet("color: #0F172A;")
-        l_hdr.addWidget(l_title)
+        self.loss_top_title = QLabel("短线微操亏损 TOP 5")
+        self.loss_top_title.setFont(QFont(".AppleSystemUIFont", 13, QFont.Weight.Bold))
+        self.loss_top_title.setStyleSheet("color: #0F172A;")
+        l_hdr.addWidget(self.loss_top_title)
 
         l_tag = QLabel("仅看已选月份")
         l_tag.setStyleSheet("background: #FEF2F2; color: #EF4444; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;")
@@ -967,7 +1116,7 @@ class MonthlyScalpingPage(QWidget):
         l_th.setContentsMargins(4, 2, 4, 2)
         l_th.addWidget(self._make_th_label("#", 24))
         l_th.addWidget(self._make_th_label("Ticker", 70))
-        l_th.addWidget(self._make_th_label("月内微操亏损", 90, align_right=True))
+        l_th.addWidget(self._make_th_label("微操净亏损", 90, align_right=True))
         l_th.addWidget(self._make_th_label("微操次数", 65, align_right=True))
         l_th.addWidget(self._make_th_label("微操数量", 80, align_right=True))
         l_th.addWidget(self._make_th_label("当前浮动盈亏", 95, align_right=True))
@@ -980,6 +1129,47 @@ class MonthlyScalpingPage(QWidget):
         rank_row.addWidget(loss_card, 1)
 
         content_layout.addLayout(rank_row)
+
+        # 6.5 超时未配对短线尝试纠偏卡片（防幸存者偏差，仅实战短线口径展示）
+        self.unpaired_card = QFrame()
+        self.unpaired_card.setStyleSheet(
+            "QFrame { background-color: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; }"
+        )
+        unpaired_vbox = QVBoxLayout(self.unpaired_card)
+        unpaired_vbox.setContentsMargins(14, 8, 14, 8)
+        unpaired_vbox.setSpacing(6)
+
+        up_hdr = QHBoxLayout()
+        up_hdr.setSpacing(8)
+        up_title = QLabel("未配对短线尝试（防幸存者偏差）")
+        up_title.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Bold))
+        up_title.setStyleSheet("color: #92400E; border: none; background: transparent;")
+        up_hdr.addWidget(up_title)
+
+        self.unpaired_summary_lbl = QLabel("—")
+        self.unpaired_summary_lbl.setStyleSheet("color: #78350F; font-size: 11.5px; border: none; background: transparent;")
+        up_hdr.addWidget(self.unpaired_summary_lbl, 1)
+
+        self.unpaired_toggle_btn = QPushButton("展开明细 ▾")
+        self.unpaired_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.unpaired_toggle_btn.setStyleSheet(
+            "QPushButton { background: #FFFFFF; color: #92400E; border: 1px solid #FCD34D; "
+            "border-radius: 5px; padding: 2px 10px; font-size: 11px; font-weight: 600; }"
+            "QPushButton:hover { background: #FEF3C7; }"
+        )
+        self.unpaired_toggle_btn.clicked.connect(self._toggle_unpaired_list)
+        up_hdr.addWidget(self.unpaired_toggle_btn)
+        unpaired_vbox.addLayout(up_hdr)
+
+        self.unpaired_list_host = QWidget()
+        self.unpaired_list_host.setStyleSheet("background: transparent; border: none;")
+        self.unpaired_list_layout = QVBoxLayout(self.unpaired_list_host)
+        self.unpaired_list_layout.setContentsMargins(0, 4, 0, 2)
+        self.unpaired_list_layout.setSpacing(3)
+        self.unpaired_list_host.hide()
+        unpaired_vbox.addWidget(self.unpaired_list_host)
+
+        content_layout.addWidget(self.unpaired_card)
 
         # 7. 微操收益明细表格卡片 (底部全宽)
         table_card = QFrame()
@@ -1111,9 +1301,17 @@ class MonthlyScalpingPage(QWidget):
         self.drawer_subtitle.setStyleSheet("color: #64748B; font-size: 12px;")
         drawer_vbox.addWidget(self.drawer_subtitle)
 
-        self.drawer_list_layout = QVBoxLayout()
-        self.drawer_list_layout.setSpacing(10)
-        drawer_vbox.addLayout(self.drawer_list_layout)
+        drawer_scroll = QScrollArea()
+        drawer_scroll.setWidgetResizable(True)
+        drawer_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        drawer_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        drawer_body = QWidget()
+        drawer_body.setStyleSheet("background: transparent;")
+        self.drawer_list_layout = QVBoxLayout(drawer_body)
+        self.drawer_list_layout.setContentsMargins(0, 0, 4, 0)
+        self.drawer_list_layout.setSpacing(8)
+        drawer_scroll.setWidget(drawer_body)
+        drawer_vbox.addWidget(drawer_scroll, 1)
 
     def _create_chip(self, text: str, on_close=None) -> QFrame:
         chip = QFrame()
@@ -1247,6 +1445,146 @@ class MonthlyScalpingPage(QWidget):
             self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
             self.person_combo.blockSignals(False)
 
+    def _sync_mode_buttons(self):
+        active_desc = ""
+        for mk, _, desc in self.MODE_SPECS:
+            btn = self.mode_buttons.get(mk)
+            if not btn:
+                continue
+            active = (mk == self.scalping_mode)
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+            if active:
+                active_desc = desc
+                btn.setStyleSheet(
+                    "QPushButton { background: #2563EB; color: #FFFFFF; border: 1px solid #1D4ED8; "
+                    "border-radius: 5px; padding: 0 11px; font-size: 11.5px; font-weight: 600; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background: #FFFFFF; color: #1E40AF; border: 1px solid #BFDBFE; "
+                    "border-radius: 5px; padding: 0 11px; font-size: 11.5px; font-weight: 500; }"
+                    "QPushButton:hover { background: #DBEAFE; }"
+                )
+        if hasattr(self, "desc_text") and active_desc:
+            self.desc_text.setText(active_desc)
+        is_compat = (self.scalping_mode == "EXCEL_COMPAT")
+        if hasattr(self, "profit_top_title"):
+            self.profit_top_title.setText("月内微操收益 TOP 5" if is_compat else "短线微操收益 TOP 5")
+        if hasattr(self, "loss_top_title"):
+            self.loss_top_title.setText("月内微操亏损 TOP 5" if is_compat else "短线微操亏损 TOP 5")
+        if hasattr(self, "trend_note"):
+            self.trend_note.setText(
+                "ⓘ 说明：若某月只有买入或只有卖出，未形成月内配对，则该月不计入微操收益。"
+                if is_compat
+                else "ⓘ 说明：短线口径按平仓/接回日归属月份，支持跨月配对；超时未平仓/未接回单列在「未配对短线尝试」供复盘。"
+            )
+        if hasattr(self, "unpaired_card"):
+            self.unpaired_card.setVisible(not is_compat)
+
+    def set_scalping_mode(self, mode_key: str):
+        if mode_key == self.scalping_mode:
+            self._sync_mode_buttons()
+            return
+        self.scalping_mode = mode_key
+        self._unpaired_expanded = False
+        if hasattr(self, "unpaired_list_host"):
+            self.unpaired_list_host.hide()
+            self.unpaired_toggle_btn.setText("展开明细 ▾")
+        self._sync_mode_buttons()
+        if self.analytics:
+            self._load_active_mode_data()
+            self.recalculate_and_refresh()
+
+    def _toggle_unpaired_list(self):
+        self._unpaired_expanded = not self._unpaired_expanded
+        self.unpaired_list_host.setVisible(self._unpaired_expanded)
+        self.unpaired_toggle_btn.setText("收起明细 ▴" if self._unpaired_expanded else "展开明细 ▾")
+
+    def _load_active_mode_data(self):
+        analytics = self.analytics
+        if not analytics or not hasattr(analytics, "reports"):
+            return
+        modes = getattr(analytics, "scalping_modes", None) or {}
+        bundle = modes.get(self.scalping_mode)
+        if not bundle:
+            fallback_rep = analytics.reports.get("每月微操收益")
+            if not fallback_rep:
+                return
+            bundle = {
+                "mode": "EXCEL_COMPAT",
+                "max_days": None,
+                "report": fallback_rep,
+                "pairs_report": analytics.reports.get("微操配对证据"),
+                "pairs": (),
+                "expired_buys": (),
+                "expired_sells": (),
+                "pending_buys": (),
+                "pending_sells": (),
+            }
+        self.active_bundle = bundle
+        report = bundle["report"]
+        self.raw_rows = [tuple(r.values) for r in report.rows]
+        self.row_meta_map = {}
+        for r in report.rows:
+            if len(r.values) >= 4:
+                key = (str(r.values[0]), fmt_broker_cn(r.values[1]), str(r.values[3]).upper())
+                self.row_meta_map[key] = dict(r.metadata or {})
+
+        # 填充券商渠道下拉框（尽量保留已选渠道）
+        prev_broker = self.applied_broker
+        brokers = sorted({fmt_broker_cn(r[1]) for r in self.raw_rows if len(r) > 1 and r[1]})
+        self.broker_combo.blockSignals(True)
+        self.broker_combo.clear()
+        self.broker_combo.addItem("全部渠道", "")
+        for b in brokers:
+            self.broker_combo.addItem(b, b)
+        b_idx = self.broker_combo.findData(prev_broker)
+        self.broker_combo.setCurrentIndex(b_idx if b_idx >= 0 else 0)
+        self.applied_broker = self.broker_combo.currentData() or ""
+        self.broker_combo.blockSignals(False)
+
+        # 填充分类下拉框（尽量保留已选分类）
+        prev_cat = self.applied_category
+        categories = sorted({str(r[2]) for r in self.raw_rows if len(r) > 2 and r[2]})
+        self.category_combo.blockSignals(True)
+        self.category_combo.clear()
+        self.category_combo.addItem("全部分类", "")
+        for c in categories:
+            self.category_combo.addItem(c, c)
+        c_idx = self.category_combo.findData(prev_cat)
+        self.category_combo.setCurrentIndex(c_idx if c_idx >= 0 else 0)
+        self.applied_category = self.category_combo.currentData() or ""
+        self.category_combo.blockSignals(False)
+
+        # 填充月份下拉框（包含配对月份与超时未配对月份）
+        months_set = {str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]}
+        for item in (*bundle.get("expired_buys", ()), *bundle.get("expired_sells", ())):
+            if item.get("month"):
+                months_set.add(str(item["month"]))
+        months = sorted(months_set)
+        self.start_month_combo.blockSignals(True)
+        self.end_month_combo.blockSignals(True)
+        self.start_month_combo.clear()
+        self.end_month_combo.clear()
+        for m in months:
+            self.start_month_combo.addItem(m, m)
+            self.end_month_combo.addItem(m, m)
+        if months:
+            self.start_month_combo.setCurrentIndex(0)
+            self.end_month_combo.setCurrentIndex(len(months) - 1)
+            self.applied_start_month = months[0]
+            self.applied_end_month = months[-1]
+            if not self.active_chart_month or self.active_chart_month not in months:
+                self.active_chart_month = months[-1]  # 默认选中最新月份
+        else:
+            self.applied_start_month = ""
+            self.applied_end_month = ""
+            self.active_chart_month = ""
+        self.start_month_combo.blockSignals(False)
+        self.end_month_combo.blockSignals(False)
+
     def update_data(self, analytics):
         self.analytics = analytics
         if not analytics or not hasattr(analytics, "reports"):
@@ -1264,49 +1602,8 @@ class MonthlyScalpingPage(QWidget):
                     if val is not None:
                         self.unrealized_pnl_map[sym] = self.unrealized_pnl_map.get(sym, 0.0) + float(val)
 
-        report = analytics.reports.get("每月微操收益")
-        if not report:
-            return
-
-        self.raw_rows = [tuple(r.values) for r in report.rows]
-
-        # 填充券商渠道下拉框
-        brokers = sorted({fmt_broker_cn(r[1]) for r in self.raw_rows if len(r) > 1 and r[1]})
-        self.broker_combo.blockSignals(True)
-        self.broker_combo.clear()
-        self.broker_combo.addItem("全部渠道", "")
-        for b in brokers:
-            self.broker_combo.addItem(b, b)
-        self.broker_combo.blockSignals(False)
-
-        # 填充分类下拉框
-        categories = sorted({str(r[2]) for r in self.raw_rows if len(r) > 2 and r[2]})
-        self.category_combo.blockSignals(True)
-        self.category_combo.clear()
-        self.category_combo.addItem("全部分类", "")
-        for c in categories:
-            self.category_combo.addItem(c, c)
-        self.category_combo.blockSignals(False)
-
-        # 填充月份下拉框
-        months = sorted({str(r[0]) for r in self.raw_rows if len(r) > 0 and r[0]})
-        self.start_month_combo.blockSignals(True)
-        self.end_month_combo.blockSignals(True)
-        self.start_month_combo.clear()
-        self.end_month_combo.clear()
-        for m in months:
-            self.start_month_combo.addItem(m, m)
-            self.end_month_combo.addItem(m, m)
-        if months:
-            self.start_month_combo.setCurrentIndex(0)
-            self.end_month_combo.setCurrentIndex(len(months) - 1)
-            self.applied_start_month = months[0]
-            self.applied_end_month = months[-1]
-            if not self.active_chart_month:
-                self.active_chart_month = months[-1]  # 默认选中最新月份
-        self.start_month_combo.blockSignals(False)
-        self.end_month_combo.blockSignals(False)
-
+        self._sync_mode_buttons()
+        self._load_active_mode_data()
         self._populate_persons()
         self.recalculate_and_refresh()
 
@@ -1462,7 +1759,65 @@ class MonthlyScalpingPage(QWidget):
 
         self.trend_canvas.set_data(trend_points, self.active_chart_month)
 
-        # 3. 统计选中月份摘要 (右侧卡片)
+        # 3. 统计选中月份摘要 (右侧卡片，含正T/反T、胜率、盈亏比、持仓天数与未配对纠偏)
+        is_compat = (self.scalping_mode == "EXCEL_COMPAT")
+        mode_short_label = next((lbl for mk, lbl, _ in self.MODE_SPECS if mk == self.scalping_mode), "")
+
+        def _match_unpaired(item: Dict[str, Any]) -> bool:
+            m = str(item.get("month", ""))
+            b_cn = fmt_broker_cn(item.get("channel", ""))
+            cat = str(item.get("category", ""))
+            sym = str(item.get("ticker", "")).upper()
+            if self.active_chart_month and m != self.active_chart_month:
+                return False
+            if self.applied_broker and b_cn != self.applied_broker:
+                return False
+            if self.applied_category and cat != self.applied_category:
+                return False
+            if self.applied_ticker and self.applied_ticker not in sym:
+                return False
+            if self.active_ranking_ticker and sym != self.active_ranking_ticker:
+                return False
+            return True
+
+        month_exp_buys = [x for x in self.active_bundle.get("expired_buys", ()) if _match_unpaired(x)] if not is_compat else []
+        month_exp_sells = [x for x in self.active_bundle.get("expired_sells", ()) if _match_unpaired(x)] if not is_compat else []
+
+        month_scope_rows = [r for r in global_scope_rows if str(r[0]) == self.active_chart_month] if self.active_chart_month else global_scope_rows
+        month_pairs: List[Dict[str, Any]] = []
+        for r in month_scope_rows:
+            k = (str(r[0]), fmt_broker_cn(r[1]), str(r[3]).upper())
+            meta = self.row_meta_map.get(k) or {}
+            month_pairs.extend(meta.get("pairs", ()))
+
+        pos_pairs = [p for p in month_pairs if p.get("mode") == "POS_T"]
+        rev_pairs = [p for p in month_pairs if p.get("mode") == "REV_T"]
+        win_pairs = [p for p in month_pairs if float(p.get("pnl") or 0) > 0]
+        loss_pairs = [p for p in month_pairs if float(p.get("pnl") or 0) < 0]
+        avg_win = (sum(float(p["pnl"]) for p in win_pairs) / len(win_pairs)) if win_pairs else None
+        avg_loss = (sum(abs(float(p["pnl"])) for p in loss_pairs) / len(loss_pairs)) if loss_pairs else None
+        pl_ratio = (avg_win / avg_loss) if (avg_win is not None and avg_loss and avg_loss > 0) else None
+        avg_hold_days = (sum(float(p.get("hold_days") or 0) for p in month_pairs) / len(month_pairs)) if month_pairs else None
+
+        summary_extra = {
+            "is_compat": is_compat,
+            "mode_label": mode_short_label,
+            "pair_count": len(month_pairs),
+            "pos_t_count": len(pos_pairs),
+            "pos_t_pnl": sum(float(p.get("pnl") or 0) for p in pos_pairs),
+            "rev_t_count": len(rev_pairs),
+            "rev_t_pnl": sum(float(p.get("pnl") or 0) for p in rev_pairs),
+            "win_count": len(win_pairs),
+            "loss_count": len(loss_pairs),
+            "pl_ratio": pl_ratio,
+            "avg_hold_days": avg_hold_days,
+            "cross_month_count": sum(1 for p in month_pairs if p.get("cross_month")),
+            "expired_buy_count": len(month_exp_buys),
+            "expired_buy_amount": sum(float(x.get("amount") or 0) for x in month_exp_buys),
+            "expired_sell_count": len(month_exp_sells),
+            "expired_sell_amount": sum(float(x.get("amount") or 0) for x in month_exp_sells),
+        }
+
         sel_month_info = next((p for p in trend_points if p["month"] == self.active_chart_month), None)
         if sel_month_info:
             self.month_summary_card.set_month_data(
@@ -1471,12 +1826,17 @@ class MonthlyScalpingPage(QWidget):
                 sel_month_info["trades"],
                 sel_month_info["qty"],
                 sel_month_info["has_pair"],
+                extra=summary_extra,
             )
         else:
-            self.month_summary_card.set_month_data(self.active_chart_month, None, 0, 0.0, False)
+            self.month_summary_card.set_month_data(
+                self.active_chart_month, None, 0, 0.0, False, extra=summary_extra
+            )
+
+        # 3.5 更新未配对短线尝试卡片（防幸存者偏差）
+        self._update_unpaired_panel(month_exp_buys, month_exp_sells, summary_extra["cross_month_count"])
 
         # 4. 统计月度股票 TOP 5 (严格取当前选中月份)
-        month_scope_rows = [r for r in global_scope_rows if str(r[0]) == self.active_chart_month] if self.active_chart_month else global_scope_rows
         stock_map: Dict[str, Dict[str, Any]] = {}
         for r in month_scope_rows:
             sym = str(r[3]).upper()
@@ -1525,15 +1885,42 @@ class MonthlyScalpingPage(QWidget):
             display_rows.append(r)
 
         # 7. 更新明细表格数据 (16列)
+        cols = (
+            "月份", "渠道", "分类", "Ticker", "微操次数", "微操数量",
+            "微操均买价($)", "微操均卖价($)", "每股价差($)", "买入金额($)", "卖出金额($)",
+            "月内微操收益($)" if is_compat else "微操净收益($)",
+            "首笔微操时间", "最近微操时间", "当前浮动盈亏($)", "说明",
+        )
         table_rows: List[List[Any]] = []
         for r in display_rows:
+            b_cn = fmt_broker_cn(r[1])
             sym = str(r[3]).upper() if len(r) > 3 else ""
             unrealized_pnl = self.unrealized_pnl_map.get(sym)
             unrealized_str = fmt_signed_money(unrealized_pnl, 2) if unrealized_pnl is not None else "—"
 
+            if is_compat:
+                note_str = "仅月内配对"
+            else:
+                meta = self.row_meta_map.get((str(r[0]), b_cn, sym)) or {}
+                parts = []
+                if meta.get("pos_t_count"):
+                    parts.append(f"正T{meta['pos_t_count']}")
+                if meta.get("rev_t_count"):
+                    parts.append(f"反T{meta['rev_t_count']}")
+                if meta.get("pair_count"):
+                    wr = float(meta.get("win_rate") or 0) * 100
+                    parts.append(f"胜{wr:.0f}%")
+                if meta.get("cross_month_count"):
+                    parts.append("跨月")
+                if meta.get("expired_buy_count"):
+                    parts.append(f"转长持{meta['expired_buy_count']}")
+                if meta.get("fee_unverified_count"):
+                    parts.append("⚠含未核实费")
+                note_str = " · ".join(parts) if parts else mode_short_label
+
             table_rows.append([
                 str(r[0]),                                  # 0: 月份
-                fmt_broker_cn(r[1]),                        # 1: 渠道
+                b_cn,                                       # 1: 渠道
                 str(r[2]),                                  # 2: 分类
                 str(r[3]),                                  # 3: Ticker
                 str(r[4]),                                  # 4: 微操次数
@@ -1543,18 +1930,18 @@ class MonthlyScalpingPage(QWidget):
                 fmt_signed_money(r[8], 2),                  # 8: 每股价差($)
                 f"${fmt_money(r[9], 2)}",                   # 9: 买入金额($)
                 f"${fmt_money(r[10], 2)}",                  # 10: 卖出金额($)
-                fmt_signed_money(r[11], 2),                 # 11: 月内微操收益($)
+                fmt_signed_money(r[11], 2),                 # 11: 微操净收益($) / 月内微操收益($)
                 str(r[12]) if len(r) > 12 else "—",          # 12: 首笔微操时间
                 str(r[13]) if len(r) > 13 else "—",          # 13: 最近微操时间
                 unrealized_str,                             # 14: 当前浮动盈亏($)
-                "仅月内配对",                               # 15: 说明
+                note_str,                                   # 15: 说明
             ])
 
         self.table_model.highlight_month = self.active_chart_month
         self.table_model.highlight_ticker = self.active_ranking_ticker
         self.table_model.page_size = max(1000, len(table_rows))
         self.table_model.page = 1
-        self.table_model.set_columns_and_rows(self.table_model.columns, table_rows)
+        self.table_model.set_columns_and_rows(cols, table_rows)
 
         # 更新表格副标题，直接全部展示，根据行数自适应高度，绝不出现内部垂直滚动条
         total_rows = len(table_rows)
@@ -1738,15 +2125,79 @@ class MonthlyScalpingPage(QWidget):
             broker = str(row_data[1]) if len(row_data) > 1 else ""
             self.open_stock_replay(sym, month=m, broker=broker)
 
+    @staticmethod
+    def _clear_layout(layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            elif item.layout() is not None:
+                MonthlyScalpingPage._clear_layout(item.layout())
+
+    def _update_unpaired_panel(self, exp_buys: List[Dict[str, Any]], exp_sells: List[Dict[str, Any]], cross_cnt: int):
+        if self.scalping_mode == "EXCEL_COMPAT":
+            self.unpaired_card.hide()
+            return
+        self.unpaired_card.show()
+        self._clear_layout(self.unpaired_list_layout)
+        buy_amt = sum(float(x.get("amount") or 0) for x in exp_buys)
+        sell_amt = sum(float(x.get("amount") or 0) for x in exp_sells)
+        win_days = self.active_bundle.get("max_days", 5)
+        cross_str = f" · 本月含跨月配对 {cross_cnt} 笔" if cross_cnt else ""
+        if exp_buys or exp_sells:
+            self.unpaired_summary_lbl.setText(
+                f"超过 {win_days} 交易日未配对：正T转长持 {len(exp_buys)} 笔（合计 ${fmt_money(buy_amt, 2)}） · "
+                f"反T未接回 {len(exp_sells)} 笔（合计 ${fmt_money(sell_amt, 2)}）{cross_str}"
+            )
+            self.unpaired_toggle_btn.show()
+            combined = [
+                ("正T转长持", x) for x in exp_buys
+            ] + [
+                ("反T未接回", x) for x in exp_sells
+            ]
+            combined.sort(key=lambda pair: (str(pair[1].get("open_day", "")), str(pair[1].get("ticker", ""))), reverse=True)
+            for tag, x in combined[:40]:
+                row_w = QWidget()
+                row_lay = QHBoxLayout(row_w)
+                row_lay.setContentsMargins(6, 2, 6, 2)
+                row_lay.setSpacing(10)
+                badge = QLabel(tag)
+                if tag == "正T转长持":
+                    badge.setStyleSheet("background: #FEE2E2; color: #B91C1C; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px;")
+                else:
+                    badge.setStyleSheet("background: #E0F2FE; color: #0369A1; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px;")
+                row_lay.addWidget(badge)
+                info = QLabel(
+                    f"{x.get('open_day', '—')}  ·  {fmt_broker_cn(x.get('channel'))}  ·  "
+                    f"<b>{x.get('ticker', '—')}</b>  ·  {fmt_money(x.get('qty'), 2)} 股"
+                )
+                info.setStyleSheet("color: #334155; font-size: 11.5px;")
+                row_lay.addWidget(info, 1)
+                amt_lbl = QLabel(f"${fmt_money(x.get('amount'), 2)}")
+                amt_lbl.setFont(numeric_font(11.5, bold=True))
+                amt_lbl.setStyleSheet("color: #78350F;")
+                row_lay.addWidget(amt_lbl)
+                self.unpaired_list_layout.addWidget(row_w)
+            if len(combined) > 40:
+                more = QLabel(f"… 另有 {len(combined) - 40} 笔超时记录（可筛选特定标的查看）")
+                more.setStyleSheet("color: #92400E; font-size: 11px; padding-left: 6px;")
+                self.unpaired_list_layout.addWidget(more)
+        else:
+            self.unpaired_summary_lbl.setText(f"当前筛选月份无超过 {win_days} 交易日未配对的买入或卖出{cross_str}")
+            self.unpaired_toggle_btn.hide()
+            self.unpaired_list_host.hide()
+            self._unpaired_expanded = False
+
     def open_drawer(self, row: List[Any]):
         self.drawer_title.setText(f"{row[3]} 微操详情")
         self.drawer_subtitle.setText(f"{row[0]} · {row[1]} · {row[2]}")
 
-        while self.drawer_list_layout.count():
-            item = self.drawer_list_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._clear_layout(self.drawer_list_layout)
+        is_compat = (self.scalping_mode == "EXCEL_COMPAT")
+        meta = self.row_meta_map.get((str(row[0]), str(row[1]), str(row[3]).upper())) or {}
 
+        pnl_label = "月内微操收益" if is_compat else "微操净收益"
         items = [
             ("月份", row[0]),
             ("渠道", row[1]),
@@ -1759,20 +2210,43 @@ class MonthlyScalpingPage(QWidget):
             ("每股价差", row[8]),
             ("买入金额", row[9]),
             ("卖出金额", row[10]),
-            ("月内微操收益", row[11]),
+            (pnl_label, row[11]),
             ("首笔微操时间", row[12]),
             ("最近微操时间", row[13]),
             ("当前浮动盈亏", row[14]),
-            ("统计说明", row[15]),
         ]
+        if not is_compat and meta:
+            pos_cnt = meta.get("pos_t_count", 0)
+            rev_cnt = meta.get("rev_t_count", 0)
+            pos_pnl = fmt_signed_money(meta.get("pos_t_pnl", 0), 2) if pos_cnt else "0 笔"
+            rev_pnl = fmt_signed_money(meta.get("rev_t_pnl", 0), 2) if rev_cnt else "0 笔"
+            wr = f"{float(meta.get('win_rate') or 0) * 100:.1f}% ({meta.get('win_count', 0)}胜/{meta.get('loss_count', 0)}负)"
+            plr = f"{float(meta['profit_loss_ratio']):.2f}" if meta.get("profit_loss_ratio") is not None else "—"
+            avg_d = f"{float(meta.get('avg_hold_days') or 0):.1f} 个交易日"
+            rep_fee = meta.get("reported_fee")
+            fee_txt = f"${fmt_money(rep_fee, 2)}" if rep_fee is not None else "含未核实费用"
+            if meta.get("fee_unverified_count"):
+                fee_txt += f"（{meta['fee_unverified_count']}笔未核实）"
+            items.extend([
+                ("正T（先买后卖）", f"{pos_pnl}（{pos_cnt} 笔）" if pos_cnt else "0 笔"),
+                ("反T（先卖后买）", f"{rev_pnl}（{rev_cnt} 笔）" if rev_cnt else "0 笔"),
+                ("胜率 / 盈亏比", f"{wr} · {plr}"),
+                ("平均持仓时长", avg_d),
+                ("跨月配对笔数", f"{meta.get('cross_month_count', 0)} 笔"),
+                ("已核实手续费", fee_txt),
+                ("当月超时转长持", f"{meta.get('expired_buy_count', 0)} 笔 (${fmt_money(meta.get('expired_buy_amount', 0), 2)})"),
+                ("当月超时未接回", f"{meta.get('expired_sell_count', 0)} 笔 (${fmt_money(meta.get('expired_sell_amount', 0), 2)})"),
+            ])
+        items.append(("统计说明", row[15]))
 
         for label, val in items:
             row_box = QHBoxLayout()
             lbl_key = QLabel(label)
             lbl_key.setStyleSheet("color: #64748B; font-size: 12px;")
             lbl_val = QLabel(str(val))
-            lbl_val.setFont(numeric_font(12, bold=(label in ("月内微操收益", "当前浮动盈亏"))))
-            if label in ("月内微操收益", "当前浮动盈亏"):
+            is_pnl_row = label in (pnl_label, "当前浮动盈亏", "正T（先买后卖）", "反T（先卖后买）")
+            lbl_val.setFont(numeric_font(12, bold=(label in (pnl_label, "当前浮动盈亏"))))
+            if is_pnl_row:
                 if str(val).startswith("+"):
                     lbl_val.setStyleSheet("color: #10B981; font-weight: bold;")
                 elif str(val).startswith("-") or str(val).startswith("−"):
@@ -1787,12 +2261,65 @@ class MonthlyScalpingPage(QWidget):
             row_box.addWidget(lbl_val)
             self.drawer_list_layout.addLayout(row_box)
 
+        # 逐笔配对证据列表（实战短线模式）
+        pairs_list = meta.get("pairs") or ()
+        if pairs_list:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet("background: #E2E8F0; max-height: 1px; border: none; margin: 4px 0;")
+            self.drawer_list_layout.addWidget(sep)
+
+            p_hdr = QLabel(f"逐笔配对证据（共 {len(pairs_list)} 笔）")
+            p_hdr.setFont(QFont(".AppleSystemUIFont", 12, QFont.Weight.Bold))
+            p_hdr.setStyleSheet("color: #0F172A;")
+            self.drawer_list_layout.addWidget(p_hdr)
+
+            for idx, p in enumerate(pairs_list, 1):
+                p_card = QFrame()
+                p_card.setStyleSheet(
+                    "QFrame { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; }"
+                )
+                pv = QVBoxLayout(p_card)
+                pv.setContentsMargins(10, 6, 10, 6)
+                pv.setSpacing(2)
+
+                top_r = QHBoxLayout()
+                cross_badge = " · 跨月" if p.get("cross_month") else ""
+                tag_lbl = QLabel(f"#{idx} {p.get('mode_label', '')} · 持仓{p.get('hold_days', 0)}天{cross_badge}")
+                tag_lbl.setStyleSheet("color: #1E40AF; font-size: 11px; font-weight: 600; border: none; background: transparent;")
+                top_r.addWidget(tag_lbl)
+                top_r.addStretch()
+                p_pnl = float(p.get("pnl") or 0)
+                pnl_c = "#10B981" if p_pnl > 0 else "#EF4444" if p_pnl < 0 else "#475569"
+                p_pnl_lbl = QLabel(fmt_signed_money(p_pnl, 2))
+                p_pnl_lbl.setFont(numeric_font(11.5, bold=True))
+                p_pnl_lbl.setStyleSheet(f"color: {pnl_c}; border: none; background: transparent;")
+                top_r.addWidget(p_pnl_lbl)
+                pv.addLayout(top_r)
+
+                fee_note = ""
+                if not p.get("fee_verified"):
+                    fee_note = " · ⚠未核实费"
+                elif p.get("reported_fee") is not None and float(p.get("reported_fee") or 0) > 0:
+                    fee_note = f" · 费${fmt_money(p['reported_fee'], 2)}"
+                sub_lbl = QLabel(
+                    f"数量 {fmt_money(p.get('qty'), 2)} 股 · 买 ${fmt_money(p.get('buy_amount'), 2)} → "
+                    f"卖 ${fmt_money(p.get('sell_amount'), 2)}{fee_note}"
+                )
+                sub_lbl.setStyleSheet("color: #475569; font-size: 11px; border: none; background: transparent;")
+                pv.addWidget(sub_lbl)
+
+                time_lbl = QLabel(f"买 {str(p.get('buy_time', ''))[:16]}  |  卖 {str(p.get('sell_time', ''))[:16]}")
+                time_lbl.setStyleSheet("color: #94A3B8; font-size: 10.5px; border: none; background: transparent;")
+                pv.addWidget(time_lbl)
+                self.drawer_list_layout.addWidget(p_card)
+
         btn_replay = QPushButton("查看该标的历史交易回放 →")
         btn_replay.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_replay.setStyleSheet("""
             QPushButton {
                 background: #2563EB; color: #FFFFFF; font-weight: 600; font-size: 12px;
-                border: none; border-radius: 6px; padding: 8px 12px; margin-top: 14px;
+                border: none; border-radius: 6px; padding: 8px 12px; margin-top: 10px;
             }
             QPushButton:hover { background: #1D4ED8; }
         """)
@@ -1803,7 +2330,7 @@ class MonthlyScalpingPage(QWidget):
         self.drawer_list_layout.addWidget(btn_replay)
         self.drawer_list_layout.addStretch()
 
-        w = 420
+        w = 440
         self.drawer_overlay.setGeometry(self.rect())
         self.drawer_frame.setGeometry(self.width() - w, 0, w, self.height())
         self.drawer_overlay.show()
