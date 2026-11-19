@@ -213,8 +213,15 @@ class ReportPage(QWidget):
             header.sectionClicked.connect(lambda column, header=header: self.open_sort_menu(column, header))
         self.table.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.horizontalHeader().customContextMenuRequested.connect(self.column_menu)
-        self.table.doubleClicked.connect(lambda index: self.drill.emit(self.table.finance_model.rows[index.row()].metadata)
-                                         if not self.table.finance_model.rows[index.row()].metadata.get('display_summary') else None)
+        def _emit_drill(index):
+            if index.isValid() and 0 <= index.row() < len(self.table.finance_model.rows):
+                meta = self.table.finance_model.rows[index.row()].metadata
+                if not meta.get('display_summary'):
+                    self.drill.emit(meta)
+
+        self.table.doubleClicked.connect(_emit_drill)
+        if getattr(self.table, 'frozen', None) is not None:
+            self.table.frozen.doubleClicked.connect(_emit_drill)
         self.table.selectionModel().currentRowChanged.connect(self.show_details)
         split.addWidget(self.table)
         self.details = QPlainTextEdit()

@@ -1866,6 +1866,9 @@ class MonthlyScalpingPage(QWidget):
             def go_trade_center():
                 dialog.close()
                 self.close_drawer()
+                if host and hasattr(host, "drill_record"):
+                    host.drill_record({"symbol": sym})
+                    return
                 if host and hasattr(host, "trade_center"):
                     host.trade_center.fields["symbol"].setText(sym)
                     host.trade_center.query()

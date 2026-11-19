@@ -949,23 +949,58 @@ class MainWindow(InteractionMixin, QMainWindow):
         self._submit("export", lambda cancel: export_report(report, path, parameters=parameters),
                      lambda _: self.banner.setText(f"已导出 {len(report.rows):,} 条到 {path.name}；包含当前筛选和计算口径。"))
 
+    def _set_legacy_accounts(self, account_id=None, broker_name=None):
+        """在批处理下钻中安全更新旧券商渠道控件的勾选状态与按钮文案。"""
+        if account_id is not None:
+            for aid, action in self.accounts.actions_by_id.items():
+                action.blockSignals(True)
+                action.setChecked(aid == account_id)
+                action.blockSignals(False)
+            ids = self.accounts.selected_ids()
+            self.accounts.setText(
+                self.accounts.actions_by_id[ids[0]].text()
+                if ids and len(ids) == 1
+                else f"已选 {len(ids)} 个渠道" if ids else "全部渠道"
+            )
+        elif broker_name:
+            self.accounts.blockSignals(True)
+            self.accounts.set_broker_name(broker_name)
+            self.accounts.blockSignals(False)
+
+    def _find_stock_index(self, *, instrument_id=None, symbol=None) -> int:
+        if instrument_id is not None:
+            idx = self.stock.findData(instrument_id)
+            if idx >= 0:
+                return idx
+        if symbol:
+            clean = str(symbol).split(" · ")[-1].strip().casefold()
+            for idx in range(1, self.stock.count()):
+                if self.stock.itemText(idx).split(" · ")[0].strip().casefold() == clean:
+                    return idx
+        return -1
+
     @batch_drill
     def drill_record(self, metadata):
         identifier = metadata.get("instrument_id")
         account = metadata.get("account_id")
         person = metadata.get("person_id")
+        symbol = metadata.get("symbol")
+        broker = metadata.get("channel") or metadata.get("broker")
         if person is not None and self.ledger.currentData() == Ledger.PERSON.value:
             self.person.setCurrentIndex(max(0, self.person.findData(person)))
-        if identifier is not None:
-            self.stock.setCurrentIndex(max(0, self.stock.findData(identifier)))
-        if account is not None:
-            for id, action in self.accounts.actions_by_id.items():
-                action.setChecked(id == account)
-        symbol = metadata.get("symbol")
-        if not symbol and identifier is not None:
+        stock_idx = self._find_stock_index(instrument_id=identifier, symbol=symbol)
+        if stock_idx >= 0:
+            self.stock.setCurrentIndex(stock_idx)
+        if account is not None or broker:
+            self._set_legacy_accounts(account_id=account, broker_name=broker)
+        if not symbol and self.stock.currentData() is not None:
             symbol = self.stock.currentText().split(" · ")[0]
+        # 同步至统一全局筛选栏，确保跳转到「交易明细」时自动带入所选渠道和股票代码
+        self._sync_global_filter_from_legacy()
         if hasattr(self, "trade_center"):
-            if symbol:
+            if hasattr(self, "global_asset_filter") and hasattr(self.trade_center, "sync_from_global_filter"):
+                self.trade_center.sync_from_global_filter(self.global_asset_filter.state(), refresh=False)
+            elif symbol:
                 self.trade_center.fields["symbol"].setText(symbol)
             self.trade_center.query()
         self.navigation.setCurrentRow(0)
@@ -975,8 +1010,19 @@ class MainWindow(InteractionMixin, QMainWindow):
         if kind in ("drill_trades", "replay"):
             extra = args[0] if args and isinstance(args[0], dict) else {}
             symbol = key or extra.get("symbol", "")
+            stock_idx = self._find_stock_index(instrument_id=extra.get("instrument_id"), symbol=symbol)
+            if stock_idx >= 0:
+                self.stock.setCurrentIndex(stock_idx)
+            if extra.get("account_id") is not None or extra.get("channel") or extra.get("broker"):
+                self._set_legacy_accounts(
+                    account_id=extra.get("account_id"),
+                    broker_name=extra.get("channel") or extra.get("broker"),
+                )
+            self._sync_global_filter_from_legacy()
             if hasattr(self, "trade_center"):
-                if symbol:
+                if hasattr(self, "global_asset_filter") and hasattr(self.trade_center, "sync_from_global_filter"):
+                    self.trade_center.sync_from_global_filter(self.global_asset_filter.state(), refresh=False)
+                elif symbol:
                     self.trade_center.fields["symbol"].setText(symbol)
                 self.trade_center.query()
             self.navigation.setCurrentRow(0)
@@ -1008,12 +1054,14 @@ class MainWindow(InteractionMixin, QMainWindow):
             self.navigation.setCurrentRow(4)
         elif kind in ("symbol", "symbol_suffix"):
             symbol = key.split(" · ")[-1]
-            for index in range(self.stock.count()):
-                if self.stock.itemText(index).split(" · ")[0] == symbol:
-                    self.stock.setCurrentIndex(index)
-                    break
+            stock_idx = self._find_stock_index(symbol=symbol)
+            if stock_idx >= 0:
+                self.stock.setCurrentIndex(stock_idx)
+            self._sync_global_filter_from_legacy()
             if hasattr(self, "trade_center"):
-                if symbol:
+                if hasattr(self, "global_asset_filter") and hasattr(self.trade_center, "sync_from_global_filter"):
+                    self.trade_center.sync_from_global_filter(self.global_asset_filter.state(), refresh=False)
+                elif symbol:
                     self.trade_center.fields["symbol"].setText(symbol)
                 self.trade_center.query()
             self.navigation.setCurrentRow(0)
@@ -1023,7 +1071,16 @@ class MainWindow(InteractionMixin, QMainWindow):
             code = key.replace("渠道", "").strip()
             for id, action in self.accounts.actions_by_id.items():
                 account = next((a for a in self.info.accounts if a["id"] == id), {})
+                action.blockSignals(True)
                 action.setChecked(account.get("broker_code") == code)
+                action.blockSignals(False)
+            ids = self.accounts.selected_ids()
+            self.accounts.setText(
+                self.accounts.actions_by_id[ids[0]].text()
+                if ids and len(ids) == 1
+                else f"已选 {len(ids)} 个渠道" if ids else "全部渠道"
+            )
+            self._sync_global_filter_from_legacy()
         elif kind == "contribution" and key.startswith("分类"):
             self.category.setCurrentText(key.replace("分类", "").strip())
 

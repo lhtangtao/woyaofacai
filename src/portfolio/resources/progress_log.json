@@ -1,5 +1,16 @@
 [
   {
+    "title": "修复今日盈亏双击跳转交易明细未带入渠道与股票代码的问题",
+    "time": "2026-11-19 18:41",
+    "author": "Antigravity",
+    "tag": "下钻交易明细已带入渠道与代码",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "修复 drill_record、drill_chart 及报表下钻跳转到交易明细时未同步统一全局筛选栏（GlobalAssetFilter）导致渠道与股票代码被重置为空的问题，同时支持双击表格左侧冻结渠道列直接下钻。",
+      "验证范围：tests/test_drill_to_trades.py 与 tests/test_intraday_loading.py 全部 4 项测试通过。"
+    ]
+  },
+  {
     "title": "为今日盈亏当日走势折线图增加加载中动画效果",
     "time": "2026-11-19 18:27",
     "author": "Antigravity",
