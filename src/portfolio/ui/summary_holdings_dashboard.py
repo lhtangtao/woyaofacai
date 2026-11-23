@@ -670,7 +670,7 @@ class _SummaryTopBarsCanvas(QWidget):
         if max_abs <= 0:
             max_abs = 1.0
 
-        label_w = 190.0
+        label_w = 210.0
         gap = 12.0
         mid_x = w * 0.5
         bar_max_w = max(40.0, mid_x - label_w - gap * 1.5)
@@ -680,6 +680,17 @@ class _SummaryTopBarsCanvas(QWidget):
         f_lbl = QFont()
         f_lbl.setPointSize(11)
         f_num = numeric_font(11, bold=True)
+
+        def _status_tag(item: dict[str, Any]) -> str:
+            is_cross = bool(item.get("is_cross_channel"))
+            is_closed = item.get("status") == "已全清仓"
+            if is_cross and is_closed:
+                return " (跨/清)"
+            if is_cross:
+                return " (跨/持)"
+            if is_closed:
+                return " (清)"
+            return ""
 
         # 中轴线
         painter.setPen(QPen(QColor("#E2E8F0"), 1.0))
@@ -705,14 +716,14 @@ class _SummaryTopBarsCanvas(QWidget):
                     painter.setBrush(QColor("#FEF2F2"))
                     painter.drawRoundedRect(full_rect, 4, 4)
 
-                tag = " (跨)" if item.get("is_cross_channel") else (" (清)" if item.get("status") == "已全清仓" else "")
+                tag = _status_tag(item)
                 painter.setFont(f_lbl)
                 painter.setPen(QColor("#0F172A"))
-                painter.drawText(QRectF(8.0, y, 105.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, f"{i + 1}. {tk}{tag}")
+                painter.drawText(QRectF(8.0, y, 122.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, f"{i + 1}. {tk}{tag}")
 
                 painter.setFont(f_num)
                 painter.setPen(QColor("#DC2626"))
-                painter.drawText(QRectF(108.0, y, label_w - 110.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, _fmt_usd(val, signed=True))
+                painter.drawText(QRectF(128.0, y, label_w - 130.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, _fmt_usd(val, signed=True))
 
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor("#EF4444"))
@@ -738,15 +749,15 @@ class _SummaryTopBarsCanvas(QWidget):
                 painter.setBrush(QColor("#10B981"))
                 painter.drawRoundedRect(bar_rect, 3, 3)
 
-                tag = " (跨)" if item.get("is_cross_channel") else (" (清)" if item.get("status") == "已全清仓" else "")
+                tag = _status_tag(item)
                 rx = w - label_w
                 painter.setFont(f_lbl)
                 painter.setPen(QColor("#0F172A"))
-                painter.drawText(QRectF(rx, y, 105.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, f"{i + 1}. {tk}{tag}")
+                painter.drawText(QRectF(rx, y, 122.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, f"{i + 1}. {tk}{tag}")
 
                 painter.setFont(f_num)
                 painter.setPen(QColor("#16A34A"))
-                painter.drawText(QRectF(rx + 100.0, y, label_w - 108.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, _fmt_usd(val, signed=True))
+                painter.drawText(QRectF(rx + 120.0, y, label_w - 128.0, row_h), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, _fmt_usd(val, signed=True))
 
 
 class SummaryTopContributorsCard(QFrame):
