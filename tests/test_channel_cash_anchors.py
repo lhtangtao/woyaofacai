@@ -1,0 +1,162 @@
+"""券商实时现金 + 手动现金锚点推演及资产总览展示测试。"""
+from __future__ import annotations
+
+import os
+from datetime import date
+from decimal import Decimal
+from types import SimpleNamespace
+
+from portfolio.domain.models import QueryScope
+
+
+def to_e8(val: Decimal) -> int:
+    return int(val * Decimal("100000000"))
+from portfolio.services.channel_cash import (
+    compute_anchored_channel_cash,
+    is_cash_visible_scope,
+    resolve_channel_cash_details,
+)
+from portfolio.services.quote_store import QuoteStore
+
+
+def test_quote_store_manual_cash_anchors_crud(tmp_path):
+    store = QuoteStore(tmp_path / "live_quotes.sqlite3")
+    assert store.load_cash_anchors() == {}
+
+    store.save_cash_anchor("BBAE", "2026-11-23", Decimal("248.00"), note="test")
+    store.save_cash_anchor("FIRSTRADE", "2026-11-23", Decimal("1377.41"), note="test2")
+    anchors = store.load_cash_anchors()
+    assert anchors["BBAE"]["anchor_date"] == "2026-11-23"
+    assert anchors["BBAE"]["amount"] == Decimal("248.00")
+    assert anchors["FIRSTRADE"]["amount"] == Decimal("1377.41")
+
+    # 覆盖更新
+    store.save_cash_anchor("BBAE", "2026-11-25", Decimal("300.50"))
+    assert store.load_cash_anchors()["BBAE"]["amount"] == Decimal("300.50")
+
+    # 删除
+    store.delete_cash_anchor("BBAE")
+    assert "BBAE" not in store.load_cash_anchors()
+
+
+def test_anchored_cash_rolls_forward_trades_and_events():
+    """验证锚点日期之后的买入/卖出成交（含手续费）及现金事件能精确推算现金。"""
+    snapshot = SimpleNamespace(
+        scope=QueryScope(as_of=date(2026, 11, 30), person_ids=(1,)),
+        accounts={
+            10: {"broker_code": "BBAE"},
+            11: {"broker_code": "FIRSTRADE"},
+        },
+        extras={
+            "broker_trades": [
+                # 锚点当天成交不重复计入
+                {
+                    "account_id": 10,
+                    "side": "BUY",
+                    "business_date": "2026-11-23",
+                    "calculation_amount_e8": to_e8(Decimal("100.00")),
+                    "fees_e8": to_e8(Decimal("1.00")),
+                    "net_amount_e8": None,
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                },
+                # 锚点之后买入：减少 100 + 1 = 101
+                {
+                    "account_id": 10,
+                    "side": "BUY",
+                    "business_date": "2026-11-25",
+                    "calculation_amount_e8": to_e8(Decimal("100.00")),
+                    "fees_e8": to_e8(Decimal("1.00")),
+                    "net_amount_e8": None,
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                },
+                # 锚点之后卖出：增加 250 - 1 = 249
+                {
+                    "account_id": 10,
+                    "side": "SELL",
+                    "business_date": "2026-11-28",
+                    "calculation_amount_e8": to_e8(Decimal("250.00")),
+                    "fees_e8": to_e8(Decimal("1.00")),
+                    "net_amount_e8": None,
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                },
+            ],
+            "cash_events": [
+                # 分红到账 +5.50
+                {
+                    "account_id": 10,
+                    "event_type": "DIVIDEND",
+                    "business_date": "2026-11-29",
+                    "amount_e8": to_e8(Decimal("5.50")),
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                }
+            ],
+        },
+    )
+    anchor = {
+        "channel": "BBAE",
+        "anchor_date": "2026-11-23",
+        "amount": Decimal("248.00"),
+    }
+    res = compute_anchored_channel_cash(snapshot, anchor)
+    assert res is not None
+    # 248.00 - 101.00 + 249.00 + 5.50 = 401.50
+    assert res["amount"] == Decimal("401.50")
+    assert res["trades_applied"] == 2
+    assert res["events_applied"] == 1
+    assert res["source"] == "锚点推算"
+
+
+def test_cash_visibility_restricted_to_personal_and_all():
+    """仅「我个人(1)」和「全部人员(None)」展示现金，其他人员一律不展示。"""
+    assert is_cash_visible_scope(QueryScope(as_of=date(2026, 11, 23), person_ids=None)) is True
+    assert is_cash_visible_scope(QueryScope(as_of=date(2026, 11, 23), person_ids=(1,))) is True
+    assert is_cash_visible_scope(QueryScope(as_of=date(2026, 11, 23), person_ids=(2,))) is False
+    assert is_cash_visible_scope(QueryScope(as_of=date(2026, 11, 23), person_ids=(2, 3))) is False
+
+    base_extras = {
+        "channel_cash": {"LONGBRIDGE": Decimal("-936.76"), "SCHWAB": Decimal("159.19")},
+        "manual_cash_anchors": {
+            "BBAE": {"channel": "BBAE", "anchor_date": "2026-11-23", "amount": Decimal("248.00")},
+            "FIRSTRADE": {"channel": "FIRSTRADE", "anchor_date": "2026-11-23", "amount": Decimal("1377.41")},
+        },
+    }
+    other_snap = SimpleNamespace(scope=QueryScope(as_of=date(2026, 11, 23), person_ids=(2,)), extras=base_extras)
+    assert resolve_channel_cash_details(other_snap) == {}
+
+    personal_snap = SimpleNamespace(scope=QueryScope(as_of=date(2026, 11, 23), person_ids=(1,)), extras=base_extras)
+    details = resolve_channel_cash_details(personal_snap)
+    assert set(details.keys()) == {"LONGBRIDGE", "SCHWAB", "BBAE", "FIRSTRADE"}
+    assert details["LONGBRIDGE"]["source"] == "API实时"
+    assert details["BBAE"]["source"] == "锚点推算"
+    assert details["FIRSTRADE"]["amount"] == Decimal("1377.41")
+
+
+def test_cash_summary_banner_ui_offscreen():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from portfolio.ui.dashboard_page import CashSummaryBanner
+
+    app = QApplication.instance() or QApplication([])
+    banner = CashSummaryBanner()
+
+    extras = {
+        "channel_cash": {"LONGBRIDGE": Decimal("-936.76"), "SCHWAB": Decimal("159.19")},
+        "manual_cash_anchors": {
+            "BBAE": {"channel": "BBAE", "anchor_date": "2026-11-23", "amount": Decimal("248.00")},
+            "FIRSTRADE": {"channel": "FIRSTRADE", "anchor_date": "2026-11-23", "amount": Decimal("1377.41")},
+        },
+    }
+    personal_analytics = SimpleNamespace(scope=QueryScope(as_of=date(2026, 11, 23), person_ids=(1,)), extras=extras)
+    banner.update_cash(personal_analytics, Decimal("45000.00"))
+    assert not banner.isHidden()
+    assert "847.84" in banner.lbl_total_cash.text()
+    assert "45,847.84" in banner.lbl_total_equity.text()
+
+    other_analytics = SimpleNamespace(scope=QueryScope(as_of=date(2026, 11, 23), person_ids=(2,)), extras=extras)
+    banner.update_cash(other_analytics, Decimal("10000.00"))
+    assert banner.isHidden()
+    app.processEvents()

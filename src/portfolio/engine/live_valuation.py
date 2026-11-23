@@ -174,11 +174,11 @@ def live_summaries(analytics, report, total, session=None, now=None):
                 annual_gain = strict_sum(year_rows) if year_rows else None
             baseline_annual_gain = annual_gain
             if dimension == 0 and cash is None and hasattr(analytics, "extras"):
-                from portfolio.domain.models import Ledger
-                is_personal_or_all = (analytics.scope.ledger == Ledger.PERSON and (analytics.scope.person_ids is None or 1 in analytics.scope.person_ids))
-                channel_cash = getattr(analytics, "extras", {}).get("channel_cash", {})
-                if is_personal_or_all and category in channel_cash:
-                    cash = channel_cash[category]
+                from portfolio.services.channel_cash import resolve_channel_cash_details
+                resolved_cash = resolve_channel_cash_details(analytics)
+                entry = resolved_cash.get(str(category).upper())
+                if entry is not None and entry.get("amount") is not None:
+                    cash = entry["amount"]
             if session is not None and now is not None:
                 from types import SimpleNamespace
                 subset = {}

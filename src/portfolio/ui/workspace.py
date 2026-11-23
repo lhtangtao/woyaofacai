@@ -357,6 +357,7 @@ def build_workspace(self):
         page.export_requested.connect(self.export_financial_report)
         page.provenance_requested.connect(self.report_provenance)
     self.dashboard.drill.connect(self.drill_chart)
+    self.dashboard.cash_anchors_updated.connect(self._on_cash_anchors_updated)
     self.charts_page.drill.connect(self.drill_chart)
     self.charts_page.error.connect(self.banner.setText)
     build_system_pages(self)

@@ -39,6 +39,7 @@ class QuoteStore:
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_versions (scope_key TEXT NOT NULL, day TEXT NOT NULL, source_version TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS historical_pnl_warnings (scope_key TEXT NOT NULL, day TEXT NOT NULL, warning TEXT NOT NULL, PRIMARY KEY(scope_key,day))')
         c.execute('CREATE TABLE IF NOT EXISTS channel_cash_snapshots (channel TEXT PRIMARY KEY, amount TEXT NOT NULL, currency TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT NOT NULL)')
+        c.execute('CREATE TABLE IF NOT EXISTS manual_cash_anchors (channel TEXT PRIMARY KEY, anchor_date TEXT NOT NULL, amount TEXT NOT NULL, currency TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS quote_close_revisions(day TEXT PRIMARY KEY,revision INTEGER NOT NULL)')
         for table in ('daily_quote_snapshots',):
             for operation in ('INSERT','UPDATE','DELETE'):
@@ -280,6 +281,49 @@ class QuoteStore:
         except Exception:
             return {}
 
+    def save_cash_anchor(self, channel: str, anchor_date: str, amount: Decimal, currency: str = 'USD', note: str = ''):
+        """保存某券商在指定基准日期的手动现金锚点（用于无实时 API 的券商往后推算现金）。"""
+        now_str = datetime.now(UTC).isoformat()
+        with self.connect() as c:
+            c.execute(
+                'INSERT INTO manual_cash_anchors VALUES (?,?,?,?,?,?) '
+                'ON CONFLICT(channel) DO UPDATE SET '
+                'anchor_date=excluded.anchor_date, amount=excluded.amount, currency=excluded.currency, '
+                'updated_at=excluded.updated_at, note=excluded.note',
+                (channel.upper(), str(anchor_date)[:10], str(amount), currency.upper(), now_str, note),
+            )
+
+    def load_cash_anchors(self) -> dict[str, dict[str, object]]:
+        if not self.path.exists():
+            return {}
+        try:
+            with self.connect() as c:
+                if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_cash_anchors'").fetchone():
+                    return {}
+                rows = c.execute(
+                    'SELECT channel, anchor_date, amount, currency, updated_at, note FROM manual_cash_anchors'
+                ).fetchall()
+                return {
+                    str(ch).upper(): {
+                        'channel': str(ch).upper(),
+                        'anchor_date': str(anchor_date)[:10],
+                        'amount': Decimal(str(amt)),
+                        'currency': str(cur or 'USD').upper(),
+                        'updated_at': str(updated_at or ''),
+                        'note': str(note or ''),
+                    }
+                    for ch, anchor_date, amt, cur, updated_at, note in rows
+                }
+        except Exception:
+            return {}
+
+    def delete_cash_anchor(self, channel: str):
+        if not self.path.exists():
+            return
+        with self.connect() as c:
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_cash_anchors'").fetchone():
+                c.execute('DELETE FROM manual_cash_anchors WHERE channel = ?', (channel.upper(),))
+
     def supplement(self, snapshot, *, readonly=False):
         from portfolio.domain.analytics import Issue, Price
         instruments = {i['symbol']+'.US': key for key, i in snapshot.instruments.items() if i.get('market') == 'US'}
@@ -293,8 +337,27 @@ class QuoteStore:
             with (self.read_connection() if readonly else self.connect()) as c:
                 snapshot.extras['trading_days'] = tuple(r[0] for r in c.execute('SELECT day FROM us_calendar ORDER BY day'))
                 try:
-                    c_rows = c.execute('SELECT channel, amount FROM channel_cash_snapshots').fetchall()
+                    c_rows = c.execute('SELECT channel, amount, updated_at FROM channel_cash_snapshots').fetchall()
                     snapshot.extras['channel_cash'] = {r[0]: Decimal(r[1]) for r in c_rows}
+                    snapshot.extras['channel_cash_updated_at'] = {r[0]: str(r[2] or '') for r in c_rows}
+                except Exception:
+                    pass
+                try:
+                    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_cash_anchors'").fetchone():
+                        a_rows = c.execute(
+                            'SELECT channel, anchor_date, amount, currency, updated_at, note FROM manual_cash_anchors'
+                        ).fetchall()
+                        snapshot.extras['manual_cash_anchors'] = {
+                            str(ch).upper(): {
+                                'channel': str(ch).upper(),
+                                'anchor_date': str(anchor_date)[:10],
+                                'amount': Decimal(str(amt)),
+                                'currency': str(cur or 'USD').upper(),
+                                'updated_at': str(updated_at or ''),
+                                'note': str(note or ''),
+                            }
+                            for ch, anchor_date, amt, cur, updated_at, note in a_rows
+                        }
                 except Exception:
                     pass
         count = 0

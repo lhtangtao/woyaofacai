@@ -42,6 +42,12 @@ class AnalyticsService:
         self.fx_store = fx_store
         self._cache, self._ownership_cache, self._lock = {}, {}, RLock()
 
+    def clear_cache(self):
+        """线程安全清空分析与归属计算缓存（如手动校准现金锚点后立即生效）。"""
+        with self._lock:
+            self._cache.clear()
+            self._ownership_cache.clear()
+
     def identity(self):
         from portfolio.services.derived_dependencies import source_identity
         # Shared five-minute bars are not inputs to historical financial
@@ -255,10 +261,16 @@ class AnalyticsService:
             }
             for win_days in (0, 5, 20):
                 scalping_modes[f"SHORT_{win_days}"] = short_term_scalping(snapshot, max_days=win_days, cancel=cancel)
+            cash_extras = {
+                k: snapshot.extras[k]
+                for k in ("channel_cash", "channel_cash_updated_at", "manual_cash_anchors", "resolved_channel_cash")
+                if k in snapshot.extras
+            }
             result = Analytics(scope, reports, metrics, snapshot.issues, positions, traces, latest, valuation_days,
                                calculated_at=datetime.now(timezone.utc).isoformat(), source_identity=snapshot.source_identity,
                                trading_days=snapshot.extras.get("trading_days", ()),
-                               scalping_modes=scalping_modes)
+                               scalping_modes=scalping_modes,
+                               extras=cash_extras)
             # Filter display rows only AFTER replay and dashboard calculations.
             if scope.start_date:
                 cutoff_m = scope.start_date.isoformat()[:7]

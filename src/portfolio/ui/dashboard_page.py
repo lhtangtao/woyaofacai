@@ -1,14 +1,23 @@
 import calendar
 from collections import defaultdict
+from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QListView,
+    QMessageBox,
+    QPushButton,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -28,13 +37,249 @@ from portfolio.engine.dashboard import (
     quarterly_gains,
     quarterly_rates,
 )
+from portfolio.paths import quote_cache_path
+from portfolio.services.channel_cash import (
+    is_cash_visible_scope,
+    resolve_channel_cash_details,
+)
+from portfolio.services.quote_store import QuoteStore
 from portfolio.ui.metric_card import MetricCard
 from portfolio.ui.report_page import ReportPage
-from portfolio.ui.theme import tokens
+from portfolio.ui.theme import numeric_font, tokens
+
+_CHANNEL_DISPLAY = (
+    ("LONGBRIDGE", "长桥"),
+    ("SCHWAB", "嘉信"),
+    ("BBAE", "BBAE"),
+    ("FIRSTRADE", "第一证券"),
+)
+_MANUAL_ANCHOR_CHANNELS = (
+    ("BBAE", "BBAE"),
+    ("FIRSTRADE", "第一证券"),
+)
+
+
+class CashAnchorDialog(QDialog):
+    """手动校准 BBAE / 第一证券现金余额锚点弹窗（仅存本地行情缓存库，不改原始账本）。"""
+
+    def __init__(self, store: QuoteStore, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.setWindowTitle("校准券商现金锚点（BBAE / 第一证券）")
+        self.setMinimumWidth(440)
+        anchors = store.load_cash_anchors()
+        today_str = date.today().isoformat()
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "长桥与嘉信通过券商 API 自动获取实时现金；BBAE 与第一证券无开放余额接口，"
+            "请输入某日收盘后的现金余额作为锚点，系统将自动叠加锚点日期之后的交易明细持续推算。"
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #475569; font-size: 12px;")
+        layout.addWidget(intro)
+
+        self._inputs: dict[str, tuple[QLineEdit, QLineEdit]] = {}
+        for code, label in _MANUAL_ANCHOR_CHANNELS:
+            box = QFrame(self)
+            box.setStyleSheet("QFrame { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; }")
+            form = QFormLayout(box)
+            form.setContentsMargins(12, 10, 12, 10)
+            form.setSpacing(8)
+
+            hdr = QLabel(f"{label}（{code}）")
+            hdr.setStyleSheet("font-weight: 700; font-size: 13px; color: #0F172A; border: none; background: transparent;")
+            form.addRow(hdr)
+
+            cur = anchors.get(code, {})
+            date_edit = QLineEdit(str(cur.get("anchor_date") or today_str), box)
+            date_edit.setPlaceholderText("YYYY-MM-DD")
+            amt_val = cur.get("amount")
+            amt_edit = QLineEdit(f"{amt_val:.2f}" if isinstance(amt_val, Decimal) else "", box)
+            amt_edit.setPlaceholderText("例如 248.00（留空则清除该渠道锚点）")
+
+            form.addRow("锚点基准日期：", date_edit)
+            form.addRow("现金余额 (USD)：", amt_edit)
+            self._inputs[code] = (date_edit, amt_edit)
+            layout.addWidget(box)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel, self)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存并重算")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(self._on_save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_save(self):
+        parsed: list[tuple[str, str, Decimal | None]] = []
+        for code, (date_edit, amt_edit) in self._inputs.items():
+            raw_amt = amt_edit.text().strip().replace(",", "").replace("$", "")
+            raw_date = date_edit.text().strip()
+            if not raw_amt:
+                parsed.append((code, raw_date, None))
+                continue
+            try:
+                date.fromisoformat(raw_date)
+            except ValueError:
+                QMessageBox.warning(self, "日期格式错误", f"{code} 的锚点日期格式应为 YYYY-MM-DD。")
+                return
+            try:
+                val = Decimal(raw_amt)
+            except InvalidOperation:
+                QMessageBox.warning(self, "金额格式错误", f"{code} 的现金余额请输入有效数字。")
+                return
+            parsed.append((code, raw_date, val))
+
+        for code, anchor_date, val in parsed:
+            if val is None:
+                self.store.delete_cash_anchor(code)
+            else:
+                self.store.save_cash_anchor(code, anchor_date, val, currency="USD", note="用户手动校准现金锚点")
+        self.accept()
+
+
+class CashSummaryBanner(QFrame):
+    """资产总览顶部「账户现金与仓位概览」卡片（仅个人与全部人员视角可见）。"""
+
+    calibrate_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CashSummaryBanner")
+        self.setStyleSheet("""
+            QFrame#CashSummaryBanner {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 12px;
+            }
+        """)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(16, 12, 16, 12)
+        outer.setSpacing(16)
+
+        # 左侧总览指标：账户总现金 / 总权益 / 股票仓位
+        self.lbl_total_cash = QLabel("账户总现金\n—")
+        self.lbl_total_equity = QLabel("总权益(市值+现金)\n—")
+        self.lbl_position_ratio = QLabel("当前股票仓位\n—")
+        for lbl in (self.lbl_total_cash, self.lbl_total_equity, self.lbl_position_ratio):
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setStyleSheet("border: none; background: transparent;")
+            outer.addWidget(lbl)
+
+        sep = QFrame(self)
+        sep.setFixedWidth(1)
+        sep.setStyleSheet("background: #E2E8F0; border: none;")
+        outer.addWidget(sep)
+
+        # 中间 4 家券商分渠道现金胶囊
+        self.channel_labels: dict[str, QLabel] = {}
+        ch_wrap = QHBoxLayout()
+        ch_wrap.setSpacing(10)
+        for code, name in _CHANNEL_DISPLAY:
+            pill = QLabel(self)
+            pill.setTextFormat(Qt.TextFormat.RichText)
+            pill.setStyleSheet(
+                "background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; "
+                "padding: 6px 10px; font-size: 12px; color: #0F172A;"
+            )
+            self.channel_labels[code] = pill
+            ch_wrap.addWidget(pill)
+        outer.addLayout(ch_wrap, 1)
+
+        # 右侧校准按钮
+        self.calibrate_btn = QPushButton("校准现金锚点", self)
+        self.calibrate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.calibrate_btn.setStyleSheet("""
+            QPushButton {
+                background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE;
+                border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+            }
+            QPushButton:hover { background: #DBEAFE; border-color: #93C5FD; }
+        """)
+        self.calibrate_btn.clicked.connect(self.calibrate_clicked.emit)
+        outer.addWidget(self.calibrate_btn)
+
+    def update_cash(self, analytics, stock_market_value: Decimal | None):
+        if analytics is None or not is_cash_visible_scope(getattr(analytics, "scope", None)):
+            self.hide()
+            return
+
+        details = resolve_channel_cash_details(analytics)
+        self.show()
+
+        total_cash = sum((item["amount"] for item in details.values() if item.get("amount") is not None), Decimal("0"))
+        has_any_cash = bool(details)
+
+        if has_any_cash:
+            c_col = "#DC2626" if total_cash < 0 else "#0F172A"
+            c_txt = f"${total_cash:+,.2f}" if total_cash < 0 else f"${total_cash:,.2f}"
+        else:
+            c_col, c_txt = "#94A3B8", "暂无快照"
+        self.lbl_total_cash.setText(
+            f"<div style='font-size:11px;color:#64748B;'>账户总现金 (USD)</div>"
+            f"<div style='font-size:16px;font-weight:700;color:{c_col};margin-top:2px;'>{c_txt}</div>"
+        )
+
+        if has_any_cash and stock_market_value is not None:
+            equity = stock_market_value + total_cash
+            eq_txt = f"${equity:,.2f}"
+            if equity > 0:
+                pos_pct = (stock_market_value / equity) * Decimal("100")
+                pos_col = "#DC2626" if pos_pct > Decimal("100") else "#2563EB"
+                pos_suffix = " (含融资)" if pos_pct > Decimal("100") else ""
+                pos_txt = f"{pos_pct:.1f}%{pos_suffix}"
+            else:
+                pos_col, pos_txt = "#64748B", "—"
+        else:
+            eq_txt = "—"
+            pos_col, pos_txt = "#64748B", "—"
+
+        self.lbl_total_equity.setText(
+            f"<div style='font-size:11px;color:#64748B;'>总权益 (市值+现金)</div>"
+            f"<div style='font-size:16px;font-weight:700;color:#0F172A;margin-top:2px;'>{eq_txt}</div>"
+        )
+        self.lbl_position_ratio.setText(
+            f"<div style='font-size:11px;color:#64748B;'>当前股票仓位</div>"
+            f"<div style='font-size:16px;font-weight:700;color:{pos_col};margin-top:2px;'>{pos_txt}</div>"
+        )
+
+        for code, name in _CHANNEL_DISPLAY:
+            pill = self.channel_labels[code]
+            entry = details.get(code)
+            if entry and entry.get("amount") is not None:
+                amt = entry["amount"]
+                src = entry.get("source") or ""
+                col = "#DC2626" if amt < 0 else "#16A34A" if amt > 0 else "#0F172A"
+                amt_txt = f"${amt:+,.2f}" if amt < 0 else f"${amt:,.2f}"
+                src_badge = f"<span style='font-size:10px;color:#64748B;margin-left:4px;'>{src}</span>"
+                pill.setText(
+                    f"<div><b style='color:#0F172A;'>{name}</b>{src_badge}</div>"
+                    f"<div style='font-size:13px;font-weight:700;color:{col};margin-top:2px;'>{amt_txt}</div>"
+                )
+                if src == "锚点推算":
+                    pill.setToolTip(
+                        f"{name} 锚点推算现金：{amt_txt}\n"
+                        f"基准日期：{entry.get('anchor_date')}\n"
+                        f"基准金额：${entry.get('anchor_amount'):,.2f}\n"
+                        f"后续叠加成交：{entry.get('trades_applied', 0)} 笔"
+                    )
+                else:
+                    pill.setToolTip(f"{name} 券商 API 实时现金：{amt_txt}\n更新时间：{entry.get('updated_at') or '—'}")
+            else:
+                hint = "待校准" if code in ("BBAE", "FIRSTRADE") else "待拉取"
+                pill.setText(
+                    f"<div><b style='color:#0F172A;'>{name}</b>"
+                    f"<span style='font-size:10px;color:#94A3B8;margin-left:4px;'>{hint}</span></div>"
+                    f"<div style='font-size:13px;font-weight:600;color:#94A3B8;margin-top:2px;'>—</div>"
+                )
+                pill.setToolTip(f"{name} 暂无现金数据，可点击右侧「校准现金锚点」设置。")
 
 
 class DashboardPage(QWidget):
     drill = Signal(str, str)
+    cash_anchors_updated = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,6 +295,11 @@ class DashboardPage(QWidget):
         content = QWidget()
         body = QVBoxLayout(content)
         body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
+        self.cash_banner = CashSummaryBanner(content)
+        self.cash_banner.calibrate_clicked.connect(self._open_cash_anchor_dialog)
+        self.cash_banner.hide()
+        body.addWidget(self.cash_banner)
         self.grid = QGridLayout()
         self.grid.setSpacing(12)
         for index in range(18):
@@ -157,6 +407,7 @@ class DashboardPage(QWidget):
         self.daily_rows, self.live_day = (), None
         self.day_rates = {}
         self.metrics = None
+        self.cash_banner.hide()
         for card in self.cards:
             card.setText("计算中…")
             card.setToolTip("")
@@ -179,6 +430,12 @@ class DashboardPage(QWidget):
                 f"border:1px solid {t.border}; background:{t.panel}; color:{t.loss};}}"
             )
 
+    def _open_cash_anchor_dialog(self):
+        store = QuoteStore(quote_cache_path())
+        dlg = CashAnchorDialog(store, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.cash_anchors_updated.emit()
+
     def set_analytics(self, analytics):
         self.analytics = analytics
         self.set_metrics(analytics.metrics)
@@ -189,6 +446,8 @@ class DashboardPage(QWidget):
         analytics = self.analytics
         from portfolio.services.overview_metrics import overview_metrics
         metrics=overview_metrics(analytics,metrics)
+        stock_mv = next((m.value for m in metrics if m.name == "当前总资产" and m.value is not None), None)
+        self.cash_banner.update_cash(analytics, stock_mv)
         for card, metric in zip(self.cards, metrics):
             gap, _ = metric_gap(metric.name, analytics.reports['每日持仓收益'].rows, analytics.scope.as_of) if metric.value is None else ('', '')
             if metric.value is None and metric.formula.startswith('长桥'):

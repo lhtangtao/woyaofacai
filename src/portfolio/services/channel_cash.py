@@ -1,9 +1,205 @@
 """Fetch live account cash balances for supported brokers (Longbridge, Schwab)."""
 from decimal import Decimal
 import logging
-from typing import Optional
+from typing import Any, Optional
+
+from portfolio.domain.models import from_e8
 
 logger = logging.getLogger(__name__)
+
+ZERO = Decimal("0")
+PERSONAL_PERSON_ID = 1
+
+
+def is_cash_visible_scope(scope) -> bool:
+    """现金信息仅在「我个人」和「全部人员」视角展示，其他人员不展示。"""
+    if scope is None:
+        return False
+    person_ids = getattr(scope, "person_ids", None)
+    if person_ids is None:
+        return True
+    try:
+        ids = tuple(int(p) for p in person_ids)
+    except Exception:
+        return False
+    return ids == (PERSONAL_PERSON_ID,)
+
+
+def _trade_cash_delta(trade: dict[str, Any]) -> Decimal | None:
+    """计算单笔 broker_trades 成交对账户现金的净变动（买入为负，卖出为正）。"""
+    side = str(trade.get("side") or "").upper()
+    net_e8 = trade.get("net_amount_e8")
+    if net_e8 is not None:
+        net = from_e8(net_e8)
+        if side == "BUY" and net > ZERO:
+            return -net
+        if side == "SELL" and net < ZERO:
+            return -net
+        return net
+
+    calc_e8 = trade.get("calculation_amount_e8")
+    gross_e8 = trade.get("gross_amount_e8")
+    if calc_e8 is not None:
+        gross = abs(from_e8(calc_e8))
+    elif gross_e8 is not None:
+        gross = abs(from_e8(gross_e8))
+    else:
+        q_e8 = trade.get("quantity_e8")
+        p_e8 = trade.get("price_e8")
+        if q_e8 is None or p_e8 is None:
+            return None
+        gross = abs(from_e8(q_e8) * from_e8(p_e8))
+
+    fees_e8 = trade.get("fees_e8")
+    fee = abs(from_e8(fees_e8)) if fees_e8 is not None else ZERO
+    if side == "BUY":
+        return -(gross + fee)
+    if side == "SELL":
+        return gross - fee
+    return ZERO
+
+
+def compute_anchored_channel_cash(
+    snapshot,
+    anchor: dict[str, Any],
+) -> dict[str, Any] | None:
+    """基于某个时间点的手动现金锚点，叠加锚点日期之后该渠道的真实成交与现金流水推算当前现金。"""
+    channel = str(anchor.get("channel") or "").upper()
+    anchor_date = str(anchor.get("anchor_date") or "")[:10]
+    anchor_amt = anchor.get("amount")
+    if not channel or not anchor_date or anchor_amt is None:
+        return None
+    base_amount = anchor_amt if isinstance(anchor_amt, Decimal) else Decimal(str(anchor_amt))
+    as_of = snapshot.scope.as_of.isoformat()
+    if as_of < anchor_date:
+        return None
+
+    accounts = getattr(snapshot, "accounts", {}) or {}
+    channel_acc_ids = {
+        acc_id
+        for acc_id, acc in accounts.items()
+        if str(acc.get("broker_code") or "").upper() == channel
+    }
+
+    extras = getattr(snapshot, "extras", {}) or {}
+    current = base_amount
+    trades_applied = 0
+    events_applied = 0
+
+    for trade in extras.get("broker_trades", []):
+        if trade.get("record_state") != "ACTIVE" or trade.get("accounting_role") != "ACCOUNT_LEDGER":
+            continue
+        if channel_acc_ids and trade.get("account_id") not in channel_acc_ids:
+            continue
+        if not channel_acc_ids:
+            acc = accounts.get(trade.get("account_id"), {})
+            if str(acc.get("broker_code") or "").upper() != channel:
+                continue
+        bday = str(trade.get("business_date") or "")[:10]
+        if not (anchor_date < bday <= as_of):
+            continue
+        delta = _trade_cash_delta(trade)
+        if delta is not None:
+            current += delta
+            trades_applied += 1
+
+    for ev in extras.get("cash_events", []):
+        if ev.get("record_state") != "ACTIVE":
+            continue
+        if ev.get("accounting_role") in ("REVIEW_REQUIRED", "INFORMATIONAL"):
+            continue
+        if ev.get("broker_trade_id") and ev.get("event_type") in ("FEE", "TAX"):
+            continue
+        if channel_acc_ids and ev.get("account_id") not in channel_acc_ids:
+            continue
+        bday = str(ev.get("business_date") or "")[:10]
+        if not (anchor_date < bday <= as_of):
+            continue
+        amt_e8 = ev.get("amount_e8")
+        if amt_e8 is not None:
+            current += from_e8(amt_e8)
+            events_applied += 1
+
+    return {
+        "channel": channel,
+        "amount": current,
+        "source": "锚点推算",
+        "anchor_date": anchor_date,
+        "anchor_amount": base_amount,
+        "trades_applied": trades_applied,
+        "events_applied": events_applied,
+        "updated_at": str(anchor.get("updated_at") or ""),
+        "note": str(anchor.get("note") or ""),
+    }
+
+
+def resolve_channel_cash_details(snapshot_or_analytics) -> dict[str, dict[str, Any]]:
+    """统一解析当前视角下各券商渠道的现金余额及来源（长桥/嘉信 API 实时 + BBAE/第一证券锚点推算）。
+
+    仅在「个人」或「全部人员」视角返回；其他人员视角返回空字典。
+    """
+    scope = getattr(snapshot_or_analytics, "scope", None)
+    if not is_cash_visible_scope(scope):
+        return {}
+
+    extras = getattr(snapshot_or_analytics, "extras", {}) or {}
+    api_cash = extras.get("channel_cash", {}) or {}
+    api_updated = extras.get("channel_cash_updated_at", {}) or {}
+    anchors = extras.get("manual_cash_anchors", {}) or {}
+
+    resolved: dict[str, dict[str, Any]] = {}
+
+    # 1. API 实时现金（长桥 / 嘉信）
+    for ch, amt in api_cash.items():
+        ch_u = str(ch).upper()
+        if amt is None:
+            continue
+        val = amt if isinstance(amt, Decimal) else Decimal(str(amt))
+        resolved[ch_u] = {
+            "channel": ch_u,
+            "amount": val,
+            "source": "API实时",
+            "anchor_date": None,
+            "anchor_amount": None,
+            "trades_applied": 0,
+            "events_applied": 0,
+            "updated_at": str(api_updated.get(ch_u) or ""),
+            "note": "券商开放接口实时拉取",
+        }
+
+    # 2. 手动现金锚点 + 后续交易流水推算（BBAE / 第一证券等无实时 API 券商）
+    #    若 snapshot 具备完整 broker_trades 则动态推算，否则直接使用已预计算的结果或锚点原值
+    precomputed = extras.get("resolved_channel_cash", {}) or {}
+    for ch, item in precomputed.items():
+        ch_u = str(ch).upper()
+        if ch_u not in resolved and item and item.get("amount") is not None:
+            resolved[ch_u] = dict(item)
+
+    has_trades = "broker_trades" in extras
+    for ch, anchor in anchors.items():
+        ch_u = str(ch).upper()
+        if ch_u in resolved:
+            continue
+        if has_trades:
+            est = compute_anchored_channel_cash(snapshot_or_analytics, anchor)
+            if est is not None:
+                resolved[ch_u] = est
+        else:
+            amt = anchor.get("amount")
+            if amt is not None:
+                resolved[ch_u] = {
+                    "channel": ch_u,
+                    "amount": amt if isinstance(amt, Decimal) else Decimal(str(amt)),
+                    "source": "锚点推算",
+                    "anchor_date": str(anchor.get("anchor_date") or "")[:10],
+                    "anchor_amount": amt if isinstance(amt, Decimal) else Decimal(str(amt)),
+                    "trades_applied": 0,
+                    "events_applied": 0,
+                    "updated_at": str(anchor.get("updated_at") or ""),
+                    "note": str(anchor.get("note") or ""),
+                }
+
+    return resolved
 
 
 def fetch_longbridge_cash() -> Optional[Decimal]:

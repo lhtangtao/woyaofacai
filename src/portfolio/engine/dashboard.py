@@ -206,6 +206,10 @@ def overview(snapshot, reports):
         from dataclasses import replace
         metrics = tuple(replace(m, formula=m.formula+'；含本机历史行情估值，非正式收盘数据。',
                                 day=m.day+' · 含历史估值', status='INCOMPLETE' if m.value is None else 'REVIEW_REQUIRED') for m in metrics)
+    from portfolio.services.channel_cash import resolve_channel_cash_details
+    resolved_cash = resolve_channel_cash_details(snapshot)
+    snapshot.extras["resolved_channel_cash"] = resolved_cash
+
     additions = {}
     for dimension, name in ((0, "渠道汇总"), (1, "分类汇总")):
         result = []
@@ -219,12 +223,15 @@ def overview(snapshot, reports):
             profits = [r.values[10] for r in hs] + [r.values[7] for r in cs]
             account_ids = {r.metadata["account_id"] for r in [*hs, *cs]}
             cash = strict_sum(cash_balance(snapshot, account) for account in account_ids) if dimension == 0 else None
+            cash_note = "无可信现金期初余额时不显示现金余额"
             if dimension == 0 and cash is None:
-                from portfolio.domain.models import Ledger
-                is_personal_or_all = (snapshot.scope.ledger == Ledger.PERSON and (snapshot.scope.person_ids is None or 1 in snapshot.scope.person_ids))
-                channel_cash = snapshot.extras.get("channel_cash", {})
-                if is_personal_or_all and category in channel_cash:
-                    cash = channel_cash[category]
+                entry = resolved_cash.get(str(category).upper())
+                if entry is not None and entry.get("amount") is not None:
+                    cash = entry["amount"]
+                    if entry.get("source") == "API实时":
+                        cash_note = "券商 API 实时现金"
+                    elif entry.get("anchor_date"):
+                        cash_note = f"锚点推算（基准 {entry['anchor_date']}，含后续 {entry.get('trades_applied', 0)} 笔成交）"
             annual = [r for r in daily if str(r.values[0]).startswith(str(snapshot.scope.as_of.year)) and r.values[dimension + 1] == category]
             annual_gain = strict_sum(r.values[19] for r in annual) if annual else None
             result.append(ReportRow((category, mv, net, len(hs), ratio(mv, value), cp, fp,
@@ -232,7 +239,7 @@ def overview(snapshot, reports):
                                      fp + cp if fp is not None and cp is not None else None,
                                      sum(v is not None and v > ZERO for v in profits), sum(v is not None and v < ZERO for v in profits),
                                      strict_sum(max(-v, ZERO) if v is not None else None for v in profits), *([cash] if dimension == 0 else [])),
-                                    {"current_principal_basis": "当前+清仓净投入" if dimension == 0 else "仅当前持仓净投入", "cash_note": "无可信现金期初余额时不显示现金余额"}))
+                                    {"current_principal_basis": "当前+清仓净投入" if dimension == 0 else "仅当前持仓净投入", "cash_note": cash_note}))
         additions[name] = Report(name, SUMMARY_COLUMNS if dimension == 0 else ("分类", *SUMMARY_COLUMNS[1:-1]), tuple(result))
     calendar_rows = []
     for week in calendar.Calendar().monthdatescalendar(y, m):

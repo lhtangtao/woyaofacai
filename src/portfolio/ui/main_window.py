@@ -703,6 +703,12 @@ class MainWindow(InteractionMixin, QMainWindow):
                     own_date.setDate(today)
                 own_date.blockSignals(False)
 
+    def _on_cash_anchors_updated(self):
+        """手动现金锚点保存后立即清空计算缓存并刷新资产总览。"""
+        if self.analytics_service is not None:
+            self.analytics_service.clear_cache()
+        self.refresh()
+
     def refresh(self):
         self.sync_maximum_dates()
         if hasattr(self, "trade_center") and self.pages.currentIndex() == 0:
