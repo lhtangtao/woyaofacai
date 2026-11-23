@@ -375,7 +375,7 @@ def test_compute_max_rise_and_fall_zones():
 
 
 def test_extreme_zones_toggle_and_render(qtbot):
-    """验证涨跌区间高亮开关默认开启、离屏绘制淡绿/淡红底色且可一键关闭。"""
+    """验证涨跌区间 4 态切换（全部/仅涨幅/仅跌幅/隐藏）、离屏绘制与嵌套区间渲染正常。"""
     from PySide6.QtGui import QPixmap
 
     page = MonthlyRealtimePnlPage()
@@ -383,15 +383,17 @@ def test_extreme_zones_toggle_and_render(qtbot):
     page.resize(960, 620)
     page.show()
 
-    assert page.zone_toggle_btn.isChecked() is True
+    assert page.zone_mode == "both"
+    assert page.canvas.extreme_zone_mode == "both"
     assert page.canvas.show_extreme_zones is True
 
+    # 构造带嵌套波段的序列：最大跌幅 (01-10 -> 11-21) 嵌套了最大涨幅 (03-10 -> 06-03)
     points = [
-        ("2026-01-10T02:00:00Z", Decimal("0.00")),
-        ("2026-03-10T02:00:00Z", Decimal("-8000.00")),
-        ("2026-06-03T12:00:00Z", Decimal("37000.00")),
-        ("2026-09-01T02:00:00Z", Decimal("5000.00")),
-        ("2026-11-21T00:00:00Z", Decimal("-37000.00")),
+        ("2026-01-10T02:00:00Z", Decimal("10000.00")),
+        ("2026-03-10T02:00:00Z", Decimal("-15000.00")),
+        ("2026-06-03T12:00:00Z", Decimal("-2000.00")),
+        ("2026-09-01T02:00:00Z", Decimal("-12000.00")),
+        ("2026-11-21T00:00:00Z", Decimal("-28000.00")),
     ]
     chart = Chart(
         id=1,
@@ -403,18 +405,30 @@ def test_extreme_zones_toggle_and_render(qtbot):
     page._display_shared_chart(chart, {"baseline_state": "READY"}, year=True)
     page.canvas.resize(820, 420)
 
-    # 开启状态下渲染并校验缓存的极值区间
-    assert page.canvas._extreme_zones["max_rise"]["delta"] == Decimal("45000.00")
-    assert page.canvas._extreme_zones["max_fall"]["delta"] == Decimal("-74000.00")
+    assert page.canvas._extreme_zones["max_rise"]["delta"] == Decimal("13000.00")
+    assert page.canvas._extreme_zones["max_fall"]["delta"] == Decimal("-38000.00")
 
-    pix_on = QPixmap(page.canvas.size())
-    page.canvas.render(pix_on)
+    pix_both = QPixmap(page.canvas.size())
+    page.canvas.render(pix_both)
 
-    # 关闭开关后重新渲染，画布像素应与开启时存在明显差异
-    page.zone_toggle_btn.setChecked(False)
+    page.set_zone_display_mode("rise")
+    assert page.canvas.extreme_zone_mode == "rise"
+    pix_rise = QPixmap(page.canvas.size())
+    page.canvas.render(pix_rise)
+
+    page.set_zone_display_mode("fall")
+    assert page.canvas.extreme_zone_mode == "fall"
+    pix_fall = QPixmap(page.canvas.size())
+    page.canvas.render(pix_fall)
+
+    page.set_zone_display_mode("off")
+    assert page.canvas.extreme_zone_mode == "off"
     assert page.canvas.show_extreme_zones is False
     pix_off = QPixmap(page.canvas.size())
     page.canvas.render(pix_off)
 
-    assert pix_on.toImage() != pix_off.toImage()
+    assert pix_both.toImage() != pix_off.toImage()
+    assert pix_rise.toImage() != pix_fall.toImage()
+    assert pix_rise.toImage() != pix_off.toImage()
+    assert pix_fall.toImage() != pix_off.toImage()
 
