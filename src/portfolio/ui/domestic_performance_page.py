@@ -810,15 +810,53 @@ class DomesticPerformanceBasePage(QWidget):
         self.table_view.setShowGrid(False)
         self.table_view.setWordWrap(False)
         self.table_view.setSortingEnabled(True)
+        self.table_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_view.verticalHeader().hide()
         self.table_view.verticalHeader().setDefaultSectionSize(34)
-        self.table_view.setMinimumHeight(320)
         self.table_view.clicked.connect(self._on_table_row_clicked)
         self.table_view.doubleClicked.connect(self._on_table_double_clicked)
         tbl_l.addWidget(self.table_view)
+
+        # 底部分页控制栏（默认 10 条/页，消除表格内部垂直滚动条）
+        self._table_page = 1
+        self._table_page_size = 10
+        self._table_all_rows: list[dict[str, Any]] = []
+        self._table_highlight_key = ""
+        self._table_highlight_field = ""
+
+        pager = QHBoxLayout()
+        pager.setContentsMargins(0, 6, 0, 0)
+        pager.setSpacing(8)
+        self.pager_info_lbl = QLabel("共 0 条")
+        self.pager_info_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+        pager.addWidget(self.pager_info_lbl)
+        pager.addStretch(1)
+
+        self.page_size_combo = QComboBox()
+        for sz in (10, 20, 50):
+            self.page_size_combo.addItem(f"{sz} 条/页", sz)
+        self.page_size_combo.setCurrentIndex(0)
+        self.page_size_combo.currentIndexChanged.connect(self._on_page_size_changed)
+        pager.addWidget(self.page_size_combo)
+
+        self.prev_page_btn = QPushButton("‹ 上一页")
+        self.prev_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.prev_page_btn.clicked.connect(lambda: self._step_table_page(-1))
+        pager.addWidget(self.prev_page_btn)
+
+        self.page_num_lbl = QLabel("1 / 1")
+        self.page_num_lbl.setStyleSheet("color: #0F172A; font-size: 12px; font-weight: 600; padding: 0 4px;")
+        pager.addWidget(self.page_num_lbl)
+
+        self.next_page_btn = QPushButton("下一页 ›")
+        self.next_page_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.next_page_btn.clicked.connect(lambda: self._step_table_page(1))
+        pager.addWidget(self.next_page_btn)
+        tbl_l.addLayout(pager)
+
         root.addWidget(table_card)
 
         period_word = "当日" if self.is_day else "当月"
@@ -1481,7 +1519,58 @@ class DomesticPerformanceBasePage(QWidget):
             self._selected_fund_code = ""
         if idx == 1:
             self._fund_pnl_filter = ""
+        self._table_page = 1
         self._refresh_table()
+
+    def _on_page_size_changed(self, *_):
+        sz = self.page_size_combo.currentData()
+        self._table_page_size = int(sz) if sz else 10
+        self._table_page = 1
+        self._apply_table_page()
+
+    def _step_table_page(self, delta: int):
+        total = len(self._table_all_rows)
+        total_pages = max(1, (total + self._table_page_size - 1) // self._table_page_size)
+        new_page = max(1, min(total_pages, self._table_page + delta))
+        if new_page != self._table_page:
+            self._table_page = new_page
+            self._apply_table_page()
+
+    def _apply_table_page(self):
+        tab_idx = self.table_tab_group.checkedId()
+        if tab_idx not in self._models:
+            tab_idx = 0
+        model = self._models[tab_idx]
+        total = len(self._table_all_rows)
+        page_size = max(1, self._table_page_size)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        self._table_page = max(1, min(total_pages, self._table_page))
+        start = (self._table_page - 1) * page_size
+        end = min(total, start + page_size)
+        page_rows = self._table_all_rows[start:end]
+
+        model.set_rows(
+            page_rows,
+            highlight_key=self._table_highlight_key,
+            highlight_field=self._table_highlight_field,
+        )
+        self.table_count_lbl.setText(f"共 {total} 条记录")
+        if total > 0:
+            self.pager_info_lbl.setText(f"当前显示第 {start + 1} - {end} 条 / 共 {total} 条")
+        else:
+            self.pager_info_lbl.setText("共 0 条记录")
+        self.page_num_lbl.setText(f"{self._table_page} / {total_pages}")
+        self.prev_page_btn.setEnabled(self._table_page > 1)
+        self.next_page_btn.setEnabled(self._table_page < total_pages)
+
+        row_h = self.table_view.verticalHeader().defaultSectionSize() or 34
+        header_h = self.table_view.horizontalHeader().height() or 34
+        visible_rows = max(1, len(page_rows))
+        self.table_view.setFixedHeight(header_h + visible_rows * row_h + 6)
+
+        header = self.table_view.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
 
     def _refresh_table(self):
         tab_idx = self.table_tab_group.checkedId()
@@ -1546,11 +1635,10 @@ class DomesticPerformanceBasePage(QWidget):
                 rows = [r for r in rows if float(r[self.pnl_key]) < 0]
             rows = sorted(rows, key=lambda r: -abs(float(r[self.pnl_key])))
 
-        model.set_rows(rows, highlight_key=highlight_key, highlight_field=highlight_field)
-        self.table_count_lbl.setText(f"共 {len(rows)} 条记录")
-        header = self.table_view.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(True)
+        self._table_all_rows = rows
+        self._table_highlight_key = highlight_key
+        self._table_highlight_field = highlight_field
+        self._apply_table_page()
 
     def _on_table_row_clicked(self, index: QModelIndex):
         tab_idx = self.table_tab_group.checkedId()
