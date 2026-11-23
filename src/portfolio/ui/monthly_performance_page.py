@@ -462,10 +462,11 @@ class MonthlyTrendCanvas(QWidget):
                 painter.setBrush(QColor("#2563EB"))
                 painter.drawEllipse(QRectF(cx - 3.5, hy - 3.5, 7.0, 7.0))
 
-                # Y 轴左侧定位数值标签
-                y_txt = fmt_signed_money(float(active_val), 0)
-                painter.setFont(numeric_font(9, bold=True))
-                y_rect = QRectF(2, max(2.0, min(h - 18.0, hy - 8.5)), margin_left - 6, 17)
+                # Y 轴左侧定位数值标签（自动按文本宽度适配，完整展示两位小数，避免图表内部重复弹窗遮挡柱子）
+                y_txt = fmt_signed_money(float(active_val), 2)
+                painter.setFont(numeric_font(8.5, bold=True))
+                y_w = max(float(margin_left - 6), float(painter.fontMetrics().horizontalAdvance(y_txt) + 8))
+                y_rect = QRectF(2, max(2.0, min(h - 18.0, hy - 8.5)), y_w, 17)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor("#1E293B"))
                 painter.drawRoundedRect(y_rect, 3, 3)
@@ -481,21 +482,6 @@ class MonthlyTrendCanvas(QWidget):
                 painter.drawRoundedRect(x_rect, 3, 3)
                 painter.setPen(QColor("#FFFFFF"))
                 painter.drawText(x_rect, Qt.AlignmentFlag.AlignCenter, str(hm))
-
-            if self.mode == "net":
-                tip_text = f"{hm}\n每月净投入: {fmt_signed_money(h_monthly)}"
-            elif self.mode == "net_cum":
-                tip_text = f"{hm}\n累计净投入: {fmt_signed_money(h_cum)}"
-            else:
-                tip_text = f"{hm}\n当月: {fmt_signed_money(h_monthly)}\n累计: {fmt_signed_money(h_cum)}"
-            tx = min(w - 166, max(margin_left, cx - 70))
-            ty = margin_top + 15
-            painter.setBrush(QColor(15, 23, 42, 220))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(QRectF(tx, ty, 156, 65), 4, 4)
-            painter.setPen(QColor("#FFFFFF"))
-            painter.setFont(QFont(".AppleSystemUIFont", 9.5))
-            painter.drawText(QRectF(tx, ty + 2, 156, 61), Qt.AlignmentFlag.AlignCenter, tip_text)
 
     def mouseMoveEvent(self, event):
         w = self.width()

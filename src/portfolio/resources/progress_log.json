@@ -1,5 +1,17 @@
 [
   {
+    "title": "移除每日/每月收益走势图内与坐标轴重复的深色悬浮窗并提升 Y 轴黑标精度",
+    "time": "2026-11-24 02:05",
+    "author": "Antigravity",
+    "tag": "重复悬浮窗已移除",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 DailyTrendCanvas（每日持仓收益）与 MonthlyTrendCanvas（每月持仓收益）中移除图表区域内与 X/Y 轴定位黑标信息重复的深色悬浮提示卡片，消除悬停时遮挡柱状图与重复展示的问题。",
+      "同步将十字准星 Y 轴左侧黑标升级为自适应宽度并完整展示两位小数，只保留十字虚线 + 交点圆点 + X 轴日期/月份黑标 + Y 轴精确金额黑标，界面更加干净清爽。",
+      "验证范围：DailyTrendCanvas 与 MonthlyTrendCanvas 悬停状态离屏渲染目视核验通过；test_monthly_overview.py 7 项测试全部通过。"
+    ]
+  },
+  {
     "title": "走势图嵌套涨跌区间升级为外层整块+内层局部框并新增四态切换开关",
     "time": "2026-11-24 01:42",
     "author": "Antigravity",

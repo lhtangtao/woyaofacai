@@ -470,11 +470,13 @@ class DailyTrendCanvas(QWidget):
             painter.setBrush(QColor("#2563EB"))
             painter.drawEllipse(QRectF(hx - 3.5, hy_c - 3.5, 7.0, 7.0))
 
-            # Y 轴左侧定位数值标签
+            # Y 轴左侧定位数值标签（自动按文本宽度适配，完整展示两位小数，避免图表内部重复弹窗遮挡柱子）
             y_val = h_daily if self.mode == "daily" else h_cum
-            y_txt = f"{y_val:+,.0f}" if abs(y_val) >= 0.5 else "0"
-            painter.setFont(numeric_font(9, bold=True))
-            y_rect = QRectF(2, max(2.0, min(h - 18.0, hy_c - 8.5)), margin_left - 6, 17)
+            y_txt = f"{y_val:+,.2f}" if abs(y_val) >= 0.005 else "0.00"
+            y_font = numeric_font(8.5, bold=True)
+            painter.setFont(y_font)
+            y_w = max(float(margin_left - 6), float(painter.fontMetrics().horizontalAdvance(y_txt) + 8))
+            y_rect = QRectF(2, max(2.0, min(h - 18.0, hy_c - 8.5)), y_w, 17)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#1E293B"))
             painter.drawRoundedRect(y_rect, 3, 3)
@@ -490,20 +492,6 @@ class DailyTrendCanvas(QWidget):
             painter.drawRoundedRect(x_rect, 3, 3)
             painter.setPen(QColor("#FFFFFF"))
             painter.drawText(x_rect, Qt.AlignmentFlag.AlignCenter, h_dt)
-
-            # 轻量悬浮提示卡片（自动避让边缘）
-            tip_w, tip_h = 152.0, 52.0
-            tx = hx + 12.0 if (hx + 12.0 + tip_w) <= (w - margin_right) else (hx - 12.0 - tip_w)
-            tx = max(margin_left + 2.0, min(w - margin_right - tip_w, tx))
-            ty = max(margin_top + 4.0, min(margin_top + plot_h - tip_h - 4.0, hy_c - tip_h * 0.5))
-            tip_rect = QRectF(tx, ty, tip_w, tip_h)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(15, 23, 42, 225))
-            painter.drawRoundedRect(tip_rect, 5, 5)
-            painter.setPen(QColor("#FFFFFF"))
-            painter.setFont(numeric_font(9))
-            tip_text = f"{h_dt}\n当日: {h_daily:+,.2f}\n累计: {h_cum:+,.2f}"
-            painter.drawText(tip_rect.adjusted(6, 4, -6, -4), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tip_text)
 
     def mouseMoveEvent(self, event):
         w = self.width()
