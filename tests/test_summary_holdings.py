@@ -108,12 +108,12 @@ def test_cross_channel_merge_and_conservation():
     aaox = rows_by_tk["AAOX"]
     assert aaox["status"] == "持有中"
     assert aaox["is_cross_channel"] is True
-    assert aaox["channels_display"] == "长桥(持) · BBAE(清)"
+    assert aaox["channels_display"] == "长桥(持)·BBAE(清)"
     assert Decimal(str(aaox["quantity"])) == Decimal("300")
     assert Decimal(str(aaox["floating_pnl"])) == Decimal("-420.0")
     assert Decimal(str(aaox["realized_pnl"])) == Decimal("1280.5")
     assert Decimal(str(aaox["total_pnl"])) == Decimal("860.5")
-    assert aaox["trade_counts_display"] == "7买 / 4卖"
+    assert aaox["trade_counts_display"] == "7/4"
     assert len(aaox["channel_breakdown"]) == 2
 
     # 守恒核对：汇总浮点/已实现/总盈亏 == 持仓中 + 已清仓

@@ -88,7 +88,7 @@ def _build_channel_tags(channels: list[dict[str, Any]]) -> str:
         else:
             tag = "清"
         parts.append(f"{broker_name}({tag})")
-    return " · ".join(parts)
+    return "·".join(parts)
 
 
 def _aggregate_ticker_rows(
@@ -239,7 +239,7 @@ def _aggregate_ticker_rows(
         agg_status = "持有中" if has_open else "已全清仓"
         is_cross_channel = (len(distinct_brokers) > 1) or (has_open and has_closed)
         channels_display = _build_channel_tags(channel_breakdown)
-        trade_counts_display = f"{buy_count}买 / {sell_count}卖" if has_trade_counts else "—"
+        trade_counts_display = f"{buy_count}/{sell_count}" if has_trade_counts else "—"
 
         # 按渠道归并排序（持有中在前）
         channel_breakdown.sort(key=lambda c: (0 if c["status"] == "持有中" else 1, c["channel"], c["person_name"]))

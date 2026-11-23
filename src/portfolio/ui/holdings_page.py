@@ -386,20 +386,20 @@ CLOSED_PERSON_SUMMARY_COLUMNS = (
 SUMMARY_HOLDINGS_COLUMNS = (
     "Ticker",
     "类型",
-    "当前状态",
-    "涉及券商渠道",
-    "当前持仓股数",
-    "当前持仓均价",
+    "状态",
+    "券商渠道",
+    "持仓数",
+    "均价",
     "最新价",
-    "当前持仓市值",
-    "当前持仓成本",
+    "持仓市值",
+    "持仓成本",
     "浮动盈亏",
     "已实现盈亏",
     "累计总盈亏",
-    "综合总收益率",
-    "历史总买入额",
-    "历史总卖出额",
-    "总买卖次数",
+    "总收益率",
+    "买入总额",
+    "卖出总额",
+    "买卖",
 )
 
 SUMMARY_PERSON_SUMMARY_COLUMNS = (
@@ -2565,6 +2565,40 @@ class HoldingsPage(QWidget):
         h_scroll = 16 if self.detail_table.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff else 2
         self.detail_table.setFixedHeight(max(160, header_h + row_cnt * row_h + h_scroll + 4))
 
+    def _apply_detail_column_sizing(self, is_summary: bool):
+        """汇总模式下采用紧凑自适应列宽，确保 16 列在桌面窗口一屏完整展示无需横向拖动。"""
+        hdr = self.detail_table.horizontalHeader()
+        if not is_summary:
+            hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            return
+
+        # 16 列基础权重宽度（总和 1160px，按当前视口宽度等比缩放，保证大屏舒展、标准屏完整显示）
+        base_widths = (
+            74,   # Ticker
+            44,   # 类型
+            56,   # 状态
+            136,  # 券商渠道
+            56,   # 持仓数
+            56,   # 均价
+            56,   # 最新价
+            74,   # 持仓市值
+            74,   # 持仓成本
+            76,   # 浮动盈亏
+            76,   # 已实现盈亏
+            82,   # 累计总盈亏
+            66,   # 总收益率
+            84,   # 买入总额
+            84,   # 卖出总额
+            48,   # 买卖
+        )
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        avail_w = max(self.detail_table.viewport().width(), self.width() - 48, 1140)
+        base_sum = sum(base_widths)
+        scale = avail_w / base_sum if avail_w > 0 else 1.0
+        for col_idx, bw in enumerate(base_widths):
+            if col_idx < self.detail_model.columnCount():
+                hdr.resizeSection(col_idx, max(40, int(bw * scale)))
+
     def _apply_open_pagination(self):
         self.detail_model.replace(self._open_all_rows)
         sorted_rows = list(self.detail_model.rows)
@@ -3471,7 +3505,7 @@ class HoldingsPage(QWidget):
                 rows.append(ReportRow(values, item))
         elif is_summary:
             for item in raw_rows:
-                tk_disp = f"{item.get('ticker')} [跨渠道]" if item.get("is_cross_channel") else str(item.get("ticker") or "")
+                tk_disp = f"{item.get('ticker')}(跨)" if item.get("is_cross_channel") else str(item.get("ticker") or "")
                 rows.append(ReportRow((
                     tk_disp,
                     item.get("industry") or "—",
@@ -3535,10 +3569,12 @@ class HoldingsPage(QWidget):
 
         if closed:
             self.detail_model.replace(rows)
+            self._apply_detail_column_sizing(False)
             self._fit_detail_table_height()
         else:
             self._open_all_rows = list(rows)
             self._apply_open_pagination()
+            self._apply_detail_column_sizing(is_summary)
         self.detail_table.verticalScrollBar().setValue(v_scroll)
         self.detail_table.horizontalScrollBar().setValue(h_scroll)
         elapsed_ms = (time.monotonic() - t0) * 1000
