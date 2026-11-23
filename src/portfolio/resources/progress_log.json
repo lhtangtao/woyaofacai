@@ -1,5 +1,16 @@
 [
   {
+    "title": "热修 Analytics 数据类缺失 extras 字段导致资产总览加载失败",
+    "time": "2026-11-23 18:54",
+    "author": "Antigravity",
+    "tag": "资产总览加载异常已修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 domain/analytics.py 的 Analytics 数据类补齐 extras: dict = field(default_factory=dict) 字段，修复传递现金快照元数据时的 TypeError。",
+      "验证范围：真实本地数据库 AnalyticsService.calculate 与 DashboardPage 离屏渲染端到端验证通过，四券商现金与总现金正常显示，7 项测试全部通过。"
+    ]
+  },
+  {
     "title": "资产总览新增账户现金与仓位概览（API实时 + BBAE/第一证券锚点推算）",
     "time": "2026-11-23 18:51",
     "author": "Antigravity",

@@ -1,3 +1,8 @@
+## 2026-11-23 18:54 热修 Analytics 数据类缺失 extras 字段导致资产总览加载失败
+
+- 修改者：Antigravity（代码修改）
+- 为 `Analytics` dataclass 补齐 `extras` 字段，解决透传现金快照元数据时触发 `TypeError` 导致加载失败的问题；真实库端到端计算与 7 项单元测试全部通过。
+
 ## 2026-11-23 18:51 资产总览新增账户现金与仓位概览（API实时 + BBAE/第一证券锚点推算）
 
 - 修改者：Antigravity（代码修改）

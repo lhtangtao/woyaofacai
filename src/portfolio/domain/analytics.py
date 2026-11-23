@@ -138,6 +138,7 @@ class Analytics:
     calculated_at: str = ""
     source_identity: str = ""
     scalping_modes: dict = field(default_factory=dict)
+    extras: dict = field(default_factory=dict)
 
 
 def strict_sum(values):
