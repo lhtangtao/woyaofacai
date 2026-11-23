@@ -1,5 +1,17 @@
 [
   {
+    "title": "券商现金锚点升级为精确到时分秒（北京时间）并按 UTC 精准比对同日成交",
+    "time": "2026-11-23 23:46",
+    "author": "Antigravity",
+    "tag": "现金锚点已精确到秒",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "升级 QuoteStore 与 CashAnchorDialog 支持输入精确到时分秒的北京时间锚点（YYYY-MM-DD HH:MM:SS，默认自动填入当前北京时间，向下兼容纯日期 YYYY-MM-DD）。",
+      "在 channel_cash.py 中复用 domain/trade_time.event_time_utc 解析每笔成交的真实 UTC 时刻并与锚点时刻精准比较，彻底解决同一天盘前打锚点、盘中又下单时的同日边界遗漏或重复计入问题。",
+      "验证范围：tests/test_channel_cash_anchors.py 新增同日时分秒边界单测全部 5 项通过，并同步更新本机 BBAE 与第一证券今日 18:45:00 锚点。"
+    ]
+  },
+  {
     "title": "国内资产每日/每月持仓收益明细表改为每页 10 条分页并消除双滚动条",
     "time": "2026-11-23 23:13",
     "author": "Antigravity",

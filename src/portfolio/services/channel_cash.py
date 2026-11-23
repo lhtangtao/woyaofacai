@@ -1,14 +1,56 @@
 """Fetch live account cash balances for supported brokers (Longbridge, Schwab)."""
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 import logging
+from types import SimpleNamespace
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from portfolio.domain.models import from_e8
+from portfolio.domain.trade_time import event_time_utc
 
 logger = logging.getLogger(__name__)
 
 ZERO = Decimal("0")
 PERSONAL_PERSON_ID = 1
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+UTC = timezone.utc
+
+
+def _parse_anchor_utc(anchor_text: str) -> tuple[str, datetime] | None:
+    """将用户输入的锚点时间（北京时间 YYYY-MM-DD HH:MM:SS 或纯日期 YYYY-MM-DD）解析为 (日期字符串, UTC时刻)。"""
+    text = str(anchor_text or "").strip()
+    if not text:
+        return None
+    if len(text) == 10:
+        d = date.fromisoformat(text)
+        dt = datetime.combine(d, time(23, 59, 59), SHANGHAI)
+        return d.isoformat(), dt.astimezone(UTC)
+    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=SHANGHAI)
+    return dt.astimezone(SHANGHAI).date().isoformat(), dt.astimezone(UTC)
+
+
+def _trade_utc(trade: dict[str, Any], broker_code: str) -> datetime | None:
+    """复用 domain/trade_time.event_time_utc 解析单笔成交的准确 UTC 时刻。"""
+    bday = str(trade.get("business_date") or "")[:10]
+    raw_time = str(trade.get("book_time") or bday or "").strip()
+    if not raw_time:
+        return None
+    ev = SimpleNamespace(
+        day=bday,
+        time=raw_time,
+        metadata={
+            "executed_at_utc": trade.get("executed_at_utc"),
+            "broker_code": broker_code,
+            "trade_clock_timezone": trade.get("trade_clock_timezone"),
+        },
+    )
+    try:
+        return event_time_utc(ev)
+    except Exception:
+        return None
 
 
 def is_cash_visible_scope(scope) -> bool:
@@ -63,15 +105,19 @@ def compute_anchored_channel_cash(
     snapshot,
     anchor: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """基于某个时间点的手动现金锚点，叠加锚点日期之后该渠道的真实成交与现金流水推算当前现金。"""
+    """基于某个时刻（支持精确到时分秒）的手动现金锚点，叠加之后该渠道的真实成交与现金流水推算当前现金。"""
     channel = str(anchor.get("channel") or "").upper()
-    anchor_date = str(anchor.get("anchor_date") or "")[:10]
+    raw_anchor_text = str(anchor.get("anchor_date") or "").strip()
     anchor_amt = anchor.get("amount")
-    if not channel or not anchor_date or anchor_amt is None:
+    if not channel or not raw_anchor_text or anchor_amt is None:
         return None
+    parsed_anchor = _parse_anchor_utc(raw_anchor_text)
+    if parsed_anchor is None:
+        return None
+    anchor_day, anchor_utc = parsed_anchor
     base_amount = anchor_amt if isinstance(anchor_amt, Decimal) else Decimal(str(anchor_amt))
     as_of = snapshot.scope.as_of.isoformat()
-    if as_of < anchor_date:
+    if as_of < anchor_day:
         return None
 
     accounts = getattr(snapshot, "accounts", {}) or {}
@@ -96,7 +142,13 @@ def compute_anchored_channel_cash(
             if str(acc.get("broker_code") or "").upper() != channel:
                 continue
         bday = str(trade.get("business_date") or "")[:10]
-        if not (anchor_date < bday <= as_of):
+        if not bday or bday > as_of:
+            continue
+        t_utc = _trade_utc(trade, channel)
+        if t_utc is not None:
+            if t_utc <= anchor_utc:
+                continue
+        elif bday <= anchor_day:
             continue
         delta = _trade_cash_delta(trade)
         if delta is not None:
@@ -113,7 +165,7 @@ def compute_anchored_channel_cash(
         if channel_acc_ids and ev.get("account_id") not in channel_acc_ids:
             continue
         bday = str(ev.get("business_date") or "")[:10]
-        if not (anchor_date < bday <= as_of):
+        if not (anchor_day < bday <= as_of):
             continue
         amt_e8 = ev.get("amount_e8")
         if amt_e8 is not None:
@@ -124,7 +176,7 @@ def compute_anchored_channel_cash(
         "channel": channel,
         "amount": current,
         "source": "锚点推算",
-        "anchor_date": anchor_date,
+        "anchor_date": raw_anchor_text,
         "anchor_amount": base_amount,
         "trades_applied": trades_applied,
         "events_applied": events_applied,
@@ -191,7 +243,7 @@ def resolve_channel_cash_details(snapshot_or_analytics) -> dict[str, dict[str, A
                     "channel": ch_u,
                     "amount": amt if isinstance(amt, Decimal) else Decimal(str(amt)),
                     "source": "锚点推算",
-                    "anchor_date": str(anchor.get("anchor_date") or "")[:10],
+                    "anchor_date": str(anchor.get("anchor_date") or "").strip(),
                     "anchor_amount": amt if isinstance(amt, Decimal) else Decimal(str(amt)),
                     "trades_applied": 0,
                     "events_applied": 0,

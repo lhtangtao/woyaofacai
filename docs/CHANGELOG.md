@@ -1,3 +1,8 @@
+## 2026-11-23 23:46 券商现金锚点升级为精确到时分秒（北京时间）并按 UTC 精准比对同日成交
+
+- 修改者：Antigravity（代码修改）
+- `QuoteStore`、`channel_cash.py` 与 `CashAnchorDialog` 全面升级支持 `YYYY-MM-DD HH:MM:SS`（北京时间）锚点，复用 `domain/trade_time.event_time_utc` 精确区分同日锚点前后的成交（向下兼容纯日期）；5 项单元测试全部通过。
+
 ## 2026-11-23 23:13 国内资产每日/每月持仓收益明细表改为每页 10 条分页并消除双滚动条
 
 - 修改者：Antigravity（代码修改）

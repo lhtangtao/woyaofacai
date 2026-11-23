@@ -110,6 +110,55 @@ def test_anchored_cash_rolls_forward_trades_and_events():
     assert res["source"] == "锚点推算"
 
 
+def test_anchored_cash_intraday_second_precision():
+    """验证精确到时分秒的锚点：同一天锚点前的成交不重复计入，锚点后的成交精准计入。"""
+    snapshot = SimpleNamespace(
+        scope=QueryScope(as_of=date(2026, 11, 23), person_ids=(1,)),
+        accounts={10: {"broker_code": "BBAE"}},
+        extras={
+            "broker_trades": [
+                # 北京时间 18:30:00（UTC 10:30:00）—— 在 18:45:00 锚点之前，不应计入
+                {
+                    "account_id": 10,
+                    "side": "BUY",
+                    "business_date": "2026-11-23",
+                    "executed_at_utc": "2026-11-23T10:30:00+00:00",
+                    "book_time": "2026-11-23 10:30:00",
+                    "calculation_amount_e8": to_e8(Decimal("50.00")),
+                    "fees_e8": to_e8(Decimal("1.00")),
+                    "net_amount_e8": None,
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                },
+                # 北京时间 23:10:00（UTC 15:10:00）—— 在 18:45:00 锚点之后，必须计入
+                {
+                    "account_id": 10,
+                    "side": "BUY",
+                    "business_date": "2026-11-23",
+                    "executed_at_utc": "2026-11-23T15:10:00+00:00",
+                    "book_time": "2026-11-23 15:10:00",
+                    "calculation_amount_e8": to_e8(Decimal("100.00")),
+                    "fees_e8": to_e8(Decimal("1.00")),
+                    "net_amount_e8": None,
+                    "record_state": "ACTIVE",
+                    "accounting_role": "ACCOUNT_LEDGER",
+                },
+            ],
+            "cash_events": [],
+        },
+    )
+    anchor = {
+        "channel": "BBAE",
+        "anchor_date": "2026-11-23 18:45:00",
+        "amount": Decimal("248.00"),
+    }
+    res = compute_anchored_channel_cash(snapshot, anchor)
+    assert res is not None
+    # 248.00 - (100.00 + 1.00) = 147.00
+    assert res["amount"] == Decimal("147.00")
+    assert res["trades_applied"] == 1
+
+
 def test_cash_visibility_restricted_to_personal_and_all():
     """仅「我个人(1)」和「全部人员(None)」展示现金，其他人员一律不展示。"""
     assert is_cash_visible_scope(QueryScope(as_of=date(2026, 11, 23), person_ids=None)) is True

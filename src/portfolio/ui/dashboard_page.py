@@ -1,7 +1,8 @@
 import calendar
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -66,16 +67,17 @@ class CashAnchorDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.setWindowTitle("校准券商现金锚点（BBAE / 第一证券）")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(460)
         anchors = store.load_cash_anchors()
-        today_str = date.today().isoformat()
+        now_bj_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
         intro = QLabel(
             "长桥与嘉信通过券商 API 自动获取实时现金；BBAE 与第一证券无开放余额接口，"
-            "请输入某日收盘后的现金余额作为锚点，系统将自动叠加锚点日期之后的交易明细持续推算。"
+            "请输入记录现金余额的北京时间（精确到时分秒，如 2026-11-23 18:45:00），"
+            "系统将精确叠加该时刻之后的每一笔成交持续推算。"
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("color: #475569; font-size: 12px;")
@@ -94,13 +96,13 @@ class CashAnchorDialog(QDialog):
             form.addRow(hdr)
 
             cur = anchors.get(code, {})
-            date_edit = QLineEdit(str(cur.get("anchor_date") or today_str), box)
-            date_edit.setPlaceholderText("YYYY-MM-DD")
+            date_edit = QLineEdit(str(cur.get("anchor_date") or now_bj_str), box)
+            date_edit.setPlaceholderText("YYYY-MM-DD HH:MM:SS（北京时间）")
             amt_val = cur.get("amount")
             amt_edit = QLineEdit(f"{amt_val:.2f}" if isinstance(amt_val, Decimal) else "", box)
             amt_edit.setPlaceholderText("例如 248.00（留空则清除该渠道锚点）")
 
-            form.addRow("锚点基准日期：", date_edit)
+            form.addRow("锚点时间 (北京)：", date_edit)
             form.addRow("现金余额 (USD)：", amt_edit)
             self._inputs[code] = (date_edit, amt_edit)
             layout.addWidget(box)
@@ -121,9 +123,16 @@ class CashAnchorDialog(QDialog):
                 parsed.append((code, raw_date, None))
                 continue
             try:
-                date.fromisoformat(raw_date)
+                if len(raw_date) == 10:
+                    date.fromisoformat(raw_date)
+                else:
+                    datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
             except ValueError:
-                QMessageBox.warning(self, "日期格式错误", f"{code} 的锚点日期格式应为 YYYY-MM-DD。")
+                QMessageBox.warning(
+                    self,
+                    "时间格式错误",
+                    f"{code} 的锚点时间格式应为 YYYY-MM-DD HH:MM:SS（或 YYYY-MM-DD）。",
+                )
                 return
             try:
                 val = Decimal(raw_amt)

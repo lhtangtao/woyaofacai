@@ -282,15 +282,16 @@ class QuoteStore:
             return {}
 
     def save_cash_anchor(self, channel: str, anchor_date: str, amount: Decimal, currency: str = 'USD', note: str = ''):
-        """保存某券商在指定基准日期的手动现金锚点（用于无实时 API 的券商往后推算现金）。"""
+        """保存某券商在指定基准时刻（YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD，北京时间）的手动现金锚点。"""
         now_str = datetime.now(UTC).isoformat()
+        clean_anchor = str(anchor_date).strip()
         with self.connect() as c:
             c.execute(
                 'INSERT INTO manual_cash_anchors VALUES (?,?,?,?,?,?) '
                 'ON CONFLICT(channel) DO UPDATE SET '
                 'anchor_date=excluded.anchor_date, amount=excluded.amount, currency=excluded.currency, '
                 'updated_at=excluded.updated_at, note=excluded.note',
-                (channel.upper(), str(anchor_date)[:10], str(amount), currency.upper(), now_str, note),
+                (channel.upper(), clean_anchor, str(amount), currency.upper(), now_str, note),
             )
 
     def load_cash_anchors(self) -> dict[str, dict[str, object]]:
@@ -306,7 +307,7 @@ class QuoteStore:
                 return {
                     str(ch).upper(): {
                         'channel': str(ch).upper(),
-                        'anchor_date': str(anchor_date)[:10],
+                        'anchor_date': str(anchor_date).strip(),
                         'amount': Decimal(str(amt)),
                         'currency': str(cur or 'USD').upper(),
                         'updated_at': str(updated_at or ''),
@@ -350,7 +351,7 @@ class QuoteStore:
                         snapshot.extras['manual_cash_anchors'] = {
                             str(ch).upper(): {
                                 'channel': str(ch).upper(),
-                                'anchor_date': str(anchor_date)[:10],
+                                'anchor_date': str(anchor_date).strip(),
                                 'amount': Decimal(str(amt)),
                                 'currency': str(cur or 'USD').upper(),
                                 'updated_at': str(updated_at or ''),
