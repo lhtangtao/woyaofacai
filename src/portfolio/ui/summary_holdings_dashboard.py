@@ -348,6 +348,63 @@ class SummaryStructureDonut(QWidget):
             )
 
 
+class _ClickableTypeCard(QFrame):
+    """右侧「股票类型总盈亏分解」可点击卡片，避免 QPushButton 嵌套布局在 macOS 下被压缩裁剪。"""
+
+    clicked = Signal(str)
+
+    def __init__(self, name: str, count: int, total_pnl: float | None, floating_pnl: float | None, realized_pnl: float | None, *, selected: bool = False, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self.setObjectName("SummaryTypeItemCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(56)
+        self.setStyleSheet(f"""
+            QFrame#SummaryTypeItemCard {{
+                background: {'#EFF6FF' if selected else '#F8FAFC'};
+                border: 1px solid {'#93C5FD' if selected else '#E2E8F0'};
+                border-radius: 8px;
+            }}
+            QFrame#SummaryTypeItemCard:hover {{
+                border-color: #93C5FD;
+                background: #EFF6FF;
+            }}
+        """)
+
+        bl = QVBoxLayout(self)
+        bl.setContentsMargins(12, 8, 12, 8)
+        bl.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        l_name = QLabel(f"{name} ({count} 只)", self)
+        l_name.setStyleSheet("color: #0F172A; font-size: 12px; font-weight: 700; border: none; background: transparent;")
+        l_tot = QLabel(f"总盈亏 {_fmt_usd(total_pnl, signed=True)}", self)
+        l_tot.setFont(numeric_font(12, bold=True))
+        l_tot.setStyleSheet(f"color: {_pnl_color(total_pnl)}; border: none; background: transparent;")
+        top_row.addWidget(l_name)
+        top_row.addStretch()
+        top_row.addWidget(l_tot)
+        bl.addLayout(top_row)
+
+        sub_row = QHBoxLayout()
+        sub_row.setContentsMargins(0, 0, 0, 0)
+        l_fl = QLabel(f"浮动盈亏: <span style='color:{_pnl_color(floating_pnl)};font-weight:600;'>{_fmt_usd(floating_pnl, signed=True)}</span>", self)
+        l_fl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
+        l_rl = QLabel(f"已实现: <span style='color:{_pnl_color(realized_pnl)};font-weight:600;'>{_fmt_usd(realized_pnl, signed=True)}</span>", self)
+        l_rl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
+        sub_row.addWidget(l_fl)
+        sub_row.addStretch()
+        sub_row.addWidget(l_rl)
+        bl.addLayout(sub_row)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._name)
+        super().mousePressEvent(event)
+
+
 class SummaryChartsRow(QWidget):
     """汇总页中部三联分析卡片：左券商汇总表 + 中状态结构环图 + 右股票类型分解。"""
 
@@ -531,52 +588,19 @@ class SummaryChartsRow(QWidget):
                 tp = ti.get("total_pnl")
                 is_sel = bool(self._active_industry and self._active_industry.casefold() == name.casefold())
 
-                btn = QPushButton(self.type_card)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {'#EFF6FF' if is_sel else '#F8FAFC'};
-                        border: 1px solid {'#93C5FD' if is_sel else '#E2E8F0'};
-                        border-radius: 8px;
-                        text-align: left;
-                        padding: 0px;
-                    }}
-                    QPushButton:hover {{
-                        border-color: #93C5FD;
-                        background: #EFF6FF;
-                    }}
-                """)
-                btn.setFixedHeight(52)
-                btn.clicked.connect(lambda checked=False, n=name: self.industry_clicked.emit("" if (self._active_industry.casefold() == n.casefold()) else n))
-
-                bl = QVBoxLayout(btn)
-                bl.setContentsMargins(10, 6, 10, 6)
-                bl.setSpacing(3)
-
-                top_row = QHBoxLayout()
-                top_row.setContentsMargins(0, 0, 0, 0)
-                l_name = QLabel(f"{name} ({cnt} 只)")
-                l_name.setStyleSheet("color: #0F172A; font-size: 12px; font-weight: 700; border: none; background: transparent;")
-                l_tot = QLabel(f"总盈亏 {_fmt_usd(tp, signed=True)}")
-                l_tot.setFont(numeric_font(12, bold=True))
-                l_tot.setStyleSheet(f"color: {_pnl_color(tp)}; border: none; background: transparent;")
-                top_row.addWidget(l_name)
-                top_row.addStretch()
-                top_row.addWidget(l_tot)
-                bl.addLayout(top_row)
-
-                sub_row = QHBoxLayout()
-                sub_row.setContentsMargins(0, 0, 0, 0)
-                l_fl = QLabel(f"浮动盈亏: <span style='color:{_pnl_color(fl)};font-weight:600;'>{_fmt_usd(fl, signed=True)}</span>")
-                l_fl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
-                l_rl = QLabel(f"已实现: <span style='color:{_pnl_color(rl)};font-weight:600;'>{_fmt_usd(rl, signed=True)}</span>")
-                l_rl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
-                sub_row.addWidget(l_fl)
-                sub_row.addStretch()
-                sub_row.addWidget(l_rl)
-                bl.addLayout(sub_row)
-
-                self.type_list_layout.addWidget(btn)
+                card_item = _ClickableTypeCard(
+                    name,
+                    cnt,
+                    tp,
+                    fl,
+                    rl,
+                    selected=is_sel,
+                    parent=self.type_card,
+                )
+                card_item.clicked.connect(
+                    lambda n: self.industry_clicked.emit("" if (self._active_industry.casefold() == n.casefold()) else n)
+                )
+                self.type_list_layout.addWidget(card_item)
             self.type_list_layout.addStretch()
 
 

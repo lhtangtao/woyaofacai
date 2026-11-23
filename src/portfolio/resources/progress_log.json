@@ -1,5 +1,17 @@
 [
   {
+    "title": "修复持仓管理「汇总」页右侧股票类型总盈亏卡片文字被压缩遮挡的问题",
+    "time": "2026-11-23 17:43",
+    "author": "Antigravity",
+    "tag": "类型卡片排版已修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "原因定位：右侧「股票类型总盈亏分解」子卡片原先使用 QPushButton 嵌套 QVBoxLayout，受全局按钮样式与 macOS 按钮内边距影响高度被压缩裁剪。",
+      "修复方案：替换为自定义可点击卡片 _ClickableTypeCard(QFrame)（固定高度 56px、显式内边距 12×8px），保留点击筛选股票类型与悬浮高亮交互。",
+      "验证范围：tests/test_summary_holdings.py 新增卡片高度 >= 54px 离屏校验，10 项持仓汇总相关测试全部通过。"
+    ]
+  },
+  {
     "title": "美股持仓管理新增「汇总」标签页（跨渠道持仓+清仓全周期合并）",
     "time": "2026-11-23 17:38",
     "author": "Antigravity",

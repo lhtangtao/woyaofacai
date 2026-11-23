@@ -170,8 +170,18 @@ def test_summary_dashboard_widgets_render_offscreen():
     assert "+1,560.50" in kpi.card_total.val_lbl.text()
 
     charts = SummaryChartsRow()
+    charts.resize(1200, 270)
+    charts.show()
     charts.set_data(payload)
+    app.processEvents()
     assert charts.broker_table.rowCount() >= 2
+    type_cards = [
+        charts.type_list_layout.itemAt(i).widget()
+        for i in range(charts.type_list_layout.count())
+        if charts.type_list_layout.itemAt(i).widget() is not None
+    ]
+    assert len(type_cards) == 2
+    assert all(card.height() >= 54 for card in type_cards)
 
     top_card = SummaryTopContributorsCard()
     top_card.set_data(payload["top_contributors"])
