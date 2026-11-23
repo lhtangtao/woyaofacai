@@ -286,6 +286,7 @@ class DashboardPage(QWidget):
         self.analytics = None
         self.daily_rows, self.live_day = (), None
         self.cards, self.widgets = [], []
+        self._calendar_display_mode = "both"  # "amount" | "rate" | "both"
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
@@ -334,6 +335,15 @@ class DashboardPage(QWidget):
         self.month.currentTextChanged.connect(self.calendar)
         controls.addWidget(self.month)
         controls.addStretch()
+        self._cal_mode_btns: dict[str, QPushButton] = {}
+        for mode_key, mode_lbl in (("amount", "金额"), ("rate", "收益率"), ("both", "都展示")):
+            btn = QPushButton(mode_lbl, daily_panel)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, k=mode_key: self.set_calendar_display_mode(k))
+            self._cal_mode_btns[mode_key] = btn
+            controls.addWidget(btn)
+        self._update_calendar_mode_styles()
         daily_layout.addLayout(controls)
         self.calendar_table = QTableWidget(0, 6)
         self.calendar_table.setHorizontalHeaderLabels(["周一", "周二", "周三", "周四", "周五", "本周合计"])
@@ -500,6 +510,49 @@ class DashboardPage(QWidget):
         self.calendar()
         self.annual_year_changed(self.year.currentText())
 
+    def set_calendar_display_mode(self, mode: str):
+        """切换交易日历与月度盈亏展示内容：amount(仅金额) / rate(仅收益率) / both(都展示)。"""
+        target = mode if mode in ("amount", "rate", "both") else "both"
+        if target == self._calendar_display_mode:
+            self._update_calendar_mode_styles()
+            return
+        self._calendar_display_mode = target
+        self._update_calendar_mode_styles()
+        self.calendar()
+        if self.year.currentText():
+            self.annual_year_changed(self.year.currentText())
+
+    def _update_calendar_mode_styles(self):
+        for key, btn in self._cal_mode_btns.items():
+            active = key == self._calendar_display_mode
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+            if active:
+                btn.setStyleSheet(
+                    "QPushButton { background: #2563EB; color: #FFFFFF; border: 1px solid #2563EB; "
+                    "border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 700; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background: #F8FAFC; color: #475569; border: 1px solid #CBD5E1; "
+                    "border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 600; }"
+                    "QPushButton:hover { background: #EFF6FF; color: #2563EB; border-color: #93C5FD; }"
+                )
+
+    def _format_calendar_val(self, gain, rate, *, missing_text: str = "— 无数据") -> str:
+        mode = self._calendar_display_mode
+        if mode == "amount":
+            return f"{gain:+,.2f}" if gain is not None else missing_text
+        if mode == "rate":
+            if rate is not None:
+                return f"{rate:+.2%}"
+            return missing_text if gain is None else "—"
+        if gain is None:
+            return missing_text
+        rate_str = f"\n{rate:+.2%}" if rate is not None else ""
+        return f"{gain:+,.2f}{rate_str}"
+
     def calendar(self, *_):
         if not self.analytics or not self.month.currentText():
             return
@@ -517,32 +570,35 @@ class DashboardPage(QWidget):
                 key = day.isoformat()
                 gain = strict_sum(days[key]) if key in days and day.month == m else None
                 rate = self.day_rates.get(key) if key in days and day.month == m else None
-                rate_str = f"\n{rate:+.2%}" if rate is not None else ""
                 if day.month == m:
-                    text = f"{day.month}/{day.day}\n{gain:+,.2f}{rate_str}" if gain is not None else f"{day.month}/{day.day}\n— 无数据"
+                    val_txt = self._format_calendar_val(gain, rate, missing_text="— 无数据")
+                    text = f"{day.month}/{day.day}\n{val_txt}"
                 else:
                     text = ""
                 item = QTableWidgetItem(text)
                 if key in getattr(self, 'estimate_days', set()) and day.month == m:
-                    item.setText(f'{day.month}/{day.day} · 历史估值\n' + (f'{gain:+,.2f}{rate_str}' if gain is not None else '— 数据未完整'))
+                    est_txt = self._format_calendar_val(gain, rate, missing_text="— 数据未完整")
+                    item.setText(f"{day.month}/{day.day} · 历史估值\n{est_txt}")
                 if key == self.live_day and day.month == m:
-                    item.setText(f'{day.month}/{day.day} · 实时估值\n' + (f'{gain:+,.2f}{rate_str}' if gain is not None else '— 等待报价/基准'))
+                    live_txt = self._format_calendar_val(gain, rate, missing_text="— 等待报价/基准")
+                    item.setText(f"{day.month}/{day.day} · 实时估值\n{live_txt}")
                 item.setData(Qt.ItemDataRole.UserRole, key if day.month == m else "")
-                if gain is not None:
+                color_ref = rate if (self._calendar_display_mode == "rate" and rate is not None) else gain
+                if color_ref is not None:
                     from PySide6.QtGui import QColor
-                    item.setForeground(QColor(tokens(self).profit if gain > 0 else tokens(self).loss if gain < 0 else tokens(self).muted))
+                    item.setForeground(QColor(tokens(self).profit if color_ref > 0 else tokens(self).loss if color_ref < 0 else tokens(self).muted))
                 self.calendar_table.setItem(week_index, column, item)
                 if day.month == m and key in days:
                     totals.append(gain)
                     week_days.append(key)
             total = strict_sum(totals) if totals else None
             week_rate = compound_rates(week_days, self.day_rates) if week_days else None
-            rate_str = f"\n{week_rate:+.2%}" if week_rate is not None else ""
-            text = f"{total:+,.2f}{rate_str}" if total is not None else "—"
+            text = self._format_calendar_val(total, week_rate, missing_text="—")
             week_item = QTableWidgetItem(text)
-            if total is not None:
+            week_ref = week_rate if (self._calendar_display_mode == "rate" and week_rate is not None) else total
+            if week_ref is not None:
                 from PySide6.QtGui import QColor
-                week_item.setForeground(QColor(tokens(self).profit if total > 0 else tokens(self).loss if total < 0 else tokens(self).muted))
+                week_item.setForeground(QColor(tokens(self).profit if week_ref > 0 else tokens(self).loss if week_ref < 0 else tokens(self).muted))
             self.calendar_table.setItem(week_index, 5, week_item)
             self.calendar_table.setRowHeight(week_index, row_height)
         # Include the header and frame as well as every week. Hiding the inner
@@ -568,30 +624,36 @@ class DashboardPage(QWidget):
         a_rate = annual_rate(daily, year, getattr(self, 'day_rates', {}), getattr(self, 'metrics', None), self.live_day)
         self.annual_title.setText(f'{year} 年每月盈亏（{self.analytics.scope.reporting_currency}）')
         annual_text = '年度合计：'
-        if total is not None:
-            annual_text += f'{total:+,.2f}'
-            if a_rate is not None:
-                annual_text += f'（{a_rate:+.2%}）'
+        if self._calendar_display_mode == "rate":
+            annual_text += f"{a_rate:+.2%}" if a_rate is not None else ("— 数据未完整" if total is None else "—")
+        elif self._calendar_display_mode == "amount":
+            annual_text += f"{total:+,.2f}" if total is not None else "— 数据未完整"
         else:
-            annual_text += '— 数据未完整'
+            if total is not None:
+                annual_text += f'{total:+,.2f}'
+                if a_rate is not None:
+                    annual_text += f'（{a_rate:+.2%}）'
+            else:
+                annual_text += '— 数据未完整'
         self.annual_total.setText(annual_text)
         for index, gain in enumerate(gains):
             rate = m_rates[index]
-            rate_str = f'\n{rate:+.2%}' if rate is not None else ''
-            label = f'{index + 1}月\n' + (f'{gain:+,.2f}{rate_str}' if gain is not None else '— 无数据/未完整')
+            val_txt = self._format_calendar_val(gain, rate, missing_text="— 无数据/未完整")
+            label = f"{index + 1}月\n{val_txt}"
             item = QTableWidgetItem(label)
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             t = tokens(self)
-            item.setForeground(QColor(t.profit if gain is not None and gain > 0 else t.loss if gain is not None and gain < 0 else t.muted))
+            ref = rate if (self._calendar_display_mode == "rate" and rate is not None) else gain
+            item.setForeground(QColor(t.profit if ref is not None and ref > 0 else t.loss if ref is not None and ref < 0 else t.muted))
             self.monthly_table.setItem(index // 3, index % 3, item)
         for quarter, gain in enumerate(quarterly_gains(daily, year)):
             rate = q_rates[quarter]
-            rate_str = f'\n{rate:+.2%}' if rate is not None else ''
-            value = f'{gain:+,.2f}{rate_str}' if gain is not None else '— 无数据/未完整'
+            value = self._format_calendar_val(gain, rate, missing_text="— 无数据/未完整")
             item = QTableWidgetItem('季度合计\n' + value)
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             t = tokens(self)
-            item.setForeground(QColor(t.profit if gain is not None and gain > 0 else t.loss if gain is not None and gain < 0 else t.muted))
+            ref = rate if (self._calendar_display_mode == "rate" and rate is not None) else gain
+            item.setForeground(QColor(t.profit if ref is not None and ref > 0 else t.loss if ref is not None and ref < 0 else t.muted))
             self.monthly_table.setItem(quarter, 3, item)
 
     def eventFilter(self, watched, event):
