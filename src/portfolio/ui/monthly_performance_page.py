@@ -1573,11 +1573,27 @@ class MonthlyPerformancePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not hasattr(self, "_quote_timer"):
+            self._quote_timer = QTimer(self)
+            self._quote_timer.setInterval(5 * 60 * 1000)
+            self._quote_timer.timeout.connect(self._on_quote_timer_tick)
+        if not self._quote_timer.isActive():
+            self._quote_timer.start()
         if hasattr(self, "mid_splitter") and self.mid_splitter:
             w = self.mid_splitter.width()
             if w > 100:
                 self.mid_splitter.setSizes([int(w * 0.58), int(w * 0.42)])
         QTimer.singleShot(50, self.adjust_current_table_columns)
+
+    def hideEvent(self, event):
+        if hasattr(self, "_quote_timer") and self._quote_timer.isActive():
+            self._quote_timer.stop()
+        super().hideEvent(event)
+
+    def _on_quote_timer_tick(self):
+        if not self.isVisible() or not self.analytics:
+            return
+        self.recalculate_and_refresh()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

@@ -16,7 +16,7 @@ from pathlib import Path
 import time
 from typing import Any
 
-from PySide6.QtCore import QDate, QEvent, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QDate, QEvent, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -2620,6 +2620,34 @@ class HoldingsPage(QWidget):
         self.open_prev_btn.setEnabled(self._open_page > 1)
         self._fit_detail_table_height()
         self.open_next_btn.setEnabled(self._open_page < total_pages)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not hasattr(self, "_quote_timer"):
+            self._quote_timer = QTimer(self)
+            self._quote_timer.setInterval(5 * 60 * 1000)
+            self._quote_timer.timeout.connect(self._refresh_live_quotes_silently)
+        if not self._quote_timer.isActive():
+            self._quote_timer.start()
+
+    def hideEvent(self, event):
+        if hasattr(self, "_quote_timer") and self._quote_timer.isActive():
+            self._quote_timer.stop()
+        super().hideEvent(event)
+
+    def _refresh_live_quotes_silently(self):
+        """每 5 分钟静默刷新持仓管理最新价（持仓中/已清仓/汇总），不关闭已展开抽屉。"""
+        if not self.isVisible() or not self.analytics:
+            return
+        if self.view_mode == "dashboard":
+            self.refresh_dashboard()
+        else:
+            self.refresh_detail()
+            if not self.drawer.isHidden() and self.drawer.current_ticker:
+                self.open_stock_drawer(
+                    self.drawer.current_ticker,
+                    row={"ticker": self.drawer.current_ticker, "is_summary_merged": self._detail_mode == "summary"},
+                )
 
     def switch_view_mode(self, mode: str):
         self.view_mode = mode
