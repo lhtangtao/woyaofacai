@@ -849,30 +849,80 @@ class RealtimeChartCanvas(ChartCanvas):
             ),
         )
 
-        badge_rects_drawn: list[QRectF] = []
-        badge_font = chart_font(10)
-        badge_font.setWeight(QFont.Weight.DemiBold)
-
-        for zone, title, fill_col, line_col, accent_col, badge_bg, badge_border in zone_specs:
+        resolved_zones = []
+        for idx, (zone, title, fill_col, line_col, accent_col, badge_bg, badge_border) in enumerate(zone_specs):
             if not zone:
                 continue
             p_start = point_map.get((s_name, zone["start_key"])) or point_map.get(zone["start_key"])
             p_end = point_map.get((s_name, zone["end_key"])) or point_map.get(zone["end_key"])
             if p_start is None or p_end is None:
                 continue
-
             x1, x2 = min(p_start.x(), p_end.x()), max(p_start.x(), p_end.x())
             if x2 - x1 < 2.0:
                 continue
+            resolved_zones.append({
+                "idx": idx,
+                "zone": zone,
+                "title": title,
+                "fill_col": fill_col,
+                "line_col": line_col,
+                "accent_col": accent_col,
+                "badge_bg": badge_bg,
+                "badge_border": badge_border,
+                "p_start": p_start,
+                "p_end": p_end,
+                "x1": x1,
+                "x2": x2,
+                "span": x2 - x1,
+            })
 
-            # 1. 半透明淡绿 / 淡红竖向区间底色
-            zone_rect = QRectF(x1, top, x2 - x1, height)
+        if not resolved_zones:
+            return
+
+        # 若两区间存在嵌套或重叠（例如月度走势中最大反弹嵌套在最大回撤内），
+        # 从较宽区间的底色中扣除较窄区间的 X 范围，避免淡红+淡绿叠成灰暗色；
+        # 同时在顶部绘制 3px 贯通色条以完整标示两段区间的起止范围。
+        has_overlap = (
+            len(resolved_zones) == 2
+            and min(resolved_zones[0]["x2"], resolved_zones[1]["x2"])
+            > max(resolved_zones[0]["x1"], resolved_zones[1]["x1"]) + 1.0
+        )
+        # 按宽度从宽到窄绘制，确保较窄区间完整呈现纯净底色
+        draw_order = sorted(resolved_zones, key=lambda item: -item["span"])
+
+        def _subtract_span(a1: float, a2: float, b1: float, b2: float) -> list[tuple[float, float]]:
+            if b2 <= a1 or b1 >= a2:
+                return [(a1, a2)]
+            segs: list[tuple[float, float]] = []
+            if b1 > a1 + 0.5:
+                segs.append((a1, min(b1, a2)))
+            if b2 < a2 - 0.5:
+                segs.append((max(b2, a1), a2))
+            return segs
+
+        for order_pos, item in enumerate(draw_order):
+            x1, x2 = item["x1"], item["x2"]
+            # 1. 半透明淡绿 / 淡红竖向区间底色（较宽区间避让较窄重叠区，保持色彩纯净）
+            if has_overlap and order_pos == 0:
+                inner = draw_order[1]
+                fill_segs = _subtract_span(x1, x2, inner["x1"], inner["x2"])
+            else:
+                fill_segs = [(x1, x2)]
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(fill_col)
-            painter.drawRect(zone_rect)
+            painter.setBrush(item["fill_col"])
+            for sx1, sx2 in fill_segs:
+                painter.drawRect(QRectF(sx1, top, sx2 - sx1, height))
+
+            # 若发生重叠，在顶部绘 3px 贯通提示色条，让外层完整起止跨度一目了然
+            if has_overlap:
+                bar_y = top + (0.0 if order_pos == 0 else 3.0)
+                bar_col = QColor(item["accent_col"])
+                bar_col.setAlpha(155)
+                painter.setBrush(bar_col)
+                painter.drawRect(QRectF(x1, bar_y, x2 - x1, 2.5))
 
             # 2. 左右极细边界虚线
-            b_pen = QPen(line_col, 1.0)
+            b_pen = QPen(item["line_col"], 1.0)
             b_pen.setDashPattern([4.0, 3.0])
             painter.setPen(b_pen)
             painter.drawLine(QPointF(x1, top), QPointF(x1, top + height))
@@ -880,15 +930,26 @@ class RealtimeChartCanvas(ChartCanvas):
 
             # 3. 曲线起止圆点标记
             painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
-            painter.setBrush(accent_col)
-            painter.drawEllipse(p_start, 3.8, 3.8)
-            painter.drawEllipse(p_end, 3.8, 3.8)
+            painter.setBrush(item["accent_col"])
+            painter.drawEllipse(item["p_start"], 3.8, 3.8)
+            painter.drawEllipse(item["p_end"], 3.8, 3.8)
 
-            # 4. 顶部紧凑徽标胶囊（自动避让越界与互相重叠）
+        # 4. 顶部紧凑徽标胶囊（自动避让越界与互相重叠）
+        badge_rects_drawn: list[QRectF] = []
+        badge_font = chart_font(10)
+        badge_font.setWeight(QFont.Weight.DemiBold)
+        for item in resolved_zones:
+            zone = item["zone"]
+            x1, x2 = item["x1"], item["x2"]
             delta = zone["delta"]
             d_txt = f"{delta:+,.0f}"
-            span_txt = f"{_fmt_short_dt(zone['start_key'])}~{_fmt_short_dt(zone['end_key'])}"
-            label_text = f"{title} {d_txt} ({span_txt})"
+            dt_s = to_bj_datetime(zone["start_key"])
+            dt_e = to_bj_datetime(zone["end_key"])
+            if dt_s and dt_e and dt_s.date() == dt_e.date() and cal_axis != "all":
+                span_txt = f"{dt_s.strftime('%m-%d %H:%M')}~{dt_e.strftime('%H:%M')}"
+            else:
+                span_txt = f"{_fmt_short_dt(zone['start_key'])}~{_fmt_short_dt(zone['end_key'])}"
+            label_text = f"{item['title']} {d_txt} ({span_txt})"
             painter.setFont(badge_font)
             fm = painter.fontMetrics()
             bw = fm.horizontalAdvance(label_text) + 14
@@ -903,10 +964,10 @@ class RealtimeChartCanvas(ChartCanvas):
                     cand = QRectF(bx, by, bw, bh)
             badge_rects_drawn.append(cand)
 
-            painter.setPen(QPen(badge_border, 1.0))
-            painter.setBrush(badge_bg)
+            painter.setPen(QPen(item["badge_border"], 1.0))
+            painter.setBrush(item["badge_bg"])
             painter.drawRoundedRect(cand, 5, 5)
-            painter.setPen(accent_col)
+            painter.setPen(item["accent_col"])
             painter.drawText(cand, Qt.AlignmentFlag.AlignCenter, label_text)
 
     def paintEvent(self, event):
