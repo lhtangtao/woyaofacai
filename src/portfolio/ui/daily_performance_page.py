@@ -285,6 +285,13 @@ class DailyTrendCanvas(QWidget):
             # 绘制柱状图：常态充分展开，极值平滑收顶，消除大量空白
             step_x = plot_w / n
             bar_w = max(1.8, min(14.0, step_x * 0.85))
+            ref_target_date = (
+                self.selected_date
+                if any(p[0] == self.selected_date for p in self.data_points)
+                else self.data_points[-1][0]
+            )
+            ref_line_y: float | None = None
+            ref_line_pnl: float = 0.0
 
             for i, (dt, d_pnl, _) in enumerate(self.data_points):
                 cx = margin_left + (i + 0.5) * step_x
@@ -299,6 +306,7 @@ class DailyTrendCanvas(QWidget):
                     bar_h = max(3.0, min(h_pos_max, ratio * h_pos_max))
                     by = zero_y - bar_h
                     color = QColor("#10B981")
+                    tip_y = by
                 elif d_pnl < 0:
                     abs_val = abs(d_pnl)
                     if abs_val <= v_bench_neg:
@@ -309,10 +317,16 @@ class DailyTrendCanvas(QWidget):
                     bar_h = max(3.0, min(h_neg_max, ratio * h_neg_max))
                     by = zero_y
                     color = QColor("#EF4444")
+                    tip_y = by + bar_h
                 else:
                     bar_h = 1.0
                     by = zero_y - 0.5
                     color = QColor("#CBD5E1")
+                    tip_y = zero_y
+
+                if dt == ref_target_date:
+                    ref_line_y = tip_y
+                    ref_line_pnl = d_pnl
 
                 rect = QRectF(bx, by, bar_w, bar_h)
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
@@ -326,6 +340,38 @@ class DailyTrendCanvas(QWidget):
 
                 painter.setBrush(color)
                 painter.drawRoundedRect(rect, 1.5, 1.5)
+
+            # 绘制当日/选中日水平淡虚参考线，便于横向对比哪些交易日赚得更多或亏得更多
+            if ref_line_y is not None and abs(ref_line_pnl) > 1e-6:
+                is_pos_ref = ref_line_pnl > 0
+                line_col = QColor(22, 163, 74, 125) if is_pos_ref else QColor(220, 38, 38, 125)
+                ref_pen = QPen(line_col, 1.15)
+                ref_pen.setDashPattern([4.0, 4.0])
+                painter.setPen(ref_pen)
+                painter.drawLine(int(margin_left), int(round(ref_line_y)), int(w - margin_right), int(round(ref_line_y)))
+
+                exceed_cnt = (
+                    sum(1 for _, v, _ in self.data_points if v > ref_line_pnl)
+                    if is_pos_ref
+                    else sum(1 for _, v, _ in self.data_points if v < ref_line_pnl)
+                )
+                day_tag = "最新" if ref_target_date == self.data_points[-1][0] else ref_target_date[5:]
+                cmp_tag = f"更高 {exceed_cnt}天" if is_pos_ref else f"更亏 {exceed_cnt}天"
+                badge_text = f"{day_tag} {ref_line_pnl:+,.0f} · {cmp_tag}"
+                badge_font = numeric_font(9, bold=True)
+                painter.setFont(badge_font)
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(badge_text) + 12
+                th = 16
+                bx_lbl = margin_left + 4
+                by_lbl = (ref_line_y - th - 2) if is_pos_ref else (ref_line_y + 2)
+                by_lbl = max(margin_top, min(margin_top + plot_h - th, by_lbl))
+                badge_rect = QRectF(bx_lbl, by_lbl, tw, th)
+                painter.setPen(QPen(QColor(22, 163, 74, 90) if is_pos_ref else QColor(220, 38, 38, 90), 0.8))
+                painter.setBrush(QColor(240, 253, 244, 225) if is_pos_ref else QColor(254, 242, 242, 225))
+                painter.drawRoundedRect(badge_rect, 4, 4)
+                painter.setPen(QColor("#15803D") if is_pos_ref else QColor("#B91C1C"))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
         else:
             # Cumulative Line Chart
             vals = [p[2] for p in self.data_points]
