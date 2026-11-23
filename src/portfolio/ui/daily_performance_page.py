@@ -193,11 +193,14 @@ class DailyTrendCanvas(QWidget):
         self.data_points: List[Tuple[str, float, float]] = []  # (date, dailyProfit, cumProfit)
         self.hit_rects: List[Tuple[QRectF, str]] = []
         self.selected_date = ""
+        self.hovered_index = -1
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def set_data(self, points: List[Tuple[str, float, float]], selected_date: str = ""):
         self.data_points = points
         self.selected_date = selected_date
+        self.hovered_index = -1
         self.update()
 
     def set_mode(self, mode: str):
@@ -226,6 +229,8 @@ class DailyTrendCanvas(QWidget):
         n = len(self.data_points)
         if n == 0 or plot_w <= 10 or plot_h <= 10:
             return
+
+        hover_pt: tuple[float, float, str, float, float] | None = None
 
         if self.mode == "daily":
             # 每日收益柱状图：基于分位数基准（Quantile Benchmark）分层映射，彻底消除死白大面积空白
@@ -327,6 +332,8 @@ class DailyTrendCanvas(QWidget):
                 if dt == ref_target_date:
                     ref_line_y = tip_y
                     ref_line_pnl = d_pnl
+                if i == self.hovered_index:
+                    hover_pt = (cx, tip_y, dt, d_pnl, self.data_points[i][2])
 
                 rect = QRectF(bx, by, bar_w, bar_h)
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
@@ -410,6 +417,8 @@ class DailyTrendCanvas(QWidget):
                 cx = margin_left + (i + 0.5) * step_x
                 cy = margin_top + (disp_max - c_pnl) / disp_range * plot_h
                 pts.append((cx, cy, dt))
+                if i == self.hovered_index:
+                    hover_pt = (cx, cy, dt, self.data_points[i][1], c_pnl)
                 hit_rect = QRectF(cx - step_x / 2.0, margin_top, step_x, plot_h)
                 self.hit_rects.append((hit_rect, dt))
 
@@ -445,6 +454,79 @@ class DailyTrendCanvas(QWidget):
                 mid_idx = n // 2
                 painter.drawText(QRectF(margin_left + plot_w * 0.4, h - margin_bottom + 4, 80, 16),
                                  Qt.AlignmentFlag.AlignCenter, self.data_points[mid_idx][0])
+
+        # 十字准星辅助定位系统（悬停交点虚线 + X/Y 轴定位标尺 + 悬浮数值卡片）
+        if hover_pt is not None:
+            hx, hy, h_dt, h_daily, h_cum = hover_pt
+            hy_c = max(margin_top, min(margin_top + plot_h, hy))
+            cross_pen = QPen(QColor(71, 85, 105, 145), 1.0)
+            cross_pen.setDashPattern([3.0, 3.0])
+            painter.setPen(cross_pen)
+            painter.drawLine(int(round(hx)), int(margin_top), int(round(hx)), int(margin_top + plot_h))
+            painter.drawLine(int(margin_left), int(round(hy_c)), int(w - margin_right), int(round(hy_c)))
+
+            # 交点高亮圆点
+            painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+            painter.setBrush(QColor("#2563EB"))
+            painter.drawEllipse(QRectF(hx - 3.5, hy_c - 3.5, 7.0, 7.0))
+
+            # Y 轴左侧定位数值标签
+            y_val = h_daily if self.mode == "daily" else h_cum
+            y_txt = f"{y_val:+,.0f}" if abs(y_val) >= 0.5 else "0"
+            painter.setFont(numeric_font(9, bold=True))
+            y_rect = QRectF(2, max(2.0, min(h - 18.0, hy_c - 8.5)), margin_left - 6, 17)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#1E293B"))
+            painter.drawRoundedRect(y_rect, 3, 3)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(y_rect, Qt.AlignmentFlag.AlignCenter, y_txt)
+
+            # X 轴底部定位日期标签
+            x_w = 68.0
+            x_left = max(margin_left, min(w - margin_right - x_w, hx - x_w * 0.5))
+            x_rect = QRectF(x_left, h - margin_bottom + 2, x_w, 16)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#1E293B"))
+            painter.drawRoundedRect(x_rect, 3, 3)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(x_rect, Qt.AlignmentFlag.AlignCenter, h_dt)
+
+            # 轻量悬浮提示卡片（自动避让边缘）
+            tip_w, tip_h = 152.0, 52.0
+            tx = hx + 12.0 if (hx + 12.0 + tip_w) <= (w - margin_right) else (hx - 12.0 - tip_w)
+            tx = max(margin_left + 2.0, min(w - margin_right - tip_w, tx))
+            ty = max(margin_top + 4.0, min(margin_top + plot_h - tip_h - 4.0, hy_c - tip_h * 0.5))
+            tip_rect = QRectF(tx, ty, tip_w, tip_h)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(15, 23, 42, 225))
+            painter.drawRoundedRect(tip_rect, 5, 5)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.setFont(numeric_font(9))
+            tip_text = f"{h_dt}\n当日: {h_daily:+,.2f}\n累计: {h_cum:+,.2f}"
+            painter.drawText(tip_rect.adjusted(6, 4, -6, -4), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, tip_text)
+
+    def mouseMoveEvent(self, event):
+        w = self.width()
+        margin_left, margin_right = 58, 16
+        plot_w = w - margin_left - margin_right
+        n = len(self.data_points)
+        if n > 0 and plot_w > 10 and margin_left <= event.position().x() <= w - margin_right:
+            step_x = plot_w / n
+            idx = int((event.position().x() - margin_left) / step_x)
+            idx = max(0, min(n - 1, idx))
+            if idx != self.hovered_index:
+                self.hovered_index = idx
+                self.update()
+        elif self.hovered_index != -1:
+            self.hovered_index = -1
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self.hovered_index != -1:
+            self.hovered_index = -1
+            self.update()
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

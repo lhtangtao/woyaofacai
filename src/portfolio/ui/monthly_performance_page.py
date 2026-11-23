@@ -196,6 +196,7 @@ class MonthlyTrendCanvas(QWidget):
         self.profit_points: List[Tuple[str, float, float]] = []  # (month, monthly_pnl, cum_pnl)
         self.selected_month = ""
         self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.hovered_index = -1
         self.net_points: List[Tuple[str, Optional[Decimal], Optional[Decimal]]] = []
@@ -443,16 +444,50 @@ class MonthlyTrendCanvas(QWidget):
             cx = margin_left + idx * bar_step + bar_step * 0.5
             painter.drawText(int(cx - 25), int(h - 12), 50, 15, Qt.AlignmentFlag.AlignCenter, m)
 
-        # Draw Tooltip on Hover
+        # Draw Crosshair + Tooltip on Hover
         if 0 <= self.hovered_index < len(self.data_points):
             hm, h_monthly, h_cum = self.data_points[self.hovered_index]
+            cx = margin_left + self.hovered_index * bar_step + bar_step * 0.5
+            active_val = h_cum if is_line else h_monthly
+            if active_val is not None:
+                hy = max(margin_top, min(margin_top + plot_h, y_coord(float(active_val))))
+                cross_pen = QPen(QColor(71, 85, 105, 145), 1.0)
+                cross_pen.setDashPattern([3.0, 3.0])
+                painter.setPen(cross_pen)
+                painter.drawLine(int(round(cx)), int(margin_top), int(round(cx)), int(margin_top + plot_h))
+                painter.drawLine(int(margin_left), int(round(hy)), int(w - margin_right), int(round(hy)))
+
+                # 交点高亮圆点
+                painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+                painter.setBrush(QColor("#2563EB"))
+                painter.drawEllipse(QRectF(cx - 3.5, hy - 3.5, 7.0, 7.0))
+
+                # Y 轴左侧定位数值标签
+                y_txt = fmt_signed_money(float(active_val), 0)
+                painter.setFont(numeric_font(9, bold=True))
+                y_rect = QRectF(2, max(2.0, min(h - 18.0, hy - 8.5)), margin_left - 6, 17)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#1E293B"))
+                painter.drawRoundedRect(y_rect, 3, 3)
+                painter.setPen(QColor("#FFFFFF"))
+                painter.drawText(y_rect, Qt.AlignmentFlag.AlignCenter, y_txt)
+
+                # X 轴底部定位月份标签
+                x_w = 56.0
+                x_left = max(margin_left, min(w - margin_right - x_w, cx - x_w * 0.5))
+                x_rect = QRectF(x_left, h - 16, x_w, 15)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#1E293B"))
+                painter.drawRoundedRect(x_rect, 3, 3)
+                painter.setPen(QColor("#FFFFFF"))
+                painter.drawText(x_rect, Qt.AlignmentFlag.AlignCenter, str(hm))
+
             if self.mode == "net":
                 tip_text = f"{hm}\n每月净投入: {fmt_signed_money(h_monthly)}"
             elif self.mode == "net_cum":
                 tip_text = f"{hm}\n累计净投入: {fmt_signed_money(h_cum)}"
             else:
                 tip_text = f"{hm}\n当月: {fmt_signed_money(h_monthly)}\n累计: {fmt_signed_money(h_cum)}"
-            cx = margin_left + self.hovered_index * bar_step + bar_step * 0.5
             tx = min(w - 166, max(margin_left, cx - 70))
             ty = margin_top + 15
             painter.setBrush(QColor(15, 23, 42, 220))
