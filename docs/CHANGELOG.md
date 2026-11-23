@@ -1,3 +1,8 @@
+## 2026-11-24 01:24 月度/年度/总收益走势图新增最大涨幅（淡绿）与最大跌幅（淡红）区间高亮标注
+
+- 修改者：Antigravity（代码修改）
+- 在 `monthly_realtime_page.py` 新增 `compute_max_rise_and_fall_zones`（严格时序 `Decimal` 计算）与 `RealtimeChartCanvas` 区间底色渲染：以半透明淡绿色标注最大涨幅区间、淡红色标注最大跌幅（最大回撤）区间，配以边界虚线、曲线起止点与顶部金额/日期徽标，并在图表标题栏新增「涨跌区间高亮」一键开关；`tests/test_monthly_realtime_page.py` 13 项测试全部通过。
+
 ## 2026-11-23 23:46 券商现金锚点升级为精确到时分秒（北京时间）并按 UTC 精准比对同日成交
 
 - 修改者：Antigravity（代码修改）

@@ -9,6 +9,7 @@ from portfolio.services.charts_service import Chart, Series
 from portfolio.ui.monthly_realtime_page import (
     MonthlyRealtimePnlPage,
     calculate_realtime_metrics,
+    compute_max_rise_and_fall_zones,
 )
 
 
@@ -328,3 +329,92 @@ def test_total_return_tab_layout_and_metrics(qtbot):
     assert "2025-01-16" in page.kpi_start.sub_lbl.text()
     assert "2025-11-05" in page.right_panel.max_time_lbl.text()
     assert "2026-11-11" in page.right_panel.min_time_lbl.text()
+
+
+def test_compute_max_rise_and_fall_zones():
+    """验证最大涨幅与最大跌幅区间的严格时序 Decimal 计算，及与最大回撤口径一致。"""
+    # 先跌至 -5000，再涨至 +30000（最大涨幅 +35000），再跌至 -20000（最大跌幅 -50000）
+    points = [
+        ("2026-01-05T02:00:00Z", Decimal("0.00")),
+        ("2026-02-01T02:00:00Z", Decimal("-5000.00")),
+        ("2026-03-01T02:00:00Z", None),  # 缺失点应跳过
+        ("2026-06-03T12:00:00Z", Decimal("30000.00")),
+        ("2026-08-15T02:00:00Z", Decimal("10000.00")),
+        ("2026-11-21T00:00:00Z", Decimal("-20000.00")),
+        ("2026-11-24T01:00:00Z", Decimal("-15000.00")),
+    ]
+    zones = compute_max_rise_and_fall_zones(points)
+    assert zones["max_rise"] is not None
+    assert zones["max_rise"]["start_key"] == "2026-02-01T02:00:00Z"
+    assert zones["max_rise"]["end_key"] == "2026-06-03T12:00:00Z"
+    assert zones["max_rise"]["delta"] == Decimal("35000.00")
+
+    assert zones["max_fall"] is not None
+    assert zones["max_fall"]["start_key"] == "2026-06-03T12:00:00Z"
+    assert zones["max_fall"]["end_key"] == "2026-11-21T00:00:00Z"
+    assert zones["max_fall"]["delta"] == Decimal("-50000.00")
+
+    # 与右侧卡片的最大回撤数值严格一致
+    m = calculate_realtime_metrics(points, is_year=True, period_str="2026")
+    assert zones["max_fall"]["delta"] == m["drawdown_val"]
+
+    # 单调上涨时无最大跌幅区间
+    mono_up = compute_max_rise_and_fall_zones([
+        ("2026-11-01T02:00:00Z", Decimal("100")),
+        ("2026-11-02T02:00:00Z", Decimal("350")),
+    ])
+    assert mono_up["max_rise"]["delta"] == Decimal("250")
+    assert mono_up["max_fall"] is None
+
+    # 空序列或单点无区间
+    assert compute_max_rise_and_fall_zones([]) == {"max_rise": None, "max_fall": None}
+    assert compute_max_rise_and_fall_zones([("2026-11-01T02:00:00Z", Decimal("10"))]) == {
+        "max_rise": None,
+        "max_fall": None,
+    }
+
+
+def test_extreme_zones_toggle_and_render(qtbot):
+    """验证涨跌区间高亮开关默认开启、离屏绘制淡绿/淡红底色且可一键关闭。"""
+    from PySide6.QtGui import QPixmap
+
+    page = MonthlyRealtimePnlPage()
+    qtbot.addWidget(page)
+    page.resize(960, 620)
+    page.show()
+
+    assert page.zone_toggle_btn.isChecked() is True
+    assert page.canvas.show_extreme_zones is True
+
+    points = [
+        ("2026-01-10T02:00:00Z", Decimal("0.00")),
+        ("2026-03-10T02:00:00Z", Decimal("-8000.00")),
+        ("2026-06-03T12:00:00Z", Decimal("37000.00")),
+        ("2026-09-01T02:00:00Z", Decimal("5000.00")),
+        ("2026-11-21T00:00:00Z", Decimal("-37000.00")),
+    ]
+    chart = Chart(
+        id=1,
+        title="2026 当年收益走势",
+        kind="line",
+        series=(Series("累计盈亏", tuple(points)),),
+        note="",
+    )
+    page._display_shared_chart(chart, {"baseline_state": "READY"}, year=True)
+    page.canvas.resize(820, 420)
+
+    # 开启状态下渲染并校验缓存的极值区间
+    assert page.canvas._extreme_zones["max_rise"]["delta"] == Decimal("45000.00")
+    assert page.canvas._extreme_zones["max_fall"]["delta"] == Decimal("-74000.00")
+
+    pix_on = QPixmap(page.canvas.size())
+    page.canvas.render(pix_on)
+
+    # 关闭开关后重新渲染，画布像素应与开启时存在明显差异
+    page.zone_toggle_btn.setChecked(False)
+    assert page.canvas.show_extreme_zones is False
+    pix_off = QPixmap(page.canvas.size())
+    page.canvas.render(pix_off)
+
+    assert pix_on.toImage() != pix_off.toImage()
+

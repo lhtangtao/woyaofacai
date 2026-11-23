@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from portfolio.paths import DATABASE_PATH
 import sqlite3
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, QStandardPaths, Qt, QTimer, Signal
@@ -645,15 +646,99 @@ class RightAnalysisCard(QFrame):
         """)
 
 
+def compute_max_rise_and_fall_zones(points) -> dict[str, dict[str, Any] | None]:
+    """按严格时间顺序（O(N)）基于 Decimal 计算走势序列的最大涨幅区间与最大跌幅区间。
+
+    - 最大涨幅区间（max_rise）：满足 i < j 且 v[j] - v[i] > 0 最大的区间 [i, j]
+    - 最大跌幅区间（max_fall）：满足 i < j 且 v[j] - v[i] < 0 最小的区间 [i, j]（即最大回撤波段）
+    """
+    valid: list[tuple[str, Decimal]] = []
+    for k, v in points or ():
+        if v is None:
+            continue
+        try:
+            d = v if isinstance(v, Decimal) else Decimal(str(v))
+        except Exception:
+            continue
+        if d.is_finite():
+            valid.append((str(k), d))
+
+    if len(valid) < 2:
+        return {"max_rise": None, "max_fall": None}
+
+    # 1. 最大涨幅区间：记录历史最低点，求后续点相对它的最大正差
+    run_min_k, run_min_v = valid[0]
+    best_rise = Decimal(0)
+    rise_zone = None
+    for k, v in valid[1:]:
+        if v < run_min_v:
+            run_min_k, run_min_v = k, v
+        else:
+            diff = v - run_min_v
+            if diff > best_rise:
+                best_rise = diff
+                rise_zone = {
+                    "start_key": run_min_k,
+                    "end_key": k,
+                    "start_val": run_min_v,
+                    "end_val": v,
+                    "delta": diff,
+                }
+
+    # 2. 最大跌幅区间：记录历史最高点，求后续点相对它的最小负差（最大回撤）
+    run_max_k, run_max_v = valid[0]
+    best_fall = Decimal(0)
+    fall_zone = None
+    for k, v in valid[1:]:
+        if v > run_max_v:
+            run_max_k, run_max_v = k, v
+        else:
+            diff = v - run_max_v
+            if diff < best_fall:
+                best_fall = diff
+                fall_zone = {
+                    "start_key": run_max_k,
+                    "end_key": k,
+                    "start_val": run_max_v,
+                    "end_val": v,
+                    "delta": diff,
+                }
+
+    return {"max_rise": rise_zone, "max_fall": fall_zone}
+
+
 class RealtimeChartCanvas(ChartCanvas):
-    """Enhanced ChartCanvas with vertical tracking crosshair, dot marker and floating Tooltip."""
+    """Enhanced ChartCanvas with max rise/fall zone shading, tracking crosshair, dot marker and floating Tooltip."""
 
     def __init__(self, parent=None, card_mode=False):
+        self._chart = None
+        self._extreme_zones: dict[str, dict[str, Any] | None] = {"max_rise": None, "max_fall": None}
         super().__init__(parent, card_mode=card_mode)
         self.hide_legend = True
         self.value_label = "累计盈亏"
+        self.show_extreme_zones = True
         self.hover_point = None  # (x, y, dt_str, val_str, delta_str, status_str)
         self.setMouseTracking(True)
+
+    @property
+    def chart(self):
+        return self._chart
+
+    @chart.setter
+    def chart(self, value):
+        self._chart = value
+        if value and getattr(value, "series", None):
+            self._extreme_zones = compute_max_rise_and_fall_zones(value.series[0].points)
+        else:
+            self._extreme_zones = {"max_rise": None, "max_fall": None}
+
+    def set_chart(self, chart):
+        self.chart = chart
+        self.update()
+
+    def set_show_extreme_zones(self, enabled: bool):
+        self.show_extreme_zones = bool(enabled)
+        self.update()
 
     def mouseMoveEvent(self, event):
         pos = event.position()
@@ -723,13 +808,120 @@ class RealtimeChartCanvas(ChartCanvas):
             self.update()
         super().leaveEvent(event)
 
+    def _paint_extreme_zones(self, painter: QPainter):
+        """在主折线图上绘制淡绿色最大涨幅区间与淡红色最大跌幅区间。"""
+        if not self.show_extreme_zones or not self.chart or not self.chart.series:
+            return
+        bounds = getattr(self, "_line_hover_bounds", None)
+        point_map = getattr(self, "point_coords", {}) or {}
+        if not bounds or not point_map:
+            return
+
+        left, top, width, height = bounds
+        if width <= 10 or height <= 10:
+            return
+        s_name = self.chart.series[0].name
+        cal_axis = getattr(self.chart, "calendar_axis", None)
+        short_fmt = "%y-%m-%d" if cal_axis == "all" else "%m-%d"
+
+        def _fmt_short_dt(key: str) -> str:
+            dt_bj = to_bj_datetime(key)
+            return dt_bj.strftime(short_fmt) if dt_bj else str(key)[5:10]
+
+        zone_specs = (
+            (
+                self._extreme_zones.get("max_rise"),
+                "最大涨幅",
+                QColor(16, 185, 129, 36),     # 淡绿色区间底色
+                QColor(16, 185, 129, 135),    # 淡绿虚线边框
+                QColor("#16A34A"),            # 起止点与文字深绿
+                QColor(240, 253, 244, 235),   # 徽标背景
+                QColor(134, 239, 172, 200),   # 徽标描边
+            ),
+            (
+                self._extreme_zones.get("max_fall"),
+                "最大跌幅",
+                QColor(239, 68, 68, 34),      # 淡红色区间底色
+                QColor(239, 68, 68, 135),     # 淡红虚线边框
+                QColor("#DC2626"),            # 起止点与文字深红
+                QColor(254, 242, 242, 235),   # 徽标背景
+                QColor(252, 165, 165, 200),   # 徽标描边
+            ),
+        )
+
+        badge_rects_drawn: list[QRectF] = []
+        badge_font = chart_font(10)
+        badge_font.setWeight(QFont.Weight.DemiBold)
+
+        for zone, title, fill_col, line_col, accent_col, badge_bg, badge_border in zone_specs:
+            if not zone:
+                continue
+            p_start = point_map.get((s_name, zone["start_key"])) or point_map.get(zone["start_key"])
+            p_end = point_map.get((s_name, zone["end_key"])) or point_map.get(zone["end_key"])
+            if p_start is None or p_end is None:
+                continue
+
+            x1, x2 = min(p_start.x(), p_end.x()), max(p_start.x(), p_end.x())
+            if x2 - x1 < 2.0:
+                continue
+
+            # 1. 半透明淡绿 / 淡红竖向区间底色
+            zone_rect = QRectF(x1, top, x2 - x1, height)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill_col)
+            painter.drawRect(zone_rect)
+
+            # 2. 左右极细边界虚线
+            b_pen = QPen(line_col, 1.0)
+            b_pen.setDashPattern([4.0, 3.0])
+            painter.setPen(b_pen)
+            painter.drawLine(QPointF(x1, top), QPointF(x1, top + height))
+            painter.drawLine(QPointF(x2, top), QPointF(x2, top + height))
+
+            # 3. 曲线起止圆点标记
+            painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+            painter.setBrush(accent_col)
+            painter.drawEllipse(p_start, 3.8, 3.8)
+            painter.drawEllipse(p_end, 3.8, 3.8)
+
+            # 4. 顶部紧凑徽标胶囊（自动避让越界与互相重叠）
+            delta = zone["delta"]
+            d_txt = f"{delta:+,.0f}"
+            span_txt = f"{_fmt_short_dt(zone['start_key'])}~{_fmt_short_dt(zone['end_key'])}"
+            label_text = f"{title} {d_txt} ({span_txt})"
+            painter.setFont(badge_font)
+            fm = painter.fontMetrics()
+            bw = fm.horizontalAdvance(label_text) + 14
+            bh = 19.0
+            bx = (x1 + x2 - bw) * 0.5
+            bx = max(left + 4.0, min(left + width - bw - 4.0, bx))
+            by = (top - bh - 5.0) if top >= bh + 8.0 else (top + 6.0)
+            cand = QRectF(bx, by, bw, bh)
+            for prev in badge_rects_drawn:
+                if cand.intersects(prev.adjusted(-4, -2, 4, 2)):
+                    by = (prev.top() - bh - 3.0) if (prev.top() - bh - 3.0) >= 2.0 else (top + 6.0)
+                    cand = QRectF(bx, by, bw, bh)
+            badge_rects_drawn.append(cand)
+
+            painter.setPen(QPen(badge_border, 1.0))
+            painter.setBrush(badge_bg)
+            painter.drawRoundedRect(cand, 5, 5)
+            painter.setPen(accent_col)
+            painter.drawText(cand, Qt.AlignmentFlag.AlignCenter, label_text)
+
     def paintEvent(self, event):
         super().paintEvent(event)
-        if not self.hover_point or not self.chart:
+        if not self.chart:
             return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 0. 绘制最大涨幅（淡绿）/ 最大跌幅（淡红）区间高亮
+        self._paint_extreme_zones(painter)
+
+        if not self.hover_point:
+            return
 
         hp = self.hover_point
         point_map = getattr(self, "point_coords", {}) or {}
@@ -1021,6 +1213,16 @@ class MonthlyRealtimePnlPage(QWidget):
         self.cum_base_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cum_base_btn.setFixedHeight(26)
         self.cum_base_btn.clicked.connect(lambda: self.set_zero_base(False))
+
+        self.zone_toggle_btn = QPushButton("涨跌区间高亮")
+        self.zone_toggle_btn.setCheckable(True)
+        self.zone_toggle_btn.setChecked(True)
+        self.zone_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zone_toggle_btn.setFixedHeight(28)
+        self.zone_toggle_btn.setToolTip("在折线图上用淡绿色标注最大涨幅波段、淡红色标注最大跌幅（最大回撤）波段")
+        self._update_zone_toggle_style(True)
+        self.zone_toggle_btn.toggled.connect(self._on_zone_toggle)
+        chart_header_layout.addWidget(self.zone_toggle_btn)
 
         baseline_switch_layout.addWidget(self.zero_base_btn)
         baseline_switch_layout.addWidget(self.cum_base_btn)
@@ -1452,6 +1654,24 @@ class MonthlyRealtimePnlPage(QWidget):
         self.cum_base_btn.setStyleSheet(inactive_qss if self.zero_base else active_qss)
         mode = self.mode_combo.currentData() or "cumulative"
         self.baseline_switch_frame.setVisible(mode == "cumulative" and not is_all)
+
+    def _update_zone_toggle_style(self, checked: bool):
+        if checked:
+            self.zone_toggle_btn.setStyleSheet(
+                "QPushButton { background: #ECFDF5; color: #047857; border: 1px solid #A7F3D0;"
+                " border-radius: 7px; padding: 0 10px; font-size: 12px; font-weight: 600; }"
+                "QPushButton:hover { background: #D1FAE5; }"
+            )
+        else:
+            self.zone_toggle_btn.setStyleSheet(
+                "QPushButton { background: #F8FAFC; color: #64748B; border: 1px solid #E2E8F0;"
+                " border-radius: 7px; padding: 0 10px; font-size: 12px; font-weight: 500; }"
+                "QPushButton:hover { background: #F1F5F9; color: #334155; }"
+            )
+
+    def _on_zone_toggle(self, checked: bool):
+        self._update_zone_toggle_style(bool(checked))
+        self.canvas.set_show_extreme_zones(bool(checked))
 
     def set_zero_base(self, zero_base: bool):
         zero_base = bool(zero_base)
