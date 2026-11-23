@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal,localcontext,ROUND_HALF_UP
 from pathlib import Path
 import re
-from PySide6.QtCore import QDate,Qt,QEvent,QSize,QStringListModel
+from PySide6.QtCore import QDate,Qt,QEvent,QSize,QStringListModel,QTimer
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QGridLayout,QLabel,QPushButton,QComboBox,QLineEdit,QDateEdit,QCheckBox,QButtonGroup,QListWidget,QListWidgetItem,QTabWidget,QFileDialog,QMenu,QAbstractItemView,QTableView,QApplication,QFrame,QSizePolicy,QCompleter)
 from portfolio.domain.models import QueryScope,Ledger,exact_text
 from portfolio.services.trade_center import TradeCenterService,COLUMNS,KEYS,SIDES,KINDS
@@ -431,6 +431,71 @@ class TradeCenterPage(QWidget):
         self.per_page.setCurrentIndex(1);self.per_page.currentIndexChanged.connect(self.change_size);footer.addWidget(self.per_page)
         self.previous_page=QPushButton('上一页');self.next_page=QPushButton('下一页');self.previous_page.clicked.connect(lambda:self.turn(-1));self.next_page.clicked.connect(lambda:self.turn(1));footer.addWidget(self.previous_page);footer.addWidget(self.next_page);footer.setContentsMargins(14,10,14,10);table_layout.addLayout(footer)
         self.note=QLabel();self.note.setWordWrap(True);self.note.hide();layout.addWidget(self.note)
+        # 每 5 分钟静默刷新本页「当前价」（含盘前/盘中/盘后最新价），仅在页面可见时运行
+        self._quote_timer=QTimer(self)
+        self._quote_timer.setInterval(5*60*1000)
+        self._quote_timer.timeout.connect(self._refresh_current_prices_silently)
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        if not self._quote_timer.isActive():
+            self._quote_timer.start()
+
+    def hideEvent(self,event):
+        if self._quote_timer.isActive():
+            self._quote_timer.stop()
+        super().hideEvent(event)
+
+    def _refresh_current_prices_silently(self):
+        """后台静默刷新当前页股票最新价（盘前/盘中/盘后），不锁表、不重置滚动与选中态。"""
+        if not self.isVisible() or not self.path or not self.data:
+            return
+        items=self.data.get('items') or []
+        if not items:
+            return
+        symbols=sorted({str(it.get('symbol') or '').strip() for it in items if it.get('symbol')})
+        if not symbols:
+            return
+        db_path=self.path
+
+        def _load_quotes(cancel=None):
+            from types import SimpleNamespace
+            from portfolio.db.connection import readonly_connection
+            from portfolio.services.post_trade_positions import current_quotes
+            dummy_rows=[SimpleNamespace(metadata={'symbol':sym,'market':'US'}) for sym in symbols]
+            with readonly_connection(db_path,cancel=cancel,timeout=15) as conn:
+                return current_quotes(conn,dummy_rows)
+
+        self.submit('quotes_refresh',_load_quotes,self._apply_refreshed_prices)
+
+    def _apply_refreshed_prices(self,quotes_map):
+        if not quotes_map or not self.data:
+            return
+        model=self.table.finance_model
+        rows=model.rows
+        if not rows:
+            return
+        col_idx=KEYS.index('current_price')
+        changed_rows=[]
+        for r_idx,row in enumerate(rows):
+            sym=row.get('symbol')
+            if not sym:
+                continue
+            entry=quotes_map.get((sym,'US'))
+            if not entry:
+                continue
+            new_p,new_t,new_st=entry
+            if new_p is None:
+                continue
+            if (row.get('current_price')!=new_p or row.get('quote_time')!=new_t or row.get('quote_status')!=new_st):
+                row['current_price']=new_p
+                row['quote_time']=new_t
+                row['quote_status']=new_st
+                changed_rows.append(r_idx)
+        if changed_rows:
+            top=model.index(changed_rows[0],col_idx)
+            bottom=model.index(changed_rows[-1],col_idx)
+            model.dataChanged.emit(top,bottom,[Qt.ItemDataRole.DisplayRole,Qt.ItemDataRole.ToolTipRole])
 
     def submit(self,name,task,ready):
         previous=self.jobs.get(name)
@@ -445,6 +510,8 @@ class TradeCenterPage(QWidget):
         self.status.setVisible(bool(text))
 
     def failed(self,name,message):
+        if name=='quotes_refresh':
+            return
         if name=='detail':
             for panel in self.texts.values():
                 panel.setPlainText('详情读取失败 · '+message)
