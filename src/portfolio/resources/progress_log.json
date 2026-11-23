@@ -1,5 +1,16 @@
 [
   {
+    "title": "同步写入交易流水.xlsx 时加宽时间/日期与订单ID列，避免显示 ###",
+    "time": "2026-11-23 23:00",
+    "author": "Antigravity",
+    "tag": "交易流水时间列已加宽",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 sync_and_split_operations._write_df_to_sheet 中将包含「时间」「日期」以及「订单ID」「活动ID」的列宽由 16 加宽至 24，解决 WPS / Excel 打开交易流水.xlsx 时「交易时间」显示为 ########### 的问题。",
+      "验证范围：使用 openpyxl 单元测试校验 _write_df_to_sheet 写入后的列宽符合预期（交易时间=24，普通列=16）。"
+    ]
+  },
+  {
     "title": "全站用到最新价的页面统一补齐 5 分钟自动刷新",
     "time": "2026-11-23 22:34",
     "author": "Antigravity",

@@ -372,7 +372,11 @@ def _write_df_to_sheet(wb: openpyxl.Workbook, sheet_name: str, df: pd.DataFrame)
 
     for col in range(1, ws.max_column + 1):
         col_let = get_column_letter(col)
-        ws.column_dimensions[col_let].width = 16
+        header = str(ws.cell(1, col).value or "")
+        if "时间" in header or "日期" in header or header in ("订单ID", "活动ID"):
+            ws.column_dimensions[col_let].width = 24
+        else:
+            ws.column_dimensions[col_let].width = 16
 
 
 def _same_transaction_rows(left: pd.DataFrame, right: pd.DataFrame) -> bool:
