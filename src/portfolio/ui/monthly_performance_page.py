@@ -309,6 +309,15 @@ class MonthlyTrendCanvas(QWidget):
         # Draw series
         if not is_line:
             bar_w = max(2.5, min(24.0, bar_step * 0.65))
+            valid_months = [p[0] for p in self.data_points if p[1] is not None]
+            ref_target_month = (
+                self.selected_month
+                if self.selected_month in valid_months
+                else (valid_months[-1] if valid_months else "")
+            )
+            ref_line_y: float | None = None
+            ref_line_pnl: float = 0.0
+
             for i, (m, monthly_pnl, cum_pnl) in enumerate(self.data_points):
                 if monthly_pnl is None or (self.mode == "net" and monthly_pnl == 0):
                     continue
@@ -336,6 +345,41 @@ class MonthlyTrendCanvas(QWidget):
                 by = min(zero_y, y_clamped)
                 bh = max(2.0, abs(zero_y - y_clamped))
                 painter.drawRoundedRect(QRectF(bx, by, bar_w, bh), 2, 2)
+
+                if self.mode == "monthly" and m == ref_target_month:
+                    ref_line_y = by if monthly_pnl >= 0 else (by + bh)
+                    ref_line_pnl = float(monthly_pnl)
+
+            # 月度收益走势模式：绘制当月/选中月水平淡虚参考线与对比徽标
+            if self.mode == "monthly" and ref_line_y is not None and abs(ref_line_pnl) > 1e-6:
+                is_pos_ref = ref_line_pnl > 0
+                line_col = QColor(22, 163, 74, 125) if is_pos_ref else QColor(220, 38, 38, 125)
+                ref_pen = QPen(line_col, 1.15)
+                ref_pen.setDashPattern([4.0, 4.0])
+                painter.setPen(ref_pen)
+                painter.drawLine(int(margin_left), int(round(ref_line_y)), int(w - margin_right), int(round(ref_line_y)))
+
+                exceed_cnt = (
+                    sum(1 for _, v, _ in self.data_points if v is not None and float(v) > ref_line_pnl)
+                    if is_pos_ref
+                    else sum(1 for _, v, _ in self.data_points if v is not None and float(v) < ref_line_pnl)
+                )
+                m_tag = "当月" if (valid_months and ref_target_month == valid_months[-1]) else ref_target_month
+                cmp_tag = f"更高 {exceed_cnt}月" if is_pos_ref else f"更亏 {exceed_cnt}月"
+                badge_text = f"{m_tag} {ref_line_pnl:+,.0f} · {cmp_tag}"
+                painter.setFont(numeric_font(9, bold=True))
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(badge_text) + 12
+                th = 16
+                bx_lbl = margin_left + 4
+                by_lbl = (ref_line_y - th - 2) if is_pos_ref else (ref_line_y + 2)
+                by_lbl = max(margin_top, min(margin_top + plot_h - th, by_lbl))
+                badge_rect = QRectF(bx_lbl, by_lbl, tw, th)
+                painter.setPen(QPen(QColor(22, 163, 74, 90) if is_pos_ref else QColor(220, 38, 38, 90), 0.8))
+                painter.setBrush(QColor(240, 253, 244, 225) if is_pos_ref else QColor(254, 242, 242, 225))
+                painter.drawRoundedRect(badge_rect, 4, 4)
+                painter.setPen(QColor("#15803D") if is_pos_ref else QColor("#B91C1C"))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
         elif self.mode == "net_cum":
             path = QPainterPath()
             connected = False
