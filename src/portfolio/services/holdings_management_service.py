@@ -1042,7 +1042,7 @@ class HoldingsManagementService:
         source_path: str,
         analytics,
         ticker: str,
-        person_id: int | None = None,
+        person_id: int | tuple[int, ...] | None = None,
         broker: str | None = None,
         as_of: date | None = None,
         *, account_id: int | None = None, instrument_id: int | None = None,
@@ -1053,13 +1053,18 @@ class HoldingsManagementService:
         as_of = as_of or (analytics.scope.as_of if analytics and hasattr(analytics, "scope") else date.today())
 
         scope = analytics.scope if analytics else QueryScope(as_of=as_of, include_disabled=True)
+        person_id_tuple = (
+            (person_id,) if isinstance(person_id, int)
+            else tuple(person_id) if isinstance(person_id, (tuple, list))
+            else None
+        )
 
         # 1. Top Summary Metrics
         pa = analytics.reports.get("人员资产") if analytics else None
         pa_rows = [
             r for r in (pa.rows if pa else ())
             if r.values[2] and r.values[2].upper() == ticker
-            and (person_id is None or r.metadata.get("person_id") == person_id)
+            and (person_id_tuple is None or r.metadata.get("person_id") in person_id_tuple)
             and (account_id is None or r.metadata.get("account_id") == account_id)
             and (instrument_id is None or r.metadata.get("instrument_id") == instrument_id)
             and _match_broker(broker, r.values[1], r.metadata.get("broker_code"))
@@ -1100,6 +1105,68 @@ class HoldingsManagementService:
         floating_pnl_rate = ratio(floating_pnl, open_net) if (current_quantity > 0 and open_net > 0) else None
         total_pnl_rate = ratio(total_pnl, base_invested) if base_invested > 0 else None
 
+        # 分券商渠道状态拆解（用于跨渠道合并抽屉展示）
+        channel_groups: dict[str, dict[str, Any]] = {}
+        for r in pa_rows:
+            ch_name = channel_label(str(r.values[1] or "").split(" · #")[0].strip()) or "未知渠道"
+            st = r.values[4] or "持有中"
+            cg = channel_groups.setdefault(
+                ch_name,
+                {
+                    "channel": ch_name,
+                    "has_open": False,
+                    "has_closed": False,
+                    "quantity": Decimal(0),
+                    "floating_pnl": Decimal(0),
+                    "realized_pnl": Decimal(0),
+                },
+            )
+            r_qty = r.values[3] if isinstance(r.values[3], Decimal) else Decimal(0)
+            r_mv = r.values[7] if isinstance(r.values[7], Decimal) else Decimal(0)
+            r_pnl = r.values[8] if isinstance(r.values[8], Decimal) else Decimal(0)
+            r_net = r.values[12] if len(r.values) > 12 and isinstance(r.values[12], Decimal) else None
+            r_cost_p = r.values[5] if isinstance(r.values[5], Decimal) else None
+            if st == "持有中":
+                cg["has_open"] = True
+                cg["quantity"] += r_qty
+                if live_p is not None and r_qty > ZERO:
+                    adj_mv = r_qty * live_p
+                    if r_net is not None:
+                        r_pnl = adj_mv - r_net
+                    elif r_cost_p is not None:
+                        r_pnl = adj_mv - (r_qty * r_cost_p)
+                cg["floating_pnl"] += r_pnl
+            else:
+                cg["has_closed"] = True
+                cg["realized_pnl"] += r_pnl
+
+        channel_breakdown = []
+        for cg in sorted(
+            channel_groups.values(),
+            key=lambda x: (0 if x["has_open"] else 1, x["channel"]),
+        ):
+            if cg["has_open"] and cg["has_closed"]:
+                st_lbl = "持有中/含清仓"
+            elif cg["has_open"]:
+                st_lbl = "持有中"
+            else:
+                st_lbl = "已清仓"
+            sub_pnl = cg["floating_pnl"] + cg["realized_pnl"]
+            channel_breakdown.append({
+                "channel": cg["channel"],
+                "status": st_lbl,
+                "quantity": serialize_val(cg["quantity"]),
+                "floating_pnl": serialize_val(cg["floating_pnl"]),
+                "realized_pnl": serialize_val(cg["realized_pnl"]),
+                "subtotal_pnl": serialize_val(sub_pnl),
+            })
+
+        # 实时行情若已更新 floating_pnl，同步修正 total_pnl 保持浮盈 + 已实现 = 累计总盈亏一致
+        closed_pnl_sum = sum((r.values[8] for r in pa_rows if r.values[4] != "持有中" and isinstance(r.values[8], Decimal)), Decimal(0))
+        if live_p is not None and current_quantity > 0:
+            total_pnl = floating_pnl + closed_pnl_sum
+            total_pnl_rate = ratio(total_pnl, base_invested) if base_invested > 0 else None
+
         summary = {
             "ticker": ticker,
             "company_name": f"{ticker} Corporation",
@@ -1110,6 +1177,7 @@ class HoldingsManagementService:
             "market_value": serialize_val(market_value),
             "floating_pnl": serialize_val(floating_pnl),
             "floating_pnl_rate": serialize_val(floating_pnl_rate),
+            "realized_pnl": serialize_val(closed_pnl_sum),
             "cumulative_pnl": serialize_val(total_pnl),
             "cumulative_pnl_rate": serialize_val(total_pnl_rate),
         }
@@ -1118,8 +1186,12 @@ class HoldingsManagementService:
         ts = TradesService(source_path)
         scoped_drawer = account_id is not None or instrument_id is not None or scope.account_ids is not None or scope.instrument_ids is not None
         person_ids = scope.person_ids
-        if person_id is not None:
-            person_ids = (person_id,) if person_ids is None or person_id in person_ids else (-99999,)
+        if person_id_tuple is not None:
+            if person_ids is None:
+                person_ids = person_id_tuple
+            else:
+                inter = tuple(pid for pid in person_id_tuple if pid in person_ids)
+                person_ids = inter if inter else (-99999,)
         if scoped_drawer:
             def narrow(ids, selected):
                 if selected is None:
@@ -1482,6 +1554,7 @@ class HoldingsManagementService:
 
         return {
             "summary": summary,
+            "channel_breakdown": channel_breakdown,
             "trades": trade_records,
             "holding_analysis": holding_analysis,
             "pnl_analysis": pnl_analysis,

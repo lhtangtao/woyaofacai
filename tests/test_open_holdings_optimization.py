@@ -297,10 +297,11 @@ def test_10_default_detail_view_and_status_tabs(real_analytics, qtbot):
     assert page.stack.currentIndex() == 1
     assert page.mode_box.isHidden()
 
-    # 顶部展示「持仓中」和「已清仓」两个 Tab，且「持仓中」排在第一位并默认选中
-    assert page.status_tabs.count() == 2
+    # 顶部展示「持仓中」「已清仓」「汇总」三个 Tab，且「持仓中」排在第一位并默认选中
+    assert page.status_tabs.count() == 3
     assert page.status_tabs.tabText(0) == "持仓中"
     assert page.status_tabs.tabText(1) == "已清仓"
+    assert page.status_tabs.tabText(2) == "汇总"
     assert page.status_tabs.currentIndex() == 0
     assert page.open_table_title_lbl.text() == "持仓明细 (共 47 只)"
     assert page._open_pnl_btns["all"].text() == "全部 (47)"
@@ -310,12 +311,23 @@ def test_10_default_detail_view_and_status_tabs(real_analytics, qtbot):
     assert page.status_combo.currentData() == "已清仓"
     assert not page.closed_dashboard.isHidden()
     assert page.open_kpi_bar.isHidden()
+    assert page.summary_kpi_bar.isHidden()
+
+    # 点击切换到「汇总」Tab
+    page.status_tabs.setCurrentIndex(2)
+    assert page.status_combo.currentData() == "汇总"
+    assert not page.summary_kpi_bar.isHidden()
+    assert not page.summary_charts_row.isHidden()
+    assert not page.summary_top_card.isHidden()
+    assert page.open_kpi_bar.isHidden()
+    assert page.closed_dashboard.isHidden()
 
     # 切回「持仓中」Tab
     page.status_tabs.setCurrentIndex(0)
     assert page.status_combo.currentData() == "持有中"
     assert not page.open_kpi_bar.isHidden()
     assert page.closed_dashboard.isHidden()
+    assert page.summary_kpi_bar.isHidden()
 
     # 验证「持仓中」盈亏贡献 Top 10 卡片存在、可见并可交互联动
     assert page.open_top10_card is not None

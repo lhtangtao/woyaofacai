@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTabBar,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -58,6 +60,9 @@ from portfolio.services.holdings_management_service import (
 from portfolio.services.open_holdings_analytics_service import (
     build_open_holdings_dashboard,
 )
+from portfolio.services.summary_holdings_analytics_service import (
+    build_summary_holdings_dashboard,
+)
 from portfolio.ui.charts_page import ChartCanvas
 from portfolio.ui.holding_cost_chart import HoldingCostDualAxisChart
 from portfolio.ui.pnl_analysis_charts import PnlAnalysisChartsWidget
@@ -69,6 +74,11 @@ from portfolio.ui.open_holdings_dashboard import (
     OpenHoldingsChartsRow,
     OpenHoldingsKpiBar,
     OpenTop10Card,
+)
+from portfolio.ui.summary_holdings_dashboard import (
+    SummaryChartsRow,
+    SummaryHoldingsKpiBar,
+    SummaryTopContributorsCard,
 )
 from portfolio.ui.theme import numeric_font, tokens
 
@@ -158,12 +168,32 @@ class HoldingsLocalFilterBar(QFrame):
         self._open_search = ""
         self._closed_date = "all"
         self._closed_search = ""
+        self._summary_status = "all"
+        self._summary_type = ""
+        self._summary_search = ""
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # 1. 持有中：股票类型
+        # 0. 汇总：当前状态
+        self.lbl_summary_status = QLabel("当前状态")
+        self.lbl_summary_status.setProperty("class", "FilterLabel")
+        self.lbl_summary_status.setStyleSheet("color: #475569; font-size: 12px; font-weight: 600;")
+        layout.addWidget(self.lbl_summary_status)
+
+        self.summary_status_combo = QComboBox(self)
+        self.summary_status_combo.setMinimumWidth(135)
+        for label, key in (
+            ("全部 (含跨渠道)", "all"),
+            ("仍持有", "open"),
+            ("跨渠道持仓+清仓", "cross"),
+            ("已全部清仓", "closed"),
+        ):
+            self.summary_status_combo.addItem(label, key)
+        layout.addWidget(self.summary_status_combo)
+
+        # 1. 持有中 / 汇总：股票类型
         self.lbl_stock_type = QLabel("股票类型")
         self.lbl_stock_type.setProperty("class", "FilterLabel")
         self.lbl_stock_type.setStyleSheet("color: #475569; font-size: 12px; font-weight: 600;")
@@ -225,6 +255,10 @@ class HoldingsLocalFilterBar(QFrame):
         if self._mode == "open":
             self._open_type = str(self.open_industry_combo.currentData() or "")
             self._open_search = self.search_input.text()
+        elif self._mode == "summary":
+            self._summary_status = str(self.summary_status_combo.currentData() or "all")
+            self._summary_type = str(self.open_industry_combo.currentData() or "")
+            self._summary_search = self.search_input.text()
         else:
             self._closed_date = str(self.close_date_combo.currentData() or "all")
             self._closed_search = self.search_input.text()
@@ -240,6 +274,15 @@ class HoldingsLocalFilterBar(QFrame):
             b_type = self.open_industry_combo.blockSignals(True)
             self._select_combo_data(self.open_industry_combo, self._open_type)
             self.open_industry_combo.blockSignals(b_type)
+        elif mode == "summary":
+            self.search_input.setPlaceholderText("搜索股票名称 / Ticker / 券商")
+            self.search_input.setText(self._summary_search)
+            b_st = self.summary_status_combo.blockSignals(True)
+            self._select_combo_data(self.summary_status_combo, self._summary_status)
+            self.summary_status_combo.blockSignals(b_st)
+            b_type = self.open_industry_combo.blockSignals(True)
+            self._select_combo_data(self.open_industry_combo, self._summary_type)
+            self.open_industry_combo.blockSignals(b_type)
         else:
             self.search_input.setPlaceholderText("搜索股票名称、Ticker、人员、券商或账号…")
             self.search_input.setText(self._closed_search)
@@ -250,10 +293,14 @@ class HoldingsLocalFilterBar(QFrame):
 
     def _apply_mode_visibility(self):
         is_open = self._mode == "open"
-        self.lbl_stock_type.setVisible(is_open)
-        self.open_industry_combo.setVisible(is_open)
-        self.lbl_close_date.setVisible(not is_open)
-        self.close_date_combo.setVisible(not is_open)
+        is_summary = self._mode == "summary"
+        is_closed = self._mode == "closed"
+        self.lbl_summary_status.setVisible(is_summary)
+        self.summary_status_combo.setVisible(is_summary)
+        self.lbl_stock_type.setVisible(is_open or is_summary)
+        self.open_industry_combo.setVisible(is_open or is_summary)
+        self.lbl_close_date.setVisible(is_closed)
+        self.close_date_combo.setVisible(is_closed)
 
     @staticmethod
     def _select_combo_data(combo: QComboBox, target_data: str):
@@ -274,6 +321,16 @@ class HoldingsLocalFilterBar(QFrame):
         if self._mode == "open":
             self._open_type = ""
             self._open_search = ""
+            b_t = self.open_industry_combo.blockSignals(True)
+            self.open_industry_combo.setCurrentIndex(0)
+            self.open_industry_combo.blockSignals(b_t)
+        elif self._mode == "summary":
+            self._summary_status = "all"
+            self._summary_type = ""
+            self._summary_search = ""
+            b_st = self.summary_status_combo.blockSignals(True)
+            self.summary_status_combo.setCurrentIndex(0)
+            self.summary_status_combo.blockSignals(b_st)
             b_t = self.open_industry_combo.blockSignals(True)
             self.open_industry_combo.setCurrentIndex(0)
             self.open_industry_combo.blockSignals(b_t)
@@ -324,6 +381,36 @@ CLOSED_PERSON_SUMMARY_COLUMNS = (
     "已清仓股票数",
     "盈利清仓数",
     "亏损清仓数",
+)
+
+SUMMARY_HOLDINGS_COLUMNS = (
+    "Ticker",
+    "类型",
+    "当前状态",
+    "涉及券商渠道",
+    "当前持仓股数",
+    "当前持仓均价",
+    "最新价",
+    "当前持仓市值",
+    "当前持仓成本",
+    "浮动盈亏",
+    "已实现盈亏",
+    "累计总盈亏",
+    "综合总收益率",
+    "历史总买入额",
+    "历史总卖出额",
+    "总买卖次数",
+)
+
+SUMMARY_PERSON_SUMMARY_COLUMNS = (
+    "归属人员",
+    "当前持仓市值",
+    "当前持仓成本",
+    "当前浮动盈亏",
+    "历史已实现盈亏",
+    "累计总盈亏",
+    "综合总收益率",
+    "交易股票数",
 )
 
 logger = logging.getLogger(__name__)
@@ -728,6 +815,53 @@ class StockDrawerWidget(QFrame):
             m_layout.addWidget(m, 1)
         layout.addWidget(metrics_frame)
 
+        # 2.5 分券商渠道状态拆解（跨渠道合并视图展示各券商持有中/已清仓对比）
+        self.channel_breakdown_box = QFrame(self)
+        self.channel_breakdown_box.setObjectName("DrawerChannelBox")
+        self.channel_breakdown_box.setStyleSheet("""
+            QFrame#DrawerChannelBox {
+                background: #F8FAFC;
+                border: 1px solid #E2E8F0;
+                border-radius: 8px;
+            }
+        """)
+        cb_layout = QVBoxLayout(self.channel_breakdown_box)
+        cb_layout.setContentsMargins(10, 8, 10, 8)
+        cb_layout.setSpacing(6)
+        cb_head = QHBoxLayout()
+        cb_head.setContentsMargins(0, 0, 0, 0)
+        cb_title = QLabel("分券商渠道状态拆解")
+        cb_title.setStyleSheet("color: #0F172A; font-size: 12px; font-weight: 700; border: none; background: transparent;")
+        cb_hint = QLabel("跨渠道自动合并对照")
+        cb_hint.setStyleSheet("color: #94A3B8; font-size: 11px; border: none; background: transparent;")
+        cb_head.addWidget(cb_title)
+        cb_head.addStretch()
+        cb_head.addWidget(cb_hint)
+        cb_layout.addLayout(cb_head)
+
+        self.channel_breakdown_table = QTableWidget(0, 6, self.channel_breakdown_box)
+        self.channel_breakdown_table.setHorizontalHeaderLabels(["券商渠道", "状态", "现持仓", "浮动盈亏", "已实现", "小计"])
+        self.channel_breakdown_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.channel_breakdown_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.channel_breakdown_table.verticalHeader().setVisible(False)
+        self.channel_breakdown_table.setShowGrid(False)
+        self.channel_breakdown_table.setStyleSheet("""
+            QTableWidget { background: transparent; border: none; font-size: 11px; color: #0F172A; }
+            QHeaderView::section {
+                background: transparent; color: #64748B; font-size: 11px; font-weight: 600;
+                border: none; border-bottom: 1px solid #E2E8F0; padding: 3px 4px;
+            }
+            QTableWidget::item { padding: 3px 4px; border-bottom: 1px solid #F1F5F9; }
+        """)
+        cb_hdr = self.channel_breakdown_table.horizontalHeader()
+        cb_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        cb_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        for c_i in range(2, 6):
+            cb_hdr.setSectionResizeMode(c_i, QHeaderView.ResizeMode.Stretch)
+        cb_layout.addWidget(self.channel_breakdown_table)
+        self.channel_breakdown_box.hide()
+        layout.addWidget(self.channel_breakdown_box)
+
         # 3. Tab Bar (4 Tabs)
         self.tabs = QTabBar(self)
         self.tabs.setDrawBase(False)
@@ -862,6 +996,77 @@ class StockDrawerWidget(QFrame):
         cpnl_color = "#16A34A" if (cpnl or 0) > 0 else "#DC2626" if (cpnl or 0) < 0 else "#64748B"
         sub_c = f"{crate*100:+.2f}%" if crate is not None else "—"
         self.m_cpnl.set_content(f"${cpnl:,.2f}" if cpnl is not None else "—", sub_c, cpnl_color)
+
+        # 分券商渠道状态拆解表（当存在跨渠道或明确渠道拆解数据时展示）
+        ch_rows = list(drawer_data.get("channel_breakdown") or [])
+        if len(ch_rows) > 1 or (ch_rows and drawer_data.get("show_channel_breakdown")):
+            show_total = len(ch_rows) > 1
+            total_r = len(ch_rows) + (1 if show_total else 0)
+            self.channel_breakdown_table.setRowCount(total_r)
+            f_num = numeric_font(11, bold=False)
+            f_bold = numeric_font(11, bold=True)
+
+            def _cb_item(text: str, align_right: bool = True, color: str = "#0F172A", bold: bool = False):
+                it = QTableWidgetItem(text)
+                it.setFont(f_bold if bold else f_num)
+                it.setForeground(QColor(color))
+                it.setTextAlignment(
+                    (Qt.AlignmentFlag.AlignRight if align_right else Qt.AlignmentFlag.AlignLeft)
+                    | Qt.AlignmentFlag.AlignVCenter
+                )
+                return it
+
+            def _cb_fmt(v, signed=False):
+                if v is None:
+                    return "—"
+                fv = float(v)
+                if abs(fv) < 0.005:
+                    return "0.00"
+                return f"{fv:+,.2f}" if signed else f"{fv:,.2f}"
+
+            def _cb_col(v):
+                if v is None or abs(float(v)) < 0.005:
+                    return "#64748B"
+                return "#16A34A" if float(v) > 0 else "#DC2626"
+
+            sum_qty = 0.0
+            sum_fl = 0.0
+            sum_rl = 0.0
+            for idx, cr in enumerate(ch_rows):
+                c_qty = float(cr.get("quantity") or 0.0)
+                c_fl = float(cr.get("floating_pnl") or 0.0)
+                c_rl = float(cr.get("realized_pnl") or 0.0)
+                c_sub = float(cr.get("subtotal_pnl") or (c_fl + c_rl))
+                sum_qty += c_qty
+                sum_fl += c_fl
+                sum_rl += c_rl
+                self.channel_breakdown_table.setRowHeight(idx, 25)
+                self.channel_breakdown_table.setItem(idx, 0, _cb_item(str(cr.get("channel") or "—"), False, "#0F172A", True))
+                st_txt = str(cr.get("status") or "—")
+                st_col = "#2563EB" if "持有" in st_txt else "#64748B"
+                self.channel_breakdown_table.setItem(idx, 1, _cb_item(st_txt, False, st_col, True))
+                qty_txt = f"{c_qty:,.0f}" if abs(c_qty - round(c_qty)) < 1e-6 else f"{c_qty:,.2f}"
+                self.channel_breakdown_table.setItem(idx, 2, _cb_item(qty_txt, True, "#0F172A" if c_qty > 0 else "#94A3B8"))
+                self.channel_breakdown_table.setItem(idx, 3, _cb_item(_cb_fmt(c_fl, True), True, _cb_col(c_fl)))
+                self.channel_breakdown_table.setItem(idx, 4, _cb_item(_cb_fmt(c_rl, True), True, _cb_col(c_rl)))
+                self.channel_breakdown_table.setItem(idx, 5, _cb_item(_cb_fmt(c_sub, True), True, _cb_col(c_sub), True))
+
+            if show_total:
+                t_i = len(ch_rows)
+                sum_sub = sum_fl + sum_rl
+                self.channel_breakdown_table.setRowHeight(t_i, 26)
+                self.channel_breakdown_table.setItem(t_i, 0, _cb_item("合并合计", False, "#0F172A", True))
+                self.channel_breakdown_table.setItem(t_i, 1, _cb_item("持有中" if sum_qty > 0 else "已全清仓", False, "#0F172A", True))
+                qty_txt = f"{sum_qty:,.0f}" if abs(sum_qty - round(sum_qty)) < 1e-6 else f"{sum_qty:,.2f}"
+                self.channel_breakdown_table.setItem(t_i, 2, _cb_item(qty_txt, True, "#0F172A", True))
+                self.channel_breakdown_table.setItem(t_i, 3, _cb_item(_cb_fmt(sum_fl, True), True, _cb_col(sum_fl), True))
+                self.channel_breakdown_table.setItem(t_i, 4, _cb_item(_cb_fmt(sum_rl, True), True, _cb_col(sum_rl), True))
+                self.channel_breakdown_table.setItem(t_i, 5, _cb_item(_cb_fmt(sum_sub, True), True, _cb_col(sum_sub), True))
+
+            self.channel_breakdown_table.setFixedHeight(min(180, 28 + total_r * 26 + 4))
+            self.channel_breakdown_box.show()
+        else:
+            self.channel_breakdown_box.hide()
 
         # Tab 1: 11-column trades
         self.raw_trades_data = drawer_data.get("trades", [])
@@ -1296,6 +1501,7 @@ class HoldingsPage(QWidget):
         self.status_combo = QComboBox()
         self.status_combo.addItem("当前持仓", "持有中")
         self.status_combo.addItem("已清仓", "已清仓")
+        self.status_combo.addItem("汇总", "汇总")
         self.status_combo.hide()
         self.status_combo.currentIndexChanged.connect(self._on_status_combo_changed)
         detail_bar.addWidget(self.status_combo)
@@ -1327,6 +1533,7 @@ class HoldingsPage(QWidget):
         """)
         self.status_tabs.addTab("持仓中")
         self.status_tabs.addTab("已清仓")
+        self.status_tabs.addTab("汇总")
         self.status_tabs.setCurrentIndex(0)
         self.status_tabs.currentChanged.connect(self._on_status_tab_changed)
         detail_bar.addWidget(self.status_tabs)
@@ -1367,6 +1574,18 @@ class HoldingsPage(QWidget):
         self._open_page = 1
         self._open_page_size = 50
         self._open_all_rows: list[ReportRow] = []
+        # 汇总模式独立状态
+        self._summary_status_filter = "all"
+        self._summary_industry = ""
+        self._summary_pnl_filter = "all"
+        self._summary_structure_filter = ""
+        self._summary_ticker_filter = ""
+        self._summary_top_metric = "total"
+        self._summary_person_drill_id: int | None = None
+        self._summary_person_drill_name: str = ""
+        self._summary_page = 1
+        self._summary_page_size = 50
+        self._summary_all_rows: list[ReportRow] = []
 
         # 虚拟保留兼容对象（不加入顶部 detail_bar，避免重复冗余）
         self.closed_broker_lbl = QLabel()
@@ -1478,6 +1697,7 @@ class HoldingsPage(QWidget):
         self.open_currency_combo = QComboBox()
         self.open_currency_combo.hide()
 
+        self.local_filter_bar.summary_status_combo.currentIndexChanged.connect(self._on_summary_status_combo_changed)
         self.local_filter_bar.open_industry_combo.currentIndexChanged.connect(self._on_open_industry_combo_changed)
         self.local_filter_bar.close_date_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.local_filter_bar.search_input.textChanged.connect(self._on_search_input_changed)
@@ -1519,13 +1739,68 @@ class HoldingsPage(QWidget):
         lt_layout.setSpacing(10)
 
         # -----------------------------------------------------------------
-        # 1. 顶部六张统计卡片（持有中与已清仓各自独立，高度均为 60px）
+        # 1. 顶部六张统计卡片（持有中 / 已清仓 / 汇总 各自独立，高度一致）
         # -----------------------------------------------------------------
         self.open_kpi_bar = OpenHoldingsKpiBar(self)
         self.closed_kpi_bar = ClosedHoldingsKpiBar(self)
         self.closed_kpi_bar.hide()
+        self.summary_kpi_bar = SummaryHoldingsKpiBar(self)
+        self.summary_kpi_bar.hide()
         lt_layout.addWidget(self.open_kpi_bar)
         lt_layout.addWidget(self.closed_kpi_bar)
+        lt_layout.addWidget(self.summary_kpi_bar)
+
+        # 汇总 (Summary Holdings) 专属看板：三联卡片 + 多人员汇总 + Top N + 明细表头
+        self.summary_charts_row = SummaryChartsRow(self)
+        self.summary_charts_row.broker_clicked.connect(self._on_open_broker_donut_clicked)
+        self.summary_charts_row.structure_clicked.connect(self._on_summary_structure_clicked)
+        self.summary_charts_row.industry_clicked.connect(self._on_summary_industry_clicked)
+        self.summary_charts_row.hide()
+        lt_layout.addWidget(self.summary_charts_row)
+
+        self.summary_person_card = PersonSummaryCard("各人员全周期汇总情况", SUMMARY_PERSON_SUMMARY_COLUMNS, self)
+        self.summary_person_card.setObjectName("SummaryPersonCard")
+        self.summary_person_card.person_clicked.connect(self._on_summary_person_selected)
+        self.summary_person_card.hide()
+        lt_layout.addWidget(self.summary_person_card)
+
+        self.summary_top_card = SummaryTopContributorsCard(self)
+        self.summary_top_card.ticker_clicked.connect(self._on_summary_ticker_clicked)
+        self.summary_top_card.metric_changed.connect(self._on_summary_top_metric_changed)
+        self.summary_top_card.hide()
+        lt_layout.addWidget(self.summary_top_card)
+
+        self.summary_table_header = QFrame(self)
+        self.summary_table_header.setObjectName("SummaryTableHeader")
+        self.summary_table_header.setStyleSheet("""
+            QFrame#SummaryTableHeader {
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                border-bottom: none;
+            }
+        """)
+        sth_layout = QHBoxLayout(self.summary_table_header)
+        sth_layout.setContentsMargins(14, 10, 14, 6)
+        sth_layout.setSpacing(10)
+
+        self.summary_table_title_lbl = QLabel("股票跨渠道汇总明细 (共 0 只)")
+        self.summary_table_title_lbl.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 700; border: none; background: transparent;")
+        sth_layout.addWidget(self.summary_table_title_lbl)
+        sth_layout.addStretch()
+
+        self._summary_pnl_btns: dict[str, QPushButton] = {}
+        for key, label in (("all", "全部 (0)"), ("profit", "总盈利 (0)"), ("loss", "总亏损 (0)")):
+            btn = QPushButton(label, self.summary_table_header)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, k=key: self._on_summary_pnl_tab_clicked(k))
+            self._summary_pnl_btns[key] = btn
+            sth_layout.addWidget(btn)
+        self._update_summary_pnl_btn_styles()
+        self.summary_table_header.hide()
+        lt_layout.addWidget(self.summary_table_header)
 
         # 3/4/5. 券商持仓分布 + 类型持仓分布 + 持仓市值趋势
         self.open_charts_row = OpenHoldingsChartsRow(self)
@@ -1893,7 +2168,11 @@ class HoldingsPage(QWidget):
         self.refresh_detail()
 
     def _on_structure_clicked(self, pnl_status: str):
-        self._closed_pnl_filter = pnl_status or ""
+        if self.status_tabs.currentIndex() == 2:
+            self._summary_structure_filter = pnl_status or ""
+            self._open_page = 1
+        else:
+            self._closed_pnl_filter = pnl_status or ""
         self._close_drawer()
         self.refresh_detail()
 
@@ -1903,7 +2182,11 @@ class HoldingsPage(QWidget):
         self.refresh_detail()
 
     def _on_open_ticker_clicked(self, ticker: str):
-        self._open_ticker_filter = (ticker or "").strip().upper()
+        if self.status_tabs.currentIndex() == 2:
+            self._summary_ticker_filter = (ticker or "").strip().upper()
+            self._open_page = 1
+        else:
+            self._open_ticker_filter = (ticker or "").strip().upper()
         self._close_drawer()
         self.refresh_detail()
 
@@ -1953,10 +2236,136 @@ class HoldingsPage(QWidget):
         self.refresh_detail()
 
     def _on_open_industry_combo_changed(self, *_):
-        self._open_industry = str(self.open_industry_combo.currentData() or "")
+        val = str(self.open_industry_combo.currentData() or "")
+        if self.status_tabs.currentIndex() == 2:
+            self._summary_industry = val
+            self._open_page = 1
+        else:
+            self._open_industry = val
+            self._open_page = 1
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _on_summary_status_combo_changed(self, *_):
+        self._summary_status_filter = str(self.local_filter_bar.summary_status_combo.currentData() or "all")
         self._open_page = 1
         self._close_drawer()
         self.refresh_detail()
+
+    def _on_summary_structure_clicked(self, key: str):
+        self._summary_structure_filter = key or ""
+        self._open_page = 1
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _on_summary_industry_clicked(self, industry_name: str):
+        current_i = (self._summary_industry or "").strip().casefold()
+        target = (industry_name or "").strip()
+        self._summary_industry = "" if (not target or target.casefold() == current_i) else target
+        blocked = self.open_industry_combo.blockSignals(True)
+        idx = 0
+        if self._summary_industry:
+            for i in range(self.open_industry_combo.count()):
+                if str(self.open_industry_combo.itemData(i) or "").casefold() == self._summary_industry.casefold():
+                    idx = i
+                    break
+            else:
+                self.open_industry_combo.addItem(self._summary_industry, self._summary_industry)
+                idx = self.open_industry_combo.count() - 1
+        self.open_industry_combo.setCurrentIndex(idx)
+        self.open_industry_combo.blockSignals(blocked)
+        self._open_page = 1
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _on_summary_ticker_clicked(self, ticker: str):
+        tk = (ticker or "").strip().upper()
+        if tk and tk == self._summary_ticker_filter:
+            self._summary_ticker_filter = ""
+            self._close_drawer()
+            self.refresh_detail()
+            return
+        self._summary_ticker_filter = tk
+        self._open_page = 1
+        self.refresh_detail()
+        if tk:
+            self.open_stock_drawer(tk, row={"ticker": tk, "is_summary_merged": True})
+
+    def _on_summary_top_metric_changed(self, metric: str):
+        self._summary_top_metric = metric if metric in ("total", "floating", "realized") else "total"
+        self.refresh_detail()
+
+    def _on_summary_pnl_tab_clicked(self, key: str):
+        self._summary_pnl_filter = key if key in ("all", "profit", "loss") else "all"
+        self._open_page = 1
+        self._update_summary_pnl_btn_styles()
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _update_summary_pnl_btn_styles(self):
+        self._apply_pnl_filter_btn_styles(self._summary_pnl_btns, self._summary_pnl_filter)
+
+    def _on_summary_person_selected(self, person_id: object, person_name: str):
+        if person_id is None:
+            self._summary_person_drill_id = None
+            self._summary_person_drill_name = ""
+        elif self._summary_person_drill_id == person_id:
+            self._summary_person_drill_id = None
+            self._summary_person_drill_name = ""
+        else:
+            self._summary_person_drill_id = int(person_id) if isinstance(person_id, int) else person_id
+            self._summary_person_drill_name = person_name or ""
+        self._open_page = 1
+        self._close_drawer()
+        self.refresh_detail()
+
+    def _populate_summary_person_summary_table(self, person_summary: list[dict[str, Any]]):
+        """填充汇总页『各人员全周期汇总情况』汇总表，并附上合计行。"""
+        def to_dec(val):
+            return Decimal(str(val)) if val is not None else None
+
+        p_rows: list[ReportRow] = []
+        tot_mv = Decimal(0)
+        tot_cost = Decimal(0)
+        tot_fl = Decimal(0)
+        tot_rl = Decimal(0)
+        tot_stocks = 0
+        for ps in person_summary:
+            mv = to_dec(ps.get("market_value")) or Decimal(0)
+            cost = to_dec(ps.get("cost_amount")) or Decimal(0)
+            fl = to_dec(ps.get("floating_pnl")) or Decimal(0)
+            rl = to_dec(ps.get("realized_pnl")) or Decimal(0)
+            tp = fl + rl
+            tot_mv += mv
+            tot_cost += cost
+            tot_fl += fl
+            tot_rl += rl
+            tot_stocks += int(ps.get("stock_count") or 0)
+            p_rows.append(ReportRow((
+                ps.get("person_name") or "未知人员",
+                mv,
+                cost,
+                fl,
+                rl,
+                tp,
+                to_dec(ps.get("total_pnl_rate")),
+                ps.get("stock_count_display") or str(int(ps.get("stock_count") or 0)),
+            ), {"person_id": ps.get("person_id"), "person_name": ps.get("person_name") or ""}))
+
+        if p_rows:
+            tot_tp = tot_fl + tot_rl
+            tot_rate = ratio(tot_tp, tot_cost) if tot_cost > 0 else None
+            p_rows.append(ReportRow((
+                "合计",
+                tot_mv,
+                tot_cost,
+                tot_fl,
+                tot_rl,
+                tot_tp,
+                tot_rate,
+                f"{tot_stocks} (人次)",
+            ), {"is_total": True}))
+        self.summary_person_card.set_rows(p_rows, selected_person_id=self._summary_person_drill_id)
 
     def _on_open_currency_combo_changed(self, *_):
         self._open_currency = ""
@@ -1972,9 +2381,9 @@ class HoldingsPage(QWidget):
         self._on_search_input_changed(text)
 
     def _on_local_reset_clicked(self):
-        closed = self.status_tabs.currentIndex() == 1
+        tab_idx = self.status_tabs.currentIndex()
         self.local_filter_bar.reset_current_mode()
-        if closed:
+        if tab_idx == 1:
             self._closed_pnl_filter = ""
             self._closed_ticker_filter = ""
             self._closed_person_drill_id = None
@@ -1982,6 +2391,21 @@ class HoldingsPage(QWidget):
             self.structure_chip.hide()
             self.closed_ticker_chip.hide()
             self._on_filter_changed()
+        elif tab_idx == 2:
+            self._summary_status_filter = "all"
+            self._summary_industry = ""
+            self._summary_pnl_filter = "all"
+            self._summary_structure_filter = ""
+            self._summary_ticker_filter = ""
+            self._summary_person_drill_id = None
+            self._summary_person_drill_name = ""
+            self.active_industry_chip.hide()
+            self.structure_chip.hide()
+            self.open_ticker_chip.hide()
+            self._update_summary_pnl_btn_styles()
+            self._open_page = 1
+            self._close_drawer()
+            self.refresh_detail()
         else:
             self._open_stock_type = ""
             self._open_industry = ""
@@ -2014,6 +2438,9 @@ class HoldingsPage(QWidget):
         self.refresh_detail()
 
     def _on_open_industry_donut_clicked(self, industry_name: str):
+        if self.status_tabs.currentIndex() == 2:
+            self._on_summary_industry_clicked(industry_name)
+            return
         current_i = (self._open_industry or "").strip().casefold()
         target = (industry_name or "").strip()
         if not target or target.casefold() == current_i:
@@ -2114,7 +2541,7 @@ class HoldingsPage(QWidget):
             self._apply_open_pagination()
 
     def _on_detail_header_clicked(self, column: int):
-        if self._detail_mode == "open" and self._open_all_rows:
+        if self._detail_mode in ("open", "summary") and self._open_all_rows:
             if 0 <= column < len(self.detail_model.columns) and self.detail_model.columns[column] in ("详情", "操作"):
                 return
             if self.detail_model.sort_column == column:
@@ -2172,14 +2599,15 @@ class HoldingsPage(QWidget):
             self.refresh_detail()
 
     def _on_status_combo_changed(self, idx: int):
-        target_tab = 1 if self.status_combo.currentData() == "已清仓" else 0
+        st = self.status_combo.currentData()
+        target_tab = 2 if st == "汇总" else (1 if st == "已清仓" else 0)
         blocked = self.status_tabs.blockSignals(True)
         self.status_tabs.setCurrentIndex(target_tab)
         self.status_tabs.blockSignals(blocked)
         self._on_filter_changed()
 
     def _on_status_tab_changed(self, idx: int):
-        target_status = "已清仓" if idx == 1 else "持有中"
+        target_status = "汇总" if idx == 2 else ("已清仓" if idx == 1 else "持有中")
         s_idx = self.status_combo.findData(target_status)
         blocked = self.status_combo.blockSignals(True)
         self.status_combo.setCurrentIndex(s_idx if s_idx >= 0 else 0)
@@ -2188,14 +2616,14 @@ class HoldingsPage(QWidget):
 
     def set_view(self, mode: str, dimension: str = "person", status: str = "持有中", person_id: int | None = None, broker: str | None = None, ticker: str | None = None):
         self.dimension = dimension
-        norm_status = "已清仓" if status == "已清仓" else "持有中"
+        norm_status = "汇总" if status == "汇总" else ("已清仓" if status == "已清仓" else "持有中")
         blocked_s = self.status_combo.blockSignals(True)
         s_idx = self.status_combo.findData(norm_status)
         self.status_combo.setCurrentIndex(s_idx if s_idx >= 0 else 0)
         self.status_combo.blockSignals(blocked_s)
 
         blocked_t = self.status_tabs.blockSignals(True)
-        self.status_tabs.setCurrentIndex(1 if norm_status == "已清仓" else 0)
+        self.status_tabs.setCurrentIndex(2 if norm_status == "汇总" else (1 if norm_status == "已清仓" else 0))
         self.status_tabs.blockSignals(blocked_t)
 
         self._sync_combo_by_data(self.broker_combo, broker or "")
@@ -2625,8 +3053,10 @@ class HoldingsPage(QWidget):
             src_path = str(self.main_window.service.path)
 
         closed = status_filter == "已清仓"
+        is_summary = status_filter == "汇总"
+        is_open = not closed and not is_summary
         blocked_t = self.status_tabs.blockSignals(True)
-        self.status_tabs.setCurrentIndex(1 if closed else 0)
+        self.status_tabs.setCurrentIndex(2 if is_summary else (1 if closed else 0))
         self.status_tabs.blockSignals(blocked_t)
         self.closed_sep.setVisible(closed)
         self.closed_mode.setVisible(closed)
@@ -2636,24 +3066,31 @@ class HoldingsPage(QWidget):
         self.closed_person_combo.hide()
 
         # 顶部 KPI 栏与局部筛选栏
-        self.open_kpi_bar.setVisible(not closed)
+        self.open_kpi_bar.setVisible(is_open)
         self.closed_kpi_bar.setVisible(closed)
+        self.summary_kpi_bar.setVisible(is_summary)
         self.local_filter_bar.setVisible(True)
-        self.local_filter_bar.set_mode("closed" if closed else "open")
+        self.local_filter_bar.set_mode("summary" if is_summary else ("closed" if closed else "open"))
 
         # 图表切换
         self.closed_dashboard.setVisible(closed)
-        self.open_charts_row.setVisible(not closed)
-        self.open_top10_card.setVisible(not closed)
-        if closed:
+        self.open_charts_row.setVisible(is_open)
+        self.open_top10_card.setVisible(is_open)
+        self.summary_charts_row.setVisible(is_summary)
+        self.summary_top_card.setVisible(is_summary)
+        if not is_open:
             self.open_person_card.hide()
-        self.open_table_header.setVisible(not closed)
+        if not is_summary:
+            self.summary_person_card.hide()
+        self.open_table_header.setVisible(is_open)
         self.closed_table_header.setVisible(closed)
-        self.open_table_footer.setVisible(not closed)
+        self.summary_table_header.setVisible(is_summary)
+        self.open_table_footer.setVisible(is_open or is_summary)
         self.detail_info.setVisible(closed)
-        mode = ("account" if self.closed_mode.currentIndex() == 1 else "person") if closed else "open"
-        account_ids = self.main_window.accounts.selected_ids() if closed and self.main_window else None
+        mode = "summary" if is_summary else (("account" if self.closed_mode.currentIndex() == 1 else "person") if closed else "open")
+        account_ids = self.main_window.accounts.selected_ids() if (closed or is_summary) and self.main_window else None
         open_payload = None
+        summary_payload = None
         if mode == "account":
             try:
                 account_analytics = self._closed_account_analytics()
@@ -2689,6 +3126,47 @@ class HoldingsPage(QWidget):
                     account_ids=account_ids,
                 )
                 self._sync_closed_broker_options(unfiltered_for_brokers)
+        elif is_summary:
+            summary_analytics = self._closed_account_analytics() or self.analytics
+            all_open_rows = HoldingsManagementService.get_holdings_detail_rows(
+                summary_analytics,
+                dimension=self.dimension,
+                person_id=self._closed_person_ids(),
+                broker=None,
+                ticker=global_ticker or None,
+                status="持有中",
+                search=None,
+                db_path=src_path,
+                account_ids=account_ids,
+            )
+            all_closed_rows = HoldingsManagementService.get_holdings_detail_rows(
+                self.analytics,
+                dimension=self.dimension,
+                person_id=self._closed_person_ids(),
+                broker=None,
+                ticker=global_ticker or None,
+                status="已清仓",
+                search=None,
+                db_path=src_path,
+                account_ids=account_ids,
+            )
+            summary_payload = build_summary_holdings_dashboard(
+                summary_analytics,
+                all_open_rows,
+                all_closed_rows,
+                db_path=src_path,
+                broker=broker_filter,
+                status_filter=self._summary_status_filter,
+                industry=self._summary_industry,
+                search=search_filter,
+                pnl_filter=self._summary_pnl_filter,
+                structure_filter=self._summary_structure_filter,
+                ticker_filter=self._summary_ticker_filter,
+                top_metric=self._summary_top_metric,
+                person_drill_id=self._summary_person_drill_id,
+            )
+            raw_rows = summary_payload.get("rows", [])
+            self._sync_open_filter_options(summary_payload.get("available_filters", {}), target_industry=self._summary_industry)
         else:
             open_analytics = self._closed_account_analytics() or self.analytics
             all_open_rows = HoldingsManagementService.get_holdings_detail_rows(
@@ -2783,6 +3261,89 @@ class HoldingsPage(QWidget):
                 self.structure_chip.show()
             else:
                 self.structure_chip.hide()
+        elif is_summary:
+            self.closed_person_card.hide()
+            self.closed_ticker_chip.hide()
+            self._closed_person_drill_id = None
+            self._closed_person_drill_name = ""
+            if summary_payload is not None:
+                self.summary_kpi_bar.set_cards_data(summary_payload.get("cards", {}))
+                self.summary_charts_row.set_data(
+                    summary_payload,
+                    active_broker=channel_label(broker_filter) if broker_filter else "",
+                    active_structure=self._summary_structure_filter,
+                    active_industry=self._summary_industry,
+                )
+                self.summary_top_card.set_data(
+                    summary_payload.get("top_contributors") or {},
+                    active_ticker=self._summary_ticker_filter,
+                )
+
+                sum_person = summary_payload.get("person_summary", [])
+                show_sum_person = self._is_multi_person_scope() and bool(sum_person)
+                if not show_sum_person:
+                    self._summary_person_drill_id = None
+                    self._summary_person_drill_name = ""
+                elif self._summary_person_drill_id is not None and not any(
+                    pr.get("person_id") == self._summary_person_drill_id for pr in sum_person
+                ):
+                    self._summary_person_drill_id = None
+                    self._summary_person_drill_name = ""
+                self.summary_person_card.setVisible(show_sum_person)
+                if show_sum_person:
+                    self._populate_summary_person_summary_table(sum_person)
+
+                t_counts = summary_payload.get("table_counts", {})
+                c_all = int(t_counts.get("all") or 0)
+                c_prof = int(t_counts.get("profit") or 0)
+                c_loss = int(t_counts.get("loss") or 0)
+                if self._summary_person_drill_id is not None and self._summary_person_drill_name:
+                    self.summary_table_title_lbl.setText(f"股票跨渠道汇总明细 · {self._summary_person_drill_name} (共 {c_all} 只)")
+                else:
+                    self.summary_table_title_lbl.setText(f"股票跨渠道汇总明细 (共 {c_all} 只)")
+                self._summary_pnl_btns["all"].setText(f"全部 ({c_all})")
+                self._summary_pnl_btns["profit"].setText(f"总盈利 ({c_prof})")
+                self._summary_pnl_btns["loss"].setText(f"总亏损 ({c_loss})")
+                self._update_summary_pnl_btn_styles()
+
+                t_sum = summary_payload.get("table_summary", {})
+                s_mv = float(t_sum.get("market_value") or 0.0)
+                s_fl = float(t_sum.get("floating_pnl") or 0.0)
+                s_rl = float(t_sum.get("realized_pnl") or 0.0)
+                s_tot = float(t_sum.get("total_pnl") or 0.0)
+                fl_col = "#16A34A" if s_fl > 0 else "#DC2626" if s_fl < 0 else "#475569"
+                rl_col = "#16A34A" if s_rl > 0 else "#DC2626" if s_rl < 0 else "#475569"
+                tot_col = "#16A34A" if s_tot > 0 else "#DC2626" if s_tot < 0 else "#475569"
+                self.open_summary_lbl.setText(
+                    f"合计：持仓市值 <span style='color:#0F172A;'>{s_mv:,.2f}</span>，"
+                    f"浮动盈亏 <span style='color:{fl_col};'>{s_fl:+,.2f}</span>，"
+                    f"已实现盈亏 <span style='color:{rl_col};'>{s_rl:+,.2f}</span>，"
+                    f"累计总盈亏 <span style='color:{tot_col};font-weight:700;'>{s_tot:+,.2f}</span> USD"
+                )
+
+            if self._summary_industry:
+                self.active_industry_chip.setText(f"类型: {self._summary_industry} ✕")
+                self.active_industry_chip.show()
+            else:
+                self.active_industry_chip.hide()
+
+            if self._summary_structure_filter:
+                s_map = {
+                    "open_win": "持有中·总盈利",
+                    "open_loss": "持有中·总亏损",
+                    "closed_win": "已清仓·总盈利",
+                    "closed_loss": "已清仓·总亏损",
+                }
+                self.structure_chip.setText(f"结构筛选: {s_map.get(self._summary_structure_filter, self._summary_structure_filter)} ✕")
+                self.structure_chip.show()
+            else:
+                self.structure_chip.hide()
+
+            if self._summary_ticker_filter:
+                self.open_ticker_chip.setText(f"股票筛选: {self._summary_ticker_filter} ✕")
+                self.open_ticker_chip.show()
+            else:
+                self.open_ticker_chip.hide()
         else:
             self.closed_person_card.hide()
             self._closed_person_drill_id = None
@@ -2874,14 +3435,19 @@ class HoldingsPage(QWidget):
                 self.active_industry_chip.hide()
 
         schema = closed_columns(mode) if closed else ()
-        target_cols = tuple(label for _,label,_ in schema) if closed else OPEN_HOLDINGS_COLUMNS
+        target_cols = (
+            tuple(label for _, label, _ in schema)
+            if closed
+            else (SUMMARY_HOLDINGS_COLUMNS if is_summary else OPEN_HOLDINGS_COLUMNS)
+        )
         v_scroll = self.detail_table.verticalScrollBar().value()
         h_scroll = self.detail_table.horizontalScrollBar().value()
         if mode != self._detail_mode:
             self._detail_states[self._detail_mode] = (self.detail_model.sort_column, self.detail_model.sort_order, v_scroll, h_scroll)
             default_sort = (
                 next((i for i,(key,_,_) in enumerate(schema) if key == "last_close_date"), -1)
-                if closed else target_cols.index("持仓市值")
+                if closed
+                else (target_cols.index("累计总盈亏") if is_summary else target_cols.index("持仓市值"))
             )
             sort_column, sort_order, v_scroll, h_scroll = self._detail_states.get(
                 mode, (default_sort, Qt.SortOrder.DescendingOrder, 0, 0)
@@ -2892,7 +3458,7 @@ class HoldingsPage(QWidget):
             self.detail_model.sort_order = sort_order
             self._detail_mode = mode
         self.detail_model.columns = target_cols
-        self.detail_model.nulls_last = closed
+        self.detail_model.nulls_last = closed or is_summary
 
         def to_dec(val):
             return Decimal(str(val)) if val is not None else None
@@ -2903,6 +3469,34 @@ class HoldingsPage(QWidget):
                 values = tuple(to_dec(item.get(key)) if kind in ("money", "gain", "rate", "quantity")
                                else item.get(key) for key,_,kind in schema)
                 rows.append(ReportRow(values, item))
+        elif is_summary:
+            for item in raw_rows:
+                tk_disp = f"{item.get('ticker')} [跨渠道]" if item.get("is_cross_channel") else str(item.get("ticker") or "")
+                rows.append(ReportRow((
+                    tk_disp,
+                    item.get("industry") or "—",
+                    item.get("status") or "—",
+                    item.get("channels_display") or "—",
+                    to_dec(item.get("quantity")),
+                    to_dec(item.get("cost_price")),
+                    to_dec(item.get("current_price")),
+                    to_dec(item.get("market_value")),
+                    to_dec(item.get("cost_amount")),
+                    to_dec(item.get("floating_pnl")),
+                    to_dec(item.get("realized_pnl")),
+                    to_dec(item.get("total_pnl")),
+                    to_dec(item.get("total_pnl_rate")),
+                    to_dec(item.get("total_buy_amount")),
+                    to_dec(item.get("total_sell_amount")),
+                    item.get("trade_counts_display") or "—",
+                ), {
+                    "ticker": item.get("ticker"),
+                    "is_summary_merged": True,
+                    "is_cross_channel": bool(item.get("is_cross_channel")),
+                    "channel_breakdown": item.get("channel_breakdown") or [],
+                    "quote_status": item.get("quote_status"),
+                    "quote_time": item.get("quote_time"),
+                }))
         else:
             for item in raw_rows:
                 rows.append(ReportRow((
@@ -2958,8 +3552,8 @@ class HoldingsPage(QWidget):
         note = "沿用原清仓收益报表的账本口径，操作笔数可包含划转" if mode == "account" else "点击任意行查看交易记录"
         self.detail_info.setText(f"{view_title}{person_tag}{broker_tag} · 共 {len(rows)} 条标的记录 · {note}")
 
-    def _sync_open_filter_options(self, available_filters: dict[str, list[str]]):
-        """根据真实持有中数据动态更新券商、股票类型、行业、币种下拉框选项。"""
+    def _sync_open_filter_options(self, available_filters: dict[str, list[str]], *, target_industry: str | None = None):
+        """根据真实数据动态更新券商、股票类型、行业、币种下拉框选项。"""
         def _repopulate(combo: QComboBox, all_label: str, items: list[str], current_val: str):
             saved = current_val or ""
             merged = list(items)
@@ -2978,10 +3572,11 @@ class HoldingsPage(QWidget):
 
         brokers = [channel_label(b) for b in available_filters.get("brokers", []) if b]
         cur_broker = channel_label(self.broker_combo.currentData() or "") if self.broker_combo.currentData() else ""
+        ind_val = self._open_industry if target_industry is None else target_industry
         _repopulate(self.broker_combo, "全部渠道", brokers, cur_broker)
         _repopulate(self.open_broker_combo, "全部", brokers, cur_broker)
         _repopulate(self.open_type_combo, "全部", available_filters.get("stock_types", []), self._open_stock_type)
-        _repopulate(self.open_industry_combo, "全部", available_filters.get("industries", []), self._open_industry)
+        _repopulate(self.open_industry_combo, "全部", available_filters.get("industries", []), ind_val)
         _repopulate(self.open_currency_combo, "全部", available_filters.get("currencies", []), self._open_currency)
 
     def _sync_closed_broker_options(self, source_rows: list[dict[str, Any]]):
@@ -3053,7 +3648,7 @@ class HoldingsPage(QWidget):
             return
         row = self.detail_model.rows[index.row()]
         ticker = row.metadata["ticker"]
-        if self._detail_mode in ("open", "account", "person"):
+        if self._detail_mode in ("open", "account", "person", "summary"):
             self.open_stock_drawer(ticker, row=row.metadata)
         else:
             self.open_stock_drawer(ticker)
@@ -3066,22 +3661,40 @@ class HoldingsPage(QWidget):
         if self.main_window and hasattr(self.main_window, "service") and self.main_window.service:
             src_path = str(self.main_window.service.path)
         account_mode = row is not None and self._detail_mode == "account"
+        summary_mode = (row is not None and row.get("is_summary_merged")) or self._detail_mode == "summary"
         analytics = self._closed_account_analytics() if account_mode else self.analytics
         if analytics is None:
             return
         if row and analytics.scope.reporting_currency != "USD" and self.main_window and self.main_window.analytics_service:
             analytics = self.main_window.analytics_service.calculate(replace(analytics.scope, reporting_currency="USD"))
-        row_account_id = row.get("account_id") if row else None
-        row_broker = row.get("channel") if (row and row_account_id is None) else None
-        drawer_data = HoldingsManagementService.get_stock_drawer_data(
-            src_path,
-            analytics,
-            ticker,
-            person_id=row.get("person_id") if row else self._selected_person_filter,
-            broker=row_broker if row else (self.broker_combo.currentData() or None),
-            account_id=row_account_id,
-            instrument_id=row.get("instrument_id") if row else None,
-        )
+
+        if summary_mode:
+            drawer_person = (
+                self._summary_person_drill_id
+                if self._summary_person_drill_id is not None
+                else self._closed_person_ids()
+            )
+            drawer_broker = self.broker_combo.currentData() or None
+            drawer_data = HoldingsManagementService.get_stock_drawer_data(
+                src_path,
+                analytics,
+                ticker,
+                person_id=drawer_person,
+                broker=drawer_broker,
+            )
+            drawer_data["show_channel_breakdown"] = True
+        else:
+            row_account_id = row.get("account_id") if row else None
+            row_broker = row.get("channel") if (row and row_account_id is None) else None
+            drawer_data = HoldingsManagementService.get_stock_drawer_data(
+                src_path,
+                analytics,
+                ticker,
+                person_id=row.get("person_id") if row else self._selected_person_filter,
+                broker=row_broker if row else (self.broker_combo.currentData() or None),
+                account_id=row_account_id,
+                instrument_id=row.get("instrument_id") if row else None,
+            )
         self.drawer.set_data(drawer_data)
         if self.drawer.isHidden():
             self.drawer.show()
@@ -3102,12 +3715,13 @@ class HoldingsPage(QWidget):
         self.drawer.hide()
 
     def _export_detail(self):
-        source_rows = self._open_all_rows if self._detail_mode == "open" and self._open_all_rows else self.detail_model.rows
+        source_rows = self._open_all_rows if self._detail_mode in ("open", "summary") and self._open_all_rows else self.detail_model.rows
         if not source_rows:
             return
         name = {
             "account": "已清仓-按券商账户汇总.csv",
             "person": "已清仓-按人员明细.csv",
+            "summary": "持仓汇总-跨渠道全周期.csv",
         }.get(self._detail_mode, "持仓明细.csv")
         path, _ = QFileDialog.getSaveFileName(self, "导出持仓明细", name, "CSV 文件 (*.csv)")
         if not path:

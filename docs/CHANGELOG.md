@@ -1,3 +1,10 @@
+## 2026-11-23 17:38 美股持仓管理新增「汇总」标签页（跨渠道持仓+清仓全周期合并）
+
+- 修改者：Antigravity（代码修改）
+- 新增 `src/portfolio/services/summary_holdings_analytics_service.py`，以 `Decimal` 精确合并同一股票跨券商渠道的「持有中」与「已清仓」记录，保证「汇总」与「持仓中 / 已清仓」三标签页金额严丝合缝对账。
+- 新增 `src/portfolio/ui/summary_holdings_dashboard.py` 并接入 `holdings_page.py` 第三个标签页「汇总」，提供 6 张核心 KPI 卡片、三联分析卡片（券商总盈亏表 / 状态与盈亏结构环图 / 股票类型分解）、可切换口径的 Top N 双向条形图、16 列跨渠道汇总明细表与 CSV 导出。
+- 升级 `HoldingsManagementService.get_stock_drawer_data` 与 `StockDrawerWidget`，支持跨渠道合并详情抽屉并在上方展示「分券商渠道状态拆解」对照小表；`tests/test_summary_holdings.py` 与 `tests/test_open_holdings_optimization.py` 全部 10 项测试通过。
+
 ## 2026-11-20 00:13 修复桌面端长时间运行内存膨胀至 5GB+ 的问题
 
 - 修改者：Antigravity（代码修改）
