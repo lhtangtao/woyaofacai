@@ -125,7 +125,7 @@ def build_domestic_performance(
         return DomesticPerformanceData([], [], [], [], None)
 
     cutoff = rows[0]["valuation_date"]
-    dv = daily_values(rows, root=root)
+    dv = daily_values(rows, root=root, carry_forward_shares=True)
     cash_flows = _collect_daily_cash_flows(rows, cutoff, root=root)
 
     meta_by_key = {

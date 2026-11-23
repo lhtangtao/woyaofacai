@@ -98,8 +98,13 @@ def _build_cum_net_cash_series(raw, calc, raw_tables, calc_tables, rows, cutoff)
     return series_by_key
 
 
-def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
-    """Value reconstructed shares on actual NAV dates; retain missing values."""
+def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR, carry_forward_shares: bool = False):
+    """Value reconstructed shares on actual NAV dates; retain missing values.
+
+    当 carry_forward_shares=True 时，对账单覆盖截止日之后若尚无新对账单，
+    默认沿用该基金最后已知的可靠非负份额乘以最新采集的真实每日净值继续估值，
+    待后续导入新对账单后自动替换为已确认份额。
+    """
     if not rows or not (root / CALC_FILE).is_file():
         return {}
     cutoff = rows[0]["valuation_date"]
@@ -248,12 +253,24 @@ def daily_values(rows, *, root=DOMESTIC_ASSETS_DIR):
             for key, balances in quantities.items():
                 prices = navs.get(key[1], {})
                 cash_days, cash_vals = net_cash_series.get(key, ([], []))
+                last_known_day = max(balances) if balances else None
+                last_known_qty = balances.get(last_known_day) if last_known_day is not None else None
                 for day in days:
                     quantity = balances.get(day)
                     if day not in balances and key in beginnings:
                         coverage_start, first = beginnings[key]
                         if coverage_start and coverage_start <= day < first:
                             quantity = Decimal(0)
+                    if (
+                        quantity is None
+                        and carry_forward_shares
+                        and day not in balances
+                        and last_known_day is not None
+                        and day > last_known_day
+                        and last_known_qty is not None
+                        and last_known_qty >= 0
+                    ):
+                        quantity = last_known_qty
                     dates = nav_dates.get(key[1], [])
                     index = bisect_right(dates, day) - 1
                     price_day = dates[index] if index >= 0 else None

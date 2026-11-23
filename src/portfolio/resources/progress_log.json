@@ -1,5 +1,17 @@
 [
   {
+    "title": "国内资产每日/每月持仓收益支持对账单截止日后沿用最后已知份额自动估值",
+    "time": "2026-11-23 23:04",
+    "author": "Antigravity",
+    "tag": "国内基金收益连续性已修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 domestic/holdings_history.py 的 daily_values 中新增 carry_forward_shares 参数，并在 domestic/performance.py 中默认启用：对账单覆盖截止日之后（如支付宝 11-10、天天基金 11-12 之后）尚无新对账单时，自动沿用最后已知可靠非负份额乘以最新采集的真实每日净值继续计算每日与每月持仓收益，彻底消除只剩同花顺 2 只 ETF 的断档问题；待后续导入新对账单时自动替换为已确认份额。",
+      "未修改原始数据库，也未改变严格审计模式下（carry_forward_shares=False）的缺失提示口径。",
+      "验证范围：真实本地国内数据库实测 2026-11-13 至 2026-11-23 全部三大平台（支付宝/天天基金/同花顺）10-11 只基金完整连续衔接；tests/test_domestic_holdings_dashboard.py 与 tests/test_domestic_closed_financials.py 21 项测试全部通过。"
+    ]
+  },
+  {
     "title": "同步写入交易流水.xlsx 时加宽时间/日期与订单ID列，避免显示 ###",
     "time": "2026-11-23 23:00",
     "author": "Antigravity",
