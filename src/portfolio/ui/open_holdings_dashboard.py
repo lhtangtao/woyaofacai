@@ -227,6 +227,7 @@ class OpenDistributionDonut(QWidget):
         self.total_mv = 0.0
         self.items: list[dict[str, Any]] = []
         self.active_key: str = ""
+        self._hovered_key: str = ""
         self._slice_arcs: list[tuple[str, float, float]] = []
         self._legend_rects: list[tuple[str, QRectF]] = []
         self._center_pt = QPointF(0, 0)
@@ -280,7 +281,10 @@ class OpenDistributionDonut(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        key = self._hit_key(event.position())
+        key = self._hit_key(event.position()) or ""
+        if key != self._hovered_key:
+            self._hovered_key = key
+            self.update()
         if key:
             item = next((x for x in self.items if x["key"] == key), None)
             if item:
@@ -292,6 +296,13 @@ class OpenDistributionDonut(QWidget):
                 return
         QToolTip.hideText()
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hovered_key:
+            self._hovered_key = ""
+            self.update()
+        QToolTip.hideText()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -307,12 +318,12 @@ class OpenDistributionDonut(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_text)
             return
 
-        donut_d = min(max(110, h - 24), int(w * 0.44))
-        cx = 16.0 + donut_d / 2.0
+        donut_d = min(max(110, h - 28), int(w * 0.40))
+        cx = 6.0 + donut_d / 2.0
         cy = h / 2.0
         self._center_pt = QPointF(cx, cy)
         self._outer_r = donut_d / 2.0
-        self._inner_r = self._outer_r * 0.58
+        self._inner_r = self._outer_r * 0.63
 
         outer_rect = QRectF(cx - self._outer_r, cy - self._outer_r, donut_d, donut_d)
         inner_rect = QRectF(cx - self._inner_r, cy - self._inner_r, self._inner_r * 2, self._inner_r * 2)
@@ -339,33 +350,143 @@ class OpenDistributionDonut(QWidget):
             self._slice_arcs.append((item["key"], start_angle % 360.0, span))
             start_angle -= span
 
-        # 中心总市值文字
+        # 中心总市值文字（自适应字号避免长数字贴边裁剪）
         painter.setPen(QColor("#0F172A"))
-        painter.setFont(numeric_font(12, bold=True))
         center_mv_str = _fmt_usd(self.total_mv)
+        max_center_w = max(40.0, (self._inner_r - 4.0) * 2.0)
+        for fsz in (11.5, 10.5, 9.5, 8.5):
+            cf = numeric_font(fsz, bold=True)
+            painter.setFont(cf)
+            if painter.fontMetrics().horizontalAdvance(center_mv_str) <= max_center_w:
+                break
         painter.drawText(
-            QRectF(cx - self._inner_r + 4, cy - 16, (self._inner_r - 4) * 2, 18),
+            QRectF(cx - self._inner_r + 3, cy - 14, (self._inner_r - 3) * 2, 17),
             Qt.AlignmentFlag.AlignCenter,
             center_mv_str,
         )
         painter.setPen(QColor("#64748B"))
-        painter.setFont(QFont(".AppleSystemUIFont", 10))
+        painter.setFont(QFont(".AppleSystemUIFont", 9.5))
         painter.drawText(
-            QRectF(cx - self._inner_r + 4, cy + 2, (self._inner_r - 4) * 2, 16),
+            QRectF(cx - self._inner_r + 3, cy + 2, (self._inner_r - 3) * 2, 15),
             Qt.AlignmentFlag.AlignCenter,
             "持仓市值",
         )
 
-        # 右侧图例列表（名称 | 占比 | 市值 | X 只）
-        legend_x = cx + self._outer_r + 16.0
-        legend_w = max(100.0, w - legend_x - 6.0)
-        row_h = min(28.0, max(20.0, (h - 16.0) / max(1, len(self.items))))
-        total_h = row_h * len(self.items)
-        start_y = max(8.0, (h - total_h) / 2.0)
+        # 右侧图例列表：行数较少（≤5）时采用舒展双行卡片布局，彻底消除百分比与金额挤在一起的问题
+        legend_x = cx + self._outer_r + 14.0
+        legend_w = max(116.0, w - legend_x - 4.0)
+        n_items = len(self.items)
+        avail_h = max(60.0, h - 12.0)
+        gap = 7.0 if n_items <= 4 else 5.0
+        two_line_h = (avail_h - gap * max(0, n_items - 1)) / max(1, n_items)
+
+        if two_line_h >= 42.0:
+            card_h = min(52.0, two_line_h)
+            total_h = card_h * n_items + gap * max(0, n_items - 1)
+            start_y = max(6.0, (h - total_h) / 2.0)
+
+            for idx, item in enumerate(self.items):
+                ry = start_y + idx * (card_h + gap)
+                row_rect = QRectF(legend_x, ry, legend_w, card_h)
+                self._legend_rects.append((item["key"], row_rect))
+
+                is_selected = bool(self.active_key and self.active_key.casefold() == item["key"].casefold())
+                is_hovered = bool(self._hovered_key and self._hovered_key.casefold() == item["key"].casefold())
+                if is_selected:
+                    bg_col, bd_col = QColor("#EFF6FF"), QColor("#93C5FD")
+                elif is_hovered:
+                    bg_col, bd_col = QColor("#F1F5F9"), QColor("#CBD5E1")
+                else:
+                    bg_col, bd_col = QColor("#F8FAFC"), QColor("#E2E8F0")
+
+                painter.setPen(QPen(bd_col, 1.0))
+                painter.setBrush(bg_col)
+                painter.drawRoundedRect(row_rect, 7, 7)
+
+                top_h = card_h * 0.50
+                bot_y = ry + top_h - 1.0
+                bot_h = card_h - top_h - 3.0
+
+                # 第一行左侧：颜色圆点 + 名称 + (X只)
+                dot_x = legend_x + 9.0
+                dot_y = ry + (top_h - 8.0) / 2.0 + 1.0
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(item["color"]))
+                painter.drawEllipse(QRectF(dot_x, dot_y, 8.0, 8.0))
+
+                pct_str = f"{item['percent']:.1f}%"
+                f_pct = numeric_font(11.5, bold=True)
+                painter.setFont(f_pct)
+                pct_px = painter.fontMetrics().horizontalAdvance(pct_str)
+
+                cnt_str = f"{item['stock_count']}只"
+                f_cnt = QFont(".AppleSystemUIFont", 10)
+                painter.setFont(f_cnt)
+                cnt_px = painter.fontMetrics().horizontalAdvance(cnt_str)
+
+                f_name = QFont(".AppleSystemUIFont", 11.5, QFont.Weight.Bold if is_selected else QFont.Weight.DemiBold)
+                painter.setFont(f_name)
+                fm_name = painter.fontMetrics()
+                max_name_w = max(28.0, legend_w - 22.0 - pct_px - cnt_px - 20.0)
+                name_txt = fm_name.elidedText(item["name"], Qt.TextElideMode.ElideRight, int(max_name_w))
+                name_real_w = fm_name.horizontalAdvance(name_txt)
+
+                painter.setPen(QColor("#1D4ED8" if is_selected else "#0F172A"))
+                painter.drawText(
+                    QRectF(dot_x + 12.0, ry + 2.0, name_real_w + 4.0, top_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    name_txt,
+                )
+
+                painter.setFont(f_cnt)
+                painter.setPen(QColor("#64748B"))
+                painter.drawText(
+                    QRectF(dot_x + 12.0 + name_real_w + 6.0, ry + 2.0, cnt_px + 8.0, top_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                    cnt_str,
+                )
+
+                # 第一行右侧：占比百分比
+                painter.setFont(f_pct)
+                painter.setPen(QColor("#1D4ED8" if is_selected else "#0F172A"))
+                painter.drawText(
+                    QRectF(legend_x + legend_w - pct_px - 12.0, ry + 2.0, pct_px + 4.0, top_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                    pct_str,
+                )
+
+                # 第二行左侧：微型占比进度条；第二行右侧：持仓市值（留足充裕间距）
+                mv_str = _fmt_usd(item["market_value"])
+                f_mv = numeric_font(11, bold=False)
+                painter.setFont(f_mv)
+                mv_px = painter.fontMetrics().horizontalAdvance(mv_str)
+
+                bar_x = dot_x + 12.0
+                bar_max_w = max(20.0, min(52.0, legend_w - 22.0 - mv_px - 22.0))
+                bar_y = bot_y + (bot_h - 4.0) / 2.0
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#E2E8F0"))
+                painter.drawRoundedRect(QRectF(bar_x, bar_y, bar_max_w, 4.0), 2.0, 2.0)
+                fill_w = max(2.0, bar_max_w * min(1.0, max(0.0, item["percent"] / 100.0)))
+                painter.setBrush(QColor(item["color"]))
+                painter.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, 4.0), 2.0, 2.0)
+
+                painter.setPen(QColor("#334155"))
+                painter.drawText(
+                    QRectF(legend_x + 8.0, bot_y, legend_w - 16.0, bot_h),
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                    mv_str,
+                )
+            return
+
+        # 分类项较多（>5）时的紧凑单行回退布局（显式留出列间距）
+        row_h = min(28.0, max(20.0, avail_h / max(1, n_items)))
+        total_h = row_h * n_items
+        start_y = max(6.0, (h - total_h) / 2.0)
 
         for idx, item in enumerate(self.items):
             ry = start_y + idx * row_h
-            row_rect = QRectF(legend_x - 4, ry, legend_w + 4, row_h)
+            row_rect = QRectF(legend_x - 2, ry, legend_w + 2, row_h)
             self._legend_rects.append((item["key"], row_rect))
 
             is_selected = bool(self.active_key and self.active_key.casefold() == item["key"].casefold())
@@ -374,15 +495,18 @@ class OpenDistributionDonut(QWidget):
                 painter.setBrush(QColor("#EFF6FF"))
                 painter.drawRoundedRect(row_rect, 5, 5)
 
-            # 颜色圆点
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(item["color"]))
             painter.drawEllipse(QRectF(legend_x, ry + (row_h - 8) / 2.0, 8, 8))
 
-            # 名称
+            col_gap = 8.0
+            inner_w = max(80.0, legend_w - 14.0 - col_gap * 2)
+            name_w = inner_w * 0.28
+            pct_w = inner_w * 0.24
+            mv_w = inner_w * 0.48
+
             painter.setPen(QColor("#2563EB" if is_selected else "#0F172A"))
-            painter.setFont(QFont(".AppleSystemUIFont", 11, QFont.Weight.Bold if is_selected else QFont.Weight.Medium))
-            name_w = legend_w * 0.27
+            painter.setFont(QFont(".AppleSystemUIFont", 10.5, QFont.Weight.Bold if is_selected else QFont.Weight.Medium))
             elided = painter.fontMetrics().elidedText(item["name"], Qt.TextElideMode.ElideRight, int(name_w))
             painter.drawText(
                 QRectF(legend_x + 12, ry, name_w, row_h),
@@ -390,35 +514,20 @@ class OpenDistributionDonut(QWidget):
                 elided,
             )
 
-            # 占比
-            painter.setFont(numeric_font(11, bold=True))
+            painter.setFont(numeric_font(10.5, bold=True))
             painter.setPen(QColor("#334155"))
-            pct_w = legend_w * 0.20
             painter.drawText(
-                QRectF(legend_x + 12 + name_w, ry, pct_w, row_h),
+                QRectF(legend_x + 12 + name_w + col_gap, ry, pct_w, row_h),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
                 f"{item['percent']:.1f}%",
             )
 
-            # 市值
-            painter.setFont(numeric_font(11))
+            painter.setFont(numeric_font(10.5))
             painter.setPen(QColor("#0F172A"))
-            mv_w = legend_w * 0.34
             painter.drawText(
-                QRectF(legend_x + 12 + name_w + pct_w, ry, mv_w, row_h),
+                QRectF(legend_x + 12 + name_w + col_gap + pct_w + col_gap, ry, mv_w, row_h),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
                 _fmt_usd(item["market_value"]),
-            )
-
-            # 股票数量 (X 只)
-            painter.setFont(QFont(".AppleSystemUIFont", 10))
-            painter.setPen(QColor("#64748B"))
-            cnt_x = legend_x + 12 + name_w + pct_w + mv_w
-            cnt_w = max(28.0, legend_w - (cnt_x - legend_x))
-            painter.drawText(
-                QRectF(cnt_x, ry, cnt_w, row_h),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-                f"{item['stock_count']} 只",
             )
 
 
@@ -968,9 +1077,9 @@ class OpenHoldingsChartsRow(QWidget):
         self.broker_donut = _DonutCompat(self)
         self.broker_donut.item_clicked.connect(self.broker_clicked.emit)
 
-        layout.addWidget(self.broker_card, 39)
+        layout.addWidget(self.broker_card, 38)
 
-        # 2. 持仓分布（按类型）环形图 (约占 25%)
+        # 2. 持仓分布（按类型）环形图 (约占 27%)
         self.industry_card = QFrame()
         self.industry_card.setObjectName("openChartCard")
         self.industry_card.setMinimumHeight(265)
@@ -992,9 +1101,9 @@ class OpenHoldingsChartsRow(QWidget):
         self.industry_donut = OpenDistributionDonut("暂无类型持仓数据", self.industry_card)
         self.industry_donut.item_clicked.connect(self.industry_clicked.emit)
         i_layout.addWidget(self.industry_donut, 1)
-        layout.addWidget(self.industry_card, 25)
+        layout.addWidget(self.industry_card, 27)
 
-        # 3. 持仓市值趋势 (约占 36%)
+        # 3. 持仓市值趋势 (约占 35%)
         self.trend_card = QFrame()
         self.trend_card.setObjectName("openChartCard")
         self.trend_card.setMinimumHeight(265)
