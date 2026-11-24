@@ -67,16 +67,24 @@ class GoogleAPIConfigDialog(QDialog):
         key_row.addWidget(self.toggle_key_btn)
         form.addRow("API Key:", key_row)
 
-        # 模型选择（可编辑）
+        # 模型选择（可编辑 + 实时拉取账号最新可用模型）
+        model_row = QHBoxLayout()
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         for m in GOOGLE_API_MODELS:
             self.model_combo.addItem(m)
         self.model_combo.setToolTip(
-            "日常问答推荐 gemini-2.5-flash（输入 $0.30 / 输出 $2.50 每百万 token）；\n"
-            "深度研报可切换 gemini-2.5-pro（单价较高，约 $2.50/$15.00 每百万 token）。"
+            "推荐：gemini-3.8-flash（高性价比新一代 Flash）；\n"
+            "深度研报可选 gemini-4-neon / gemini-4-argon（单价较高，注意月度预算）；\n"
+            "点击右侧「拉取最新模型」可实时获取您账号下所有可用 Gemini 模型 ID。"
         )
-        form.addRow("默认模型:", self.model_combo)
+        model_row.addWidget(self.model_combo, 1)
+
+        self.fetch_models_btn = QPushButton("拉取最新模型")
+        self.fetch_models_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fetch_models_btn.clicked.connect(self._on_fetch_models)
+        model_row.addWidget(self.fetch_models_btn)
+        form.addRow("默认模型:", model_row)
 
         # 月度安全预算上限
         self.budget_spin = QDoubleSpinBox()
@@ -131,6 +139,32 @@ class GoogleAPIConfigDialog(QDialog):
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         )
         self.toggle_key_btn.setText("隐藏" if checked else "显示")
+
+    def _on_fetch_models(self):
+        api_key = self.key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "提示", "请先在上方输入 Google API Key。")
+            return
+        self.fetch_models_btn.setEnabled(False)
+        self.fetch_models_btn.setText("拉取中...")
+        try:
+            models = CodexAIService.list_google_api_models(api_key=api_key)
+            if not models:
+                QMessageBox.information(self, "提示", "未查询到支持 generateContent 的 Gemini 模型。")
+                return
+            current = self.model_combo.currentText().strip()
+            self.model_combo.clear()
+            for m in models:
+                self.model_combo.addItem(m)
+            idx = self.model_combo.findText(current)
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+            QMessageBox.information(self, "已更新", f"已成功拉取 {len(models)} 个当前账号可用的最新 Gemini 模型。")
+        except Exception as exc:
+            QMessageBox.warning(self, "拉取失败", str(exc))
+        finally:
+            self.fetch_models_btn.setEnabled(True)
+            self.fetch_models_btn.setText("拉取最新模型")
 
     def _load_current(self):
         cfg = CodexAIService.get_google_api_config()

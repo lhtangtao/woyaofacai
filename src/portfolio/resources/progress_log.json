@@ -1,5 +1,17 @@
 [
   {
+    "title": "Google API 引擎升级至 Gemini 3.8 / Gemini 4 最新模型列表并支持实时拉取可用模型",
+    "time": "2026-11-24 22:14",
+    "author": "Antigravity",
+    "tag": "模型列表已升级",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "将 Google API 默认模型由 gemini-2.5-flash 升级为新一代高性价比主力 gemini-3.8-flash，预设列表更新为 gemini-3.8-flash、gemini-4-hydrogen、gemini-4-neon、gemini-4-argon、gemini-3.7-flash、gemini-3.1-pro-preview、gemini-2.5-flash，并同步更新 2026 保守定价表及前缀匹配计费逻辑。",
+      "在 CodexAIService 新增 list_google_api_models() 并在配置弹窗新增「拉取最新模型」按钮，直接调用 /v1beta/models 实时获取当前 API Key 账号下全部支持 generateContent 的最新模型 ID。",
+      "验证范围：tests/test_ai_providers.py 全部 12 项单元测试通过。"
+    ]
+  },
+  {
     "title": "AI 投资问答与股票分析新增 Google API 直连引擎及月度 $10 防超支预算熔断保护",
     "time": "2026-11-24 20:53",
     "author": "Antigravity",

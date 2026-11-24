@@ -405,6 +405,33 @@ class TestGoogleAPIProvider(unittest.TestCase):
         self.assertIn("Google API", chat_page.status_badge.text())
         self.assertIn("Google API", stock_page.status_badge.text())
 
+    def test_list_google_api_models_and_prefix_pricing(self):
+        fake_models_resp = json.dumps({
+            "models": [
+                {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-4-argon", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-embedding-2", "supportedGenerationMethods": ["embedContent"]},
+            ]
+        }).encode("utf-8")
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return fake_models_resp
+
+        with patch("portfolio.services.ai_service.urllib.request.urlopen", return_value=_FakeResp()):
+            models = CodexAIService.list_google_api_models(api_key="AIzaTestKey12345678")
+            self.assertEqual(models, ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-flash"])
+
+        cost = CodexAIService._estimate_google_api_cost("gemini-4-argon-preview-2026", 1_000_000, 1_000_000)
+        self.assertEqual(str(cost), "24.000000")
+
 
 if __name__ == "__main__":
     unittest.main()

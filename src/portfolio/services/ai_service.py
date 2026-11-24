@@ -22,25 +22,32 @@ from portfolio.paths import API_CONFIG_PATH, quote_cache_path
 
 
 SUPPORTED_AI_PROVIDERS = ("codex", "gemini", "google_api")
-DEFAULT_GOOGLE_API_MODEL = "gemini-2.5-flash"
+DEFAULT_GOOGLE_API_MODEL = "gemini-3.8-flash"
 DEFAULT_GOOGLE_API_BUDGET_USD = Decimal("8.50")  # 为 $10/月额度预留 $1.50 安全缓冲
 DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS = 4096
 GOOGLE_API_MODELS = (
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash-preview",
+    "gemini-3.8-flash",
+    "gemini-4-hydrogen",
+    "gemini-4-neon",
+    "gemini-4-argon",
+    "gemini-3.7-flash",
     "gemini-3.1-pro-preview",
+    "gemini-2.5-flash",
 )
-# 保守估算单价（美元 / 百万 tokens）：(输入单价, 输出单价)，宁可略高估以防超额
+# 保守估算单价（美元 / 百万 tokens）：(输入单价, 输出单价)，按 2026 官方标准价保守取值以防超额
 GOOGLE_API_PRICING_USD_PER_M: dict[str, tuple[Decimal, Decimal]] = {
+    "gemini-4-argon": (Decimal("4.00"), Decimal("20.00")),
+    "gemini-4-carbon": (Decimal("4.00"), Decimal("20.00")),
+    "gemini-4-neon": (Decimal("3.00"), Decimal("15.00")),
+    "gemini-4-hydrogen": (Decimal("1.50"), Decimal("7.50")),
+    "gemini-3.8-flash": (Decimal("1.50"), Decimal("7.50")),
+    "gemini-3.7-flash": (Decimal("1.50"), Decimal("7.50")),
+    "gemini-3.1-pro-preview": (Decimal("4.00"), Decimal("18.00")),
     "gemini-2.5-flash": (Decimal("0.30"), Decimal("2.50")),
     "gemini-2.5-flash-lite": (Decimal("0.10"), Decimal("0.40")),
     "gemini-2.5-pro": (Decimal("2.50"), Decimal("15.00")),
-    "gemini-3-flash-preview": (Decimal("0.50"), Decimal("3.00")),
-    "gemini-3.1-pro-preview": (Decimal("2.50"), Decimal("15.00")),
 }
-_DEFAULT_CONSERVATIVE_PRICING = (Decimal("2.50"), Decimal("15.00"))
+_DEFAULT_CONSERVATIVE_PRICING = (Decimal("4.00"), Decimal("20.00"))
 _GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 _USAGE_LOCK = threading.Lock()
 
@@ -353,15 +360,65 @@ class CodexAIService:
 
     @staticmethod
     def _estimate_google_api_cost(model: str, prompt_tokens: int, output_tokens: int) -> Decimal:
-        """按模型保守公开单价估算单次请求费用（USD）。"""
-        in_price, out_price = GOOGLE_API_PRICING_USD_PER_M.get(
-            (model or "").strip(),
-            _DEFAULT_CONSERVATIVE_PRICING,
-        )
+        """按模型保守公开单价估算单次请求费用（USD），支持带日期/preview 后缀的模型前缀匹配。"""
+        clean_model = (model or "").strip().lower()
+        pricing = GOOGLE_API_PRICING_USD_PER_M.get(clean_model)
+        if pricing is None:
+            for prefix, prices in GOOGLE_API_PRICING_USD_PER_M.items():
+                if clean_model.startswith(prefix):
+                    pricing = prices
+                    break
+        in_price, out_price = pricing or _DEFAULT_CONSERVATIVE_PRICING
         million = Decimal("1000000")
         in_cost = (Decimal(max(0, prompt_tokens)) * in_price) / million
         out_cost = (Decimal(max(0, output_tokens)) * out_price) / million
         return (in_cost + out_cost).quantize(Decimal("0.000001"))
+
+    @classmethod
+    def list_google_api_models(cls, api_key: str | None = None, timeout: float = 15.0) -> list[str]:
+        """调用 Google Gemini API /v1beta/models 实时拉取当前账号支持 generateContent 的最新模型列表。"""
+        key = (api_key or "").strip() or cls.get_google_api_config().get("api_key", "").strip()
+        if not key:
+            raise RuntimeError("请先输入或配置 Google API Key，再拉取可用模型列表。")
+        req = urllib.request.Request(
+            f"{_GOOGLE_API_BASE_URL}?pageSize=100",
+            method="GET",
+            headers={"x-goog-api-key": key},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(f"拉取模型列表失败 (HTTP {exc.code}): {detail[:300]}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"拉取模型列表网络异常: {exc}") from exc
+
+        models: list[str] = []
+        for item in data.get("models") or []:
+            if not isinstance(item, dict):
+                continue
+            methods = item.get("supportedGenerationMethods") or []
+            if "generateContent" not in methods:
+                continue
+            name = str(item.get("name") or "").strip()
+            if name.startswith("models/"):
+                name = name[len("models/"):]
+            if name.startswith("gemini-"):
+                models.append(name)
+
+        # 按最新代次（gemini-4 > gemini-3 > gemini-2.5）倒序展示
+        def _sort_key(m: str):
+            for idx, prefix in enumerate(("gemini-4", "gemini-3.8", "gemini-3.7", "gemini-3", "gemini-2.5")):
+                if m.startswith(prefix):
+                    return (idx, m)
+            return (99, m)
+
+        return sorted(dict.fromkeys(models), key=_sort_key)
 
     @classmethod
     def get_google_api_monthly_usage(cls, month: str | None = None) -> dict:

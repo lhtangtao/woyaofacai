@@ -1,3 +1,9 @@
+## 2026-11-24 22:14 Google API 引擎升级至 Gemini 3.8 / Gemini 4 最新模型列表并支持实时拉取
+
+- 修改者：Antigravity（代码修改）
+- 将 `DEFAULT_GOOGLE_API_MODEL` 升级为 `gemini-3.8-flash`，预设模型更新涵盖 `gemini-4-hydrogen` / `gemini-4-neon` / `gemini-4-argon` / `gemini-3.8-flash` / `gemini-3.7-flash` 等 2026 最新模型，同步更新保守计费单价与前缀匹配逻辑。
+- 在 `ai_google_api_dialog.py` 新增「拉取最新模型」按钮，实时调用 `/v1beta/models` 获取账号可用模型；`tests/test_ai_providers.py` 12 项测试全部通过。
+
 ## 2026-11-24 20:53 AI 投资问答与股票分析新增 Google API 直连引擎及月度防超支预算熔断
 
 - 修改者：Antigravity（代码修改）
