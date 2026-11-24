@@ -285,23 +285,97 @@ export const api = {
     requestApi(`/api/v1/monitoring/kline?symbol=${encodeURIComponent(symbol)}`),
 
   // AI Assistant
-  aiStatus: (provider?: "codex" | "gemini") =>
-    requestApi(provider ? `/api/v1/ai/status?provider=${encodeURIComponent(provider)}` : "/api/v1/ai/status"),
-  aiChatHistory: () => requestApi("/api/v1/ai/history"),
-  aiChat: (message: string, personId?: number | null, provider: "codex" | "gemini" = "codex") =>
+  aiStatus: (provider?: "codex" | "gemini" | "google_api", force = false) => {
+    const params = new URLSearchParams();
+    if (provider) params.set("provider", provider);
+    if (force) params.set("force", "1");
+    const qs = params.toString();
+    return requestApi(qs ? `/api/v1/ai/status?${qs}` : "/api/v1/ai/status");
+  },
+  aiAgyModels: (force = false) =>
+    requestApi(force ? "/api/v1/ai/agy/models?force=1" : "/api/v1/ai/agy/models"),
+  aiSaveAgyModel: (model: string) =>
+    requestApi("/api/v1/ai/agy/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    }),
+  aiGoogleApiConfig: () => requestApi("/api/v1/ai/google-api/config"),
+  aiSaveGoogleApiConfig: (payload: {
+    api_key?: string;
+    model?: string;
+    monthly_budget_usd?: string | number;
+    max_output_tokens?: number;
+  }) =>
+    requestApi("/api/v1/ai/google-api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  aiGoogleApiFetchModels: (api_key?: string) =>
+    requestApi("/api/v1/ai/google-api/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(api_key ? { api_key } : {}),
+    }),
+  aiGoogleApiCalibrate: (spent_usd: string | number) =>
+    requestApi("/api/v1/ai/google-api/calibrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ spent_usd }),
+    }),
+  aiScopeOptions: () => requestApi("/api/v1/ai/scope-options"),
+  aiChatHistory: (channel?: string, symbol?: string) => {
+    const params = new URLSearchParams();
+    if (channel && channel !== "全部渠道") params.set("channel", channel);
+    if (symbol && symbol !== "全部标的" && symbol !== "全部股票") params.set("symbol", symbol);
+    const qs = params.toString();
+    return requestApi(qs ? `/api/v1/ai/history?${qs}` : "/api/v1/ai/history");
+  },
+  aiChat: (
+    message: string,
+    personId?: number | null,
+    provider: "codex" | "gemini" | "google_api" = "codex",
+    opts?: { model?: string; channel?: string; symbol?: string; include_context?: boolean }
+  ) =>
     requestApi("/api/v1/ai/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: message, message, person_id: personId, provider }),
+      body: JSON.stringify({
+        prompt: message,
+        message,
+        person_id: personId,
+        provider,
+        ...(opts?.model ? { model: opts.model } : {}),
+        ...(opts?.channel ? { channel: opts.channel } : {}),
+        ...(opts?.symbol ? { symbol: opts.symbol } : {}),
+        include_context: opts?.include_context ?? true,
+      }),
     }),
-  aiClear: () => requestApi("/api/v1/ai/clear", { method: "POST" }),
+  aiClear: (channel?: string, symbol?: string) =>
+    requestApi("/api/v1/ai/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: channel || "全部渠道", symbol: symbol || "全部标的" }),
+    }),
   aiStockHistory: (symbol?: string) =>
     requestApi(symbol ? `/api/v1/ai/stock/history?symbol=${encodeURIComponent(symbol)}` : "/api/v1/ai/stock/history"),
-  aiStockChat: (symbol: string, message: string, provider: "codex" | "gemini" = "codex") =>
+  aiStockClear: (symbol: string) =>
+    requestApi("/api/v1/ai/stock/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+    }),
+  aiStockChat: (
+    symbol: string,
+    message: string,
+    provider: "codex" | "gemini" | "google_api" = "codex",
+    model?: string
+  ) =>
     requestApi("/api/v1/ai/stock/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, prompt: message, message, provider }),
+      body: JSON.stringify({ symbol, prompt: message, message, provider, ...(model ? { model } : {}) }),
     }),
 
   // Unified Holdings Management

@@ -300,6 +300,92 @@ class TestWebAIProviderRoutes(unittest.TestCase):
             self.assertEqual(s_gem.get_json()["provider"], "gemini")
             self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "gemini")
 
+    def test_web_agy_models_google_config_and_context_kwargs(self):
+        env = {"REMOTE_ADDR": "127.0.0.1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_p = Path(tmp) / "google_api_config.json"
+            usage_p = Path(tmp) / "google_api_usage.json"
+            agy_p = Path(tmp) / "ai_agy_config.json"
+            with patch.dict(
+                os.environ,
+                {
+                    "MONEY3_GOOGLE_API_CONFIG": str(cfg_p),
+                    "MONEY3_GOOGLE_API_USAGE": str(usage_p),
+                    "MONEY3_AGY_CONFIG": str(agy_p),
+                },
+                clear=False,
+            ):
+                # 1. agy 模型读取与保存
+                with patch(
+                    "portfolio.web.api_v1.AIService.list_agy_models",
+                    return_value=[("gemini-4-neon-high", "Gemini 4 Neon (High)")],
+                ):
+                    r_models = self.client.get("/api/v1/ai/agy/models", environ_overrides=env)
+                    self.assertEqual(r_models.status_code, 200)
+                    self.assertEqual(r_models.get_json()["models"][0]["id"], "gemini-4-neon-high")
+
+                r_save_agy = self.client.post(
+                    "/api/v1/ai/agy/model",
+                    json={"model": "gemini-4-neon-high"},
+                    headers=self.csrf_headers,
+                    environ_overrides=env,
+                )
+                self.assertEqual(r_save_agy.status_code, 200)
+                self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-neon-high")
+
+                # 2. Google API 配置保存（GET 返回脱敏 Key，不暴露明文）与校准
+                r_save_g = self.client.post(
+                    "/api/v1/ai/google-api/config",
+                    json={
+                        "api_key": "AIzaSecretTestKey9999",
+                        "model": "gemini-3.8-flash",
+                        "monthly_budget_usd": "8.50",
+                        "max_output_tokens": 4096,
+                    },
+                    headers=self.csrf_headers,
+                    environ_overrides=env,
+                )
+                self.assertEqual(r_save_g.status_code, 200)
+                r_get_g = self.client.get("/api/v1/ai/google-api/config", environ_overrides=env)
+                g_data = r_get_g.get_json()
+                self.assertTrue(g_data["has_key"])
+                self.assertNotIn("AIzaSecretTestKey9999", json.dumps(g_data))
+
+                r_cal = self.client.post(
+                    "/api/v1/ai/google-api/calibrate",
+                    json={"spent_usd": "1.25"},
+                    headers=self.csrf_headers,
+                    environ_overrides=env,
+                )
+                self.assertEqual(r_cal.status_code, 200)
+                self.assertEqual(r_cal.get_json()["usage"]["estimated_cost_usd"], "1.250000")
+
+                # 3. 验证 /ai/chat 调用 build_portfolio_context 使用关键字参数，不再发生字段错位
+                fake_svc = MagicMock()
+                fake_svc.calculate.return_value = MagicMock()
+                with (
+                    patch("portfolio.web.api_v1.get_analytics_service", return_value=fake_svc),
+                    patch("portfolio.web.api_v1.AIService.build_portfolio_context", return_value="CTX") as mock_ctx,
+                    patch("portfolio.web.api_v1.AIService.ask", return_value="OK") as mock_ask,
+                    patch("portfolio.web.api_v1.load_ai_sessions", return_value={}),
+                    patch("portfolio.web.api_v1.save_ai_sessions"),
+                ):
+                    r_chat = self.client.post(
+                        "/api/v1/ai/chat",
+                        json={
+                            "prompt": "分析组合",
+                            "provider": "google_api",
+                            "channel": "长桥",
+                            "symbol": "NVDA",
+                        },
+                        headers=self.csrf_headers,
+                        environ_overrides=env,
+                    )
+                    self.assertEqual(r_chat.status_code, 200)
+                    self.assertEqual(mock_ctx.call_args.kwargs["channel_names"], ("长桥",))
+                    self.assertEqual(mock_ctx.call_args.kwargs["symbol"], "NVDA")
+                    self.assertEqual(mock_ask.call_args.kwargs["provider"], "google_api")
+
 
 class TestGoogleAPIProvider(unittest.TestCase):
     """验证 Google API 直连配置、Token 统计、月度预算熔断及 UI 切换。"""

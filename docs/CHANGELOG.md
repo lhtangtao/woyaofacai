@@ -1,3 +1,9 @@
+## 2026-11-24 23:16 Web 端 AI 投资问答与股票分析 1:1 对齐桌面端并修复上下文错位 Bug
+
+- 修改者：Antigravity（代码修改）
+- 重构 `frontend/src/views/AiViews.tsx` 与 `frontend/src/api/client.ts` 并构建输出至 `src/portfolio/web/static_dist/`：上线 Codex / Gemini / Google API 三引擎切换、Gemini (`agy`) 模型选择下拉框、Google API 配置与月度预算熔断弹窗、渠道/标的筛选与会话隔离、常驻快捷洞察胶囊、复制按钮与 Markdown 渲染。
+- 在 `src/portfolio/web/api_v1.py` 新增对应配置/模型/校准接口，并修复 `/ai/chat` 调用 `build_portfolio_context` 参数错位导致返回 0 只标的的 Bug；`npm run build` 与 `tests/test_ai_providers.py` 15 项测试全部通过。
+
 ## 2026-11-24 23:03 修复 agy 引擎尝试调用 Bash 被拒导致返回原始 JSON 的问题
 
 - 修改者：Antigravity（代码修改）

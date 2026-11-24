@@ -1,5 +1,17 @@
 [
   {
+    "title": "Web 端 AI 投资问答与 AI 股票分析 1:1 对齐桌面端，并修复组合上下文参数错位 Bug",
+    "time": "2026-11-24 23:16",
+    "author": "Antigravity",
+    "tag": "Web 端 AI 已对齐",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "改造 Web 端 frontend/src/views/AiViews.tsx 与 frontend/src/api/client.ts 并重新构建打包至 src/portfolio/web/static_dist/：1) 支持 Codex / Gemini / Google API 三引擎切换与实时状态徽章（含 Google API 80% 预警与 100% 预算熔断禁用发送）；2) 选中 Gemini 时展示 Antigravity (agy) 模型下拉框并自动拉取全部可用模型与持久化；3) 新增「配置 Google API」弹窗，与桌面端共享本地配置与月度用量统计（支持 Key 脱敏保护、实时拉取 38 个可用模型、月度预算上限、单次最大输出与本月已用校准）；4) 对齐桌面端渠道/标的筛选条、携带真实账本上下文开关、常驻快捷洞察胶囊、复制回答与轻量安全 Markdown 渲染。",
+      "扩展 Web 后端 src/portfolio/web/api_v1.py：新增 /ai/agy/models、/ai/agy/model、/ai/google-api/config、/ai/google-api/models、/ai/google-api/calibrate、/ai/scope-options、/ai/stock/clear；同时修复 /ai/chat 调用 build_portfolio_context 时缺少关键字参数导致「归属人员/交易渠道」字段错位并把「全部标的」拆成单字过滤出 0 只标的的严重 Bug。",
+      "验证范围：frontend `npm run build`（tsc + vite build）编译通过；tests/test_ai_providers.py 全部 15 项单元测试通过。"
+    ]
+  },
+  {
     "title": "修复 agy 高思考模型尝试调用 Bash 被拒绝导致返回空回复和原始 JSON 泄露的问题",
     "time": "2026-11-24 23:03",
     "author": "Antigravity",

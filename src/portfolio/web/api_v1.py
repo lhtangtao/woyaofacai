@@ -36,8 +36,14 @@ from portfolio.domain.models import QueryScope, TradeFilters, exact_text
 from portfolio.domain.technical_indicators import DailyBar, series, technicals
 from portfolio.paths import DATABASE_PATH, PROJECT_DIR
 from portfolio.services.ai_service import (
+    AGY_DEFAULT_MODELS,
     CodexAIService as AIService,
+    DEFAULT_GOOGLE_API_BUDGET_USD,
+    DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS,
+    DEFAULT_GOOGLE_API_MODEL,
+    GOOGLE_API_MODELS,
     SUPPORTED_AI_PROVIDERS,
+    _mask_api_key,
     normalize_ai_provider,
 )
 from portfolio.services.analytics_service import AnalyticsService
@@ -1933,7 +1939,142 @@ def api_ai_status():
         "provider": provider,
         "ai_status": providers[provider],
         "providers": providers,
+        "agy_model": AIService.get_agy_model(),
     })
+
+
+@api_v1.route("/ai/agy/models", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_agy_models():
+    """Return available Antigravity CLI (agy) models and currently selected model."""
+    force = str(request.args.get("force") or "").lower() in ("1", "true", "yes")
+    try:
+        raw_models = AIService.list_agy_models(force=force)
+    except Exception:
+        raw_models = list(AGY_DEFAULT_MODELS)
+    return jsonify({
+        "status": "ok",
+        "current_model": AIService.get_agy_model(),
+        "models": [{"id": m_id, "label": m_label} for m_id, m_label in raw_models],
+    })
+
+
+@api_v1.route("/ai/agy/model", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_agy_model_save():
+    """Persist user's selected Antigravity CLI (agy) model."""
+    data = request.get_json(silent=True) or {}
+    model = str(data.get("model") or "").strip()
+    if not model:
+        return jsonify({"status": "error", "message": "请选择有效的模型"}), 400
+    AIService.save_agy_model(model)
+    return jsonify({"status": "ok", "model": AIService.get_agy_model()})
+
+
+@api_v1.route("/ai/google-api/config", methods=["GET", "POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_google_api_config():
+    """Get (masked) or update Google API configuration and monthly budget guard."""
+    if request.method == "GET":
+        cfg = AIService.get_google_api_config()
+        raw_key = cfg.get("api_key") or ""
+        return jsonify({
+            "status": "ok",
+            "has_key": bool(raw_key),
+            "masked_key": _mask_api_key(raw_key) if raw_key else "",
+            "model": cfg.get("model") or DEFAULT_GOOGLE_API_MODEL,
+            "monthly_budget_usd": str(cfg.get("monthly_budget_usd") or DEFAULT_GOOGLE_API_BUDGET_USD),
+            "max_output_tokens": int(cfg.get("max_output_tokens") or DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS),
+            "source": cfg.get("source") or "",
+            "usage": AIService.get_google_api_monthly_usage(),
+            "preset_models": list(GOOGLE_API_MODELS),
+        })
+
+    data = request.get_json(silent=True) or {}
+    existing = AIService.get_google_api_config()
+    new_key = str(data.get("api_key") or "").strip()
+    final_key = new_key or existing.get("api_key", "").strip()
+    if not final_key:
+        return jsonify({"status": "error", "message": "请输入有效的 Google API Key"}), 400
+    model = str(data.get("model") or "").strip() or existing.get("model") or DEFAULT_GOOGLE_API_MODEL
+    budget = data.get("monthly_budget_usd")
+    max_tokens = data.get("max_output_tokens")
+    AIService.save_google_api_config(
+        api_key=final_key,
+        model=model,
+        monthly_budget_usd=budget,
+        max_output_tokens=max_tokens,
+    )
+    updated_status = AIService.check_login_status(force=True, provider="google_api")
+    return jsonify({
+        "status": "ok",
+        "has_key": True,
+        "masked_key": _mask_api_key(final_key),
+        "model": model,
+        "ai_status": updated_status,
+        "usage": AIService.get_google_api_monthly_usage(),
+    })
+
+
+@api_v1.route("/ai/google-api/models", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_google_api_models():
+    """Fetch live available Gemini models for the provided or saved Google API key."""
+    data = request.get_json(silent=True) or {}
+    key = str(data.get("api_key") or "").strip() or None
+    try:
+        models = AIService.list_google_api_models(api_key=key)
+        return jsonify({"status": "ok", "models": models})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@api_v1.route("/ai/google-api/calibrate", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_google_api_calibrate():
+    """Calibrate or reset current month's estimated Google API spend."""
+    data = request.get_json(silent=True) or {}
+    if "spent_usd" not in data:
+        return jsonify({"status": "error", "message": "缺少 spent_usd 参数"}), 400
+    usage = AIService.set_google_api_monthly_spent(data.get("spent_usd"))
+    updated_status = AIService.check_login_status(force=True, provider="google_api")
+    return jsonify({"status": "ok", "usage": usage, "ai_status": updated_status})
+
+
+@api_v1.route("/ai/scope-options", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_scope_options():
+    """Return available channels and tickers for AI filter controls."""
+    person_id, _ = get_current_user_scope()
+    channels: set[str] = set()
+    tickers: set[str] = set()
+    try:
+        svc = get_analytics_service()
+        res = svc.calculate(get_user_query_scope(person_id=person_id))
+        person_assets = res.reports.get("人员资产") if getattr(res, "reports", None) else None
+        if person_assets and person_assets.rows:
+            for row in person_assets.rows:
+                ch = str(row.values[1]).strip() if len(row.values) > 1 and row.values[1] else ""
+                tk = str(row.values[2]).strip().upper() if len(row.values) > 2 and row.values[2] else ""
+                if ch:
+                    channels.add(ch)
+                if tk:
+                    tickers.add(tk)
+    except Exception:
+        pass
+    return jsonify({
+        "status": "ok",
+        "channels": sorted(channels),
+        "tickers": sorted(tickers),
+    })
+
+
+def _build_ai_chat_session_key(person_label: str, channel_label: str, symbol_label: str) -> str:
+    ch = (channel_label or "全部渠道").strip() or "全部渠道"
+    sym = (symbol_label or "全部标的").strip().upper()
+    if sym in ("", "全部股票", "全部标的"):
+        sym = "全部标的"
+    return f"{person_label}::{ch}::{sym}"
 
 
 @api_v1.route("/ai/history", methods=["GET"])
@@ -1944,8 +2085,10 @@ def api_ai_history():
     requested_person = request.args.get("person", "全部人员")
     if person_name:
         requested_person = person_name
+    channel = (request.args.get("channel") or "全部渠道").strip() or "全部渠道"
+    symbol = (request.args.get("symbol") or "全部标的").strip() or "全部标的"
 
-    session_key = f"{requested_person}::全部渠道::全部标的"
+    session_key = _build_ai_chat_session_key(requested_person, channel, symbol)
     sessions = load_ai_sessions("ai_chat_sessions.json")
     history = sessions.get(session_key, [])
     return jsonify({"status": "ok", "session_key": session_key, "messages": history})
@@ -1965,22 +2108,38 @@ def api_ai_chat():
     if person_id is None and req_person_id is not None:
         person_id = req_person_id
 
-    requested_person = request.args.get("person", "全部人员")
+    requested_person = str(data.get("person") or request.args.get("person") or "全部人员").strip() or "全部人员"
     if person_name:
         requested_person = person_name
 
-    session_key = f"{requested_person}::全部渠道::全部标的"
+    channel = str(data.get("channel") or "全部渠道").strip() or "全部渠道"
+    symbol = str(data.get("symbol") or "全部标的").strip() or "全部标的"
+    include_context = bool(data.get("include_context", True))
+    session_key = _build_ai_chat_session_key(requested_person, channel, symbol)
 
-    try:
-        svc = get_analytics_service()
-        res = svc.calculate(get_user_query_scope(person_id=person_id))
-        context_str = AIService.build_portfolio_context(res, requested_person, "全部渠道", "全部标的")
-    except Exception:
-        context_str = "当前投资组合处于离线状态。"
+    context_str = ""
+    if include_context:
+        try:
+            svc = get_analytics_service()
+            res = svc.calculate(get_user_query_scope(person_id=person_id))
+            channel_names = None if channel == "全部渠道" else (channel,)
+            sym_arg = None if symbol in ("全部标的", "全部股票") else symbol
+            context_str = AIService.build_portfolio_context(
+                res,
+                person_name=requested_person,
+                channel_names=channel_names,
+                symbol=sym_arg,
+            )
+        except Exception:
+            context_str = "当前投资组合处于离线状态。"
 
     provider = normalize_ai_provider(data.get("provider"))
+    model = str(data.get("model") or "").strip() or None
 
-    answer = AIService.ask(prompt, context=context_str, provider=provider)
+    try:
+        answer = AIService.ask(prompt, context=context_str, model=model, provider=provider)
+    except Exception as exc:
+        return jsonify({"status": "error", "provider": provider, "message": str(exc)}), 502
 
     sessions = load_ai_sessions("ai_chat_sessions.json")
     current_msgs = sessions.get(session_key, [])
@@ -1992,6 +2151,7 @@ def api_ai_chat():
     return jsonify({
         "status": "ok",
         "provider": provider,
+        "model": model,
         "answer": answer,
         "reply": answer,
         "content": answer,
@@ -2004,9 +2164,12 @@ def api_ai_chat():
 @require_capability(CAP_AI_CHAT)
 def api_ai_clear():
     """Clear AI conversation history."""
+    data = request.get_json(silent=True) or {}
     person_id, person_name = get_current_user_scope()
-    requested_person = person_name or request.args.get("person", "全部人员")
-    session_key = f"{requested_person}::全部渠道::全部标的"
+    requested_person = person_name or str(data.get("person") or request.args.get("person") or "全部人员")
+    channel = str(data.get("channel") or "全部渠道").strip() or "全部渠道"
+    symbol = str(data.get("symbol") or "全部标的").strip() or "全部标的"
+    session_key = _build_ai_chat_session_key(requested_person, channel, symbol)
     sessions = load_ai_sessions("ai_chat_sessions.json")
     if session_key in sessions:
         sessions[session_key] = []
@@ -2022,6 +2185,19 @@ def api_ai_stock_history():
     sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
     history = sessions.get(symbol, [])
     return jsonify({"status": "ok", "symbol": symbol, "messages": history})
+
+
+@api_v1.route("/ai/stock/clear", methods=["POST"])
+@require_capability(CAP_AI_STOCK)
+def api_ai_stock_clear():
+    """Clear AI stock analysis conversation history for a symbol."""
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or request.args.get("symbol") or "AAOI").strip().upper()
+    sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
+    if symbol in sessions:
+        sessions[symbol] = []
+        save_ai_sessions("ai_stock_analysis_sessions.json", sessions)
+    return jsonify({"status": "ok", "symbol": symbol, "message": "标的对话历史已清空"})
 
 
 @api_v1.route("/ai/stock/chat", methods=["POST"])
@@ -2043,9 +2219,13 @@ def api_ai_stock_chat():
             tech_info = f"标的 {symbol} 当前行情与指标: {json.dumps(st, ensure_ascii=False)}"
 
     provider = normalize_ai_provider(data.get("provider"))
+    model = str(data.get("model") or "").strip() or None
 
     prompt_to_send = f"{prompt}\n\n附标的技术面信息：{tech_info}" if tech_info else prompt
-    answer = AIService.ask_stock(prompt_to_send, symbol=symbol, provider=provider)
+    try:
+        answer = AIService.ask_stock(prompt_to_send, symbol=symbol, model=model, provider=provider)
+    except Exception as exc:
+        return jsonify({"status": "error", "provider": provider, "message": str(exc)}), 502
 
     sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
     current_msgs = sessions.get(symbol, [])
@@ -2057,6 +2237,7 @@ def api_ai_stock_chat():
     return jsonify({
         "status": "ok",
         "provider": provider,
+        "model": model,
         "answer": answer,
         "reply": answer,
         "content": answer,
