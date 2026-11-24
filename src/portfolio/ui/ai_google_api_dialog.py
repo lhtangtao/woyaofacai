@@ -33,7 +33,7 @@ class GoogleAPIConfigDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("配置 Google API (Gemini) 与预算保护")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(560)
         self._init_ui()
         self._load_current()
 
@@ -67,16 +67,20 @@ class GoogleAPIConfigDialog(QDialog):
         key_row.addWidget(self.toggle_key_btn)
         form.addRow("API Key:", key_row)
 
-        # 模型选择（可编辑 + 实时拉取账号最新可用模型）
+        # 模型选择（标准下拉框 + 实时拉取并自动展开账号最新可用模型）
+        model_box = QVBoxLayout()
+        model_box.setSpacing(4)
         model_row = QHBoxLayout()
         self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
+        self.model_combo.setEditable(False)
+        self.model_combo.setMinimumWidth(260)
+        self.model_combo.setMaxVisibleItems(16)
         for m in GOOGLE_API_MODELS:
             self.model_combo.addItem(m)
         self.model_combo.setToolTip(
             "推荐：gemini-3.8-flash（高性价比新一代 Flash）；\n"
             "深度研报可选 gemini-4-neon / gemini-4-argon（单价较高，注意月度预算）；\n"
-            "点击右侧「拉取最新模型」可实时获取您账号下所有可用 Gemini 模型 ID。"
+            "点击右侧「拉取最新模型」可实时获取并展开您账号下所有可用 Gemini 模型。"
         )
         model_row.addWidget(self.model_combo, 1)
 
@@ -84,7 +88,13 @@ class GoogleAPIConfigDialog(QDialog):
         self.fetch_models_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fetch_models_btn.clicked.connect(self._on_fetch_models)
         model_row.addWidget(self.fetch_models_btn)
-        form.addRow("默认模型:", model_row)
+        model_box.addLayout(model_row)
+
+        self.model_fetch_hint = QLabel("")
+        self.model_fetch_hint.setStyleSheet("font-size: 11px; color: #15803D;")
+        self.model_fetch_hint.setVisible(False)
+        model_box.addWidget(self.model_fetch_hint)
+        form.addRow("默认模型:", model_box)
 
         # 月度安全预算上限
         self.budget_spin = QDoubleSpinBox()
@@ -159,7 +169,10 @@ class GoogleAPIConfigDialog(QDialog):
             idx = self.model_combo.findText(current)
             if idx >= 0:
                 self.model_combo.setCurrentIndex(idx)
-            QMessageBox.information(self, "已更新", f"已成功拉取 {len(models)} 个当前账号可用的最新 Gemini 模型。")
+            self.model_fetch_hint.setText(f"✅ 已拉取 {len(models)} 个可用模型，请在上方下拉列表选择")
+            self.model_fetch_hint.setVisible(True)
+            self.model_combo.setFocus()
+            self.model_combo.showPopup()
         except Exception as exc:
             QMessageBox.warning(self, "拉取失败", str(exc))
         finally:
@@ -174,7 +187,8 @@ class GoogleAPIConfigDialog(QDialog):
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
         else:
-            self.model_combo.setEditText(model)
+            self.model_combo.insertItem(0, model)
+            self.model_combo.setCurrentIndex(0)
 
         try:
             budget_val = float(Decimal(str(cfg.get("monthly_budget_usd") or DEFAULT_GOOGLE_API_BUDGET_USD)))

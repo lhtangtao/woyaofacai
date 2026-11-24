@@ -1,5 +1,16 @@
 [
   {
+    "title": "优化 Google API 配置弹窗：改为标准下拉框、拉取模型后自动展开列表供选择",
+    "time": "2026-11-24 22:50",
+    "author": "Antigravity",
+    "tag": "弹窗交互已优化",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 ai_google_api_dialog.py 将模型选择框由可编辑样式调整为标准 macOS 下拉选择框（setEditable(False)、宽度 560px 避免文字截断），点击「拉取最新模型」成功后不再弹阻断提示框，改为在下方显示绿色提示并自动展开下拉菜单（showPopup）直接供用户勾选。",
+      "验证范围：tests/test_ai_providers.py 全部 13 项单元测试通过。"
+    ]
+  },
+  {
     "title": "AI 投资问答与股票分析新增 Antigravity CLI (agy) 模型切换与自动记忆功能",
     "time": "2026-11-24 22:47",
     "author": "Antigravity",
