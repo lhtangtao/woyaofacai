@@ -24,7 +24,7 @@ from portfolio.paths import API_CONFIG_PATH, quote_cache_path
 SUPPORTED_AI_PROVIDERS = ("codex", "gemini", "google_api")
 DEFAULT_GOOGLE_API_MODEL = "gemini-3.8-flash"
 DEFAULT_GOOGLE_API_BUDGET_USD = Decimal("8.50")  # 为 $10/月额度预留 $1.50 安全缓冲
-DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS = 16384  # 思考模型需同时容纳 thinking + 最终正文 tokens
 GOOGLE_API_MODELS = (
     "gemini-3.8-flash",
     "gemini-4-hydrogen",
@@ -1223,6 +1223,11 @@ class CodexAIService:
         finish_reason = (
             candidates[0].get("finishReason", "") if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict) else ""
         )
+        if finish_reason == "MAX_TOKENS":
+            raise RuntimeError(
+                f"模型思考过程耗尽了单次输出上限（当前 {max_output_tokens} tokens），尚未输出正文即被截断。"
+                f"请点击「配置 Google API」将「单次输出上限」调大至 16384 或更高后重试。"
+            )
         raise RuntimeError(f"Google API 未返回有效文本内容（finishReason={finish_reason or '未知'}）。")
 
     @classmethod
