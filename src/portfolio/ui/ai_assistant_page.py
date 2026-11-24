@@ -141,10 +141,11 @@ class AutoResizingTextBrowser(QTextBrowser):
 class ChatMessageWidget(QFrame):
     """单条消息气泡组件（支持用户输入与 AI 富文本回复，带筛选范围徽标）"""
 
-    def __init__(self, role: str, content: str, time_str: str = "", scope_tag: str = "", parent=None):
+    def __init__(self, role: str, content: str, time_str: str = "", scope_tag: str = "", on_retry=None, parent=None):
         super().__init__(parent)
         self.role = role
         self.content = content
+        self._on_retry = on_retry
         self.body_view = None
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -187,6 +188,18 @@ class ChatMessageWidget(QFrame):
         header_layout.addStretch()
 
         if role == "assistant":
+            if self._on_retry is not None:
+                retry_btn = QPushButton("重试")
+                retry_btn.setObjectName("quiet")
+                retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                retry_btn.setToolTip("使用当前引擎重新发送上一条提问")
+                retry_btn.setStyleSheet(
+                    "font-size: 11px; padding: 2px 10px; color: #2563EB; "
+                    "border: 1px solid #BFDBFE; border-radius: 6px; background: #EFF6FF; font-weight: 600;"
+                )
+                retry_btn.clicked.connect(self._on_retry)
+                header_layout.addWidget(retry_btn)
+
             copy_btn = QPushButton("复制回答")
             copy_btn.setObjectName("quiet")
             copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1002,13 +1015,32 @@ class AIAssistantPage(QWidget):
         self.cancel_btn.setVisible(False)
         self.worker = None
 
+    def _find_retry_prompt_for(self, msg: ChatMessage) -> str | None:
+        """为出错/中止的助手回复定位紧邻的前一条用户提问文本。"""
+        if msg.role != "assistant":
+            return None
+        if not (msg.content.startswith("⚠️") or msg.content.startswith("⏸️")):
+            return None
+        history = self.chat_sessions.get(self.active_session_key, [])
+        try:
+            idx = history.index(msg)
+        except ValueError:
+            idx = len(history)
+        for prev in reversed(history[:idx]):
+            if prev.role == "user" and prev.content.strip():
+                return prev.content.strip()
+        return None
+
     def _render_message_widget(self, msg: ChatMessage):
         """在当前展示流中追加渲染单个气泡"""
+        retry_prompt = self._find_retry_prompt_for(msg)
+        on_retry = (lambda _checked=False, p=retry_prompt: self.send_preset_prompt(p)) if retry_prompt else None
         msg_widget = ChatMessageWidget(
             role=msg.role,
             content=msg.content,
             time_str=msg.time_str,
             scope_tag=msg.scope_tag,
+            on_retry=on_retry,
             parent=self.chat_container,
         )
         insert_idx = max(0, self.chat_layout.count() - 1)

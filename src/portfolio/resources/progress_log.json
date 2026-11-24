@@ -1,5 +1,16 @@
 [
   {
+    "title": "桌面端与 Web 端 AI 异常/中止气泡新增一键「重试」按钮",
+    "time": "2026-11-25 00:48",
+    "author": "Antigravity",
+    "tag": "AI 一键重试已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在桌面端 AI 投资问答 (ai_assistant_page.py)、AI 股票分析 (ai_stock_analysis_page.py) 及 Web 端 (AiViews.tsx) 的异常/中止回复气泡操作栏新增「重试」按钮，点击后自动定位紧邻的前一条用户提问并一键使用当前引擎重新发送，无需手动复制粘贴。",
+      "验证范围：frontend `npm run build` 编译打包至 src/portfolio/web/static_dist/ 通过；tests/test_ai_providers.py 全部 15 项单元测试通过。"
+    ]
+  },
+  {
     "title": "新增程序启动自动检查并同步美股拆/并股公司行动（corporate_actions）功能",
     "time": "2026-11-25 00:36",
     "author": "Antigravity",

@@ -906,14 +906,45 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
                   >
                     {(m.time_str || m.time) && <span>{m.time_str || m.time}</span>}
                     {!isUser && (
-                      <button
-                        onClick={() => copyContent(m.content, idx)}
-                        className="btn btn-quiet"
-                        style={{ padding: "1px 6px", fontSize: "11px" }}
-                      >
-                        {copiedIdx === idx ? <Check size={11} /> : <Copy size={11} />}
-                        <span>{copiedIdx === idx ? "已复制" : "复制回答"}</span>
-                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        {(m.content.startsWith("⚠️") || m.content.startsWith("❌") || m.content.startsWith("⏸️")) && (() => {
+                          let prevPrompt = "";
+                          for (let j = idx - 1; j >= 0; j--) {
+                            if (messages[j].role === "user" && messages[j].content.trim()) {
+                              prevPrompt = messages[j].content.trim();
+                              break;
+                            }
+                          }
+                          if (!prevPrompt) return null;
+                          return (
+                            <button
+                              onClick={() => sendPrompt(prevPrompt)}
+                              disabled={!canSend}
+                              className="btn btn-quiet"
+                              style={{
+                                padding: "1px 8px",
+                                fontSize: "11px",
+                                color: "#2563EB",
+                                border: "1px solid #BFDBFE",
+                                background: "#EFF6FF",
+                                fontWeight: 600,
+                              }}
+                              title="使用当前引擎重新发送上一条提问"
+                            >
+                              <RotateCcw size={11} />
+                              <span>重试</span>
+                            </button>
+                          );
+                        })()}
+                        <button
+                          onClick={() => copyContent(m.content, idx)}
+                          className="btn btn-quiet"
+                          style={{ padding: "1px 6px", fontSize: "11px" }}
+                        >
+                          {copiedIdx === idx ? <Check size={11} /> : <Copy size={11} />}
+                          <span>{copiedIdx === idx ? "已复制" : "复制回答"}</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
