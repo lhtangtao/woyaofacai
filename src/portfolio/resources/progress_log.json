@@ -1,5 +1,17 @@
 [
   {
+    "title": "新增程序启动自动检查并同步美股拆/并股公司行动（corporate_actions）功能",
+    "time": "2026-11-25 00:36",
+    "author": "Antigravity",
+    "tag": "自动拆股同步已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "新增 src/portfolio/sync/corporate_actions_sync.py：只读扫描库内已交易美股标的，通过 Yahoo Finance Chart Splits API 并发拉取拆/并股事件，采用严格幂等与 ±7 天同向防重规则；无新拆股时绝不以写入模式打开源库；发现新拆股时在单事务中规范写入 import_batches -> raw_records -> corporate_actions 保留完整审计来源。",
+      "在桌面端 main_window.py 的数据源就绪钩子 _source_ready 中接入后台异步检测 _start_corporate_actions_auto_sync()：不阻塞启动、断网静默容错，若自动补录了新拆股则立即清空计算缓存、刷新报表并在顶部横幅提示同步详情。",
+      "实测已在真实库自动发现并补录 2 条缺失拆股：DXJ (2026-10-09 1→3 拆股) 与 SNDK (2026-11-20 1→8 拆股)，SNDK 持仓已自动修正为 16 股、成本 $208.00；二次运行验证 0 新增完美幂等；tests/test_corporate_actions_sync.py 单元测试通过。"
+    ]
+  },
+  {
     "title": "打通 Web 端与桌面端 AI 投资问答历史记录实时双向共享（统一 session_key 与时间字段）",
     "time": "2026-11-25 00:13",
     "author": "Antigravity",

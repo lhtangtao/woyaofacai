@@ -1,3 +1,8 @@
+## 2026-11-25 00:36 新增程序启动自动检查并同步美股拆/并股（corporate_actions）
+
+- 修改者：Antigravity（代码修改）
+- 新增 `src/portfolio/sync/corporate_actions_sync.py` 并在 `main_window.py` 启动加载完真实数据库后后台自动检查全量交易美股拆/并股事件：无新增时不触碰数据库，有新增时规范写入 `import_batches`/`raw_records`/`corporate_actions` 并自动刷新重算持仓；实库已自动补录 `SNDK`（2026-11-20 1→8）与 `DXJ`（2026-10-09 1→3），`tests/test_corporate_actions_sync.py` 单元测试通过。
+
 ## 2026-11-25 00:13 打通 Web 端与桌面端 AI 投资问答历史双向共享
 
 - 修改者：Antigravity（代码修改）

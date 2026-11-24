@@ -227,6 +227,8 @@ class MainWindow(InteractionMixin, QMainWindow):
                 QTimer.singleShot(300, self._restart_application)
         elif lane == "provenance":
             self.detail.setPlainText(message)
+        elif lane == "corporate_actions_sync":
+            logger.warning(f"[桌面端] 自动检查拆并股失败（已忽略）: {message}")
         else:
             if lane == 'people':
                 self._people_scope = None
@@ -298,6 +300,7 @@ class MainWindow(InteractionMixin, QMainWindow):
             start_pipeline(info.path)
             self.check_monthly_history()
             self._start_domestic_auto_sync()
+            self._start_corporate_actions_auto_sync(info.path)
         else:
             self.history_coverage_button.setText('历史行情：合成演示不检查')
         if self.settings and not info.is_demo:
@@ -702,6 +705,34 @@ class MainWindow(InteractionMixin, QMainWindow):
                 if advance_default_today and was_at_own_max:
                     own_date.setDate(today)
                 own_date.blockSignals(False)
+
+    def _start_corporate_actions_auto_sync(self, db_path):
+        """启动后后台静默检查美股拆/并股；若发现新拆股则自动补录并刷新持仓计算。"""
+        checked = getattr(self, "_corporate_actions_checked_paths", set())
+        key = str(Path(db_path).resolve())
+        if key in checked:
+            return
+        checked.add(key)
+        self._corporate_actions_checked_paths = checked
+
+        def _task(_cancel):
+            from portfolio.sync.corporate_actions_sync import sync_missing_corporate_actions
+            return sync_missing_corporate_actions(db_path)
+
+        self._submit("corporate_actions_sync", _task, self._on_corporate_actions_synced)
+
+    def _on_corporate_actions_synced(self, result):
+        if not result or not result.inserted:
+            logger.info("[桌面端] 拆并股启动检查完成，无新增记录")
+            return
+        logger.info(f"[桌面端] {result.summary_text}")
+        if self.analytics_service is not None:
+            with self.analytics_service._lock:
+                self.analytics_service._cache.clear()
+                self.analytics_service._ownership_cache.clear()
+        self.clear_analytics()
+        self.refresh()
+        self.banner.show_status(result.summary_text, "info")
 
     def _on_cash_anchors_updated(self):
         """手动现金锚点保存后立即清空计算缓存并刷新资产总览。"""
