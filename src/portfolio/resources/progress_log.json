@@ -1,5 +1,17 @@
 [
   {
+    "title": "修复 agy 高思考模型尝试调用 Bash 被拒绝导致返回空回复和原始 JSON 泄露的问题",
+    "time": "2026-11-24 23:03",
+    "author": "Antigravity",
+    "tag": "agy 空回复已修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "定位根因：在 Gemini (agy) 引擎下使用高思考深度模型（如 Gemini 4 Hydrogen XHigh）时，模型在 --mode plan --sandbox 下试图调用 Bash 工具被拒绝（denied_actions=[Bash]），导致 CLI 返回 status=SUCCESS 但 response 为空字符串，旧代码直接将整段原始 JSON 输出到对话气泡。",
+      "在 ai_service.py 的 _ask_gemini 中为 agy 增加 --disable-slash-commands 参数及「严禁调用 Bash/终端/文件工具、直接输出 Markdown 分析」的前置运行约束，防止模型误触发工具调用；同时改进 _extract_gemini_json_response，当识别到 response 为空或存在 denied_actions 时抛出清晰中文提示，不再泄露原始 JSON。",
+      "验证范围：tests/test_ai_providers.py 全部 14 项单元测试通过。"
+    ]
+  },
+  {
     "title": "优化 Google API 配置弹窗：改为标准下拉框、拉取模型后自动展开列表供选择",
     "time": "2026-11-24 22:50",
     "author": "Antigravity",

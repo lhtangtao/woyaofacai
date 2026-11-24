@@ -1,3 +1,8 @@
+## 2026-11-24 23:03 修复 agy 引擎尝试调用 Bash 被拒导致返回原始 JSON 的问题
+
+- 修改者：Antigravity（代码修改）
+- 在 `ai_service.py` 中为 `agy` 调用补充 `--disable-slash-commands` 及「禁止调用 Bash/外部工具、直接输出纯文本分析」的前置约束，并修复 `_extract_gemini_json_response` 在 `response` 为空 / 存在 `denied_actions` 时泄露原始 JSON 的缺陷，改为抛出友好中文提示；`tests/test_ai_providers.py` 14 项测试全部通过。
+
 ## 2026-11-24 22:50 优化 Google API 配置弹窗：拉取模型后自动展开下拉列表供选择
 
 - 修改者：Antigravity（代码修改）

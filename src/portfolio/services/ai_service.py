@@ -983,6 +983,21 @@ class CodexAIService:
                 resp = parsed.get("response")
                 if isinstance(resp, str) and resp.strip():
                     return resp.strip()
+                # 识别到合法 CLI JSON 但 response 为空（常见原因：高思考模型尝试调用被只读模式拒绝的工具）
+                if "response" in parsed or "status" in parsed:
+                    denied = parsed.get("denied_actions") or []
+                    denied_names = [
+                        str(item.get("display_name") or item.get("action") or "")
+                        for item in denied
+                        if isinstance(item, dict)
+                    ]
+                    denied_names = [n for n in denied_names if n]
+                    if denied_names:
+                        raise RuntimeError(
+                            f"模型尝试调用被只读模式禁止的工具（{', '.join(denied_names)}），导致未生成文本回复；"
+                            f"请重新发送，或切换其他模型 / Google API 引擎。"
+                        )
+                    raise RuntimeError("AI 引擎返回了空回复，请重试或切换其他模型。")
         return None
 
     @classmethod
@@ -1022,13 +1037,20 @@ class CodexAIService:
             provider_label = "Gemini CLI"
         else:
             chosen_model = (model or "").strip() or cls.get_agy_model()
+            agy_prompt = (
+                "【重要运行约束】：当前处于只读纯文本投资问答模式，严格禁止调用 Bash、终端命令、"
+                "读写文件或任何需要授权的外部工具；请直接基于下方已注入的真实账本/标的上下文与专业金融知识，"
+                "一步输出完整的 Markdown 文本分析结论。\n\n"
+                f"{full_prompt}"
+            )
             cmd = [
                 cli,
                 "-p",
-                full_prompt,
+                agy_prompt,
                 "--mode",
                 "plan",
                 "--sandbox",
+                "--disable-slash-commands",
                 "--output-format",
                 "json",
                 "--model",

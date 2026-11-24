@@ -497,6 +497,18 @@ class TestGoogleAPIProvider(unittest.TestCase):
                 self.assertEqual(stock_page.worker.model, "claude-opus-5-5-high")
                 stock_page._thinking_timer.stop()
 
+    def test_agy_empty_response_with_denied_actions_raises_friendly_error(self):
+        raw_json = json.dumps({
+            "conversation_id": "test-conv",
+            "status": "SUCCESS",
+            "response": "",
+            "denied_actions": [{"action": "command", "display_name": "Bash"}],
+        })
+        with self.assertRaises(RuntimeError) as ctx:
+            CodexAIService._extract_gemini_json_response(raw_json)
+        self.assertIn("Bash", str(ctx.exception))
+        self.assertIn("禁止的工具", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
