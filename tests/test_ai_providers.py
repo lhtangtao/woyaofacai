@@ -16,12 +16,13 @@ class TestAIServiceProviders(unittest.TestCase):
         CodexAIService._login_status_cache = {}
         CodexAIService._login_status_timestamp = {}
 
-    def test_normalize_ai_provider_defaults_to_codex(self):
-        self.assertEqual(normalize_ai_provider(None), "codex")
-        self.assertEqual(normalize_ai_provider(""), "codex")
-        self.assertEqual(normalize_ai_provider("unknown"), "codex")
+    def test_normalize_ai_provider_defaults_to_gemini(self):
+        self.assertEqual(normalize_ai_provider(None), "gemini")
+        self.assertEqual(normalize_ai_provider(""), "gemini")
+        self.assertEqual(normalize_ai_provider("unknown"), "gemini")
         self.assertEqual(normalize_ai_provider("CODEX"), "codex")
         self.assertEqual(normalize_ai_provider(" Gemini "), "gemini")
+        self.assertEqual(normalize_ai_provider("google_api"), "google_api")
 
     def test_check_login_status_gemini_with_agy_and_oauth(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,16 +109,16 @@ class TestAIServiceProviders(unittest.TestCase):
         self.assertIn("--skip-trust", cmd)
         self.assertIn("--approval-mode", cmd)
 
-    def test_ask_defaults_to_codex(self):
+    def test_ask_defaults_to_gemini(self):
         with (
             patch.object(CodexAIService, "get_cli_path", return_value="/usr/local/bin/codex"),
             patch.object(CodexAIService, "_run_cli_process", return_value=0) as mock_run,
             patch.object(CodexAIService, "_ask_gemini", return_value="gemini reply") as mock_gemini,
         ):
-            CodexAIService.ask("你好")
-        mock_run.assert_called_once()
-        self.assertEqual(mock_run.call_args.kwargs["provider_label"], "Codex")
-        mock_gemini.assert_not_called()
+            res = CodexAIService.ask("你好")
+        self.assertEqual(res, "gemini reply")
+        mock_gemini.assert_called_once()
+        mock_run.assert_not_called()
 
 
 class TestDesktopAIPagesProviderSwitch(unittest.TestCase):
@@ -154,19 +155,24 @@ class TestDesktopAIPagesProviderSwitch(unittest.TestCase):
             chat_page = AIAssistantPage()
             stock_page = AIStockAnalysisPage()
 
-            # 两个页面均默认选中 Codex
+            # 两个页面均默认选中 Gemini (agy)
+            self.assertEqual(chat_page.current_provider(), "gemini")
+            self.assertEqual(stock_page.current_provider(), "gemini")
+            self.assertIn("Gemini", chat_page.status_badge.text())
+            self.assertIn("Gemini", stock_page.status_badge.text())
+
+            # 切换到 Codex 再切回 Gemini 状态徽章与 current_provider 同步更新
+            chat_page.provider_combo.setCurrentIndex(0)
+            stock_page.provider_combo.setCurrentIndex(0)
             self.assertEqual(chat_page.current_provider(), "codex")
             self.assertEqual(stock_page.current_provider(), "codex")
             self.assertIn("Codex", chat_page.status_badge.text())
             self.assertIn("Codex", stock_page.status_badge.text())
 
-            # 切换到 Gemini 后状态徽章与 current_provider 同步更新
             chat_page.provider_combo.setCurrentIndex(1)
             stock_page.provider_combo.setCurrentIndex(1)
             self.assertEqual(chat_page.current_provider(), "gemini")
             self.assertEqual(stock_page.current_provider(), "gemini")
-            self.assertIn("Gemini", chat_page.status_badge.text())
-            self.assertIn("Gemini", stock_page.status_badge.text())
 
             # 发送问题时向后台 Worker 传入当前选中的 provider="gemini"
             with (
@@ -263,23 +269,23 @@ class TestWebAIProviderRoutes(unittest.TestCase):
             self.assertIn("gemini", st_data["providers"])
             self.assertIn("google_api", st_data["providers"])
 
-            # 2. 投资问答接口不传 provider 默认走 codex；传 gemini 走 gemini
+            # 2. 投资问答接口不传 provider 默认走 gemini；传 codex 走 codex
             c_default = self.client.post("/api/v1/ai/chat", json={"prompt": "默认引擎测试"}, headers=self.csrf_headers, environ_overrides=env)
             self.assertEqual(c_default.status_code, 200)
-            self.assertEqual(c_default.get_json()["provider"], "codex")
-            self.assertEqual(mock_ask.call_args.kwargs["provider"], "codex")
+            self.assertEqual(c_default.get_json()["provider"], "gemini")
+            self.assertEqual(mock_ask.call_args.kwargs["provider"], "gemini")
 
             c_gem = self.client.post(
                 "/api/v1/ai/chat",
-                json={"prompt": "Gemini 引擎测试", "provider": "gemini"},
+                json={"prompt": "Codex 引擎测试", "provider": "codex"},
                 headers=self.csrf_headers,
                 environ_overrides=env,
             )
             self.assertEqual(c_gem.status_code, 200)
-            self.assertEqual(c_gem.get_json()["provider"], "gemini")
-            self.assertEqual(mock_ask.call_args.kwargs["provider"], "gemini")
+            self.assertEqual(c_gem.get_json()["provider"], "codex")
+            self.assertEqual(mock_ask.call_args.kwargs["provider"], "codex")
 
-            # 3. 股票分析接口同样默认 codex、支持切换 gemini
+            # 3. 股票分析接口同样默认 gemini、支持切换 codex
             s_default = self.client.post(
                 "/api/v1/ai/stock/chat",
                 json={"symbol": "NVDA", "prompt": "分析"},
@@ -287,18 +293,18 @@ class TestWebAIProviderRoutes(unittest.TestCase):
                 environ_overrides=env,
             )
             self.assertEqual(s_default.status_code, 200)
-            self.assertEqual(s_default.get_json()["provider"], "codex")
-            self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "codex")
+            self.assertEqual(s_default.get_json()["provider"], "gemini")
+            self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "gemini")
 
             s_gem = self.client.post(
                 "/api/v1/ai/stock/chat",
-                json={"symbol": "NVDA", "prompt": "分析", "provider": "gemini"},
+                json={"symbol": "NVDA", "prompt": "分析", "provider": "codex"},
                 headers=self.csrf_headers,
                 environ_overrides=env,
             )
             self.assertEqual(s_gem.status_code, 200)
-            self.assertEqual(s_gem.get_json()["provider"], "gemini")
-            self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "gemini")
+            self.assertEqual(s_gem.get_json()["provider"], "codex")
+            self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "codex")
 
     def test_web_agy_models_google_config_and_context_kwargs(self):
         env = {"REMOTE_ADDR": "127.0.0.1"}
@@ -528,7 +534,7 @@ class TestGoogleAPIProvider(unittest.TestCase):
         agy_cfg = Path(self._tmp.name) / "ai_agy_config.json"
         with patch.dict(os.environ, {"MONEY3_AGY_CONFIG": str(agy_cfg)}, clear=False):
             CodexAIService._agy_models_cache = None
-            self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-argon-medium")
+            self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-hydrogen-high")
 
             CodexAIService.save_agy_model("gemini-4-neon-high")
             self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-neon-high")
@@ -558,10 +564,6 @@ class TestGoogleAPIProvider(unittest.TestCase):
             ):
                 chat_page = AIAssistantPage()
                 stock_page = AIStockAnalysisPage()
-                self.assertFalse(chat_page.agy_model_combo.isVisibleTo(chat_page))
-
-                chat_page.provider_combo.setCurrentIndex(1)  # gemini
-                stock_page.provider_combo.setCurrentIndex(1)
                 self.assertFalse(chat_page.agy_model_combo.isHidden())
                 self.assertFalse(stock_page.agy_model_combo.isHidden())
 

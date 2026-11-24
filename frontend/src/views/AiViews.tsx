@@ -34,13 +34,15 @@ interface AgyModelOption {
 }
 
 const DEFAULT_AGY_MODELS: AgyModelOption[] = [
+  { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
+  { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
+  { id: "gemini-4-hydrogen-xhigh", label: "Gemini 4 Hydrogen (XHigh)" },
   { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
   { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
   { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)" },
   { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
   { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)" },
   { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)" },
-  { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
   { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
   { id: "claude-opus-5-5-medium", label: "Claude Opus 5.5 (Medium)" },
   { id: "claude-opus-5-5-high", label: "Claude Opus 5.5 (High)" },
@@ -225,10 +227,10 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
   const [availableChannels, setAvailableChannels] = useState<string[]>([]);
   const [availableTickers, setAvailableTickers] = useState<string[]>([]);
 
-  const [provider, setProvider] = useState<AiProvider>("codex");
+  const [provider, setProvider] = useState<AiProvider>("gemini");
   const [providersStatus, setProvidersStatus] = useState<Record<string, any>>({});
   const [agyModels, setAgyModels] = useState<AgyModelOption[]>(DEFAULT_AGY_MODELS);
-  const [agyModel, setAgyModel] = useState("gemini-4-argon-medium");
+  const [agyModel, setAgyModel] = useState("gemini-4-hydrogen-high");
   const [agyModelsLoaded, setAgyModelsLoaded] = useState(false);
 
   const [loading, setLoading] = useState(false);

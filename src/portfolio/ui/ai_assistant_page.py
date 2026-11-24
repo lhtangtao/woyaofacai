@@ -316,7 +316,7 @@ class AIAssistantPage(QWidget):
         self.provider_combo.addItem("Codex", "codex")
         self.provider_combo.addItem("Gemini", "gemini")
         self.provider_combo.addItem("Google API", "google_api")
-        self.provider_combo.setCurrentIndex(0)  # 默认使用 Codex
+        self.provider_combo.setCurrentIndex(1)  # 默认使用 Gemini (agy)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         title_box.addWidget(self.provider_combo)
 
@@ -327,7 +327,7 @@ class AIAssistantPage(QWidget):
             self.agy_model_combo, list(AGY_DEFAULT_MODELS), CodexAIService.get_agy_model()
         )
         self.agy_model_combo.currentIndexChanged.connect(self._on_agy_model_changed)
-        self.agy_model_combo.setVisible(False)
+        self.agy_model_combo.setVisible(True)
         self._agy_models_worker: AgyModelFetchWorker | None = None
         self._agy_models_loaded = False
         title_box.addWidget(self.agy_model_combo)

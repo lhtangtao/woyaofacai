@@ -51,8 +51,12 @@ _DEFAULT_CONSERVATIVE_PRICING = (Decimal("4.00"), Decimal("20.00"))
 _GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 _USAGE_LOCK = threading.Lock()
 
-DEFAULT_AGY_MODEL = "gemini-4-argon-medium"
+DEFAULT_AI_PROVIDER = "gemini"
+DEFAULT_AGY_MODEL = "gemini-4-hydrogen-high"
 AGY_DEFAULT_MODELS: tuple[tuple[str, str], ...] = (
+    ("gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"),
+    ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
+    ("gemini-4-hydrogen-xhigh", "Gemini 4 Hydrogen (XHigh)"),
     ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
     ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
     ("gemini-4-neon-medium", "Gemini 4 Neon (Medium)"),
@@ -60,7 +64,6 @@ AGY_DEFAULT_MODELS: tuple[tuple[str, str], ...] = (
     ("gemini-4-neon-xhigh", "Gemini 4 Neon (XHigh)"),
     ("gemini-4-carbon-medium", "Gemini 4 Carbon (Medium)"),
     ("gemini-4-carbon-high", "Gemini 4 Carbon (High)"),
-    ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
     ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
     ("claude-opus-5-5-medium", "Claude Opus 5.5 (Medium)"),
     ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
@@ -78,9 +81,9 @@ def agy_model_config_path() -> Path:
 
 
 def normalize_ai_provider(provider: str | None) -> str:
-    """规范化 AI 引擎名称，未知值默认回退为 codex。"""
-    val = (provider or "codex").strip().lower()
-    return val if val in SUPPORTED_AI_PROVIDERS else "codex"
+    """规范化 AI 引擎名称，未知值默认回退为 gemini。"""
+    val = (provider or DEFAULT_AI_PROVIDER).strip().lower()
+    return val if val in SUPPORTED_AI_PROVIDERS else DEFAULT_AI_PROVIDER
 
 
 def google_api_config_path() -> Path:
@@ -643,7 +646,7 @@ class CodexAIService:
         }
 
     @classmethod
-    def check_login_status(cls, force: bool = False, cache_ttl: float = 120.0, provider: str = "codex") -> dict:
+    def check_login_status(cls, force: bool = False, cache_ttl: float = 120.0, provider: str = "gemini") -> dict:
         """
         检查 AI 引擎（codex / gemini / google_api）可用状态（带按引擎缓存与超时防卡死机制）
         :param force: 是否强制重新检测外部进程（默认 False，复用有效缓存）
@@ -1229,7 +1232,7 @@ class CodexAIService:
         context: str = "",
         model: str | None = None,
         cancel_event: threading.Event | None = None,
-        provider: str = "codex",
+        provider: str = "gemini",
     ) -> str:
         """
         调用本地 AI CLI（codex / gemini）或 Google API 发起查询，安全且只读模式返回结果
@@ -1314,7 +1317,7 @@ class CodexAIService:
         symbol: str | None = None,
         model: str | None = None,
         cancel_event: threading.Event | None = None,
-        provider: str = "codex",
+        provider: str = "gemini",
     ) -> str:
         """
         纯粹针对标的股票本身进行基本面、财报、业务前景与竞争格局的分析问答，不依赖用户数据库账本。

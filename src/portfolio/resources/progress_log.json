@@ -1,5 +1,16 @@
 [
   {
+    "title": "默认 AI 引擎与默认模型全面切换为 Gemini (agy) · Gemini 4 Hydrogen (High)",
+    "time": "2026-11-25 00:10",
+    "author": "Antigravity",
+    "tag": "默认 AI 引擎已切换",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 ai_service.py、桌面端 AI 投资问答 (ai_assistant_page.py)、桌面端 AI 股票分析 (ai_stock_analysis_page.py) 及 Web 端 (AiViews.tsx / client.ts) 中，将默认 AI 引擎由 Codex 切换为 Gemini (Antigravity CLI)，并将默认模型设为 gemini-4-hydrogen-high（Gemini 4 Hydrogen High），打开页面默认显示 agy 模型下拉框。",
+      "验证范围：frontend `npm run build`（tsc + vite build）编译打包至 src/portfolio/web/static_dist/ 通过；tests/test_ai_providers.py 全部 15 项单元测试通过。"
+    ]
+  },
+  {
     "title": "Web 端顶部栏新增「退出」按钮，支持一键登出并弹出登录框切换账号",
     "time": "2026-11-25 00:07",
     "author": "Antigravity",

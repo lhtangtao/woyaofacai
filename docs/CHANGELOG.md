@@ -1,3 +1,8 @@
+## 2026-11-25 00:10 默认 AI 引擎与默认模型切换为 Gemini · Gemini 4 Hydrogen (High)
+
+- 修改者：Antigravity（代码修改）
+- 将桌面端、Web 端及后端 `ai_service.py` 的默认 AI 接入方式统一改为 `gemini`（Antigravity CLI），默认模型升级为 `gemini-4-hydrogen-high`（Gemini 4 Hydrogen High）；已重新构建 `src/portfolio/web/static_dist/`，`tests/test_ai_providers.py` 15 项测试全部通过。
+
 ## 2026-11-25 00:07 Web 端顶部栏新增「退出」按钮支持一键切换账号
 
 - 修改者：Antigravity（代码修改）

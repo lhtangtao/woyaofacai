@@ -335,7 +335,7 @@ export const api = {
   aiChat: (
     message: string,
     personId?: number | null,
-    provider: "codex" | "gemini" | "google_api" = "codex",
+    provider: "codex" | "gemini" | "google_api" = "gemini",
     opts?: { model?: string; channel?: string; symbol?: string; include_context?: boolean }
   ) =>
     requestApi("/api/v1/ai/chat", {
@@ -369,7 +369,7 @@ export const api = {
   aiStockChat: (
     symbol: string,
     message: string,
-    provider: "codex" | "gemini" | "google_api" = "codex",
+    provider: "codex" | "gemini" | "google_api" = "gemini",
     model?: string
   ) =>
     requestApi("/api/v1/ai/stock/chat", {
