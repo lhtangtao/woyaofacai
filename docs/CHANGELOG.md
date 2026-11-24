@@ -1,3 +1,8 @@
+## 2026-11-25 00:05 「今日盈亏」纳入当日已全清仓标的并同步计入汇总（桌面端 + Web 端）
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/engine/today_holdings.py` 中将目标交易日已全清仓但当日产生买卖/平仓盈亏的标的（如 2026-11-24 第一证券 `NVD` 今日盈亏 `+$140.97`）纳入「今日盈亏」报表，并同步计入 `today_summary`、`channel_summary` 与顶部汇总行，桌面端与 Web 端共用引擎自动生效；实库核验与 `tests/test_today_holdings.py` 核心用例全部通过。
+
 ## 2026-11-24 23:16 Web 端 AI 投资问答与股票分析 1:1 对齐桌面端并修复上下文错位 Bug
 
 - 修改者：Antigravity（代码修改）

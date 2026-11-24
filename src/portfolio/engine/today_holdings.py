@@ -26,12 +26,14 @@ def today_holdings(analytics, live, session):
     with localcontext() as ctx:
         ctx.prec = 50
         result = []
+        seen_keys = set()
         total_mv = strict_sum(r.values[5] for r in live.rows if r.values[3] is not None and r.values[3] >= MIN_OPEN_QUANTITY)
         for row in live.rows:
             v, meta = row.values, dict(row.metadata)
             if v[3] is not None and v[3] < MIN_OPEN_QUANTITY:
                 continue
             key = (meta['account_id'], meta['instrument_id'])
+            seen_keys.add(key)
             current = daily.get(key)
             previous, baseline_day = None, None
             if current and current.values[5] is not None and current.values[5] > 0 and current.values[15] is not None:
@@ -70,7 +72,75 @@ def today_holdings(analytics, live, session):
             prop_val = (v[5] / total_mv) if (total_mv and total_mv > 0 and v[5] is not None) else None
             result.append(ReportRow((channel, v[2], v[3], previous, price, change, profit,
                                      phase if usable else '等待报价', v[-2] if not historical else day or '—', v[6], lifetime, v[5], recovery, prop_val), meta))
-    note = f'交易日：{day or "无数据"} · {phase}{"历史收盘数据" if historical else "实时估值，每10秒刷新"}。只展示当前仍持有的标的；股票涨跌幅相对昨收，盈亏计入当日买卖现金流。今日已全清仓的标的不计入本页，与总览全部交易盈亏可能不同；缺少报价/基准显示—；当前市值沿用实时/参考估值，参考价口径见行情状态。'
+
+        # 纳入当日已全清仓但当日发生卖出/平仓盈亏的标的（如当日卖光 NVD）
+        for key, current in daily.items():
+            if key in seen_keys:
+                continue
+            end_qty = current.values[8]
+            if end_qty is not None and end_qty >= MIN_OPEN_QUANTITY:
+                continue
+            sold_qty = current.values[7]
+            op_count = current.values[18]
+            is_closed_today = (
+                current.values[4] == '当日已清仓'
+                or (sold_qty is not None and sold_qty > 0)
+                or (op_count is not None and op_count > 0)
+            )
+            if not is_closed_today:
+                continue
+            opening, bought, sold = current.values[15:18]
+            open_qty = current.values[5]
+            previous, baseline_day = None, None
+            if open_qty is not None and open_qty > 0 and opening is not None:
+                previous = opening / open_qty
+                baseline_day = '该交易日期初收盘基准'
+            elif analytics.scope.reporting_currency == 'USD':
+                close = closes.get(key[1])
+                if close and close[0] == last_close:
+                    baseline_day, previous = close
+            if not historical and open_qty is not None and open_qty > 0 and not valid_opening(current, expected_close):
+                previous = None
+
+            stock = stocks.get(key)
+            sell_price = (sold / sold_qty) if (sold_qty is not None and sold_qty > 0 and sold is not None) else (
+                stock.values[5] if stock and len(stock.values) > 5 else None
+            )
+            if sell_price is not None and previous is not None and previous > 0:
+                change = ratio(sell_price - previous, previous)
+            elif bought is not None and bought > 0 and sold is not None and (open_qty is None or open_qty == 0):
+                change = ratio(sold - bought, bought)
+            else:
+                change = None
+
+            profit = None
+            if historical:
+                profit = current.values[19]
+            elif all(x is not None for x in (opening, bought, sold)):
+                if (open_qty is None or open_qty == 0) or valid_opening(current, expected_close):
+                    profit = Decimal(0) - opening - bought + sold
+
+            channel = {'LONGBRIDGE': '长桥', 'FIRSTRADE': '第一证券', 'SCHWAB': '嘉信'}.get(str(current.values[1]).upper(), current.values[1])
+            lifetime = stock.values[15] if stock and len(stock.values) > 15 else profit
+            c_meta = dict(current.metadata)
+            c_meta.update(
+                account_id=key[0],
+                instrument_id=key[1],
+                trading_day=day,
+                previous_close_day=baseline_day,
+                today_pnl=profit,
+                current_asset=Decimal(0),
+                closed_today=True,
+                today_formula='当日已全清仓收益 = 0 － 上一收盘市值 － 当日买入金额 ＋ 当日卖出金额。',
+                completeness='COMPLETE' if profit is not None else 'INCOMPLETE',
+            )
+            result.append(ReportRow(
+                (channel, current.values[3], Decimal(0), previous, sell_price, change, profit,
+                 '当日已清仓', day or '—', None, lifetime, Decimal(0), None, None),
+                c_meta,
+            ))
+
+    note = f'交易日：{day or "无数据"} · {phase}{"历史收盘数据" if historical else "实时估值，每10秒刷新"}。包含当前仍持有及当日已全清仓标的；股票涨跌幅相对昨收（当日清仓按清仓均价相对昨收），盈亏计入当日买卖现金流；缺少报价/基准显示—；当前市值沿用实时/参考估值，参考价口径见行情状态。'
     if any(r.metadata.get('valuation_source') == 'ESTIMATE_CLOSE' for r in live.rows):
         note += ' 含本机历史估值，非正式收盘数据。'
     if historical:
@@ -114,6 +184,9 @@ def align_with_intraday_history(report, history):
         new_rows = []
         for row in report.rows:
             v, meta = list(row.values), dict(row.metadata)
+            if meta.get('closed_today'):
+                new_rows.append(ReportRow(tuple(v), meta))
+                continue
             key = (meta.get('account_id'), meta.get('instrument_id'))
             pt = acc_inst.get(key)
             if pt is not None:
@@ -164,7 +237,12 @@ def today_summary(rows):
     with localcontext() as ctx:
         ctx.prec = 50
         profit = strict_sum(r.values[6] for r in rows)
-        value = strict_sum(r.values[2] * r.values[4] if r.values[2] is not None and r.values[4] is not None else None for r in rows)
+        value = strict_sum(
+            Decimal(0)
+            if r.values[2] == 0
+            else (r.values[2] * r.values[4] if r.values[2] is not None and r.values[4] is not None else None)
+            for r in rows
+        )
         rates = {}
         for row in rows:
             rates.setdefault(row.values[1], row.values[5])

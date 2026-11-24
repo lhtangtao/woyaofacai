@@ -353,3 +353,106 @@ def test_today_rank_includes_rate_ranking():
     assert res['text'] == '亏损第 2 名 · 亏损率第 3 名'
     assert '亏损率第 3 名' in res['note']
 
+
+def test_closed_today_positions_are_included_in_today_holdings_and_summaries():
+    """验证当日已全清仓标的（如 NVD）正确纳入今日盈亏列表、汇总和渠道统计。"""
+    from portfolio.engine.today_holdings import channel_summary, today_summary_row
+
+    a, live, session = data()
+    closed_meta = {
+        'account_id': 3,
+        'instrument_id': 43,
+        'opening_day': '2026-10-16',
+        'opening_status': 'OFFICIAL_CLOSE',
+    }
+    closed_daily = [D(0)] * 23
+    closed_daily[0] = '2026-10-19'
+    closed_daily[1] = 'FIRSTRADE'
+    closed_daily[3] = 'NVD'
+    closed_daily[4] = '当日已清仓'
+    closed_daily[5] = D(300)        # 期初数量
+    closed_daily[7] = D(300)        # 当日卖出数量
+    closed_daily[8] = D(0)          # 日末持仓数量
+    closed_daily[15] = D('1158.00') # 期初市值 (昨收 3.86)
+    closed_daily[16] = D(0)         # 当日买入金额
+    closed_daily[17] = D('1298.97') # 当日卖出金额 (均价 4.3299)
+    closed_daily[18] = 2            # 当日操作笔数
+    closed_daily[19] = D('140.97')  # 当日收益
+
+    # 当日买进又卖光做 T 清仓
+    daytrade_meta = {'account_id': 2, 'instrument_id': 99}
+    daytrade_daily = [D(0)] * 23
+    daytrade_daily[0] = '2026-10-19'
+    daytrade_daily[1] = 'BBAE'
+    daytrade_daily[3] = 'SOXL'
+    daytrade_daily[4] = '当日已清仓'
+    daytrade_daily[5] = D(0)
+    daytrade_daily[6] = D(100)
+    daytrade_daily[7] = D(100)
+    daytrade_daily[8] = D(0)
+    daytrade_daily[15] = D(0)
+    daytrade_daily[16] = D('1000')
+    daytrade_daily[17] = D('1050')
+    daytrade_daily[18] = 2
+    daytrade_daily[19] = D('50')
+
+    stock_nvd = [None] * 18
+    stock_nvd[5] = D('4.33')
+    stock_nvd[15] = D('129.00')
+    stock_soxl = [None] * 18
+    stock_soxl[5] = D('10.50')
+    stock_soxl[15] = D('50.00')
+
+    a.reports['每日持仓收益'] = Report(
+        '每日持仓收益',
+        (),
+        (
+            *a.reports['每日持仓收益'].rows,
+            ReportRow(tuple(closed_daily), closed_meta),
+            ReportRow(tuple(daytrade_daily), daytrade_meta),
+        ),
+    )
+    a.reports['股票汇总'] = Report(
+        '股票汇总',
+        (),
+        (
+            ReportRow(tuple(stock_nvd), {'account_id': 3, 'instrument_id': 43}),
+            ReportRow(tuple(stock_soxl), {'account_id': 2, 'instrument_id': 99}),
+        ),
+    )
+
+    report = today_holdings(a, live, session)
+    by_ticker = {r.values[1]: r for r in report.rows}
+    assert set(by_ticker.keys()) == {'AAA', 'NVD', 'SOXL'}
+
+    nvd = by_ticker['NVD']
+    assert nvd.values[0] == '第一证券'
+    assert nvd.values[2] == D(0)
+    assert nvd.values[3] == D('3.86')
+    assert nvd.values[4] == D('4.3299')
+    assert nvd.values[6] == D('140.97')
+    assert nvd.values[7] == '当日已清仓'
+    assert nvd.values[10] == D('129.00')
+    assert nvd.values[11] == D(0)
+    assert nvd.metadata['closed_today'] is True
+
+    soxl = by_ticker['SOXL']
+    assert soxl.values[6] == D('50')
+    assert soxl.values[5] == D('0.05')
+
+    # 汇总必须精确累加 AAA(+60) + NVD(+140.97) + SOXL(+50) = +250.97，且不因清仓行变 None
+    pnl, rate, up, down, flat, unknown = today_summary(report.rows)
+    assert pnl == D('250.97')
+    assert rate is not None and rate > 0
+    assert up == 3 and down == 0 and unknown == 0
+
+    ch_map = {ch: (p, mv) for ch, p, mv in channel_summary(report.rows)}
+    assert ch_map['第一证券'] == (D('140.97'), D(0))
+    assert ch_map['BBAE'] == (D('50'), D(0))
+    assert ch_map['长桥'] == (D('60'), D('550'))
+
+    sum_row = today_summary_row(report.rows, report.columns)
+    assert sum_row.values[6] == D('250.97')
+    assert sum_row.values[11] == D('550')
+
+
