@@ -26,8 +26,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from portfolio.services.ai_service import CodexAIService
-from portfolio.ui.ai_google_api_dialog import GoogleAPIConfigDialog
+from portfolio.services.ai_service import AGY_DEFAULT_MODELS, CodexAIService
+from portfolio.ui.ai_google_api_dialog import (
+    AgyModelFetchWorker,
+    GoogleAPIConfigDialog,
+    populate_agy_model_combo,
+)
 from portfolio.ui.filters import TickerSearch
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
@@ -280,6 +284,18 @@ class AIStockAnalysisPage(QWidget):
         self.provider_combo.setCurrentIndex(0)  # 默认使用 Codex
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         title_box.addWidget(self.provider_combo)
+
+        self.agy_model_combo = QComboBox()
+        self.agy_model_combo.setMinimumWidth(195)
+        self.agy_model_combo.setToolTip("选择 Antigravity CLI (agy) 使用的模型（切换后自动记忆）")
+        populate_agy_model_combo(
+            self.agy_model_combo, list(AGY_DEFAULT_MODELS), CodexAIService.get_agy_model()
+        )
+        self.agy_model_combo.currentIndexChanged.connect(self._on_agy_model_changed)
+        self.agy_model_combo.setVisible(False)
+        self._agy_models_worker: AgyModelFetchWorker | None = None
+        self._agy_models_loaded = False
+        title_box.addWidget(self.agy_model_combo)
 
         self.config_api_btn = QPushButton("配置 Google API")
         self.config_api_btn.setObjectName("quiet")
@@ -638,11 +654,48 @@ class AIStockAnalysisPage(QWidget):
                 self.provider_combo.setCurrentIndex(idx)
             self.refresh_codex_status(force=True)
 
+    def current_agy_model(self) -> str:
+        """返回当前选中的 Antigravity CLI (agy) 模型 ID。"""
+        return str(self.agy_model_combo.currentData() or CodexAIService.get_agy_model())
+
+    def _on_agy_model_changed(self):
+        model_id = str(self.agy_model_combo.currentData() or "").strip()
+        if model_id:
+            CodexAIService.save_agy_model(model_id)
+
+    def _load_agy_models_async(self, force: bool = False):
+        if self._agy_models_worker and self._agy_models_worker.isRunning():
+            return
+        if self._agy_models_loaded and not force:
+            return
+        worker = AgyModelFetchWorker(force=force, parent=self)
+        worker.models_ready.connect(self._on_agy_models_ready)
+        self._agy_models_worker = worker
+        worker.start()
+
+    def _on_agy_models_ready(self, models: list):
+        self._agy_models_loaded = True
+        if models:
+            populate_agy_model_combo(self.agy_model_combo, models, CodexAIService.get_agy_model())
+
     def _on_provider_changed(self):
+        is_gemini = self.current_provider() == "gemini"
+        self.agy_model_combo.setVisible(is_gemini)
+        if is_gemini:
+            populate_agy_model_combo(
+                self.agy_model_combo,
+                [(self.agy_model_combo.itemData(i), self.agy_model_combo.itemText(i)) for i in range(self.agy_model_combo.count())]
+                or list(AGY_DEFAULT_MODELS),
+                CodexAIService.get_agy_model(),
+            )
+            self._load_agy_models_async(force=False)
         self.refresh_codex_status(force=False)
 
     def refresh_codex_status(self, force: bool = False):
         provider = self.current_provider()
+        self.agy_model_combo.setVisible(provider == "gemini")
+        if provider == "gemini" and force:
+            self._load_agy_models_async(force=True)
         label = self._provider_label(provider)
         status = CodexAIService.check_login_status(force=force, provider=provider)
         is_running = bool(self.worker and self.worker.isRunning())
@@ -749,7 +802,14 @@ class AIStockAnalysisPage(QWidget):
             self.status_hint.setText(f"📈 {label} 正在对 {target_symbol or '该标的'} 进行基本面与商业前景分析... (已耗时 0 秒 · 运算中)")
             self._thinking_timer.start(1000)
 
-            self.worker = AskStockWorker(text, symbol=target_symbol, session_key=current_key, provider=provider)
+            selected_model = self.current_agy_model() if provider == "gemini" else None
+            self.worker = AskStockWorker(
+                text,
+                symbol=target_symbol,
+                session_key=current_key,
+                model=selected_model,
+                provider=provider,
+            )
             self.worker.finished_signal.connect(self._on_worker_finished)
             self.worker.error_signal.connect(self._on_worker_error)
             self.worker.start()

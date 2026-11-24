@@ -1,7 +1,7 @@
 """Google API (Gemini) 配置与月度预算保护弹窗。"""
 
 from decimal import Decimal
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -226,3 +226,37 @@ class GoogleAPIConfigDialog(QDialog):
             max_output_tokens=max_tokens,
         )
         self.accept()
+
+
+class AgyModelFetchWorker(QThread):
+    """后台异步拉取本机 Antigravity CLI (agy) 可用模型列表，避免阻塞 UI。"""
+
+    models_ready = Signal(list)
+
+    def __init__(self, force: bool = False, parent=None):
+        super().__init__(parent)
+        self.force = force
+
+    def run(self):
+        models = CodexAIService.list_agy_models(force=self.force)
+        self.models_ready.emit(models)
+
+
+def populate_agy_model_combo(combo: QComboBox, models: list[tuple[str, str]], selected_model: str):
+    """填充 agy 模型下拉框并保留用户当前选中的模型（不触发多余信号）。"""
+    combo.blockSignals(True)
+    try:
+        combo.clear()
+        found_idx = -1
+        for idx, (m_id, m_label) in enumerate(models):
+            combo.addItem(m_label, m_id)
+            if m_id == selected_model:
+                found_idx = idx
+        if found_idx < 0 and selected_model:
+            combo.addItem(selected_model, selected_model)
+            found_idx = combo.count() - 1
+        if found_idx >= 0:
+            combo.setCurrentIndex(found_idx)
+    finally:
+        combo.blockSignals(False)
+

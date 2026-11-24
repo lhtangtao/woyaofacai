@@ -148,6 +148,8 @@ class TestDesktopAIPagesProviderSwitch(unittest.TestCase):
             patch("portfolio.ui.ai_assistant_page.QStandardPaths.writableLocation", return_value=tmp),
             patch("portfolio.ui.ai_stock_analysis_page.QStandardPaths.writableLocation", return_value=tmp),
             patch.object(CodexAIService, "check_login_status", side_effect=self._mock_status),
+            patch("portfolio.ui.ai_assistant_page.AgyModelFetchWorker.start"),
+            patch("portfolio.ui.ai_stock_analysis_page.AgyModelFetchWorker.start"),
         ):
             chat_page = AIAssistantPage()
             stock_page = AIStockAnalysisPage()
@@ -431,6 +433,69 @@ class TestGoogleAPIProvider(unittest.TestCase):
 
         cost = CodexAIService._estimate_google_api_cost("gemini-4-argon-preview-2026", 1_000_000, 1_000_000)
         self.assertEqual(str(cost), "24.000000")
+
+    def test_agy_model_persistence_list_and_ui_switching(self):
+        from PySide6.QtWidgets import QApplication
+        from portfolio.ui.ai_assistant_page import AIAssistantPage
+        from portfolio.ui.ai_stock_analysis_page import AIStockAnalysisPage
+
+        agy_cfg = Path(self._tmp.name) / "ai_agy_config.json"
+        with patch.dict(os.environ, {"MONEY3_AGY_CONFIG": str(agy_cfg)}, clear=False):
+            CodexAIService._agy_models_cache = None
+            self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-argon-medium")
+
+            CodexAIService.save_agy_model("gemini-4-neon-high")
+            self.assertEqual(CodexAIService.get_agy_model(), "gemini-4-neon-high")
+
+            fake_proc = MagicMock(
+                returncode=0,
+                stdout="Fetching available models...\ngemini-4-neon-high\tGemini 4 Neon (High)\nclaude-opus-5-5-high\tClaude Opus 5.5 (High)\n",
+            )
+            with (
+                patch.object(CodexAIService, "get_agy_cli_path", return_value="/usr/local/bin/agy"),
+                patch("portfolio.services.ai_service.subprocess.run", return_value=fake_proc),
+            ):
+                models = CodexAIService.list_agy_models(force=True)
+                self.assertEqual(
+                    models,
+                    [("gemini-4-neon-high", "Gemini 4 Neon (High)"), ("claude-opus-5-5-high", "Claude Opus 5.5 (High)")],
+                )
+
+            app = QApplication.instance() or QApplication([])
+            self.assertIsNotNone(app)
+            with (
+                patch.object(CodexAIService, "check_login_status", return_value={"provider": "gemini", "installed": True, "logged_in": True, "account_type": "Antigravity", "message": "ok"}),
+                patch("portfolio.ui.ai_assistant_page.AgyModelFetchWorker.start"),
+                patch("portfolio.ui.ai_stock_analysis_page.AgyModelFetchWorker.start"),
+                patch("portfolio.ui.ai_assistant_page.AskCodexWorker.start"),
+                patch("portfolio.ui.ai_stock_analysis_page.AskStockWorker.start"),
+            ):
+                chat_page = AIAssistantPage()
+                stock_page = AIStockAnalysisPage()
+                self.assertFalse(chat_page.agy_model_combo.isVisibleTo(chat_page))
+
+                chat_page.provider_combo.setCurrentIndex(1)  # gemini
+                stock_page.provider_combo.setCurrentIndex(1)
+                self.assertFalse(chat_page.agy_model_combo.isHidden())
+                self.assertFalse(stock_page.agy_model_combo.isHidden())
+
+                idx = chat_page.agy_model_combo.findData("claude-opus-5-5-high")
+                self.assertGreaterEqual(idx, 0)
+                chat_page.agy_model_combo.setCurrentIndex(idx)
+                self.assertEqual(CodexAIService.get_agy_model(), "claude-opus-5-5-high")
+
+                chat_page.input_edit.setPlainText("测试 agy 模型传入")
+                chat_page.handle_send()
+                self.assertEqual(chat_page.worker.model, "claude-opus-5-5-high")
+                chat_page._thinking_timer.stop()
+
+                idx_s = stock_page.agy_model_combo.findData("claude-opus-5-5-high")
+                self.assertGreaterEqual(idx_s, 0)
+                stock_page.agy_model_combo.setCurrentIndex(idx_s)
+                stock_page.input_edit.setPlainText("测试 agy 股票研报模型")
+                stock_page.handle_send()
+                self.assertEqual(stock_page.worker.model, "claude-opus-5-5-high")
+                stock_page._thinking_timer.stop()
 
 
 if __name__ == "__main__":

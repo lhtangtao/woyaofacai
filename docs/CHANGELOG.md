@@ -1,3 +1,8 @@
+## 2026-11-24 22:47 AI 投资问答与股票分析新增 Antigravity CLI (agy) 模型切换与自动记忆
+
+- 修改者：Antigravity（代码修改）
+- 在 `ai_service.py` 新增 `get_agy_model` / `save_agy_model` 本地持久化及 `list_agy_models()` 实时解析本机 `agy models` 完整列表；在 `ai_assistant_page.py` 与 `ai_stock_analysis_page.py` 选中「Gemini」引擎时展示模型切换下拉框（支持 Gemini 4 Argon/Neon/Carbon/Hydrogen、Gemini 3.8 Flash、Claude Opus/Sonnet 5.5 等全部本机可用模型），后台异步拉取不卡界面；`tests/test_ai_providers.py` 13 项测试全部通过。
+
 ## 2026-11-24 22:14 Google API 引擎升级至 Gemini 3.8 / Gemini 4 最新模型列表并支持实时拉取
 
 - 修改者：Antigravity（代码修改）

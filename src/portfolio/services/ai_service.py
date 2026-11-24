@@ -51,6 +51,31 @@ _DEFAULT_CONSERVATIVE_PRICING = (Decimal("4.00"), Decimal("20.00"))
 _GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 _USAGE_LOCK = threading.Lock()
 
+DEFAULT_AGY_MODEL = "gemini-4-argon-medium"
+AGY_DEFAULT_MODELS: tuple[tuple[str, str], ...] = (
+    ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
+    ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
+    ("gemini-4-neon-medium", "Gemini 4 Neon (Medium)"),
+    ("gemini-4-neon-high", "Gemini 4 Neon (High)"),
+    ("gemini-4-neon-xhigh", "Gemini 4 Neon (XHigh)"),
+    ("gemini-4-carbon-medium", "Gemini 4 Carbon (Medium)"),
+    ("gemini-4-carbon-high", "Gemini 4 Carbon (High)"),
+    ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
+    ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
+    ("claude-opus-5-5-medium", "Claude Opus 5.5 (Medium)"),
+    ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+    ("claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"),
+    ("claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"),
+)
+
+
+def agy_model_config_path() -> Path:
+    """返回本地 Antigravity CLI (agy) 模型偏好配置文件路径（支持环境变量覆盖）。"""
+    override = os.environ.get("MONEY3_AGY_CONFIG", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return google_api_config_path().with_name("ai_agy_config.json")
+
 
 def normalize_ai_provider(provider: str | None) -> str:
     """规范化 AI 引擎名称，未知值默认回退为 codex。"""
@@ -160,6 +185,72 @@ class CodexAIService:
 
     _login_status_cache: dict[str, dict] = {}
     _login_status_timestamp: dict[str, float] = {}
+    _agy_models_cache: list[tuple[str, str]] | None = None
+
+    @staticmethod
+    def get_agy_model() -> str:
+        """读取用户保存的 Antigravity CLI (agy) 默认模型，缺省回退 DEFAULT_AGY_MODEL。"""
+        cfg_path = agy_model_config_path()
+        if cfg_path.is_file():
+            try:
+                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    saved = str(data.get("model") or "").strip()
+                    if saved:
+                        return saved
+            except Exception:
+                pass
+        return DEFAULT_AGY_MODEL
+
+    @staticmethod
+    def save_agy_model(model: str) -> Path:
+        """持久化用户选择的 Antigravity CLI (agy) 模型。"""
+        cfg_path = agy_model_config_path()
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        clean_model = (model or "").strip() or DEFAULT_AGY_MODEL
+        cfg_path.write_text(json.dumps({"model": clean_model}, ensure_ascii=False, indent=2), encoding="utf-8")
+        return cfg_path
+
+    @classmethod
+    def list_agy_models(cls, force: bool = False, timeout: float = 20.0) -> list[tuple[str, str]]:
+        """通过 `agy models` 动态获取本机 Antigravity CLI 当前可用模型列表 (model_id, label)。"""
+        if not force and cls._agy_models_cache:
+            return list(cls._agy_models_cache)
+        agy_cli = cls.get_agy_cli_path()
+        if not agy_cli:
+            return list(AGY_DEFAULT_MODELS)
+        try:
+            res = subprocess.run(
+                [agy_cli, "models"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if res.returncode != 0:
+                return list(AGY_DEFAULT_MODELS)
+            parsed: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for raw_line in res.stdout.splitlines():
+                line = raw_line.strip()
+                if not line or line.lower().startswith("fetching"):
+                    continue
+                if "\t" in line:
+                    m_id, m_label = line.split("\t", 1)
+                else:
+                    parts = line.split(None, 1)
+                    m_id = parts[0]
+                    m_label = parts[1] if len(parts) > 1 else parts[0]
+                m_id = m_id.strip()
+                m_label = m_label.strip() or m_id
+                if m_id and m_id not in seen and " " not in m_id:
+                    seen.add(m_id)
+                    parsed.append((m_id, m_label))
+            if parsed:
+                cls._agy_models_cache = parsed
+                return list(parsed)
+        except Exception:
+            pass
+        return list(AGY_DEFAULT_MODELS)
 
     @staticmethod
     def _read_active_google_account(gemini_dir: Path) -> str:
@@ -930,7 +1021,7 @@ class CodexAIService:
                 cmd.extend(["-m", model])
             provider_label = "Gemini CLI"
         else:
-            chosen_model = model or "gemini-4-argon-medium"
+            chosen_model = (model or "").strip() or cls.get_agy_model()
             cmd = [
                 cli,
                 "-p",
