@@ -255,8 +255,20 @@ class AIAssistantPage(QWidget):
         base_dir.mkdir(parents=True, exist_ok=True)
         return base_dir / "ai_chat_sessions.json"
 
+    @staticmethod
+    def _normalize_session_key(key: str) -> str:
+        """将旧版 Web 端的 `::` / `全部标的` 会话 Key 统一转换为桌面端标准 `___` 格式。"""
+        if "::" in key and "___" not in key:
+            parts = [p.strip() for p in key.split("::")]
+            if len(parts) == 3:
+                p, ch, sym = parts
+                if sym in ("", "全部标的", "全部股票"):
+                    sym = "全部股票"
+                return f"{p or '全部人员'}___{ch or '全部渠道'}___{sym}"
+        return key
+
     def load_sessions(self):
-        """从本地磁盘读取持久化历史对话"""
+        """从本地磁盘读取持久化历史对话（自动合并兼容旧版 Web 端 Key 与时间字段）"""
         path = self._history_file_path()
         if not path.exists():
             return
@@ -264,18 +276,32 @@ class AIAssistantPage(QWidget):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                for key, msg_list in data.items():
-                    if isinstance(msg_list, list):
-                        self.chat_sessions[key] = [
+                merged: dict[str, list[ChatMessage]] = {}
+                for raw_key, msg_list in data.items():
+                    if not isinstance(msg_list, list):
+                        continue
+                    norm_key = self._normalize_session_key(str(raw_key))
+                    parsed_msgs = []
+                    for m in msg_list:
+                        if not (isinstance(m, dict) and "role" in m and "content" in m):
+                            continue
+                        t_str = str(m.get("time_str") or "").strip()
+                        if not t_str and m.get("time"):
+                            raw_t = str(m.get("time"))
+                            t_str = raw_t[11:19] if "T" in raw_t and len(raw_t) >= 19 else raw_t
+                        parsed_msgs.append(
                             ChatMessage(
                                 role=m.get("role", "user"),
                                 content=m.get("content", ""),
-                                time_str=m.get("time_str", ""),
+                                time_str=t_str,
                                 scope_tag=m.get("scope_tag", ""),
                             )
-                            for m in msg_list
-                            if isinstance(m, dict) and "role" in m and "content" in m
-                        ]
+                        )
+                    if norm_key in merged:
+                        merged[norm_key].extend(parsed_msgs)
+                    else:
+                        merged[norm_key] = parsed_msgs
+                self.chat_sessions.update(merged)
         except Exception:
             pass
 

@@ -2070,11 +2070,38 @@ def api_ai_scope_options():
 
 
 def _build_ai_chat_session_key(person_label: str, channel_label: str, symbol_label: str) -> str:
+    """与桌面端 AIAssistantPage.current_session_key() 保持 1:1 一致的会话 Key 格式。"""
+    p = (person_label or "全部人员").strip() or "全部人员"
     ch = (channel_label or "全部渠道").strip() or "全部渠道"
-    sym = (symbol_label or "全部标的").strip().upper()
+    sym = (symbol_label or "全部股票").strip().upper().removesuffix(".US")
     if sym in ("", "全部股票", "全部标的"):
-        sym = "全部标的"
-    return f"{person_label}::{ch}::{sym}"
+        sym = "全部股票"
+    return f"{p}___{ch}___{sym}"
+
+
+def _legacy_ai_chat_session_keys(person_label: str, channel_label: str, symbol_label: str) -> tuple[str, ...]:
+    """兼容旧版 Web 端写入的 `::` 与 `全部标的` 历史会话 Key，便于无损合并。"""
+    p = (person_label or "全部人员").strip() or "全部人员"
+    ch = (channel_label or "全部渠道").strip() or "全部渠道"
+    sym = (symbol_label or "全部股票").strip().upper().removesuffix(".US")
+    if sym in ("", "全部股票", "全部标的"):
+        return (f"{p}::{ch}::全部标的", f"{p}::{ch}::全部股票")
+    return (f"{p}::{ch}::{sym}",)
+
+
+def _merge_legacy_chat_history(sessions: dict, canonical_key: str, legacy_keys: tuple[str, ...]) -> list[dict]:
+    """合并标准 Key 与旧版 `::` Key 的消息，返回统一列表（并写回 sessions 内存字典）。"""
+    merged = list(sessions.get(canonical_key) or [])
+    changed = False
+    for lk in legacy_keys:
+        if lk != canonical_key and lk in sessions:
+            legacy_msgs = sessions.pop(lk) or []
+            if legacy_msgs:
+                merged.extend(legacy_msgs)
+                changed = True
+    if changed:
+        sessions[canonical_key] = merged[-100:]
+    return merged
 
 
 @api_v1.route("/ai/history", methods=["GET"])
@@ -2086,11 +2113,15 @@ def api_ai_history():
     if person_name:
         requested_person = person_name
     channel = (request.args.get("channel") or "全部渠道").strip() or "全部渠道"
-    symbol = (request.args.get("symbol") or "全部标的").strip() or "全部标的"
+    symbol = (request.args.get("symbol") or "全部股票").strip() or "全部股票"
 
     session_key = _build_ai_chat_session_key(requested_person, channel, symbol)
+    legacy_keys = _legacy_ai_chat_session_keys(requested_person, channel, symbol)
     sessions = load_ai_sessions("ai_chat_sessions.json")
-    history = sessions.get(session_key, [])
+    had_legacy = any(lk in sessions for lk in legacy_keys)
+    history = _merge_legacy_chat_history(sessions, session_key, legacy_keys)
+    if had_legacy:
+        save_ai_sessions("ai_chat_sessions.json", sessions)
     return jsonify({"status": "ok", "session_key": session_key, "messages": history})
 
 
@@ -2142,10 +2173,16 @@ def api_ai_chat():
         return jsonify({"status": "error", "provider": provider, "message": str(exc)}), 502
 
     sessions = load_ai_sessions("ai_chat_sessions.json")
-    current_msgs = sessions.get(session_key, [])
-    current_msgs.append({"role": "user", "content": prompt, "time": datetime.now().isoformat()})
-    current_msgs.append({"role": "assistant", "content": answer, "time": datetime.now().isoformat()})
-    sessions[session_key] = current_msgs[-50:]
+    legacy_keys = _legacy_ai_chat_session_keys(requested_person, channel, symbol)
+    current_msgs = _merge_legacy_chat_history(sessions, session_key, legacy_keys)
+    now_dt = datetime.now()
+    now_hms = now_dt.strftime("%H:%M:%S")
+    now_iso = now_dt.isoformat()
+    sym_display = "全部股票" if symbol in ("", "全部标的", "全部股票") else symbol.upper().removesuffix(".US")
+    scope_tag = f"{requested_person} · {channel} · {sym_display}"
+    current_msgs.append({"role": "user", "content": prompt, "time_str": now_hms, "time": now_iso, "scope_tag": scope_tag})
+    current_msgs.append({"role": "assistant", "content": answer, "time_str": now_hms, "time": now_iso, "scope_tag": ""})
+    sessions[session_key] = current_msgs[-100:]
     save_ai_sessions("ai_chat_sessions.json", sessions)
 
     return jsonify({
@@ -2170,9 +2207,14 @@ def api_ai_clear():
     channel = str(data.get("channel") or "全部渠道").strip() or "全部渠道"
     symbol = str(data.get("symbol") or "全部标的").strip() or "全部标的"
     session_key = _build_ai_chat_session_key(requested_person, channel, symbol)
+    legacy_keys = _legacy_ai_chat_session_keys(requested_person, channel, symbol)
     sessions = load_ai_sessions("ai_chat_sessions.json")
-    if session_key in sessions:
-        sessions[session_key] = []
+    changed = False
+    for k in (session_key, *legacy_keys):
+        if k in sessions:
+            sessions[k] = []
+            changed = True
+    if changed:
         save_ai_sessions("ai_chat_sessions.json", sessions)
     return jsonify({"status": "ok", "message": "会话历史已清空"})
 
@@ -2229,9 +2271,12 @@ def api_ai_stock_chat():
 
     sessions = load_ai_sessions("ai_stock_analysis_sessions.json")
     current_msgs = sessions.get(symbol, [])
-    current_msgs.append({"role": "user", "content": prompt, "time": datetime.now().isoformat()})
-    current_msgs.append({"role": "assistant", "content": answer, "time": datetime.now().isoformat()})
-    sessions[symbol] = current_msgs[-50:]
+    now_dt = datetime.now()
+    now_hms = now_dt.strftime("%H:%M:%S")
+    now_iso = now_dt.isoformat()
+    current_msgs.append({"role": "user", "content": prompt, "time_str": now_hms, "time": now_iso, "symbol_tag": symbol})
+    current_msgs.append({"role": "assistant", "content": answer, "time_str": now_hms, "time": now_iso, "symbol_tag": ""})
+    sessions[symbol] = current_msgs[-100:]
     save_ai_sessions("ai_stock_analysis_sessions.json", sessions)
 
     return jsonify({

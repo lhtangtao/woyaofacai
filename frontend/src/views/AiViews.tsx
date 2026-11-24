@@ -26,6 +26,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   time?: string;
+  time_str?: string;
 }
 
 interface AgyModelOption {
@@ -903,7 +904,7 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
                       color: "var(--text-subtle)",
                     }}
                   >
-                    {m.time && <span>{m.time}</span>}
+                    {(m.time_str || m.time) && <span>{m.time_str || m.time}</span>}
                     {!isUser && (
                       <button
                         onClick={() => copyContent(m.content, idx)}

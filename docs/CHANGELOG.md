@@ -1,3 +1,8 @@
+## 2026-11-25 00:13 打通 Web 端与桌面端 AI 投资问答历史双向共享
+
+- 修改者：Antigravity（代码修改）
+- 统一 `api_v1.py` 与桌面端 `ai_assistant_page.py` 的会话 Key 格式（`{人员}___{渠道}___{标的}`，全量统一为 `全部股票`）和消息字段（`time_str` / `time` / `scope_tag`），并自动兼容合并旧版 `::` Key 历史记录，彻底打通 Web 端与桌面端双向实时同步；前端重新构建且 `tests/test_ai_providers.py` 15 项测试全部通过。
+
 ## 2026-11-25 00:10 默认 AI 引擎与默认模型切换为 Gemini · Gemini 4 Hydrogen (High)
 
 - 修改者：Antigravity（代码修改）

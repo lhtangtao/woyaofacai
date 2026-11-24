@@ -1,5 +1,17 @@
 [
   {
+    "title": "打通 Web 端与桌面端 AI 投资问答历史记录实时双向共享（统一 session_key 与时间字段）",
+    "time": "2026-11-25 00:13",
+    "author": "Antigravity",
+    "tag": "双端会话已互通",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "定位根因：Web 端与桌面端虽写入同一本地文件 ai_chat_sessions.json，但 Web 端原先使用 `::` 与 `全部标的` 作为 session_key（如 `拉科::全部渠道::AAOX`），而桌面端使用 `___` 与 `全部股票`（如 `拉科___全部渠道___AAOX`），且时间字段分别为 time / time_str，导致双端互相看不到对方提问。",
+      "在 api_v1.py 将 Web 端 session_key 统一为桌面端 `___` 标准格式，写入消息时同时保留 time_str / time / scope_tag / symbol_tag，并在读写接口与桌面端 ai_assistant_page.py 的 load_sessions() 中自动兼容合并旧版 `::` Key 历史记录，确保已有对话零丢失；同步在 AiViews.tsx 兼容展示 time_str。",
+      "验证范围：frontend `npm run build` 编译通过；tests/test_ai_providers.py 全部 15 项测试通过。"
+    ]
+  },
+  {
     "title": "默认 AI 引擎与默认模型全面切换为 Gemini (agy) · Gemini 4 Hydrogen (High)",
     "time": "2026-11-25 00:10",
     "author": "Antigravity",
