@@ -1,5 +1,18 @@
 [
   {
+    "title": "AGENTS.md 落地长任务交接与命令日志截断规范（防 EOF 断流）",
+    "time": "2026-11-24 18:28",
+    "author": "Antigravity",
+    "tag": "开发规范已更新",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 AGENTS.md 新增「长任务上下文与日志体积约束（防 EOF 断流）」章节：明确复杂任务按阶段拆分，每阶段或接近 50~80 步时主动将进度、改动文件与待办写入项目根目录临时交接文档 PROGRESS.md 并提示 /compact 或新开会话续跑，任务结束后清理临时文件。",
+      "规范命令执行与文件读取体积：强制测试、构建、搜索和日志查看优先采用精简参数与截断过滤（如 pytest -q --tb=short --maxfail=5、tail -n 50、head -n 80、grep -E），大文件按需分段读取，避免上下文迅速膨胀触发流式请求 EOF。",
+      "在 .gitignore 中新增忽略临时交接文档 PROGRESS.md，避免误提交至 Git 仓库。",
+      "验证范围：已核验 AGENTS.md 与 .gitignore 改动及 JSON 格式合法性。"
+    ]
+  },
+  {
     "title": "重构持仓管理「持仓分布 (按类型)」右侧图例为双行舒展卡片布局",
     "time": "2026-11-24 13:10",
     "author": "Antigravity",
