@@ -316,6 +316,7 @@ class AIStockAnalysisPage(QWidget):
         self.config_api_btn.setToolTip("配置 Google Gemini API Key、默认模型及每月防超支预算上限")
         self.config_api_btn.setStyleSheet("font-size: 12px; padding: 3px 10px; border: 1px solid #CBD5E1; border-radius: 8px; background: #F8FAFC; color: #334155;")
         self.config_api_btn.clicked.connect(self._open_google_api_dialog)
+        self.config_api_btn.setVisible(False)
         title_box.addWidget(self.config_api_btn)
 
         self.status_badge = QLabel("正在检测 Codex 状态...")
@@ -692,8 +693,10 @@ class AIStockAnalysisPage(QWidget):
             populate_agy_model_combo(self.agy_model_combo, models, CodexAIService.get_agy_model())
 
     def _on_provider_changed(self):
-        is_gemini = self.current_provider() == "gemini"
+        provider = self.current_provider()
+        is_gemini = provider == "gemini"
         self.agy_model_combo.setVisible(is_gemini)
+        self.config_api_btn.setVisible(provider == "google_api")
         if is_gemini:
             populate_agy_model_combo(
                 self.agy_model_combo,
@@ -707,6 +710,7 @@ class AIStockAnalysisPage(QWidget):
     def refresh_codex_status(self, force: bool = False):
         provider = self.current_provider()
         self.agy_model_combo.setVisible(provider == "gemini")
+        self.config_api_btn.setVisible(provider == "google_api")
         if provider == "gemini" and force:
             self._load_agy_models_async(force=True)
         label = self._provider_label(provider)

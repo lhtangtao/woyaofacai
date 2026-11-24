@@ -1,5 +1,16 @@
 [
   {
+    "title": "「配置 Google API」按钮按引擎联动显隐（仅在选中 Google API 时展示）",
+    "time": "2026-11-25 00:51",
+    "author": "Antigravity",
+    "tag": "顶栏布局已精简",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在桌面端 AI 投资问答 (ai_assistant_page.py)、AI 股票分析 (ai_stock_analysis_page.py) 及 Web 端 (AiViews.tsx) 中，将「配置 Google API」按钮改为仅在引擎选择为 Google API 时显示；选中 Gemini 或 Codex 时自动隐藏，保持顶部栏清爽。",
+      "验证范围：frontend `npm run build` 编译通过；tests/test_ai_providers.py 全部 15 项测试通过。"
+    ]
+  },
+  {
     "title": "桌面端与 Web 端 AI 异常/中止气泡新增一键「重试」按钮",
     "time": "2026-11-25 00:48",
     "author": "Antigravity",

@@ -674,20 +674,22 @@ export const AiViews: React.FC<AiViewsProps> = ({ mode, personId }) => {
               </select>
             )}
 
-            <button
-              onClick={openGoogleModal}
-              className="btn btn-quiet"
-              style={{
-                padding: "4px 10px",
-                fontSize: "12px",
-                border: "1px solid var(--border-color)",
-                background: provider === "google_api" ? "var(--brand-selected)" : "var(--bg-subtle)",
-              }}
-              title="配置 Google Gemini API Key、默认模型与月度防超支预算上限"
-            >
-              <Settings2 size={13} />
-              <span>配置 Google API</span>
-            </button>
+            {provider === "google_api" && (
+              <button
+                onClick={openGoogleModal}
+                className="btn btn-quiet"
+                style={{
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--brand-selected)",
+                }}
+                title="配置 Google Gemini API Key、默认模型与月度防超支预算上限"
+              >
+                <Settings2 size={13} />
+                <span>配置 Google API</span>
+              </button>
+            )}
 
             {renderStatusBadge()}
           </div>

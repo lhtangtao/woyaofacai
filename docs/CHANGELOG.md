@@ -1,3 +1,8 @@
+## 2026-11-25 00:51 「配置 Google API」按钮按引擎联动显隐
+
+- 修改者：Antigravity（代码修改）
+- 在桌面端与 Web 端 AI 页面中将「配置 Google API」按钮调整为仅在选中 `Google API` 引擎时显示，选中 `Gemini` / `Codex` 时自动隐藏，保持顶栏整洁；前端重新构建且 `tests/test_ai_providers.py` 15 项测试全部通过。
+
 ## 2026-11-25 00:48 桌面端与 Web 端 AI 异常/中止气泡新增一键「重试」按钮
 
 - 修改者：Antigravity（代码修改）
