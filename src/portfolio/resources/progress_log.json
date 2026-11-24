@@ -1,5 +1,18 @@
 [
   {
+    "title": "AI 投资问答与股票分析新增 Google API 直连引擎及月度 $10 防超支预算熔断保护",
+    "time": "2026-11-24 20:53",
+    "author": "Antigravity",
+    "tag": "AI 引擎与预算熔断已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 src/portfolio/services/ai_service.py 新增 google_api 接入引擎，直接通过 HTTPS 调用 Google Gemini Developer API (generateContent)，无需安装外部 CLI；支持本地安全保存 API Key (0600 权限)、api_config.json 及 GEMINI_API_KEY/GOOGLE_API_KEY 环境变量读取。",
+      "落地三重防超支保护：1) 按模型保守公开单价与接口真实返回的 usageMetadata（含思考 token）按月累加估算费用；2) 默认设置每月 $8.50 安全硬上限（预留 $1.50 缓冲，支持自定义），请求前达到或预估超出上限即直接熔断拦截；3) 默认限制单次 maxOutputTokens=4096 防止超长输出烧额度，并支持手动校准/清零本月已用金额。",
+      "在桌面端 AI 投资问答 (ai_assistant_page.py) 与 AI 股票分析 (ai_stock_analysis_page.py) 新增「Google API」引擎选项与「配置 Google API」弹窗 (ai_google_api_dialog.py)，状态徽章实时展示本月已用/上限并在 80% 时黄色预警、100% 时红色锁定；Web API (api_v1.py) 同步放行 google_api。",
+      "验证范围：tests/test_ai_providers.py 全部 11 项单元测试通过（含 Google API 配置、用量累计、预算熔断拦截与双页面 UI 切换）。"
+    ]
+  },
+  {
     "title": "AGENTS.md 落地长任务交接与命令日志截断规范（防 EOF 断流）",
     "time": "2026-11-24 18:28",
     "author": "Antigravity",

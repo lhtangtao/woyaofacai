@@ -1,3 +1,9 @@
+## 2026-11-24 20:53 AI 投资问答与股票分析新增 Google API 直连引擎及月度防超支预算熔断
+
+- 修改者：Antigravity（代码修改）
+- 在 `ai_service.py` 新增 `google_api` 接入方式（直接调用 Google Gemini REST API），并内置按月 Token 计费估算与硬性预算熔断（默认上限 `$8.50/月` 为 `$10` 免费额度留出安全缓冲，默认 `maxOutputTokens=4096`）。
+- 在桌面端 `ai_assistant_page.py`、`ai_stock_analysis_page.py` 新增「Google API」选项及配置/用量校准弹窗 `ai_google_api_dialog.py`，状态栏实时显示本月已用金额与预警/熔断状态；`api_v1.py` 同步支持 `google_api`；`tests/test_ai_providers.py` 11 项测试全部通过。
+
 ## 2026-11-24 18:28 AGENTS.md 落地长任务交接与命令日志截断规范（防 EOF 断流）
 
 - 修改者：Antigravity（代码修改）

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from portfolio.services.ai_service import CodexAIService
+from portfolio.ui.ai_google_api_dialog import GoogleAPIConfigDialog
 from portfolio.ui.filters import TickerSearch
 from portfolio.ui.icons import icon
 from portfolio.ui.theme import numeric_font, tokens
@@ -271,13 +272,22 @@ class AIStockAnalysisPage(QWidget):
         title_box.addWidget(title_lbl)
 
         self.provider_combo = QComboBox()
-        self.provider_combo.setMinimumWidth(112)
-        self.provider_combo.setToolTip("选择本地 AI 引擎（默认 Codex，支持切换 Gemini CLI）")
+        self.provider_combo.setMinimumWidth(122)
+        self.provider_combo.setToolTip("选择 AI 引擎（支持 Codex CLI、Gemini CLI 或 Google API 直连）")
         self.provider_combo.addItem("Codex", "codex")
         self.provider_combo.addItem("Gemini", "gemini")
+        self.provider_combo.addItem("Google API", "google_api")
         self.provider_combo.setCurrentIndex(0)  # 默认使用 Codex
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         title_box.addWidget(self.provider_combo)
+
+        self.config_api_btn = QPushButton("配置 Google API")
+        self.config_api_btn.setObjectName("quiet")
+        self.config_api_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.config_api_btn.setToolTip("配置 Google Gemini API Key、默认模型及每月防超支预算上限")
+        self.config_api_btn.setStyleSheet("font-size: 12px; padding: 3px 10px; border: 1px solid #CBD5E1; border-radius: 8px; background: #F8FAFC; color: #334155;")
+        self.config_api_btn.clicked.connect(self._open_google_api_dialog)
+        title_box.addWidget(self.config_api_btn)
 
         self.status_badge = QLabel("正在检测 Codex 状态...")
         self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #F1F5F9; color: #64748B;")
@@ -285,7 +295,7 @@ class AIStockAnalysisPage(QWidget):
         title_box.addStretch()
         info_layout.addLayout(title_box)
 
-        desc_lbl = QLabel("支持本地 Codex / Gemini CLI 切换（默认 Codex）· 聚焦标的基本面与商业前景 · 标的独立对话隔离")
+        desc_lbl = QLabel("支持本地 Codex / Gemini CLI 及 Google API 直连（含月度预算熔断保护）· 聚焦标的基本面与商业前景 · 标的独立对话隔离")
         desc_lbl.setStyleSheet("font-size: 12px; color: #64748B;")
         info_layout.addWidget(desc_lbl)
 
@@ -609,12 +619,24 @@ class AIStockAnalysisPage(QWidget):
         self.switch_to_session(self.active_session_key)
 
     def current_provider(self) -> str:
-        """返回当前选择的 AI 引擎标识（codex 或 gemini）"""
+        """返回当前选择的 AI 引擎标识（codex、gemini 或 google_api）"""
         return str(self.provider_combo.currentData() or "codex")
 
     @staticmethod
     def _provider_label(provider: str) -> str:
-        return "Gemini" if provider == "gemini" else "Codex"
+        if provider == "gemini":
+            return "Gemini"
+        if provider == "google_api":
+            return "Google API"
+        return "Codex"
+
+    def _open_google_api_dialog(self):
+        dlg = GoogleAPIConfigDialog(self)
+        if dlg.exec():
+            idx = self.provider_combo.findData("google_api")
+            if idx >= 0 and self.current_provider() != "google_api":
+                self.provider_combo.setCurrentIndex(idx)
+            self.refresh_codex_status(force=True)
 
     def _on_provider_changed(self):
         self.refresh_codex_status(force=False)
@@ -624,6 +646,26 @@ class AIStockAnalysisPage(QWidget):
         label = self._provider_label(provider)
         status = CodexAIService.check_login_status(force=force, provider=provider)
         is_running = bool(self.worker and self.worker.isRunning())
+        if provider == "google_api":
+            if status.get("budget_exceeded"):
+                self.status_badge.setText(
+                    f"🔴 Google API 预算已达上限 (${status.get('spent_usd')}/${status.get('budget_usd')})"
+                )
+                self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEE2E2; color: #991B1B; font-weight: 600;")
+                self.send_btn.setEnabled(False)
+            elif status["logged_in"] and status.get("budget_warning"):
+                self.status_badge.setText(f"🟡 已连接 {label} ({status['account_type']} · 接近上限)")
+                self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEF9C3; color: #854D0E; font-weight: 600;")
+                self.send_btn.setEnabled(not is_running)
+            elif status["logged_in"]:
+                self.status_badge.setText(f"🟢 已连接 {label} ({status['account_type']})")
+                self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #DCFCE7; color: #166534; font-weight: 600;")
+                self.send_btn.setEnabled(not is_running)
+            else:
+                self.status_badge.setText("🟡 未配置 Google API Key (点击左侧按钮配置)")
+                self.status_badge.setStyleSheet("font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #FEF9C3; color: #854D0E;")
+                self.send_btn.setEnabled(False)
+            return
         if status["logged_in"]:
             account = status["account_type"] or ("Google OAuth" if provider == "gemini" else "ChatGPT")
             suffix = " 订阅" if provider == "codex" else ""
@@ -751,6 +793,8 @@ class AIStockAnalysisPage(QWidget):
             self._render_message_widget(asst_msg)
         self._reset_input_state()
         self.status_hint.setText(f"✅ 研报分析完成 (总耗时 {elapsed} 秒)")
+        if getattr(self, "_active_worker_provider", "") == "google_api" or self.current_provider() == "google_api":
+            self.refresh_codex_status(force=True)
         QTimer.singleShot(4000, lambda: self.status_hint.setText("") if not (self.worker and self.worker.isRunning()) else None)
 
     def _on_worker_error(self, err_msg: str, session_key: str):

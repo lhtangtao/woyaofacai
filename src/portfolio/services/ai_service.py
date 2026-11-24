@@ -4,6 +4,7 @@ Bridges the local Codex CLI subscription to provide AI investment assistant capa
 without requiring manual API key configuration or extra token billing.
 Supports multi-dimensional contextual filtering across Person, Channel, and Ticker.
 """
+from datetime import datetime
 from decimal import Decimal
 import json
 import os
@@ -13,15 +14,69 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from portfolio.paths import API_CONFIG_PATH, quote_cache_path
 
 
-SUPPORTED_AI_PROVIDERS = ("codex", "gemini")
+SUPPORTED_AI_PROVIDERS = ("codex", "gemini", "google_api")
+DEFAULT_GOOGLE_API_MODEL = "gemini-2.5-flash"
+DEFAULT_GOOGLE_API_BUDGET_USD = Decimal("8.50")  # 为 $10/月额度预留 $1.50 安全缓冲
+DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS = 4096
+GOOGLE_API_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview",
+)
+# 保守估算单价（美元 / 百万 tokens）：(输入单价, 输出单价)，宁可略高估以防超额
+GOOGLE_API_PRICING_USD_PER_M: dict[str, tuple[Decimal, Decimal]] = {
+    "gemini-2.5-flash": (Decimal("0.30"), Decimal("2.50")),
+    "gemini-2.5-flash-lite": (Decimal("0.10"), Decimal("0.40")),
+    "gemini-2.5-pro": (Decimal("2.50"), Decimal("15.00")),
+    "gemini-3-flash-preview": (Decimal("0.50"), Decimal("3.00")),
+    "gemini-3.1-pro-preview": (Decimal("2.50"), Decimal("15.00")),
+}
+_DEFAULT_CONSERVATIVE_PRICING = (Decimal("2.50"), Decimal("15.00"))
+_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+_USAGE_LOCK = threading.Lock()
 
 
 def normalize_ai_provider(provider: str | None) -> str:
     """规范化 AI 引擎名称，未知值默认回退为 codex。"""
     val = (provider or "codex").strip().lower()
     return val if val in SUPPORTED_AI_PROVIDERS else "codex"
+
+
+def google_api_config_path() -> Path:
+    """返回本地 Google API 配置文件路径（支持环境变量覆盖）。"""
+    override = os.environ.get("MONEY3_GOOGLE_API_CONFIG", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return quote_cache_path().parent / "google_api_config.json"
+
+
+def google_api_usage_path() -> Path:
+    """返回本地 Google API 月度用量统计文件路径（支持环境变量覆盖）。"""
+    override = os.environ.get("MONEY3_GOOGLE_API_USAGE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return google_api_config_path().with_name("google_api_usage.json")
+
+
+def current_usage_month() -> str:
+    """返回当前统计月份键（YYYY-MM）。"""
+    return datetime.now().strftime("%Y-%m")
+
+
+def _mask_api_key(api_key: str) -> str:
+    key = (api_key or "").strip()
+    if len(key) <= 8:
+        return "*" * len(key)
+    return f"{key[:4]}...{key[-4:]}"
 
 
 def _fmt(val, prefix="", suffix="", signed=False, as_percent=False, default="—") -> str:
@@ -164,13 +219,288 @@ class CodexAIService:
             "message": "未检测到 Gemini / Antigravity CLI，请安装 agy 或配置 GEMINI_API_KEY",
         }
 
+    @staticmethod
+    def _parse_positive_decimal(raw, default: Decimal) -> Decimal:
+        try:
+            val = Decimal(str(raw))
+            return val if val >= Decimal("0") else default
+        except Exception:
+            return default
+
+    @staticmethod
+    def _parse_max_output_tokens(raw) -> int:
+        try:
+            val = int(raw)
+            return max(256, min(val, 65536))
+        except Exception:
+            return DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS
+
+    @classmethod
+    def get_google_api_config(cls) -> dict:
+        """读取本地 Google API 配置（本地配置文件 > api_config.json > 环境变量）。"""
+        model = DEFAULT_GOOGLE_API_MODEL
+        budget = DEFAULT_GOOGLE_API_BUDGET_USD
+        max_output_tokens = DEFAULT_GOOGLE_API_MAX_OUTPUT_TOKENS
+
+        cfg_path = google_api_config_path()
+        if cfg_path.is_file():
+            try:
+                data = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    saved_model = str(data.get("model") or "").strip()
+                    if saved_model:
+                        model = saved_model
+                    if data.get("monthly_budget_usd") is not None:
+                        budget = cls._parse_positive_decimal(data.get("monthly_budget_usd"), budget)
+                    if data.get("max_output_tokens") is not None:
+                        max_output_tokens = cls._parse_max_output_tokens(data.get("max_output_tokens"))
+                    saved_key = str(data.get("api_key") or "").strip()
+                    if saved_key:
+                        return {
+                            "api_key": saved_key,
+                            "model": model,
+                            "monthly_budget_usd": str(budget),
+                            "max_output_tokens": max_output_tokens,
+                            "source": "本地配置",
+                        }
+            except Exception:
+                pass
+
+        if API_CONFIG_PATH.is_file():
+            try:
+                root_cfg = json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+                if isinstance(root_cfg, dict):
+                    root_key = str(
+                        root_cfg.get("google_api_key")
+                        or root_cfg.get("gemini_api_key")
+                        or ""
+                    ).strip()
+                    root_model = str(root_cfg.get("google_api_model") or "").strip()
+                    if root_model:
+                        model = root_model
+                    if root_cfg.get("google_api_monthly_budget_usd") is not None:
+                        budget = cls._parse_positive_decimal(
+                            root_cfg.get("google_api_monthly_budget_usd"), budget
+                        )
+                    if root_key:
+                        return {
+                            "api_key": root_key,
+                            "model": model,
+                            "monthly_budget_usd": str(budget),
+                            "max_output_tokens": max_output_tokens,
+                            "source": "api_config.json",
+                        }
+            except Exception:
+                pass
+
+        for env_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            env_key = os.environ.get(env_name, "").strip()
+            if env_key:
+                return {
+                    "api_key": env_key,
+                    "model": model,
+                    "monthly_budget_usd": str(budget),
+                    "max_output_tokens": max_output_tokens,
+                    "source": f"环境变量 {env_name}",
+                }
+
+        return {
+            "api_key": "",
+            "model": model,
+            "monthly_budget_usd": str(budget),
+            "max_output_tokens": max_output_tokens,
+            "source": "",
+        }
+
+    @classmethod
+    def save_google_api_config(
+        cls,
+        api_key: str,
+        model: str | None = None,
+        monthly_budget_usd: Decimal | str | float | None = None,
+        max_output_tokens: int | None = None,
+    ) -> Path:
+        """持久化 Google API Key、默认模型与月度安全预算上限到本地目录（权限 0600）。"""
+        cfg_path = google_api_config_path()
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = cls.get_google_api_config()
+        clean_key = (api_key or "").strip()
+        clean_model = (model or "").strip() or DEFAULT_GOOGLE_API_MODEL
+        budget = (
+            cls._parse_positive_decimal(monthly_budget_usd, DEFAULT_GOOGLE_API_BUDGET_USD)
+            if monthly_budget_usd is not None
+            else cls._parse_positive_decimal(existing.get("monthly_budget_usd"), DEFAULT_GOOGLE_API_BUDGET_USD)
+        )
+        tokens_limit = (
+            cls._parse_max_output_tokens(max_output_tokens)
+            if max_output_tokens is not None
+            else cls._parse_max_output_tokens(existing.get("max_output_tokens"))
+        )
+        payload = {
+            "api_key": clean_key,
+            "model": clean_model,
+            "monthly_budget_usd": f"{budget:.2f}",
+            "max_output_tokens": tokens_limit,
+        }
+        cfg_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(cfg_path, 0o600)
+        except Exception:
+            pass
+        cls._login_status_cache.pop("google_api", None)
+        cls._login_status_timestamp.pop("google_api", None)
+        return cfg_path
+
+    @staticmethod
+    def _estimate_google_api_cost(model: str, prompt_tokens: int, output_tokens: int) -> Decimal:
+        """按模型保守公开单价估算单次请求费用（USD）。"""
+        in_price, out_price = GOOGLE_API_PRICING_USD_PER_M.get(
+            (model or "").strip(),
+            _DEFAULT_CONSERVATIVE_PRICING,
+        )
+        million = Decimal("1000000")
+        in_cost = (Decimal(max(0, prompt_tokens)) * in_price) / million
+        out_cost = (Decimal(max(0, output_tokens)) * out_price) / million
+        return (in_cost + out_cost).quantize(Decimal("0.000001"))
+
+    @classmethod
+    def get_google_api_monthly_usage(cls, month: str | None = None) -> dict:
+        """读取指定月份（默认当月）的 Google API 估算用量。"""
+        target_month = month or current_usage_month()
+        usage_path = google_api_usage_path()
+        default_entry = {
+            "month": target_month,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost_usd": "0.000000",
+        }
+        with _USAGE_LOCK:
+            if not usage_path.is_file():
+                return default_entry
+            try:
+                all_data = json.loads(usage_path.read_text(encoding="utf-8"))
+                if isinstance(all_data, dict) and isinstance(all_data.get(target_month), dict):
+                    entry = all_data[target_month]
+                    return {
+                        "month": target_month,
+                        "requests": int(entry.get("requests") or 0),
+                        "prompt_tokens": int(entry.get("prompt_tokens") or 0),
+                        "output_tokens": int(entry.get("output_tokens") or 0),
+                        "estimated_cost_usd": str(
+                            cls._parse_positive_decimal(entry.get("estimated_cost_usd"), Decimal("0"))
+                        ),
+                    }
+            except Exception:
+                pass
+        return default_entry
+
+    @classmethod
+    def record_google_api_usage(cls, model: str, prompt_tokens: int, output_tokens: int) -> dict:
+        """累加当月 Google API 请求次数、Token 与估算费用。"""
+        target_month = current_usage_month()
+        cost = cls._estimate_google_api_cost(model, prompt_tokens, output_tokens)
+        usage_path = google_api_usage_path()
+        with _USAGE_LOCK:
+            usage_path.parent.mkdir(parents=True, exist_ok=True)
+            all_data = {}
+            if usage_path.is_file():
+                try:
+                    loaded = json.loads(usage_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        all_data = loaded
+                except Exception:
+                    all_data = {}
+            cur = all_data.get(target_month) if isinstance(all_data.get(target_month), dict) else {}
+            prev_cost = cls._parse_positive_decimal(cur.get("estimated_cost_usd"), Decimal("0"))
+            updated = {
+                "requests": int(cur.get("requests") or 0) + 1,
+                "prompt_tokens": int(cur.get("prompt_tokens") or 0) + max(0, int(prompt_tokens)),
+                "output_tokens": int(cur.get("output_tokens") or 0) + max(0, int(output_tokens)),
+                "estimated_cost_usd": f"{(prev_cost + cost).quantize(Decimal('0.000001'))}",
+                "last_model": model,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            }
+            all_data[target_month] = updated
+            usage_path.write_text(json.dumps(all_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        cls._login_status_cache.pop("google_api", None)
+        cls._login_status_timestamp.pop("google_api", None)
+        return {"month": target_month, **updated, "last_call_cost_usd": str(cost)}
+
+    @classmethod
+    def set_google_api_monthly_spent(cls, spent_usd: Decimal | str | float, month: str | None = None) -> dict:
+        """手动校准当月已用金额（例如对照 GCP/AI Studio 账单归零或对齐）。"""
+        target_month = month or current_usage_month()
+        spent = cls._parse_positive_decimal(spent_usd, Decimal("0")).quantize(Decimal("0.000001"))
+        usage_path = google_api_usage_path()
+        with _USAGE_LOCK:
+            usage_path.parent.mkdir(parents=True, exist_ok=True)
+            all_data = {}
+            if usage_path.is_file():
+                try:
+                    loaded = json.loads(usage_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        all_data = loaded
+                except Exception:
+                    all_data = {}
+            cur = all_data.get(target_month) if isinstance(all_data.get(target_month), dict) else {}
+            cur["estimated_cost_usd"] = str(spent)
+            cur["calibrated_at"] = datetime.now().isoformat(timespec="seconds")
+            all_data[target_month] = cur
+            usage_path.write_text(json.dumps(all_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        cls._login_status_cache.pop("google_api", None)
+        cls._login_status_timestamp.pop("google_api", None)
+        return cls.get_google_api_monthly_usage(target_month)
+
+    @classmethod
+    def _check_google_api_status(cls) -> dict:
+        cfg = cls.get_google_api_config()
+        api_key = cfg.get("api_key", "")
+        model = cfg.get("model") or DEFAULT_GOOGLE_API_MODEL
+        source = cfg.get("source") or "本地配置"
+        budget = cls._parse_positive_decimal(cfg.get("monthly_budget_usd"), DEFAULT_GOOGLE_API_BUDGET_USD)
+        usage = cls.get_google_api_monthly_usage()
+        spent = cls._parse_positive_decimal(usage.get("estimated_cost_usd"), Decimal("0"))
+        budget_exceeded = budget > Decimal("0") and spent >= budget
+        budget_warning = budget > Decimal("0") and not budget_exceeded and spent >= (budget * Decimal("0.8"))
+
+        if api_key:
+            return {
+                "installed": True,
+                "logged_in": not budget_exceeded,
+                "budget_exceeded": budget_exceeded,
+                "budget_warning": budget_warning,
+                "spent_usd": f"{spent:.2f}",
+                "budget_usd": f"{budget:.2f}",
+                "account_type": f"{model} · ${spent:.2f}/${budget:.2f}",
+                "model": model,
+                "source": source,
+                "message": (
+                    f"已触发月度预算熔断（本月预估 ${spent:.2f} / 上限 ${budget:.2f}），已禁止继续调用"
+                    if budget_exceeded
+                    else f"Google API 已就绪 ({source} · 模型 {model} · 本月 ${spent:.2f}/${budget:.2f})"
+                ),
+            }
+        return {
+            "installed": True,
+            "logged_in": False,
+            "budget_exceeded": False,
+            "budget_warning": False,
+            "spent_usd": f"{spent:.2f}",
+            "budget_usd": f"{budget:.2f}",
+            "account_type": "",
+            "model": model,
+            "source": "",
+            "message": "未配置 Google API Key，请点击「配置 Google API」或设置 GEMINI_API_KEY",
+        }
+
     @classmethod
     def check_login_status(cls, force: bool = False, cache_ttl: float = 120.0, provider: str = "codex") -> dict:
         """
-        检查 AI CLI（codex / gemini）安装与登录状态（带按引擎缓存与超时防卡死机制）
+        检查 AI 引擎（codex / gemini / google_api）可用状态（带按引擎缓存与超时防卡死机制）
         :param force: 是否强制重新检测外部进程（默认 False，复用有效缓存）
         :param cache_ttl: 缓存有效期（秒），默认 120 秒
-        :param provider: AI 引擎标识（"codex" 或 "gemini"）
+        :param provider: AI 引擎标识（"codex"、"gemini" 或 "google_api"）
         :return: 包含 installed, logged_in, account_type, message, provider 等状态字典
         """
         prov = normalize_ai_provider(provider)
@@ -182,6 +512,12 @@ class CodexAIService:
 
         if prov == "gemini":
             res_dict = {**cls._check_gemini_login_status(), "provider": "gemini"}
+            cls._login_status_cache[prov] = res_dict
+            cls._login_status_timestamp[prov] = now
+            return res_dict
+
+        if prov == "google_api":
+            res_dict = {**cls._check_google_api_status(), "provider": "google_api"}
             cls._login_status_cache[prov] = res_dict
             cls._login_status_timestamp[prov] = now
             return res_dict
@@ -582,6 +918,141 @@ class CodexAIService:
             Path(err_path).unlink(missing_ok=True)
 
     @classmethod
+    def _ask_google_api(
+        cls,
+        full_prompt: str,
+        *,
+        model: str | None = None,
+        cancel_event: threading.Event | None = None,
+        timeout: float = 180.0,
+    ) -> str:
+        """通过 Google Gemini Developer API (REST) 发起只读问答，并执行月度预算硬熔断。"""
+        cfg = cls.get_google_api_config()
+        api_key = cfg.get("api_key", "").strip()
+        if not api_key:
+            raise RuntimeError("未配置 Google API Key，请先在界面点击「配置 Google API」或设置环境变量 GEMINI_API_KEY。")
+
+        chosen_model = (model or "").strip() or cfg.get("model") or DEFAULT_GOOGLE_API_MODEL
+        budget = cls._parse_positive_decimal(cfg.get("monthly_budget_usd"), DEFAULT_GOOGLE_API_BUDGET_USD)
+        max_output_tokens = cls._parse_max_output_tokens(cfg.get("max_output_tokens"))
+        usage = cls.get_google_api_monthly_usage()
+        spent = cls._parse_positive_decimal(usage.get("estimated_cost_usd"), Decimal("0"))
+
+        # 预估输入 token 数（约 3 字符/token，宁可略高估）并在请求前做硬性预算熔断
+        est_prompt_tokens = max(1, len(full_prompt) // 3)
+        est_input_cost = cls._estimate_google_api_cost(chosen_model, est_prompt_tokens, 0)
+        if budget > Decimal("0") and (spent >= budget or spent + est_input_cost > budget):
+            raise RuntimeError(
+                f"已触发 Google API 月度预算熔断：本月已预估使用 ${spent:.2f} / 安全上限 ${budget:.2f}。"
+                f"为防止超出每月 $10 免费额度产生扣费，已拦截本次请求。"
+            )
+
+        encoded_model = urllib.parse.quote(chosen_model, safe="")
+        url = f"{_GOOGLE_API_BASE_URL}/{encoded_model}:generateContent"
+        payload = json.dumps(
+            {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {"maxOutputTokens": max_output_tokens},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+        )
+
+        result_box: dict[str, object] = {}
+        done_event = threading.Event()
+
+        def _do_request():
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    result_box["body"] = resp.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                err_body = ""
+                try:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                result_box["http_error"] = (exc.code, err_body)
+            except Exception as exc:
+                result_box["error"] = exc
+            finally:
+                done_event.set()
+
+        worker = threading.Thread(target=_do_request, daemon=True)
+        worker.start()
+
+        start_time = time.time()
+        while not done_event.wait(timeout=0.2):
+            if cancel_event and cancel_event.is_set():
+                raise RuntimeError("用户已中止当前 AI 问答请求。")
+            if time.time() - start_time > timeout:
+                raise RuntimeError(f"Google API 请求超时（超过 {int(timeout)} 秒未响应）。")
+
+        if "http_error" in result_box:
+            code, err_body = result_box["http_error"]  # type: ignore[misc]
+            detail = err_body
+            try:
+                parsed_err = json.loads(err_body)
+                if isinstance(parsed_err, dict) and isinstance(parsed_err.get("error"), dict):
+                    detail = str(parsed_err["error"].get("message") or err_body)
+            except Exception:
+                pass
+            if code in (401, 403):
+                raise RuntimeError(f"Google API 鉴权失败 (HTTP {code})，请检查 API Key 是否有效: {detail}")
+            if code == 429:
+                raise RuntimeError(f"Google API 配额或速率受限 (HTTP 429): {detail}")
+            raise RuntimeError(f"Google API 请求失败 (HTTP {code}): {detail}")
+
+        if "error" in result_box:
+            raise RuntimeError(f"Google API 网络请求异常: {result_box['error']}")
+
+        raw_body = str(result_box.get("body") or "")
+        try:
+            data = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Google API 返回非 JSON 响应: {exc}") from exc
+
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            raise RuntimeError(f"Google API 返回错误: {data['error'].get('message') or data['error']}")
+
+        candidates = data.get("candidates") if isinstance(data, dict) else None
+        text_parts: list[str] = []
+        if isinstance(candidates, list) and candidates:
+            content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if isinstance(parts, list):
+                for part in parts:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        text_parts.append(part["text"])
+        answer = "\n".join(text_parts).strip()
+
+        # 统计并记录本次真实 Token 消耗与估算费用
+        usage_meta = data.get("usageMetadata") if isinstance(data, dict) else None
+        if isinstance(usage_meta, dict):
+            prompt_tokens = int(usage_meta.get("promptTokenCount") or est_prompt_tokens)
+            cand_tokens = int(usage_meta.get("candidatesTokenCount") or 0)
+            thought_tokens = int(usage_meta.get("thoughtsTokenCount") or 0)
+            output_tokens = cand_tokens + thought_tokens
+        else:
+            prompt_tokens = est_prompt_tokens
+            output_tokens = max(0, len(answer) // 3)
+        cls.record_google_api_usage(chosen_model, prompt_tokens, output_tokens)
+
+        if answer:
+            return answer
+        finish_reason = (
+            candidates[0].get("finishReason", "") if isinstance(candidates, list) and candidates and isinstance(candidates[0], dict) else ""
+        )
+        raise RuntimeError(f"Google API 未返回有效文本内容（finishReason={finish_reason or '未知'}）。")
+
+    @classmethod
     def ask(
         cls,
         prompt: str,
@@ -591,12 +1062,12 @@ class CodexAIService:
         provider: str = "codex",
     ) -> str:
         """
-        调用本地 AI CLI（codex / gemini）发起查询，安全且只读模式返回结果
+        调用本地 AI CLI（codex / gemini）或 Google API 发起查询，安全且只读模式返回结果
         :param prompt: 用户提问
         :param context: 结构化上下文背景
         :param model: 可选模型，缺省时使用系统默认模型
         :param cancel_event: 允许外部取消任务
-        :param provider: AI 引擎（"codex" 默认，或 "gemini"）
+        :param provider: AI 引擎（"codex" 默认、"gemini" 或 "google_api"）
         :return: AI 最终文本回复
         """
         prov = normalize_ai_provider(provider)
@@ -615,6 +1086,8 @@ class CodexAIService:
 
         if prov == "gemini":
             return cls._ask_gemini(full_prompt, model=model, cancel_event=cancel_event)
+        if prov == "google_api":
+            return cls._ask_google_api(full_prompt, model=model, cancel_event=cancel_event)
 
         cli = cls.get_cli_path()
         if not cli:

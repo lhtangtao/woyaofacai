@@ -35,7 +35,11 @@ from flask import Blueprint, Response, g, jsonify, request
 from portfolio.domain.models import QueryScope, TradeFilters, exact_text
 from portfolio.domain.technical_indicators import DailyBar, series, technicals
 from portfolio.paths import DATABASE_PATH, PROJECT_DIR
-from portfolio.services.ai_service import CodexAIService as AIService
+from portfolio.services.ai_service import (
+    CodexAIService as AIService,
+    SUPPORTED_AI_PROVIDERS,
+    normalize_ai_provider,
+)
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.charts_service import build_charts, rank_chart
 from portfolio.services.earnings_service import EarningsService
@@ -1917,14 +1921,12 @@ def save_ai_sessions(filename: str, data: Dict[str, Any]):
 @api_v1.route("/ai/status", methods=["GET"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_status():
-    """Return local AI CLI login status and available providers."""
-    provider = (request.args.get("provider") or "codex").strip().lower()
-    if provider not in ("codex", "gemini"):
-        provider = "codex"
+    """Return local AI engine login/availability status and supported providers."""
+    provider = normalize_ai_provider(request.args.get("provider"))
     force = str(request.args.get("force") or "").lower() in ("1", "true", "yes")
     providers = {
         name: AIService.check_login_status(force=force, provider=name)
-        for name in ("codex", "gemini")
+        for name in SUPPORTED_AI_PROVIDERS
     }
     return jsonify({
         "status": "ok",
@@ -1976,9 +1978,7 @@ def api_ai_chat():
     except Exception:
         context_str = "当前投资组合处于离线状态。"
 
-    provider = (data.get("provider") or "codex").strip().lower()
-    if provider not in ("codex", "gemini"):
-        provider = "codex"
+    provider = normalize_ai_provider(data.get("provider"))
 
     answer = AIService.ask(prompt, context=context_str, provider=provider)
 
@@ -2042,9 +2042,7 @@ def api_ai_stock_chat():
         if st:
             tech_info = f"标的 {symbol} 当前行情与指标: {json.dumps(st, ensure_ascii=False)}"
 
-    provider = (data.get("provider") or "codex").strip().lower()
-    if provider not in ("codex", "gemini"):
-        provider = "codex"
+    provider = normalize_ai_provider(data.get("provider"))
 
     prompt_to_send = f"{prompt}\n\n附标的技术面信息：{tech_info}" if tech_info else prompt
     answer = AIService.ask_stock(prompt_to_send, symbol=symbol, provider=provider)

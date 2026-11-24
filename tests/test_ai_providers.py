@@ -259,6 +259,7 @@ class TestWebAIProviderRoutes(unittest.TestCase):
             self.assertEqual(st_data["provider"], "gemini")
             self.assertIn("codex", st_data["providers"])
             self.assertIn("gemini", st_data["providers"])
+            self.assertIn("google_api", st_data["providers"])
 
             # 2. 投资问答接口不传 provider 默认走 codex；传 gemini 走 gemini
             c_default = self.client.post("/api/v1/ai/chat", json={"prompt": "默认引擎测试"}, headers=self.csrf_headers, environ_overrides=env)
@@ -296,6 +297,113 @@ class TestWebAIProviderRoutes(unittest.TestCase):
             self.assertEqual(s_gem.status_code, 200)
             self.assertEqual(s_gem.get_json()["provider"], "gemini")
             self.assertEqual(mock_ask_stock.call_args.kwargs["provider"], "gemini")
+
+
+class TestGoogleAPIProvider(unittest.TestCase):
+    """验证 Google API 直连配置、Token 统计、月度预算熔断及 UI 切换。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._cfg_path = Path(self._tmp.name) / "google_api_config.json"
+        self._usage_path = Path(self._tmp.name) / "google_api_usage.json"
+        os.environ["MONEY3_GOOGLE_API_CONFIG"] = str(self._cfg_path)
+        os.environ["MONEY3_GOOGLE_API_USAGE"] = str(self._usage_path)
+        CodexAIService._login_status_cache = {}
+        CodexAIService._login_status_timestamp = {}
+
+    def tearDown(self):
+        os.environ.pop("MONEY3_GOOGLE_API_CONFIG", None)
+        os.environ.pop("MONEY3_GOOGLE_API_USAGE", None)
+        self._tmp.cleanup()
+
+    def test_config_save_and_status(self):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": ""}, clear=False):
+            with patch("portfolio.services.ai_service.API_CONFIG_PATH", Path(self._tmp.name) / "missing.json"):
+                st0 = CodexAIService.check_login_status(force=True, provider="google_api")
+                self.assertFalse(st0["logged_in"])
+
+                CodexAIService.save_google_api_config(
+                    api_key="AIzaTestKey12345678",
+                    model="gemini-2.5-flash",
+                    monthly_budget_usd="8.50",
+                    max_output_tokens=2048,
+                )
+                st1 = CodexAIService.check_login_status(force=True, provider="google_api")
+                self.assertTrue(st1["logged_in"])
+                self.assertIn("gemini-2.5-flash", st1["account_type"])
+                self.assertIn("$0.00/$8.50", st1["account_type"])
+
+    def test_ask_google_api_records_usage_and_blocks_over_budget(self):
+        CodexAIService.save_google_api_config(
+            api_key="AIzaTestKey12345678",
+            model="gemini-2.5-flash",
+            monthly_budget_usd="8.50",
+            max_output_tokens=2048,
+        )
+
+        fake_response = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "### 分析结论\nNVDA 基本面强劲。"}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "thoughtsTokenCount": 100,
+            },
+        }).encode("utf-8")
+
+        class _FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return fake_response
+
+        with patch("portfolio.services.ai_service.urllib.request.urlopen", return_value=_FakeResp()) as mock_open:
+            reply = CodexAIService.ask_stock("分析 NVDA", symbol="NVDA", provider="google_api")
+            self.assertIn("NVDA 基本面强劲", reply)
+            req_obj = mock_open.call_args.args[0]
+            self.assertEqual(req_obj.get_header("X-goog-api-key"), "AIzaTestKey12345678")
+            body = json.loads(req_obj.data.decode("utf-8"))
+            self.assertEqual(body["generationConfig"]["maxOutputTokens"], 2048)
+
+        usage = CodexAIService.get_google_api_monthly_usage()
+        self.assertEqual(usage["requests"], 1)
+        self.assertEqual(usage["prompt_tokens"], 1000)
+        self.assertEqual(usage["output_tokens"], 600)
+
+        # 手动校准到上限 8.50 后，必须触发硬性预算熔断，不再发起网络请求
+        CodexAIService.set_google_api_monthly_spent("8.50")
+        st_blocked = CodexAIService.check_login_status(force=True, provider="google_api")
+        self.assertTrue(st_blocked["budget_exceeded"])
+        self.assertFalse(st_blocked["logged_in"])
+        with patch("portfolio.services.ai_service.urllib.request.urlopen") as mock_open_blocked:
+            with self.assertRaises(RuntimeError) as ctx:
+                CodexAIService.ask("继续分析", provider="google_api")
+            self.assertIn("预算熔断", str(ctx.exception))
+            mock_open_blocked.assert_not_called()
+
+    def test_ui_pages_support_google_api_option(self):
+        from PySide6.QtWidgets import QApplication
+        from portfolio.ui.ai_assistant_page import AIAssistantPage
+        from portfolio.ui.ai_stock_analysis_page import AIStockAnalysisPage
+
+        app = QApplication.instance() or QApplication([])
+        self.assertIsNotNone(app)
+        CodexAIService.save_google_api_config("AIzaTestKey12345678", "gemini-2.5-flash", "8.50")
+        chat_page = AIAssistantPage()
+        stock_page = AIStockAnalysisPage()
+        idx_c = chat_page.provider_combo.findData("google_api")
+        idx_s = stock_page.provider_combo.findData("google_api")
+        self.assertGreaterEqual(idx_c, 0)
+        self.assertGreaterEqual(idx_s, 0)
+        chat_page.provider_combo.setCurrentIndex(idx_c)
+        stock_page.provider_combo.setCurrentIndex(idx_s)
+        self.assertEqual(chat_page.current_provider(), "google_api")
+        self.assertEqual(stock_page.current_provider(), "google_api")
+        self.assertIn("Google API", chat_page.status_badge.text())
+        self.assertIn("Google API", stock_page.status_badge.text())
 
 
 if __name__ == "__main__":
