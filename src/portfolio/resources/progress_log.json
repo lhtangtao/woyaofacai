@@ -1,5 +1,16 @@
 [
   {
+    "title": "Web 端顶部栏新增「退出」按钮，支持一键登出并弹出登录框切换账号",
+    "time": "2026-11-25 00:07",
+    "author": "Antigravity",
+    "tag": "Web 端退出切换已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 frontend/src/components/WorkspaceHeader.tsx 右上角操作栏新增「退出」按钮（调用后端 POST /api/auth/logout 销毁会话与 Cookie），并在 frontend/src/App.tsx 中清空当前用户/筛选状态后立即弹出登录窗口，支持随时切换不同账号。",
+      "验证范围：frontend `npm run build`（tsc + vite build）编译打包至 src/portfolio/web/static_dist/ 通过。"
+    ]
+  },
+  {
     "title": "「今日盈亏」纳入当日已全清仓标的（如当日卖光 NVD）并同步计入汇总与双端展示",
     "time": "2026-11-25 00:05",
     "author": "Antigravity",

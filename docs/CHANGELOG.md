@@ -1,3 +1,8 @@
+## 2026-11-25 00:07 Web 端顶部栏新增「退出」按钮支持一键切换账号
+
+- 修改者：Antigravity（代码修改）
+- 在 `WorkspaceHeader.tsx` 右上角新增「退出」按钮并在 `App.tsx` 接入 `api.logout()`，登出销毁会话并清理本地筛选状态后直接弹出登录框，方便随时切换账号；已重新构建 `src/portfolio/web/static_dist/`。
+
 ## 2026-11-25 00:05 「今日盈亏」纳入当日已全清仓标的并同步计入汇总（桌面端 + Web 端）
 
 - 修改者：Antigravity（代码修改）

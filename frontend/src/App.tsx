@@ -177,6 +177,22 @@ export const App: React.FC = () => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [historyIndex, history]);
 
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // 即使网络异常也清空本地状态并弹出登录窗口切换账号
+    }
+    setBootstrap(null);
+    setSelectedPersonId(null);
+    setSelectedBroker("");
+    setSelectedTicker("");
+    setLoginUsername("");
+    setLoginPassword("");
+    setLoginError("");
+    setShowLogin(true);
+  };
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
@@ -269,6 +285,7 @@ export const App: React.FC = () => {
           title={headerMeta.title}
           subtitle={headerMeta.subtitle}
           onRefresh={handleRefresh}
+          onLogout={handleLogout}
           onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
           user={bootstrap?.user || null}
           hidePersonSelector={currentRoute === "domestic:holdings" || currentRoute === "trades" || (assetRoute && currentRoute !== "overview") ||

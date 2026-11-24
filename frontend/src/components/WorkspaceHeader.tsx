@@ -6,6 +6,7 @@ import {
   User,
   Sun,
   Moon,
+  LogOut,
 } from "lucide-react";
 import { PersonItem, UserProfile } from "../types";
 
@@ -15,6 +16,7 @@ interface WorkspaceHeaderProps {
   onRefresh: () => void;
   onResetFilters?: () => void;
   onExport?: () => void;
+  onLogout?: () => void;
   user: UserProfile | null;
   persons: PersonItem[];
   currentPersonId: number | null;
@@ -31,6 +33,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onRefresh,
   onResetFilters,
   onExport,
+  onLogout,
   user,
   hidePersonSelector = false,
   persons,
@@ -161,6 +164,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             >
               <Download size={14} />
               <span>导出</span>
+            </button>
+          )}
+
+          {/* Logout / Switch Account */}
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="btn btn-quiet"
+              style={{ height: "32px", color: "#DC2626", border: "1px solid var(--border-color)" }}
+              title="退出当前账号并切换登录"
+            >
+              <LogOut size={14} />
+              <span>退出</span>
             </button>
           )}
         </div>
