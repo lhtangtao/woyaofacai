@@ -893,8 +893,12 @@ def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snaps
     tldr = str(src.get("tldr") or "").strip()
     if not tldr:
         sec1 = _extract_markdown_section_bullets(markdown, "一、")
-        if sec1:
-            tldr = " ".join(sec1[:2])[:180]
+        non_table = [b for b in sec1 if not b.startswith("|") and "---" not in b]
+        if non_table:
+            raw_tldr = " ".join(non_table[:2])
+            raw_tldr = re.sub(r"^(一句话定性|核心定性|今日定性)[:：]\s*", "", raw_tldr)
+            raw_tldr = raw_tldr.replace("`", "").replace("|", " ").strip()
+            tldr = re.sub(r"\s{2,}", " ", raw_tldr)[:180]
         else:
             tldr = (
                 f"{snapshot.get('trade_date')} {snapshot.get('person_name')} 组合持仓 {summary.get('holding_count', 0)} 只、"

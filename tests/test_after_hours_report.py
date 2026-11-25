@@ -151,12 +151,21 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     assert est_report["snapshot"]["summary"]["day_pnl"] == 15.0
     assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_estimated"
 
-    # 桌面端 2.0 页面可渲染并勾选清单落盘
+    # 桌面端 2.0 页面可渲染并勾选清单落盘，且 1280x800 下绝无横向溢出
+    from PySide6.QtCore import Qt
+
     page = AfterHoursReportPage(store=store, db_path=demo_path)
     qtbot.addWidget(page)
+    page.resize(1280, 800)
+    page.show()
+    qtbot.wait(50)
+
     assert page.report_list.count() == 2
     assert "DEMO 财报超预期" in page.tldr_lbl.text()
     assert page.cl_progress_lbl.text() == "0 / 2 已核查"
+    assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert page.right_container.width() <= page.right_scroll.viewport().width() + 2
+    assert page.kpi_card_4.isVisible()
 
     page._on_checklist_toggled("c1")
     assert page.cl_progress_lbl.text() == "1 / 2 已核查"

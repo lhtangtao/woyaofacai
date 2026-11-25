@@ -1,4 +1,4 @@
-"""Mac 桌面端「盘后复盘日报 2.0」页面（结构化驾驶舱 + 持仓异动卡片 + 风险雷达 + 可勾选清单 + 追问）。"""
+"""Mac 桌面端「盘后复盘日报 2.0」页面（结构化驾驶舱 + 自动换行零横向溢出 + 清单持久化 + 追问）。"""
 from __future__ import annotations
 
 import html
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTextBrowser,
@@ -82,6 +83,41 @@ def _clear_layout(layout):
             w.deleteLater()
         elif item.layout() is not None:
             _clear_layout(item.layout())
+
+
+def _make_wrap_label(text: str = "", style: str = "") -> QLabel:
+    """创建严格按父容器宽度自动换行、绝不撑宽横向滚动条的标签。"""
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setMinimumWidth(0)
+    lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    if style:
+        lbl.setStyleSheet(style)
+    return lbl
+
+
+class _FitWidthScrollArea(QScrollArea):
+    """锁定内容最大宽度等于视口宽度，禁止横向拖动并确保内部文本自然折行。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def _sync_widget_width(self):
+        w = self.widget()
+        vw = self.viewport().width()
+        if w is not None and vw > 0:
+            w.setMaximumWidth(vw)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_widget_width()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_widget_width()
 
 
 class _AfterHoursWorker(QThread):
@@ -148,7 +184,7 @@ class _FollowupWorker(QThread):
 
 
 class AfterHoursReportPage(QWidget):
-    """美股盘后复盘日报 2.0 桌面端交互视图。"""
+    """美股盘后复盘日报 2.0 桌面端交互视图（全自动折行、无需左右拖动）。"""
 
     def __init__(self, parent=None, store: Optional[AfterHoursReportStore] = None, db_path: Path = DATABASE_PATH):
         super().__init__(parent)
@@ -186,7 +222,7 @@ class AfterHoursReportPage(QWidget):
 
         top.addWidget(QLabel("范围："))
         self.person_combo = QComboBox()
-        self.person_combo.setMinimumWidth(105)
+        self.person_combo.setMinimumWidth(100)
         self.person_combo.addItem("个人", "个人")
         self.person_combo.addItem("全部人员", "ALL")
         top.addWidget(self.person_combo)
@@ -197,7 +233,7 @@ class AfterHoursReportPage(QWidget):
 
         top.addStretch()
 
-        self.status_lbl = QLabel("美东每个交易日 20:10 自动同步并生成「个人」盘后日报")
+        self.status_lbl = QLabel("美东 20:10 自动同步并生成「个人」日报")
         self.status_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
         top.addWidget(self.status_lbl)
 
@@ -214,10 +250,13 @@ class AfterHoursReportPage(QWidget):
 
         # 主体左右分栏
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
-        # 左侧：历史存档时间轴
+        # 左侧：历史存档时间轴（定宽区间，把最大空间让给右侧复盘内容）
         left_card = QFrame()
         left_card.setObjectName("card")
+        left_card.setMinimumWidth(205)
+        left_card.setMaximumWidth(248)
         left_layout = QVBoxLayout(left_card)
         left_layout.setContentsMargins(10, 10, 10, 10)
         left_layout.setSpacing(8)
@@ -232,17 +271,16 @@ class AfterHoursReportPage(QWidget):
         hdr_l.addWidget(self.count_lbl)
         left_layout.addLayout(hdr_l)
 
-        # 左侧人员筛选药丸
         pill_row = QHBoxLayout()
-        pill_row.setSpacing(5)
+        pill_row.setSpacing(4)
         self._pill_group = QButtonGroup(self)
         for idx, (lbl, pkey) in enumerate((("全部", None), ("个人", "个人"), ("全部人员", "ALL"))):
             btn = QPushButton(lbl)
             btn.setCheckable(True)
             btn.setChecked(idx == 0)
-            btn.setProperty("person_key", pkey)
+            btn.setMinimumWidth(0)
             btn.setStyleSheet(
-                "QPushButton { font-size: 11.5px; padding: 3px 9px; border-radius: 10px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
+                "QPushButton { font-size: 11px; padding: 3px 8px; border-radius: 10px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
                 "QPushButton:checked { border-color: #2563EB; background: #EFF6FF; color: #2563EB; font-weight: 600; }"
             )
             btn.clicked.connect(lambda _=False, k=pkey: self._set_person_filter(k))
@@ -253,6 +291,7 @@ class AfterHoursReportPage(QWidget):
 
         self.report_list = QListWidget()
         self.report_list.setSpacing(4)
+        self.report_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.report_list.setStyleSheet(
             "QListWidget { border: none; background: transparent; }"
             "QListWidget::item { border: 1px solid #E2E8F0; border-radius: 8px; padding: 6px; background: #F8FAFC; }"
@@ -261,84 +300,81 @@ class AfterHoursReportPage(QWidget):
         self.report_list.currentRowChanged.connect(self._on_report_selected)
         left_layout.addWidget(self.report_list, 1)
 
-        # 右侧：可滚动工作台
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
+        # 右侧：锁宽自动折行滚动工作台
+        self.right_scroll = _FitWidthScrollArea()
+        self.right_container = QWidget()
+        self.right_container.setMinimumWidth(0)
+        right_layout = QVBoxLayout(self.right_container)
         right_layout.setContentsMargins(2, 0, 4, 4)
         right_layout.setSpacing(10)
 
         # 1. Hero 驾驶舱卡片
         self.hero_card = QFrame()
         self.hero_card.setObjectName("card")
+        self.hero_card.setMinimumWidth(0)
         hero_l = QVBoxLayout(self.hero_card)
         hero_l.setContentsMargins(14, 14, 14, 14)
         hero_l.setSpacing(10)
 
         hero_top = QHBoxLayout()
+        hero_top.setSpacing(8)
         title_col = QVBoxLayout()
-        title_col.setSpacing(3)
+        title_col.setSpacing(4)
         title_badges = QHBoxLayout()
-        title_badges.setSpacing(8)
-        self.detail_title = QLabel("请选择左侧日报或点击右上角立即生成")
-        self.detail_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #0F172A;")
-        title_badges.addWidget(self.detail_title)
+        title_badges.setSpacing(6)
+        self.detail_title = _make_wrap_label(
+            "请选择左侧日报或点击右上角立即生成",
+            "font-size: 15px; font-weight: 700; color: #0F172A;",
+        )
+        title_badges.addWidget(self.detail_title, 1)
         self.regime_badge = QLabel("")
         self.regime_badge.hide()
         title_badges.addWidget(self.regime_badge)
         self.sync_badge = QLabel("")
         self.sync_badge.hide()
         title_badges.addWidget(self.sync_badge)
-        title_badges.addStretch()
         title_col.addLayout(title_badges)
 
-        self.detail_meta = QLabel("")
-        self.detail_meta.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        self.detail_meta = _make_wrap_label("", "font-size: 11.5px; color: #64748B;")
         title_col.addWidget(self.detail_meta)
         hero_top.addLayout(title_col, 1)
 
         self.copy_btn = QPushButton("复制 Markdown")
         self.copy_btn.clicked.connect(self._copy_markdown)
-        hero_top.addWidget(self.copy_btn)
+        hero_top.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignTop)
         hero_l.addLayout(hero_top)
 
         # TL;DR 横幅
         self.tldr_frame = QFrame()
+        self.tldr_frame.setMinimumWidth(0)
         self.tldr_frame.setStyleSheet("QFrame { border: 1px solid #BFDBFE; border-radius: 8px; background: #EFF6FF; }")
         tldr_row = QHBoxLayout(self.tldr_frame)
         tldr_row.setContentsMargins(10, 8, 10, 8)
         tldr_row.setSpacing(8)
         tldr_tag = QLabel("核心定性")
         tldr_tag.setStyleSheet("font-size: 11px; font-weight: 700; color: white; background: #2563EB; border-radius: 4px; padding: 2px 6px;")
-        tldr_tag.setAlignment(Qt.AlignmentFlag.AlignTop)
         tldr_row.addWidget(tldr_tag, 0, Qt.AlignmentFlag.AlignTop)
-        self.tldr_lbl = QLabel("")
-        self.tldr_lbl.setWordWrap(True)
-        self.tldr_lbl.setStyleSheet("font-size: 12.5px; color: #0F172A; border: none; background: transparent;")
+        self.tldr_lbl = _make_wrap_label("", "font-size: 12.5px; color: #0F172A; border: none; background: transparent;")
         tldr_row.addWidget(self.tldr_lbl, 1)
         self.tldr_frame.hide()
         hero_l.addWidget(self.tldr_frame)
 
-        # 4 张 KPI 卡片
+        # 4 张 KPI 卡片（等宽拉伸 + 零最小宽限制，确保全部同屏展示）
         kpi_grid = QGridLayout()
         kpi_grid.setSpacing(8)
-        self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, kpi_card_1 = self._make_kpi_card("当日预估盈亏")
-        self.kpi_mv_val, self.kpi_un_sub, _, kpi_card_2 = self._make_kpi_card("总持仓市值 / 累计浮盈")
-        self.kpi_bench_val, self.kpi_bench_sub, _, kpi_card_3 = self._make_kpi_card("大盘基准 (常规/盘后)")
-        self.kpi_lev_val, self.kpi_lev_sub, self.kpi_trades_lbl, kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
+        self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, self.kpi_card_1 = self._make_kpi_card("当日预估盈亏")
+        self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总持仓市值 / 浮盈")
+        self.kpi_bench_val, self.kpi_bench_sub, _, self.kpi_card_3 = self._make_kpi_card("大盘基准")
+        self.kpi_lev_val, self.kpi_lev_sub, self.kpi_trades_lbl, self.kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
         self.lev_bar = QProgressBar()
         self.lev_bar.setRange(0, 100)
         self.lev_bar.setTextVisible(False)
         self.lev_bar.setFixedHeight(6)
-        kpi_card_4.layout().addWidget(self.lev_bar)
+        self.kpi_card_4.layout().addWidget(self.lev_bar)
 
-        kpi_grid.addWidget(kpi_card_1, 0, 0)
-        kpi_grid.addWidget(kpi_card_2, 0, 1)
-        kpi_grid.addWidget(kpi_card_3, 0, 2)
-        kpi_grid.addWidget(kpi_card_4, 0, 3)
+        for col, card in enumerate((self.kpi_card_1, self.kpi_card_2, self.kpi_card_3, self.kpi_card_4)):
+            kpi_grid.addWidget(card, 0, col)
+            kpi_grid.setColumnStretch(col, 1)
         hero_l.addLayout(kpi_grid)
 
         right_layout.addWidget(self.hero_card)
@@ -346,15 +382,17 @@ class AfterHoursReportPage(QWidget):
         # 2. 多视角 Tabs
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.tabs.setMinimumWidth(0)
 
         # Tab 1: 结构化复盘总览
         tab_overview = QWidget()
+        tab_overview.setMinimumWidth(0)
         ov_l = QVBoxLayout(tab_overview)
         ov_l.setContentsMargins(8, 10, 8, 10)
         ov_l.setSpacing(12)
 
-        # 持仓异动过滤条
         mf_row = QHBoxLayout()
+        mf_row.setSpacing(6)
         mf_title = QLabel("重点持仓异动与归因")
         mf_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
         mf_row.addWidget(mf_title)
@@ -370,8 +408,9 @@ class AfterHoursReportPage(QWidget):
             b = QPushButton(lbl)
             b.setCheckable(True)
             b.setChecked(idx == 0)
+            b.setMinimumWidth(0)
             b.setStyleSheet(
-                "QPushButton { font-size: 11.5px; padding: 3px 9px; border-radius: 6px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
+                "QPushButton { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
                 "QPushButton:checked { border-color: #2563EB; background: #EFF6FF; color: #2563EB; font-weight: 600; }"
             )
             b.clicked.connect(lambda _=False, k=mkey: self._set_mover_filter(k))
@@ -389,6 +428,7 @@ class AfterHoursReportPage(QWidget):
 
         risk_card = QFrame()
         risk_card.setObjectName("card")
+        risk_card.setMinimumWidth(0)
         risk_outer = QVBoxLayout(risk_card)
         risk_outer.setContentsMargins(12, 10, 12, 10)
         risk_outer.setSpacing(8)
@@ -407,6 +447,7 @@ class AfterHoursReportPage(QWidget):
 
         cl_card = QFrame()
         cl_card.setObjectName("card")
+        cl_card.setMinimumWidth(0)
         cl_outer = QVBoxLayout(cl_card)
         cl_outer.setContentsMargins(12, 10, 12, 10)
         cl_outer.setSpacing(8)
@@ -430,12 +471,14 @@ class AfterHoursReportPage(QWidget):
 
         # Tab 2: 今日操作复盘
         tab_trades = QWidget()
+        tab_trades.setMinimumWidth(0)
         tr_l = QVBoxLayout(tab_trades)
         tr_l.setContentsMargins(8, 10, 8, 10)
         tr_l.setSpacing(8)
-        self.trades_summary_lbl = QLabel("")
-        self.trades_summary_lbl.setWordWrap(True)
-        self.trades_summary_lbl.setStyleSheet("padding: 8px 10px; border-radius: 8px; background: #F8FAFC; border: 1px solid #E2E8F0; font-size: 12.5px;")
+        self.trades_summary_lbl = _make_wrap_label(
+            "",
+            "padding: 8px 10px; border-radius: 8px; background: #F8FAFC; border: 1px solid #E2E8F0; font-size: 12.5px;",
+        )
         tr_l.addWidget(self.trades_summary_lbl)
         self.trades_box = QVBoxLayout()
         self.trades_box.setSpacing(8)
@@ -444,6 +487,7 @@ class AfterHoursReportPage(QWidget):
 
         # Tab 3: 突发新闻情报
         tab_news = QWidget()
+        tab_news.setMinimumWidth(0)
         nw_l = QVBoxLayout(tab_news)
         nw_l.setContentsMargins(8, 10, 8, 10)
         nw_l.setSpacing(8)
@@ -454,11 +498,13 @@ class AfterHoursReportPage(QWidget):
 
         # Tab 4: 完整 Markdown 长文
         tab_md = QWidget()
+        tab_md.setMinimumWidth(0)
         md_l = QVBoxLayout(tab_md)
         md_l.setContentsMargins(8, 10, 8, 10)
         self.viewer = QTextBrowser()
         self.viewer.setMinimumHeight(420)
         self.viewer.setOpenExternalLinks(False)
+        self.viewer.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.viewer.setStyleSheet("QTextBrowser { border: 1px solid #E2E8F0; border-radius: 8px; padding: 12px; background: #FFFFFF; font-size: 13px; }")
         md_l.addWidget(self.viewer)
 
@@ -468,23 +514,25 @@ class AfterHoursReportPage(QWidget):
         self.tabs.addTab(tab_md, "完整长文 (Markdown)")
         right_layout.addWidget(self.tabs)
 
-        # 3. 底部带上下文追问条
+        # 3. 底部带上下文追问条（快捷问题竖排，绝不横向撑爆页面）
         fq_card = QFrame()
         fq_card.setObjectName("card")
+        fq_card.setMinimumWidth(0)
         fq_l = QVBoxLayout(fq_card)
         fq_l.setContentsMargins(12, 10, 12, 10)
         fq_l.setSpacing(8)
 
-        fq_hdr = QLabel("基于这份盘后日报继续追问 Gemini")
+        fq_hdr = QLabel("基于这份盘后日报继续追问 Gemini（点击快捷问题可直接发送）")
         fq_hdr.setStyleSheet("font-size: 12px; font-weight: 700; color: #475569;")
         fq_l.addWidget(fq_hdr)
 
-        self.fq_chips_box = QHBoxLayout()
-        self.fq_chips_box.setSpacing(6)
+        self.fq_chips_box = QVBoxLayout()
+        self.fq_chips_box.setSpacing(5)
         fq_l.addLayout(self.fq_chips_box)
 
         fq_input_row = QHBoxLayout()
         self.followup_input = QLineEdit()
+        self.followup_input.setMinimumWidth(0)
         self.followup_input.setPlaceholderText("输入想基于当前日报继续追问的问题（回车发送）...")
         self.followup_input.returnPressed.connect(lambda: self._start_followup())
         fq_input_row.addWidget(self.followup_input, 1)
@@ -502,36 +550,35 @@ class AfterHoursReportPage(QWidget):
         right_layout.addWidget(fq_card)
         right_layout.addStretch()
 
-        right_scroll.setWidget(right_container)
+        self.right_scroll.setWidget(self.right_container)
 
         splitter.addWidget(left_card)
-        splitter.addWidget(right_scroll)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 6)
+        splitter.addWidget(self.right_scroll)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, 1)
 
     @staticmethod
     def _make_kpi_card(title: str):
         card = QFrame()
+        card.setMinimumWidth(0)
+        card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; }")
         lay = QVBoxLayout(card)
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(3)
         top = QHBoxLayout()
-        t_lbl = QLabel(title)
-        t_lbl.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
-        top.addWidget(t_lbl)
-        top.addStretch()
+        top.setSpacing(4)
+        t_lbl = _make_wrap_label(title, "font-size: 11px; color: #64748B; border: none;")
+        top.addWidget(t_lbl, 1)
         right_lbl = QLabel("")
-        right_lbl.setStyleSheet("font-size: 11px; font-weight: 600; border: none;")
+        right_lbl.setMinimumWidth(0)
+        right_lbl.setStyleSheet("font-size: 10.5px; font-weight: 600; border: none;")
         top.addWidget(right_lbl)
         lay.addLayout(top)
-        val_lbl = QLabel("—")
-        val_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #0F172A; border: none;")
+        val_lbl = _make_wrap_label("—", "font-size: 15.5px; font-weight: 700; color: #0F172A; border: none;")
         lay.addWidget(val_lbl)
-        sub_lbl = QLabel("")
-        sub_lbl.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
-        sub_lbl.setWordWrap(True)
+        sub_lbl = _make_wrap_label("", "font-size: 11px; color: #64748B; border: none;")
         lay.addWidget(sub_lbl)
         return val_lbl, sub_lbl, right_lbl, card
 
@@ -647,12 +694,12 @@ class AfterHoursReportPage(QWidget):
 
         # KPI 1-4
         self.kpi_pnl_val.setText(_fmt_money(summary.get("day_pnl"), signed=True))
-        self.kpi_pnl_val.setStyleSheet(f"font-size: 16px; font-weight: 700; border: none; color: {_tone_color(summary.get('day_pnl'))};")
+        self.kpi_pnl_val.setStyleSheet(f"font-size: 15.5px; font-weight: 700; border: none; color: {_tone_color(summary.get('day_pnl'))};")
         self.kpi_pnl_sub.setText(f"日收益率 {_fmt_pct(summary.get('day_pnl_pct'))}")
         alpha = summary.get("alpha_vs_qqq")
         if alpha is not None:
             self.kpi_alpha_lbl.setText(f"vs QQQ {_fmt_pct(alpha)}")
-            self.kpi_alpha_lbl.setStyleSheet(f"font-size: 11px; font-weight: 600; border: none; color: {_tone_color(alpha)};")
+            self.kpi_alpha_lbl.setStyleSheet(f"font-size: 10.5px; font-weight: 600; border: none; color: {_tone_color(alpha)};")
         else:
             self.kpi_alpha_lbl.setText("")
 
@@ -676,7 +723,7 @@ class AfterHoursReportPage(QWidget):
         self.kpi_lev_sub.setText("高杠杆警戒" if lev_pct >= 50 else ("中高暴露" if lev_pct >= 35 else "稳健可控"))
         bar_col = "#DC2626" if lev_pct >= 50 else ("#D97706" if lev_pct >= 35 else "#16A34A")
         self.kpi_lev_sub.setStyleSheet(f"font-size: 11px; font-weight: 600; border: none; color: {bar_col};")
-        self.kpi_trades_lbl.setText(f"{summary.get('trade_count', 0)} 笔成交")
+        self.kpi_trades_lbl.setText(f"{summary.get('trade_count', 0)} 笔")
         self.lev_bar.setValue(min(100, int(round(lev_pct))))
         self.lev_bar.setStyleSheet(f"QProgressBar {{ background: #E2E8F0; border-radius: 3px; }} QProgressBar::chunk {{ background: {bar_col}; border-radius: 3px; }}")
 
@@ -689,6 +736,7 @@ class AfterHoursReportPage(QWidget):
         self.tabs.setTabText(2, f"突发新闻情报 ({news_cnt})")
         self.viewer.setMarkdown(str(rep.get("markdown") or ""))
         self._render_followups(rep)
+        self.right_scroll._sync_widget_width()
 
     def _get_holding_news(self, snap: dict, h: dict) -> list[dict]:
         news_map = snap.get("news") or {}
@@ -726,8 +774,7 @@ class AfterHoursReportPage(QWidget):
             filtered.append(h)
 
         if not filtered:
-            empty = QLabel("当前筛选条件下无匹配持仓标的")
-            empty.setStyleSheet("padding: 14px; color: #64748B; font-size: 12px;")
+            empty = _make_wrap_label("当前筛选条件下无匹配持仓标的", "padding: 14px; color: #64748B; font-size: 12px;")
             self.movers_box.addWidget(empty)
             return
 
@@ -737,53 +784,55 @@ class AfterHoursReportPage(QWidget):
             expanded = sym in self._expanded_syms
 
             card = QFrame()
+            card.setMinimumWidth(0)
             card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; }")
             cl = QVBoxLayout(card)
             cl.setContentsMargins(10, 8, 10, 8)
-            cl.setSpacing(6)
+            cl.setSpacing(5)
 
-            hdr = QHBoxLayout()
-            left_info = QVBoxLayout()
-            left_info.setSpacing(2)
+            # 第一行：标题与标签 + 展开按钮
+            row1 = QHBoxLayout()
+            row1.setSpacing(8)
             tags = f"  [→ {h['underlying']}]" if h.get("underlying") else ""
             lev_tag = "  [杠杆]" if h.get("is_leveraged") else ""
             news_tag = f"  [新闻 {len(h_news)}]" if h_news else ""
-            top_lbl = QLabel(f"{sym}{tags}{lev_tag}{news_tag}")
-            top_lbl.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A; border: none;")
-            left_info.addWidget(top_lbl)
-
-            w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
-            be_txt = f" · 回本需 +{float(h['need_breakeven_pct']) * 100:.1f}%" if h.get("need_breakeven_pct") is not None else ""
-            sub_lbl = QLabel(f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 均价 {_fmt_money(h.get('avg_cost'))}{be_txt}")
-            sub_lbl.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
-            left_info.addWidget(sub_lbl)
-            hdr.addLayout(left_info, 1)
-
-            q_lbl = QLabel(
-                f"收 {_fmt_money(h.get('regular_close'))} ({_fmt_pct(h.get('regular_change_pct'))})  |  "
-                f"盘后 {_fmt_money(h.get('after_hours_price'))} ({_fmt_pct(h.get('after_hours_change_pct'))})  |  "
-                f"当日 {_fmt_money(h.get('day_pnl'), signed=True)}"
+            top_lbl = _make_wrap_label(
+                f"{sym}{tags}{lev_tag}{news_tag}",
+                "font-size: 13px; font-weight: 700; color: #0F172A; border: none;",
             )
-            q_lbl.setStyleSheet(f"font-size: 11.5px; font-weight: 600; color: {_tone_color(h.get('day_pnl'))}; border: none;")
-            hdr.addWidget(q_lbl)
+            row1.addWidget(top_lbl, 1)
 
             toggle_btn = QPushButton("收起" if expanded else "详情")
             toggle_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
             toggle_btn.clicked.connect(lambda _=False, s=sym: self._toggle_symbol_expand(s))
-            hdr.addWidget(toggle_btn)
-            cl.addLayout(hdr)
+            row1.addWidget(toggle_btn)
+            cl.addLayout(row1)
+
+            # 第二行：基础仓位数据 + 盘后价与当日盈亏（自动折行绝不截断）
+            w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
+            be_txt = f" · 回本需 +{float(h['need_breakeven_pct']) * 100:.1f}%" if h.get("need_breakeven_pct") is not None else ""
+            row2 = _make_wrap_label(
+                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 均价 {_fmt_money(h.get('avg_cost'))}{be_txt}   |   "
+                f"常规收 {_fmt_money(h.get('regular_close'))} ({_fmt_pct(h.get('regular_change_pct'))}) · "
+                f"盘后 {_fmt_money(h.get('after_hours_price'))} ({_fmt_pct(h.get('after_hours_change_pct'))}) · "
+                f"当日盈亏 {_fmt_money(h.get('day_pnl'), signed=True)}",
+                f"font-size: 11.5px; color: {_tone_color(h.get('day_pnl'))}; border: none;",
+            )
+            cl.addWidget(row2)
 
             if expanded:
                 reason = reasons.get(sym) or f"当前持仓 {h.get('quantity')} 股，浮盈 {_fmt_money(h.get('unrealized_pnl'), signed=True)}。"
-                r_lbl = QLabel(f"AI 异动归因：{reason}")
-                r_lbl.setWordWrap(True)
-                r_lbl.setStyleSheet("font-size: 12px; color: #1E293B; border: none; padding-top: 4px;")
+                r_lbl = _make_wrap_label(
+                    f"AI 异动归因：{reason}",
+                    "font-size: 12px; color: #1E293B; border: none; padding-top: 4px;",
+                )
                 cl.addWidget(r_lbl)
                 for n in h_news:
                     sent = sentiments.get(n.get("title"), "中性")
-                    n_lbl = QLabel(f"• [{sent}] {n.get('title')} ({n.get('publisher')} · {n.get('published_bj')})")
-                    n_lbl.setWordWrap(True)
-                    n_lbl.setStyleSheet("font-size: 11.5px; color: #475569; border: none; padding-left: 6px;")
+                    n_lbl = _make_wrap_label(
+                        f"• [{sent}] {n.get('title')} ({n.get('publisher')} · {n.get('published_bj')})",
+                        "font-size: 11.5px; color: #475569; border: none; padding-left: 6px;",
+                    )
                     cl.addWidget(n_lbl)
 
             self.movers_box.addWidget(card)
@@ -815,25 +864,50 @@ class AfterHoursReportPage(QWidget):
         for r in risks:
             lv = r.get("level") or "提示"
             col = "#DC2626" if lv == "高危" else ("#D97706" if lv == "中危" else "#2563EB")
-            lbl = QLabel(f"<b style='color:{col};'>[{html.escape(lv)}] {html.escape(str(r.get('title') or ''))}</b><br>{html.escape(str(r.get('detail') or ''))}")
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet("padding: 8px; border: 1px solid #E2E8F0; border-radius: 6px; background: #F8FAFC; font-size: 12px;")
+            lbl = _make_wrap_label(
+                f"<b style='color:{col};'>[{html.escape(lv)}] {html.escape(str(r.get('title') or ''))}</b><br>"
+                f"{html.escape(str(r.get('detail') or ''))}",
+                "padding: 8px; border: 1px solid #E2E8F0; border-radius: 6px; background: #F8FAFC; font-size: 12px;",
+            )
             self.risks_box.addWidget(lbl)
         if not risks:
-            self.risks_box.addWidget(QLabel("暂无风险提示。"))
+            self.risks_box.addWidget(_make_wrap_label("暂无风险提示。"))
 
         done_cnt = sum(1 for c in checklist if c.get("id") in checked)
         self.cl_progress_lbl.setText(f"{done_cnt} / {len(checklist)} 已核查")
 
         for c in checklist:
             cid = str(c.get("id") or "")
-            cb = QCheckBox(f"[{c.get('ticker')} · {c.get('level')}] {c.get('text')}")
-            cb.setChecked(cid in checked)
-            cb.setStyleSheet("QCheckBox { font-size: 12px; padding: 4px; }")
+            is_checked = cid in checked
+            row_card = QFrame()
+            row_card.setMinimumWidth(0)
+            row_card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 6px; background: #F8FAFC; }")
+            hl = QHBoxLayout(row_card)
+            hl.setContentsMargins(8, 6, 8, 6)
+            hl.setSpacing(8)
+
+            cb = QCheckBox("")
+            cb.setChecked(is_checked)
+            cb.setFixedWidth(20)
             cb.stateChanged.connect(lambda _state, item_id=cid: self._on_checklist_toggled(item_id))
-            self.checklist_box.addWidget(cb)
+            hl.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+
+            text_html = (
+                f"<b style='color:#2563EB;'>[{html.escape(str(c.get('ticker') or ''))} · "
+                f"{html.escape(str(c.get('level') or ''))}]</b> "
+                f"{html.escape(str(c.get('text') or ''))}"
+            )
+            lbl = _make_wrap_label(
+                text_html,
+                f"font-size: 12px; border: none; background: transparent; color: {'#64748B' if is_checked else '#0F172A'};",
+            )
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            lbl.mousePressEvent = lambda _e, box=cb: box.toggle()
+            hl.addWidget(lbl, 1)
+
+            self.checklist_box.addWidget(row_card)
         if not checklist:
-            self.checklist_box.addWidget(QLabel("暂无次日关注事项。"))
+            self.checklist_box.addWidget(_make_wrap_label("暂无次日关注事项。"))
 
     def _on_checklist_toggled(self, item_id: str):
         if not self._current_report:
@@ -857,8 +931,7 @@ class AfterHoursReportPage(QWidget):
         self.trades_summary_lbl.setText(f"今日操作总评：{structured.get('trades_summary') or '暂无操作点评。'}")
 
         if not trades:
-            lbl = QLabel("该交易日无真实成交记录。")
-            lbl.setStyleSheet("padding: 16px; color: #64748B; font-size: 12px;")
+            lbl = _make_wrap_label("该交易日无真实成交记录。", "padding: 16px; color: #64748B; font-size: 12px;")
             self.trades_box.addWidget(lbl)
             return
 
@@ -869,13 +942,12 @@ class AfterHoursReportPage(QWidget):
             rev = next((r for r in reviews if r.get("symbol") == t.get("symbol")), None)
             vs_close = _fmt_pct(t.get("vs_close_pct"))
             comment_html = f"<br><span style='color:#475569;'>AI 点评：{html.escape(str(rev.get('comment') or ''))}</span>" if rev and rev.get("comment") else ""
-            lbl = QLabel(
+            lbl = _make_wrap_label(
                 f"<b>[{'买入' if is_buy else '卖出'}] {html.escape(str(t.get('symbol')))}</b> · {html.escape(str(t.get('channel') or ''))} · "
                 f"{t.get('quantity')} 股 @ {_fmt_money(t.get('price'))} （收盘 {_fmt_money(t.get('close_price'))}，价差 {vs_close}）"
-                f"{comment_html}"
+                f"{comment_html}",
+                "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
             )
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet("padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;")
             self.trades_box.addWidget(lbl)
 
     def _render_news(self, rep: dict) -> int:
@@ -889,17 +961,15 @@ class AfterHoursReportPage(QWidget):
                 count += 1
                 sent = sentiments.get(n.get("title"), "中性")
                 col = "#16A34A" if sent == "利好" else ("#DC2626" if sent == "利空" else "#64748B")
-                lbl = QLabel(
+                lbl = _make_wrap_label(
                     f"<b>[{html.escape(str(sym))}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
                     f"{html.escape(str(n.get('title') or ''))}<br>"
-                    f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))}</span>"
+                    f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))}</span>",
+                    "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
                 )
-                lbl.setWordWrap(True)
-                lbl.setStyleSheet("padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;")
                 self.news_box.addWidget(lbl)
         if count == 0:
-            empty = QLabel("近 36 小时未抓取到持仓/交易标的的显著突发新闻。")
-            empty.setStyleSheet("padding: 16px; color: #64748B; font-size: 12px;")
+            empty = _make_wrap_label("近 36 小时未抓取到持仓/交易标的的显著突发新闻。", "padding: 16px; color: #64748B; font-size: 12px;")
             self.news_box.addWidget(empty)
         return count
 
@@ -909,20 +979,24 @@ class AfterHoursReportPage(QWidget):
 
         followups = (rep.get("structured") or {}).get("followups") or []
         for q in followups[:3]:
-            btn = QPushButton(str(q))
-            btn.setStyleSheet("QPushButton { font-size: 11px; padding: 3px 9px; border-radius: 10px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #1E293B; }")
+            btn = QPushButton(f"▸ {str(q)}")
+            btn.setMinimumWidth(0)
+            btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            btn.setStyleSheet(
+                "QPushButton { text-align: left; font-size: 11.5px; padding: 5px 10px; border-radius: 8px; "
+                "border: 1px solid #CBD5E1; background: #F8FAFC; color: #1E293B; }"
+                "QPushButton:hover { border-color: #2563EB; background: #EFF6FF; color: #2563EB; }"
+            )
             btn.clicked.connect(lambda _=False, text=str(q): self._start_followup(text))
             self.fq_chips_box.addWidget(btn)
-        self.fq_chips_box.addStretch()
 
         for item in rep.get("followups_history") or []:
-            box = QLabel(
+            box = _make_wrap_label(
                 f"<b style='color:#2563EB;'>问：{html.escape(str(item.get('question') or ''))}</b> "
                 f"<span style='color:#64748B; font-size:11px;'>({html.escape(str(item.get('time_str') or ''))})</span><br>"
-                f"{html.escape(str(item.get('answer') or '')).replace(chr(10), '<br>')}"
+                f"{html.escape(str(item.get('answer') or '')).replace(chr(10), '<br>')}",
+                "padding: 8px 10px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
             )
-            box.setWordWrap(True)
-            box.setStyleSheet("padding: 8px 10px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;")
             self.fq_history_box.addWidget(box)
 
     def _start_generate(self):

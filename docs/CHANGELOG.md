@@ -1,3 +1,8 @@
+## 2026-11-25 22:28 修复桌面端盘后复盘日报 2.0 横向溢出，全页面自动换行展示
+
+- 修改者：Antigravity（代码修改）
+- 在 `after_hours_report_page.py` 引入锁宽滚动区域 `_FitWidthScrollArea`，确保 TL;DR 横幅、4 张 KPI 卡片、持仓异动卡、风险雷达、可勾选清单及快捷追问全自动折行，彻底消除横向拖动并完整展示全部 4 张 KPI；同步清理 `after_hours_report.py` 旧日报 TL;DR 的 Markdown 符号。`ruff` 与 `tests/test_after_hours_report.py` 全部通过。
+
 ## 2026-11-25 22:15 盘后复盘日报升级 2.0（驾驶舱 KPI、持仓归因、风险雷达与清单勾选追问）
 
 - 修改者：Antigravity（代码修改）

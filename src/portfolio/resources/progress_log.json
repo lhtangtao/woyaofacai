@@ -1,5 +1,17 @@
 [
   {
+    "title": "修复桌面端盘后复盘日报 2.0 横向溢出，全页面自动换行同屏完整展示",
+    "time": "2026-11-25 22:28",
+    "author": "Antigravity",
+    "tag": "桌面端布局已优化",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 `after_hours_report_page.py` 新增锁宽滚动容器 `_FitWidthScrollArea`（禁用横向滚动条并同步内容最大宽度等于视口宽度），将所有文本标签统一开启 `wordWrap` 与 `Ignored` 水平策略，把 4 张 KPI 卡片改为等宽自适应（第 4 张杠杆警戒卡同屏完整可见），将不换行的长文本 `QCheckBox` 替换为独立勾选框 + 自动折行点击标签，并将快捷追问按钮改为竖排铺满展示。",
+      "在 `after_hours_report.py` 优化老日报 `tldr` 兜底提取，清除反引号、Markdown 表格符号及冗余前缀。",
+      "验证范围：`ruff check` 0 错误；`tests/test_after_hours_report.py` 4 项测试（含 1280×800 零横向溢出及 4 张 KPI 卡可见性断言）全部通过。"
+    ]
+  },
+  {
     "title": "盘后复盘日报升级 2.0：驾驶舱 KPI、持仓归因过滤、风险雷达、可勾选清单与追问联动",
     "time": "2026-11-25 22:15",
     "author": "Antigravity",
