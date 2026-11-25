@@ -264,9 +264,9 @@ except Exception:
     if [[ -n "$PUBLIC_URL" ]]; then
         IS_NGROK_RUNNING=1
     else
-        # 若未运行且已配置 Token，启动后台守护进程
+        # 若未运行且已配置 Token，启动后台守护进程（清除代理环境变量，避免免费版 ngrok 触发 ERR_NGROK_9009）
         if "$NGROK_BIN" config check &>/dev/null; then
-            nohup "$NGROK_BIN" http 8888 --log=stdout > "$NGROK_LOG" 2>&1 &
+            nohup env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY "$NGROK_BIN" http 8888 --log=stdout > "$NGROK_LOG" 2>&1 &
             for i in {1..30}; do
                 sleep 0.25
                 PUBLIC_URL=$("$APP_DIR/.venv/bin/python" -c "
