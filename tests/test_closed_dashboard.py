@@ -595,5 +595,134 @@ def test_middle_analytics_unified_layout_and_broker_summary_table(closed_dashboa
     assert open_row.trend_card.minimumHeight() == 265
 
 
+def test_closed_person_summary_table_and_drilldown(closed_dashboard_db, qtbot):
+    """验证已清仓页面「各人员清仓情况」汇总表的 9 字段、KPI 对账、显示条件、点击联动及窄屏滚动。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QWidget
+
+    svc, analytics = closed_dashboard_db
+    host_widget = QWidget()
+    host_widget.analytics_service = svc
+    host_widget.accounts = SimpleNamespace(selected_ids=lambda: None, current_broker_name=lambda: "")
+    host_widget.quote_store = None
+    host_widget.info = SimpleNamespace(persons=(), instruments=())
+    qtbot.addWidget(host_widget)
+
+    page = HoldingsPage(host_widget)
+    page.resize(1440, 900)
+    host_widget.show()
+    page.show()
+    page.set_analytics(analytics)
+    page.open_closed_positions()
+
+    # 1. 多人员（全部人员）按人员明细模式下卡片可见，且为 9 个统一字段
+    assert not page.closed_person_card.isHidden()
+    expected_cols = [
+        "归属人员", "买入总额", "卖出总额", "净已实现盈亏",
+        "已实现收益率", "清仓数量占比", "已清仓股票数", "盈利清仓数", "亏损清仓数",
+    ]
+    assert list(page.closed_person_model.columns) == expected_cols
+
+    # 2. 合计行 + 至少两个人员行，且合计行与顶部 KPI 精确一致
+    rows = page.closed_person_model.rows
+    assert len(rows) >= 3  # person 1 + person 2 + 合计
+    total_idx = next(i for i, r in enumerate(rows) if r.metadata.get("is_total"))
+    total_row = rows[total_idx]
+    assert total_row.values[0] == "合计"
+    assert float(total_row.values[1]) == pytest.approx(2700.0)
+    assert float(total_row.values[2]) == pytest.approx(3080.0)
+    assert float(total_row.values[3]) == pytest.approx(380.0)
+    assert float(total_row.values[4]) == pytest.approx(380.0 / 2700.0)
+    assert float(total_row.values[5]) == pytest.approx(1.0)
+    assert total_row.values[6] == 4
+    assert total_row.values[7] == 2  # DEMO(+80), NVDA(+500)
+    assert total_row.values[8] == 1  # TSLA(-200); FLAT(0) 不计入盈亏数
+
+    # 格式化校验：占比带 %，数量为整数
+    assert page.closed_person_model.data(page.closed_person_model.index(total_idx, 5)) == "100.00%"
+    assert page.closed_person_model.data(page.closed_person_model.index(total_idx, 6)) == "4"
+    assert page.closed_person_model.data(page.closed_person_model.index(total_idx, 7)) == "2"
+    assert page.closed_person_model.data(page.closed_person_model.index(total_idx, 8)) == "1"
+
+    # 3. 窄窗口下开启横向按需滚动（避免遮挡大金额）
+    page.resize(900, 700)
+    assert page.closed_person_table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+
+    # 4. 点击某人员行下钻筛选下方明细，再次点击取消，且上方 KPI 保持不变
+    page.resize(1440, 900)
+    target_row_idx = next(i for i, r in enumerate(rows) if r.metadata.get("person_id") == 2)
+    target_pid = rows[target_row_idx].metadata["person_id"]
+    target_pname = rows[target_row_idx].values[0]
+    page._on_closed_person_selected(target_pid, target_pname)
+    assert page._closed_person_drill_id == target_pid
+    assert len(page.detail_model.rows) == 1
+    ticker_col = list(page.detail_model.columns).index("Ticker")
+    assert page.detail_model.rows[0].values[ticker_col] == "TSLA"
+    # 上方 KPI 仍为全部 4 只清仓统计
+    assert "3,080.00" in page.closed_kpi_bar.card_sell.val_lbl.text()
+
+    # 再次点击同一人员恢复全部 4 条明细
+    page._on_closed_person_selected(target_pid, target_pname)
+    assert page._closed_person_drill_id is None
+    assert len(page.detail_model.rows) == 4
+
+    # 5. 切换至「按券商账户汇总」模式时自动隐藏人员汇总卡片
+    page.closed_mode.setCurrentIndex(1)
+    assert page.closed_person_card.isHidden()
+
+    # 切回「按人员明细」后恢复显示
+    page.closed_mode.setCurrentIndex(0)
+    assert not page.closed_person_card.isHidden()
+
+    # 6. 单选具体人员时隐藏人员汇总卡片
+    single_analytics = svc.calculate(QueryScope(date(2026, 11, 12), person_ids=(1,)))
+    page.set_analytics(single_analytics)
+    assert page.closed_person_card.isHidden()
+
+    # 切回全部人员恢复显示
+    page.set_analytics(analytics)
+    assert not page.closed_person_card.isHidden()
+
+
+def test_stock_drawer_holding_analysis_isolates_person_from_account_daily_report(demo_path, monkeypatch):
+    """验证指定 person_id 打开股票抽屉时，不会被同账户下其他人的后续加仓污染持仓与成本轨迹。"""
+    monkeypatch.setattr(HoldingsManagementService, "get_latest_quotes_map", staticmethod(lambda: {}))
+    with sqlite3.connect(demo_path) as db:
+        db.execute("DELETE FROM person_operations")
+        db.execute("DELETE FROM broker_trades")
+        db.execute("UPDATE broker_accounts SET broker_code='LONGBRIDGE', display_name='长桥' WHERE id=1")
+        # person 1 于 2026-06-15 清仓 DEMO（最终股数=0）；
+        # person 2 在同一长桥账户 (account_id=1) 于 2026-09-10 买入 DEMO 50 股。
+        ops = [
+            (1, 1, 1, "BUY", 10, 10, "2026-06-01"),
+            (1, 1, 1, "SELL", 10, 12, "2026-06-15"),
+            (2, 1, 1, "BUY", 50, 20, "2026-09-10"),
+        ]
+        for n, (person, acc, inst, side, qty, price, day) in enumerate(ops, 1):
+            db.execute(
+                """INSERT INTO person_operations
+                (id,operation_key,person_id,account_id,instrument_id,operation_kind,side,business_date,book_time,sequence_no,
+                 quantity_e8,price_e8,amount_e8,amount_basis,currency,link_status,source_record_id)
+                VALUES(?,?,?,?,?,'MARKET_TRADE',?,?,?,?,?,?,?,'GROSS','USD','LINKED',1)""",
+                (
+                    n, f"op-{n}", person, acc, inst, side, day, f"{day} 10:00:00", n,
+                    int(D(qty) * 10**8), int(D(price) * 10**8), int(D(qty) * D(price) * 10**8),
+                ),
+            )
+
+    svc = AnalyticsService(demo_path)
+    analytics = svc.calculate(QueryScope(date(2026, 11, 12)))
+
+    drawer_p1 = HoldingsManagementService.get_stock_drawer_data(
+        demo_path, analytics, "DEMO",
+        person_id=1, broker="长桥", account_id=1, instrument_id=1,
+    )
+    ha_p1 = drawer_p1["holding_analysis"]
+    assert ha_p1["dates"] == ["2026-06-01", "2026-06-15"]
+    assert ha_p1["quantities"] == [10.0, 0.0]
+    assert ha_p1["costs"] == [10.0, None]
+
+
+
 
 

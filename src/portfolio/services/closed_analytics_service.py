@@ -339,6 +339,7 @@ def build_closed_dashboard_analytics(
     loss_count = 0
 
     broker_groups: dict[str, dict[str, Any]] = {}
+    person_groups: dict[tuple[str, Any], dict[str, Any]] = {}
 
     for r in closed_rows:
         buy = _to_dec(r.get("total_buy_amount")) or ZERO
@@ -355,6 +356,35 @@ def build_closed_dashboard_analytics(
             loss_count += 1
         else:
             flat_count += 1
+
+        # 按真实 person_id 分组汇总各人员清仓情况
+        p_id = r.get("person_id")
+        p_name = str(r.get("person_name") or "未归属人员")
+        p_key = ("id", p_id) if p_id is not None else ("unassigned", p_name)
+        pg = person_groups.get(p_key)
+        if pg is None:
+            pg = {
+                "person_id": p_id,
+                "person_name": p_name,
+                "buy_amount": ZERO,
+                "sell_amount": ZERO,
+                "realized_pnl": ZERO,
+                "record_count": 0,
+                "profit_count": 0,
+                "loss_count": 0,
+                "flat_count": 0,
+            }
+            person_groups[p_key] = pg
+        pg["buy_amount"] += buy
+        pg["sell_amount"] += sell
+        pg["realized_pnl"] += rpnl
+        pg["record_count"] += 1
+        if rpnl > ZERO:
+            pg["profit_count"] += 1
+        elif rpnl < ZERO:
+            pg["loss_count"] += 1
+        else:
+            pg["flat_count"] += 1
 
         raw_ch = str(r.get("channel") or "未知渠道").split(" · #")[0].strip()
         ch_name = channel_label(raw_ch) or "未知渠道"
@@ -454,6 +484,33 @@ def build_closed_dashboard_analytics(
     ]
     ticker_top10 = compute_closed_ticker_top10(closed_rows, top_n=top_n)
 
+    # 汇总各人员清仓情况（按买入总额倒序排列，使用真实 person_id 避免同名混杂）
+    person_summary = []
+    for pg in sorted(
+        person_groups.values(),
+        key=lambda x: (-x["buy_amount"], -x["record_count"], str(x["person_name"])),
+    ):
+        p_buy = pg["buy_amount"]
+        p_sell = pg["sell_amount"]
+        p_pnl = pg["realized_pnl"]
+        p_rate = ratio(p_pnl, p_buy) if p_buy > ZERO else None
+        p_weight = ratio(Decimal(pg["record_count"]), Decimal(total_count)) if total_count > 0 else ZERO
+        person_summary.append({
+            "person_id": pg["person_id"],
+            "person_name": pg["person_name"],
+            "name": pg["person_name"],
+            "buy_amount": serialize_val(p_buy),
+            "sell_amount": serialize_val(p_sell),
+            "realized_pnl": serialize_val(p_pnl),
+            "return_rate": serialize_val(p_rate),
+            "weight": serialize_val(p_weight),
+            "closed_count": pg["record_count"],
+            "record_count": pg["record_count"],
+            "profit_count": pg["profit_count"],
+            "loss_count": pg["loss_count"],
+            "flat_count": pg["flat_count"],
+        })
+
     attribution_mode = "close_date_fallback" if used_fallback else "trade_level"
     attribution_note = (
         "部分清仓记录因缺少逐笔回放流水按最终清仓日期归集；其余均按卖出交易逐笔还原移动加权已实现盈亏。"
@@ -465,6 +522,7 @@ def build_closed_dashboard_analytics(
         "cards": cards,
         "broker_summary": broker_rows,
         "broker_total": broker_total,
+        "person_summary": person_summary,
         "structure": structure,
         "monthly_trend": monthly_clean,
         "monthly_all": [

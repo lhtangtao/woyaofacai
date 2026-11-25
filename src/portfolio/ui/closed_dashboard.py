@@ -1040,11 +1040,23 @@ class ClosedDashboardWidget(QFrame):
         root.addLayout(mid_row)
 
         # ---------------------------------------------------------------------
+        # 新增：各人员清仓情况汇总表插槽（由 HoldingsPage 注入共享的 PersonSummaryCard）
+        # ---------------------------------------------------------------------
+        self.person_summary_slot = QVBoxLayout()
+        self.person_summary_slot.setContentsMargins(0, 0, 0, 0)
+        self.person_summary_slot.setSpacing(0)
+        root.addLayout(self.person_summary_slot)
+
+        # ---------------------------------------------------------------------
         # 第三行：已清仓股票盈亏贡献 Top 10（可折叠横向发散条形图）
         # ---------------------------------------------------------------------
         self.top10_card = ClosedTop10Card(self)
         self.top10_card.ticker_clicked.connect(self.ticker_clicked.emit)
         root.addWidget(self.top10_card)
+
+    def attach_person_summary_widget(self, widget: QWidget):
+        """挂载『各人员清仓情况』汇总卡片至三张分析卡片与 Top10 之间。"""
+        self.person_summary_slot.addWidget(widget)
 
     @staticmethod
     def _make_panel_card(title: str, subtitle: str) -> QFrame:
