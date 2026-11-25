@@ -10,17 +10,19 @@ export MONEY3_HOME="$APP_DIR"
 # 功能说明：
 # - 默认行为：双击一键启动全部组件：
 #   1. 手机端后台服务 (Flask Web / PWA on Port 8888)
-#   2. 公网安全直连隧道 (ngrok 自动分配公网 HTTPS 网址，免装 App 秒开)
+#   2. 公网安全直连隧道 (Cloudflare Tunnel 自动分配公网 HTTPS 网址，免装 App 秒开)
 #   3. 桌面端图形界面 (PySide6 GUI)
+#   4. 崩溃自动重启守护 (Watchdog：桌面端异常崩溃自动重启，Web/隧道异常断开自动拉起)
 # - 数据同步参数：
 #   ./启动Money3.command --api        (强制完整券商API+Excel同步后启动)
 #   ./启动Money3.command --excel      (强制仅本地Excel同步后启动)
 #   ./启动Money3.command --no-sync    (强制跳过同步直接启动)
 # - 服务模式参数：
-#   ./启动Money3.command --only-mobile (仅启动手机后台与公网隧道，不打开桌面端GUI)
-#   ./启动Money3.command --no-public   (仅启动桌面端与局域网手机端，不开启公网隧道)
-#   ./启动Money3.command --no-mobile   (仅启动桌面端GUI，不启动手机端服务与公网)
-#   ./启动Money3.command --stop        (一键停止手机后台服务与公网隧道)
+#   ./启动Money3.command --only-mobile     (仅启动手机后台与公网隧道，不打开桌面端GUI)
+#   ./启动Money3.command --no-public       (仅启动桌面端与局域网手机端，不开启公网隧道)
+#   ./启动Money3.command --no-mobile       (仅启动桌面端GUI，不启动手机端服务与公网)
+#   ./启动Money3.command --no-auto-restart (关闭崩溃自动重启守护，便于调试)
+#   ./启动Money3.command --stop            (一键停止手机后台服务、公网隧道与守护进程)
 # ==============================================================================
 
 SYNC_API="${SYNC_API:-0}"
@@ -30,7 +32,14 @@ START_PUBLIC=1
 START_DESKTOP=1
 STOP_ALL=0
 SKIP_NAV_SYNC=0
+AUTO_RESTART="${AUTO_RESTART:-1}"
 DERIVED_MODE=""
+
+WATCHDOG_SCRIPT="$APP_DIR/scripts/watchdog.py"
+WEB_WATCHDOG_PID_FILE="/tmp/money_web_watchdog.pid"
+TUNNEL_WATCHDOG_PID_FILE="/tmp/money_tunnel_watchdog.pid"
+DESKTOP_WATCHDOG_PID_FILE="/tmp/money_desktop_watchdog.pid"
+DESKTOP_WATCHDOG_LOG="$APP_DIR/logs/crash_watchdog.log"
 
 APP_ARGS=()
 for arg in "$@"; do
@@ -63,6 +72,9 @@ for arg in "$@"; do
             START_MOBILE=0
             START_PUBLIC=0
             ;;
+        --no-auto-restart)
+            AUTO_RESTART=0
+            ;;
         --stop-mobile|--stop|--stop-all)
             STOP_ALL=1
             ;;
@@ -70,16 +82,17 @@ for arg in "$@"; do
             print "用法: ./启动Money3.command [选项]"
             print ""
             print "常规启动选项:"
-            print "  (无参数)          一键启动桌面端 GUI、手机端服务与公网直连隧道 (默认推荐)"
-            print "  --only-mobile    仅启动手机后台服务与公网隧道，不打开桌面端图形窗口"
-            print "  --no-public      仅启动桌面端与局域网手机端，不建立公网隧道"
-            print "  --no-mobile      仅启动桌面端 GUI，不启动手机端服务"
-            print "  --stop           一键停止正在运行的手机端后台服务与公网隧道"
+            print "  (无参数)           一键启动桌面端 GUI、手机端服务与公网直连隧道 (默认推荐)"
+            print "  --only-mobile      仅启动手机后台服务与公网隧道，不打开桌面端图形窗口"
+            print "  --no-public        仅启动桌面端与局域网手机端，不建立公网隧道"
+            print "  --no-mobile        仅启动桌面端 GUI，不启动手机端服务"
+            print "  --no-auto-restart  关闭崩溃自动重启守护机制（方便开发调试）"
+            print "  --stop             一键停止手机端后台服务、公网隧道与自动重启守护"
             print ""
             print "数据同步选项:"
-            print "  --api, --sync    启动前强制调用券商API完整同步数据"
-            print "  --excel          启动前强制仅同步本地交易流水.xlsx"
-            print "  --no-sync        跳过任何同步，直接极速启动"
+            print "  --api, --sync      启动前强制调用券商API完整同步数据"
+            print "  --excel            启动前强制仅同步本地交易流水.xlsx"
+            print "  --no-sync          跳过任何同步，直接极速启动"
             print "  --rebuild-derived=changed|all  启动服务前安全重建全部历史人员派生数据"
             exit 0
             ;;
@@ -89,10 +102,49 @@ for arg in "$@"; do
     esac
 done
 
+stop_pid_file() {
+    local pid_file="$1"
+    local expect_pattern="${2:-watchdog.py}"
+    if [[ ! -f "$pid_file" ]]; then
+        return 1
+    fi
+    local pid=""
+    pid=$(<"$pid_file" 2>/dev/null || true)
+    pid="${pid//[[:space:]]/}"
+    if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+        rm -f "$pid_file"
+        return 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+        local cmdline=""
+        cmdline=$(ps -p "$pid" -o command= 2>/dev/null || true)
+        if [[ -z "$expect_pattern" || "$cmdline" == *"$expect_pattern"* ]]; then
+            kill "$pid" 2>/dev/null || true
+            for _ in {1..15}; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.2
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+            rm -f "$pid_file"
+            return 0
+        fi
+    fi
+    rm -f "$pid_file"
+    return 1
+}
+
 # ------------------------------------------------------------------------------
 # 停止服务处理 (--stop / --stop-all)
 # ------------------------------------------------------------------------------
 if [[ "$STOP_ALL" == "1" ]]; then
+    stop_pid_file "$WEB_WATCHDOG_PID_FILE" "watchdog.py" && print "✅ Web 自动重启守护已停止。" || true
+    stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" && print "✅ 公网隧道自动重启守护已停止。" || true
+    stop_pid_file "$DESKTOP_WATCHDOG_PID_FILE" "watchdog.py" && print "✅ 桌面端自动重启守护已停止。" || true
+
     MOBILE_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
     if [[ -n "$MOBILE_PID" ]]; then
         kill "$MOBILE_PID" 2>/dev/null || true
@@ -101,17 +153,21 @@ if [[ "$STOP_ALL" == "1" ]]; then
         print "ℹ️ 手机端 Web 服务当前未在运行 (端口 8888 未被占用)。"
     fi
 
-    if pgrep -f "ngrok http 8888" &>/dev/null; then
+    if pgrep -f "$APP_DIR/tools/cloudflared tunnel --url http://127.0.0.1:8888" &>/dev/null; then
+        pkill -f "$APP_DIR/tools/cloudflared tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
+        print "✅ 公网隧道 (cloudflared) 已安全停止。"
+    elif pgrep -f "ngrok http 8888" &>/dev/null; then
         pkill -f "ngrok http 8888" 2>/dev/null || true
-        print "✅ 公网隧道 (ngrok) 已安全停止。"
+        print "✅ 残留公网隧道 (ngrok) 已安全停止。"
     else
         print "ℹ️ 公网隧道当前未在运行。"
     fi
     exit 0
 fi
 
-# Stop this project's prior Web process before synchronization or reconstruction.
+# Stop this project's prior Web process (and its watchdog) before synchronization or reconstruction.
 if [[ "$START_MOBILE" == "1" ]]; then
+    stop_pid_file "$WEB_WATCHDOG_PID_FILE" "watchdog.py" || true
     EXISTING_PID=$(lsof -ti tcp:8888 -sTCP:LISTEN 2>/dev/null || true)
     if [[ -n "$EXISTING_PID" ]]; then
         if ps -p "$EXISTING_PID" -o command= 2>/dev/null | grep -q "portfolio.web.app" &&
@@ -222,7 +278,15 @@ PY
     fi
 
     if [[ "$IS_MOBILE_RUNNING" == "0" ]]; then
-        nohup "$APP_DIR/.venv/bin/python" -m portfolio.web.app >> "$MOBILE_LOG" 2>&1 &
+        if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+            nohup "$APP_DIR/.venv/bin/python" "$WATCHDOG_SCRIPT" \
+                --name web --restart-on-zero --redirect-child-output \
+                --pid-file "$WEB_WATCHDOG_PID_FILE" \
+                --log-file "$MOBILE_LOG" \
+                -- "$APP_DIR/.venv/bin/python" -m portfolio.web.app >/dev/null 2>&1 &
+        else
+            nohup "$APP_DIR/.venv/bin/python" -m portfolio.web.app >> "$MOBILE_LOG" 2>&1 &
+        fi
         MOBILE_PID=$!
         for i in {1..25}; do
             if lsof -ti tcp:8888 -sTCP:LISTEN &>/dev/null; then
@@ -247,18 +311,38 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$CLOUDFLARED_
     # 停掉残留的旧 ngrok 进程，避免占用或混淆隧道地址
     pkill -f "$APP_DIR/tools/ngrok" 2>/dev/null || true
 
-    # 先检查是否已有运行中的 cloudflared 隧道并提取 URL
-    if pgrep -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 && [[ -f "$CLOUDFLARED_LOG" ]]; then
+    TUNNEL_WATCHDOG_ALIVE=1
+    if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+        TUNNEL_WATCHDOG_ALIVE=0
+        if [[ -f "$TUNNEL_WATCHDOG_PID_FILE" ]]; then
+            local_tunnel_wd_pid=$(<"$TUNNEL_WATCHDOG_PID_FILE" 2>/dev/null || true)
+            if [[ -n "$local_tunnel_wd_pid" ]] && kill -0 "$local_tunnel_wd_pid" 2>/dev/null; then
+                TUNNEL_WATCHDOG_ALIVE=1
+            fi
+        fi
+    fi
+
+    # 先检查是否已有运行中的 cloudflared 隧道（且在开启守护时已受 watchdog 托管）并提取 URL
+    if [[ "$TUNNEL_WATCHDOG_ALIVE" == "1" ]] && pgrep -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 && [[ -f "$CLOUDFLARED_LOG" ]]; then
         PUBLIC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | tail -n 1 || true)
     fi
 
     if [[ -n "$PUBLIC_URL" ]]; then
         IS_TUNNEL_RUNNING=1
     else
-        # 若未运行或日志无 URL，清理旧进程并启动新的 cloudflared Quick Tunnel
+        # 若未运行或日志无 URL，清理旧守护与旧进程并启动新的 cloudflared Quick Tunnel
+        stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
         pkill -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
         : > "$CLOUDFLARED_LOG"
-        nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
+        if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+            nohup "$APP_DIR/.venv/bin/python" "$WATCHDOG_SCRIPT" \
+                --name tunnel --restart-on-zero --redirect-child-output \
+                --pid-file "$TUNNEL_WATCHDOG_PID_FILE" \
+                --log-file "$CLOUDFLARED_LOG" \
+                -- "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate >/dev/null 2>&1 &
+        else
+            nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
+        fi
         for i in {1..40}; do
             sleep 0.3
             PUBLIC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" 2>/dev/null | tail -n 1 || true)
@@ -306,6 +390,11 @@ if [[ "$START_DESKTOP" == "1" ]]; then
 else
     print "  ℹ️ 3. 手机端独立模式 (已跳过桌面端窗口)"
 fi
+if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+    print "  🛡️ 4. 崩溃自动重启守护已开启 (桌面端/Web/隧道，可用 --no-auto-restart 关闭)"
+else
+    print "  ℹ️ 4. 崩溃自动重启守护未开启"
+fi
 
 print ""
 print "  📱【手机访问地址 (iPhone / iPad / 安卓)】"
@@ -342,11 +431,28 @@ if [[ "$START_DESKTOP" == "1" ]]; then
     if [[ -x "$DESKTOP_BIN" ]]; then
         print "  🖥️ 桌面端主窗口已启动..."
         print -- "------------------------------------------------------------------\n"
-        "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
+        mkdir -p "$APP_DIR/logs"
+        set +e
+        if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+            "$APP_DIR/.venv/bin/python" "$WATCHDOG_SCRIPT" \
+                --name desktop --notify \
+                --pid-file "$DESKTOP_WATCHDOG_PID_FILE" \
+                --log-file "$DESKTOP_WATCHDOG_LOG" \
+                -- "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
+        else
+            "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
+        fi
         DESKTOP_EXIT=$?
+        set -e
 
         print "\n=================================================================="
-        print "  ℹ️ 桌面端已安全退出 (状态码: $DESKTOP_EXIT)"
+        if [[ "$DESKTOP_EXIT" == "0" ]]; then
+            print "  ℹ️ 桌面端已安全退出 (状态码: $DESKTOP_EXIT)"
+        else
+            print "  ⚠️ 桌面端异常退出或触发连续崩溃熔断 (状态码: $DESKTOP_EXIT)"
+            print "  • 排查日志: $DESKTOP_WATCHDOG_LOG"
+            print "  • 原生堆栈: $APP_DIR/logs/crash_fault.log"
+        fi
         if [[ "$START_MOBILE" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
             print "  📱 手机端后台服务 (Port 8888) 与 🌐 公网隧道 仍在持续运行中"
             print "  👉 手机端随时可通过以下地址访问："
@@ -365,9 +471,9 @@ if [[ "$START_DESKTOP" == "1" ]]; then
 else
     print "\n  📱 手机端独立模式已就绪 (桌面端已跳过)。"
     print "  • Web日志: $MOBILE_LOG"
-    [[ -n "$PUBLIC_URL" ]] && print "  • 隧道日志: $NGROK_LOG"
+    [[ -n "$PUBLIC_URL" ]] && print "  • 隧道日志: $CLOUDFLARED_LOG"
     print "  • 若需停止服务，可按 Ctrl + C 或执行 ./启动Money3.command --stop"
     print "=================================================================="
-    trap "kill $MOBILE_PID 2>/dev/null || true; pkill -f 'ngrok http 8888' 2>/dev/null || true; exit 0" INT TERM
+    trap 'stop_pid_file "$WEB_WATCHDOG_PID_FILE" "watchdog.py" || true; stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true; kill "$MOBILE_PID" 2>/dev/null || true; pkill -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true; exit 0' INT TERM
     tail -f "$MOBILE_LOG"
 fi

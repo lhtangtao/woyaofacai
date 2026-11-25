@@ -1,3 +1,10 @@
+## 2026-11-26 00:17 新增崩溃自动重启守护（Watchdog）与原生崩溃堆栈采集
+
+- 修改者：Antigravity（代码修改）
+- 新增 `scripts/watchdog.py`：为桌面端 PySide6 GUI、Web 后台服务（8888 端口）与 `tools/cloudflared` 公网隧道提供进程崩溃自动重启保护；桌面端正常退出（状态码 0）不重启、崩溃后指数退避自动重拉并支持 macOS 通知，Web 与隧道在任意意外退出时自动拉起；内置 120s 内连续 5 次快速崩溃熔断保护。
+- 在 `src/portfolio/logging_config.py` 与 `src/portfolio/app.py` 启用 `faulthandler`，原生崩溃堆栈自动写入 `logs/crash_fault.log`。
+- 更新 `启动Money3.command`：新增 `--no-auto-restart` 调试参数、完善 `--stop` 守护清理顺序（防重启竞态）并清除 `--only-mobile` / `--stop` 中残留的旧 `ngrok` 引用。`zsh -n`、`ruff check` 与 `tests/test_watchdog.py`（5 项）全部通过。
+
 ## 2026-11-25 22:28 修复桌面端盘后复盘日报 2.0 横向溢出，全页面自动换行展示
 
 - 修改者：Antigravity（代码修改）

@@ -7,10 +7,12 @@ Supports:
 - Console output (StreamHandler)
 - Timing tracking helper for diagnosing UI hangs and slow queries
 """
+import faulthandler
 import logging
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from portfolio.paths import DATABASE_PATH
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(threadName)s] [%(name)s]: %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+_FAULT_HANDLER_STREAM = None
 
 
 def get_project_logs_dir() -> Path:
@@ -108,3 +111,26 @@ def log_timing(stage_name: str, logger: logging.Logger | None = None, warn_thres
             log.warning(f"⚠️ [慢操作警告] {stage_name} 耗时较长: {elapsed:.1f}ms (预警阈值: {warn_threshold_ms}ms)")
         else:
             log.info(f"✔ 执行完成: {stage_name} (耗时 {elapsed:.1f}ms)")
+
+
+def enable_fault_handler(logs_dir: Path | None = None, filename: str = "crash_fault.log") -> Path | None:
+    """启用 Python faulthandler，将原生崩溃（如 SIGSEGV/SIGABRT）堆栈记录到日志文件。"""
+    global _FAULT_HANDLER_STREAM
+    try:
+        target_dir = Path(logs_dir) if logs_dir is not None else get_project_logs_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / filename
+        stream = target.open("a", encoding="utf-8")
+        stream.write(f"\n=== [{datetime.now().strftime(DATE_FORMAT)}] 启用原生崩溃堆栈采集 ===\n")
+        stream.flush()
+        faulthandler.enable(file=stream, all_threads=True)
+        old_stream = _FAULT_HANDLER_STREAM
+        _FAULT_HANDLER_STREAM = stream
+        if old_stream is not None and old_stream is not stream:
+            try:
+                old_stream.close()
+            except Exception:
+                pass
+        return target
+    except Exception:
+        return None

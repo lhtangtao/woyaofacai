@@ -1,5 +1,18 @@
 [
   {
+    "title": "为桌面端、Web 后台与 Cloudflared 隧道接入崩溃自动重启守护及原生崩溃堆栈采集",
+    "time": "2026-11-26 00:17",
+    "author": "Antigravity",
+    "tag": "崩溃自动重启已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "新增通用进程守护脚本 `scripts/watchdog.py`：支持异常退出（非 0 状态码或 SIGSEGV/SIGABRT 等信号终止）自动指数退避重启，桌面端正常关闭（退出码 0）直接退出不误重启；Web 与隧道启用 `--restart-on-zero` 确保意外断开均可自动拉起；内置 120s 内连续崩溃 5 次自动熔断机制与 macOS 桌面恢复/熔断通知，收到 SIGTERM/SIGINT 时先优雅终止子进程并清理 PID 文件。",
+      "在 `src/portfolio/logging_config.py` 新增 `enable_fault_handler()` 并在 `src/portfolio/app.py` 桌面端入口启用 Python `faulthandler`，将原生底层崩溃堆栈写入 `logs/crash_fault.log` 便于根因排查。",
+      "重构 `启动Money3.command`：全链路接入 Watchdog 守护与 `--no-auto-restart` 调试开关，完善 `--stop` 及重启前先停守护再清子进程的防抢跑逻辑，并同步清理残留的旧 `ngrok` 日志/停止命令为 `cloudflared`。",
+      "验证范围：`zsh -n 启动Money3.command` 语法校验通过；`./启动Money3.command --help` 输出正常；`ruff check` 0 错误；`tests/test_watchdog.py` 5 项测试（正常退出、崩溃自愈、连续崩溃熔断、零退出重启+SIGTERM 优雅停止、`faulthandler` 日志初始化）全部通过。"
+    ]
+  },
+  {
     "title": "修复桌面端盘后复盘日报 2.0 横向溢出，全页面自动换行同屏完整展示",
     "time": "2026-11-25 22:28",
     "author": "Antigravity",
