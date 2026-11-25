@@ -1,3 +1,8 @@
+## 2026-11-25 21:35 新增美股每日盘后复盘日报（Web 端 + Mac 桌面端）
+
+- 修改者：Antigravity（代码修改）
+- 新增 `src/portfolio/services/after_hours_report.py`、`src/portfolio/ui/after_hours_report_page.py`、`frontend/src/views/AfterHoursReportView.tsx` 并接入 `api_v1.py`、`web/app.py` 与桌面端侧边栏：每个美股交易日盘后（美东 20:10）自动先同步券商流水，再结合当日交易、当前持仓、盘后收盘价/涨跌幅、大盘基准及近期突发新闻由 Gemini 生成结构化复盘日报；支持「个人 / 全部人员 / 指定人员」范围切换、手动补跑重算与事实快照核对，Web 端与 Mac 桌面端共享本地存档。前端构建及全部单元测试通过。
+
 ## 2026-11-25 18:46 公网隧道切换为 Cloudflared；上线账号改密、多标签写作与软清空归档
 
 - 修改者：Antigravity（代码修改）

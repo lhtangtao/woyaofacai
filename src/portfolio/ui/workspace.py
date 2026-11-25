@@ -460,6 +460,11 @@ def build_workspace(self):
     from portfolio.ui.lake_writer_archive_page import LakeWriterArchivePage
     self.lake_writer_archive_page = LakeWriterArchivePage(self)
     self.pages.addWidget(self.lake_writer_archive_page)
+    from portfolio.ui.after_hours_report_page import AfterHoursReportPage
+    self.after_hours_report_page = AfterHoursReportPage(self)
+    self.pages.addWidget(self.after_hours_report_page)
+    from portfolio.services.after_hours_report import start_after_hours_scheduler
+    start_after_hours_scheduler()
 
     def _jump_domestic_day(day_str: str):
         self.domestic_daily_performance_page.select_period(day_str)

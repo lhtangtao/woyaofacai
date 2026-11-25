@@ -16,6 +16,7 @@ import { ChartsView } from "./views/ChartsView";
 import { EntitiesView } from "./views/EntitiesView";
 import { EarningsView } from "./views/EarningsView";
 import { AiViews } from "./views/AiViews";
+import { AfterHoursReportView } from "./views/AfterHoursReportView";
 import { LakeWriterView } from "./views/LakeWriterView";
 import { SystemViews } from "./views/SystemViews";
 import { HoldingsView } from "./views/HoldingsView";
@@ -321,6 +322,7 @@ export const App: React.FC = () => {
     if (currentRoute === "earnings") return { title: "持仓财报日历", subtitle: "追踪持仓标的财报披露时间与 EPS 预期" };
     if (currentRoute === "monitor") return { title: "行情监控中心", subtitle: "实时行情、多周期均线系统与 Bark 预警规则" };
     if (currentRoute === "ai_chat") return { title: "AI 投资问答", subtitle: "基于账本真实财务数据的智能分析顾问" };
+    if (currentRoute === "ai_after_hours") return { title: "盘后复盘日报", subtitle: "每个交易日美股盘后自动同步流水、采集盘后行情与新闻并生成复盘总结" };
     if (currentRoute === "ai_stock") return { title: "AI 股票分析", subtitle: "单标的深度技术面与基本面研报" };
     if (currentRoute === "ai_lake") return { title: "拉科专属", subtitle: "专属 Gemini 写作空间 · 自由创作、改稿与润色" };
     if (currentRoute === "charts:trend") return { title: "走势图", subtitle: "从资产规模、持仓结构、渠道配置和集中度等维度，观察投资组合的长期变化趋势。" };
@@ -366,7 +368,7 @@ export const App: React.FC = () => {
           onLogout={handleLogout}
           onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
           user={bootstrap?.user || null}
-          hidePersonSelector={currentRoute === "domestic:holdings" || currentRoute === "trades" || currentRoute === "ai_lake" || (assetRoute && currentRoute !== "overview") ||
+          hidePersonSelector={currentRoute === "domestic:holdings" || currentRoute === "trades" || currentRoute === "ai_lake" || currentRoute === "ai_after_hours" || (assetRoute && currentRoute !== "overview") ||
             ["people", "brokers", "reports:当前持仓", "reports:股票汇总"].includes(currentRoute)}
           persons={bootstrap?.persons || []}
           currentPersonId={selectedPersonId}
@@ -514,6 +516,7 @@ export const App: React.FC = () => {
             {currentRoute === "earnings" && <EarningsView personId={selectedPersonId} broker={selectedBroker} ticker={selectedTicker} refreshKey={refreshKey} />}
 
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
+            {currentRoute === "ai_after_hours" && <AfterHoursReportView />}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
             {currentRoute === "ai_lake" && (
               bootstrap?.user?.can_view_lake_writer

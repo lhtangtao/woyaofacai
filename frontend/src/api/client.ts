@@ -431,6 +431,26 @@ export const api = {
     const qs = params.toString();
     return requestApi(qs ? `/api/v1/ai/lake-writer/admin/archives?${qs}` : "/api/v1/ai/lake-writer/admin/archives");
   },
+  aiAfterHoursReports: (person?: string) =>
+    requestApi(
+      person
+        ? `/api/v1/ai/after-hours/reports?person=${encodeURIComponent(person)}`
+        : "/api/v1/ai/after-hours/reports"
+    ),
+  aiAfterHoursDetail: (reportId: string) =>
+    requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}`),
+  aiAfterHoursGenerate: (payload: {
+    trade_date?: string;
+    person?: string;
+    run_sync?: boolean;
+    provider?: "codex" | "gemini" | "google_api";
+    model?: string;
+  }) =>
+    requestApi("/api/v1/ai/after-hours/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
 
   // Unified Holdings Management
   holdingsDashboard: (person_id?: number | null, broker?: string, ticker?: string) => {

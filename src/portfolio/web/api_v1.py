@@ -2442,6 +2442,122 @@ def api_ai_lake_writer_admin_archives():
     return jsonify({"status": "ok", **payload})
 
 
+def get_after_hours_store():
+    """获取盘后复盘日报持久化存储实例（与桌面端共享同一 JSON 文件）。"""
+    from portfolio.services.after_hours_report import AfterHoursReportStore
+    return AfterHoursReportStore()
+
+
+@api_v1.route("/ai/after-hours/reports", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_reports():
+    """获取盘后复盘日报历史列表与可选人员范围。"""
+    from portfolio.db.connection import readonly_connection
+    from portfolio.services.after_hours_report import resolve_default_trade_date
+
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    scoped_pid, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    req_person = (request.args.get("person") or "").strip() or None
+    if is_isolated:
+        req_person = scoped_pname
+
+    persons_list: List[Dict[str, Any]] = []
+    if is_isolated:
+        persons_list = [{"key": scoped_pname, "label": scoped_pname, "id": scoped_pid}]
+    else:
+        persons_list.append({"key": "个人", "label": "个人", "id": None})
+        persons_list.append({"key": "ALL", "label": "全部人员", "id": None})
+        try:
+            with readonly_connection(DATABASE_PATH) as conn:
+                for p in conn.execute("SELECT id, name FROM persons WHERE COALESCE(enabled, 1) = 1 ORDER BY id"):
+                    p_name = str(p["name"] or "").strip()
+                    if not p_name:
+                        continue
+                    if p_name == "个人":
+                        persons_list[0]["id"] = p["id"]
+                    else:
+                        persons_list.append({"key": p_name, "label": p_name, "id": p["id"]})
+        except Exception:
+            pass
+
+    store = get_after_hours_store()
+    reports = store.list_reports(person_key=req_person)
+    return jsonify({
+        "status": "ok",
+        "default_trade_date": resolve_default_trade_date().isoformat(),
+        "is_isolated": is_isolated,
+        "can_sync": bool(ctx and ctx.is_admin()),
+        "person_options": persons_list,
+        "reports": reports,
+    })
+
+
+@api_v1.route("/ai/after-hours/report/<path:report_id>", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_report_detail(report_id: str):
+    """获取单份盘后复盘日报的完整 Markdown 正文与原始事实快照。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    _, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    report = get_after_hours_store().get_report(report_id)
+    if not report:
+        return jsonify({"status": "error", "message": "未找到对应的盘后复盘日报"}), 404
+    if is_isolated and report.get("person_key") != scoped_pname:
+        return jsonify({"status": "error", "message": "无权查看其他人员的盘后复盘日报"}), 403
+    return jsonify({"status": "ok", "report": report})
+
+
+@api_v1.route("/ai/after-hours/generate", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_generate():
+    """手动触发生成（或重新生成）指定交易日与人员范围的盘后复盘日报。"""
+    from portfolio.services.after_hours_report import generate_after_hours_report, resolve_default_trade_date
+
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    scoped_pid, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    data = request.get_json(silent=True) or {}
+    raw_date = str(data.get("trade_date") or "").strip()
+    try:
+        target_date = date.fromisoformat(raw_date) if raw_date else resolve_default_trade_date()
+    except ValueError:
+        return jsonify({"status": "error", "message": "交易日期格式无效，应为 YYYY-MM-DD"}), 400
+
+    req_person = str(data.get("person") or "个人").strip() or "个人"
+    req_person_id = data.get("person_id")
+    if is_isolated:
+        req_person = scoped_pname
+        req_person_id = scoped_pid
+
+    # 仅管理员可触发本机券商全库同步，普通隔离账号跳过同步直接基于当前只读库生成
+    req_sync = bool(data.get("run_sync", True))
+    allow_sync = req_sync and bool(ctx and ctx.is_admin())
+
+    provider = normalize_ai_provider(data.get("provider"))
+    model = str(data.get("model") or "").strip() or None
+
+    try:
+        report = generate_after_hours_report(
+            trade_date=target_date,
+            person_key=req_person,
+            person_id=req_person_id,
+            run_sync=allow_sync,
+            provider=provider,
+            model=model,
+            trigger="manual",
+            db_path=DATABASE_PATH,
+            store=get_after_hours_store(),
+        )
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 502
+
+    return jsonify({"status": "ok", "report": report})
+
+
 # ------------------------------------------------------------------------------
 # 10. System, Reconciliation & Diagnostics
 # ------------------------------------------------------------------------------

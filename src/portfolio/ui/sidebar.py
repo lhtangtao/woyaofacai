@@ -13,6 +13,7 @@ GROUPS = (
     ("国内资产", (("资产总览", 31, "grid", None), ("持仓管理", 27, "wallet", None), ("每日持仓收益", 28, "calendar", None), ("每月持仓收益", 29, "calendar", None), ("交易明细", 30, "trade", None))),
     ("交易与收益", (("每月微操收益", 25, "trade", "每月微操收益"),)),
     ("AI 助手", (("AI 投资问答", 19, "robot", None),
+                ("盘后复盘日报", 33, "table", None),
                 ("行情监控中心", 21, "chart", None),
                 ("AI 股票分析", 20, "chart", None),
                 ("拉科写作记录", 32, "table", None))),

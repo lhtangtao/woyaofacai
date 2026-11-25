@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ShieldCheck,
   PenTool,
+  FileText,
 } from "lucide-react";
 
 export interface NavEntry {
@@ -58,6 +59,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "AI 助手",
     entries: [
       { id: "ai_chat", label: "AI 投资问答", icon: <Bot size={16} /> },
+      { id: "ai_after_hours", label: "盘后复盘日报", icon: <FileText size={16} /> },
       { id: "monitor", label: "行情监控中心", icon: <Activity size={16} /> },
       { id: "ai_stock", label: "AI 股票分析", icon: <TrendingUp size={16} /> },
       { id: "ai_lake", label: "拉科专属", icon: <PenTool size={16} /> },

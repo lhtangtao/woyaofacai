@@ -1,5 +1,18 @@
 [
   {
+    "title": "新增美股每日盘后复盘日报（自动同步流水 + 盘后行情/新闻 + Gemini 总结，Web/桌面双端共享）",
+    "time": "2026-11-25 21:35",
+    "author": "Antigravity",
+    "tag": "盘后复盘日报已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "核心引擎与定时调度：新增 `src/portfolio/services/after_hours_report.py`，严格按美东时区（自动兼容夏/冬令时）在每个美股交易日盘后 20:10 后自动加锁执行：先调用 `scripts/sync_data.py` 同步券商流水，再采集当日交易、当前持仓、长桥/Yahoo 常规收盘与盘后涨跌幅、SPY/QQQ 大盘基准及近 36 小时相关突发新闻（杠杆 ETF 自动映射正股），最后由 Gemini 生成结构化 5 模块盘后复盘日报并落盘至 `after_hours_reports.json`。",
+      "多范围与权限：支持选择「个人 / 全部人员 / 指定人员」生成与按日回看；Web 端普通隔离账号仅限本人范围，管理员可切换任意人员并触发券商同步；不发手机推送。",
+      "双端展示：Web 端（`AfterHoursReportView.tsx`）与 Mac 桌面端（`after_hours_report_page.py`）均在「AI 助手 → 盘后复盘日报」上线，共用同一本地持久化存档与后台定时守护线程。",
+      "验证范围：`frontend npm run build` 打包至 `src/portfolio/web/static_dist/` 通过；`tests/test_after_hours_report.py`、`tests/test_lake_writer.py`、`tests/test_password_change.py`、`tests/test_ai_providers.py` 全部通过。"
+    ]
+  },
+  {
     "title": "公网隧道切换为 Cloudflared；上线账号改密、多标签写作与软清空归档查看",
     "time": "2026-11-25 18:46",
     "author": "Antigravity",
