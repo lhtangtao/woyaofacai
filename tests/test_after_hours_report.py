@@ -1,4 +1,5 @@
-"""美股盘后复盘日报引擎、定时判断、Web API 与桌面端页面回归测试。"""
+"""美股盘后复盘日报 2.0（结构化驾驶舱、旧版兜底解析、行情估算、清单持久化、追问与桌面端）测试。"""
+import json
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -6,6 +7,7 @@ from flask import Flask, g
 
 from portfolio.services.after_hours_report import (
     AfterHoursReportStore,
+    ensure_structured,
     generate_after_hours_report,
     is_after_hours_ready,
 )
@@ -29,22 +31,19 @@ def _make_client(auth_ctx):
 
 def test_is_after_hours_ready_respects_ny_time_and_weekend():
     """验证美东交易日盘后 20:10 触发窗口与周末跳过逻辑。"""
-    # 周三美东 19:59 -> 未到盘后结束
     ready_before, _ = is_after_hours_ready(datetime(2026, 11, 25, 19, 59, tzinfo=NY_TZ))
     assert ready_before is False
 
-    # 周三美东 20:10 -> 到达自动生成窗口
     ready_after, target_day = is_after_hours_ready(datetime(2026, 11, 25, 20, 10, tzinfo=NY_TZ))
     assert ready_after is True
     assert target_day == date(2026, 11, 25)
 
-    # 周六美东 21:00 -> 休市跳过
     ready_sat, _ = is_after_hours_ready(datetime(2026, 11, 28, 21, 0, tzinfo=NY_TZ))
     assert ready_sat is False
 
 
-def test_generate_after_hours_report_and_desktop_viewer(demo_path, tmp_path, qtbot):
-    """验证自动同步衔接、盘后行情+新闻采集、AI 总结落盘以及桌面端只读/展示页面。"""
+def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tmp_path, qtbot):
+    """验证双轨 JSON+Markdown 输出解析、无账本日盈亏时的行情估算补齐及桌面端 2.0 交互。"""
     store = AfterHoursReportStore(tmp_path / "after_hours_reports.json")
     captured = {}
 
@@ -57,10 +56,10 @@ def test_generate_after_hours_report_and_desktop_viewer(demo_path, tmp_path, qtb
                 "symbol": "DEMO",
                 "regular_close": 112.5,
                 "prev_close": 110.0,
-                "regular_change_pct": 0.0227,
+                "regular_change_pct": 0.022727,
                 "after_hours_price": 115.0,
-                "after_hours_change_pct": 0.0222,
-                "total_change_pct": 0.0455,
+                "after_hours_change_pct": 0.022222,
+                "total_change_pct": 0.04545,
                 "source": "longbridge",
             },
             "SPY": {
@@ -71,6 +70,16 @@ def test_generate_after_hours_report_and_desktop_viewer(demo_path, tmp_path, qtb
                 "after_hours_price": 601.2,
                 "after_hours_change_pct": 0.002,
                 "total_change_pct": 0.0104,
+                "source": "longbridge",
+            },
+            "QQQ": {
+                "symbol": "QQQ",
+                "regular_close": 500.0,
+                "prev_close": 505.0,
+                "regular_change_pct": -0.0099,
+                "after_hours_price": 502.0,
+                "after_hours_change_pct": 0.004,
+                "total_change_pct": -0.0059,
                 "source": "longbridge",
             },
         }
@@ -89,8 +98,21 @@ def test_generate_after_hours_report_and_desktop_viewer(demo_path, tmp_path, qtb
 
     def fake_ai(prompt, provider, model):
         captured["prompt"] = prompt
-        captured["provider"] = provider
-        return "## 一、今日总览与大盘对比\n\n今日组合表现稳健，DEMO 盘后走强。"
+        structured_json = {
+            "regime": {"label": "多头突围 · 显著跑赢", "tone": "success"},
+            "tldr": "在 QQQ 收跌背景下组合逆势收涨，DEMO 财报超预期推动盘后走强。",
+            "mover_reasons": {"DEMO": "Q4 业绩超预期带动常规与盘后共振走高。"},
+            "news_sentiments": {"Demo Corp beats Q4 earnings estimates": "利好"},
+            "risks": [{"level": "提示", "title": "单一持仓集中度较高", "detail": "关注明日盘前获利回吐风险。"}],
+            "checklist": [
+                {"id": "c1", "ticker": "DEMO", "level": "$115 关口", "text": "观察盘前是否站稳 $115 上方"},
+                {"id": "c2", "ticker": "QQQ", "level": "$500 支撑", "text": "跟踪纳指期货能否企稳"},
+            ],
+            "trades_summary": "今日交易节奏稳健。",
+            "trade_reviews": [{"symbol": "DEMO", "side": "BUY", "verdict": "精准低吸", "tone": "success", "comment": "买在起涨前。"}],
+            "followups": ["明日盘前如果高开 3% 要不要先兑现一半？"],
+        }
+        return f"```json\n{json.dumps(structured_json, ensure_ascii=False)}\n```\n\n## 一、今日总览与大盘对比\n\nDEMO 盘后走强。"
 
     report = generate_after_hours_report(
         trade_date=date(2026, 1, 2),
@@ -108,20 +130,71 @@ def test_generate_after_hours_report_and_desktop_viewer(demo_path, tmp_path, qtb
     )
 
     assert report["id"] == "2026-01-02::ALL"
-    assert report["sync_status"]["ok"] is True
-    assert "Demo Corp beats Q4 earnings estimates" in captured["prompt"]
-    assert "SPY" in captured["prompt"]
-    assert store.has_report("2026-01-02", "ALL") is True
+    assert report["structured"]["regime"]["tone"] == "success"
+    assert report["structured"]["checklist"][0]["ticker"] == "DEMO"
+    # 2026-01-02 在 demo_path 中存在真实账本当日盈亏 (2.0)，优先保留账本精确口径
+    assert report["snapshot"]["summary"]["day_pnl"] == 2.0
+    assert report["snapshot"]["summary"]["day_pnl_basis"] == "ledger"
+    assert report["snapshot"]["summary"]["alpha_vs_qqq"] is not None
 
-    # 桌面端页面可直接加载同一份本地存储
+    # 对于账本缺当日盈亏的日期，自动按持仓股数 * (常规收盘 - 昨收) 估算补齐
+    est_report = generate_after_hours_report(
+        trade_date=date(2026, 1, 5),
+        person_key="ALL",
+        run_sync=False,
+        db_path=demo_path,
+        store=store,
+        quote_fetcher=fake_quotes,
+        news_fetcher=fake_news,
+        ai_asker=fake_ai,
+    )
+    assert est_report["snapshot"]["summary"]["day_pnl"] == 15.0
+    assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_estimated"
+
+    # 桌面端 2.0 页面可渲染并勾选清单落盘
     page = AfterHoursReportPage(store=store, db_path=demo_path)
     qtbot.addWidget(page)
-    assert page.report_list.count() == 1
-    assert "DEMO 盘后走强" in page.viewer.toPlainText()
+    assert page.report_list.count() == 2
+    assert "DEMO 财报超预期" in page.tldr_lbl.text()
+    assert page.cl_progress_lbl.text() == "0 / 2 已核查"
+
+    page._on_checklist_toggled("c1")
+    assert page.cl_progress_lbl.text() == "1 / 2 已核查"
+    reloaded = store.get_report("2026-01-05::ALL")
+    assert reloaded["checked_ids"] == ["c1"]
 
 
-def test_after_hours_web_api_scope_isolation(tmp_path, monkeypatch):
-    """验证 Web API 权限隔离：普通隔离用户仅能看自己人员日报，管理员可看全部范围。"""
+def test_legacy_markdown_report_upgrades_via_ensure_structured():
+    """验证没有 structured 字段的老版纯 Markdown 日报可自动解析升级为 2.0 视图。"""
+    legacy = {
+        "id": "2026-11-23::拉科",
+        "trade_date": "2026-11-23",
+        "person_key": "拉科",
+        "person_name": "拉科",
+        "snapshot": {
+            "summary": {"holding_count": 2, "trade_count": 0, "day_pnl": -120.0, "leverage_pct": 0.56},
+            "holdings": [{"symbol": "TQQQ"}],
+            "trades": [],
+        },
+        "markdown": (
+            "## 一、今日总览与大盘对比\n\n"
+            "- 受高杠杆拖累回撤较大，控仓为主。\n\n"
+            "## 四、仓位结构与风险提示\n\n"
+            "- 三只杠杆 ETF 合计占比达 56%，存在波动率损耗风险。\n\n"
+            "## 五、次日盘前关注清单\n\n"
+            "1. 关注 TQQQ 在 $46.19 的支撑表现。\n"
+        ),
+    }
+    upgraded = ensure_structured(legacy)
+    assert upgraded["structured"]["regime"]["tone"] == "error"
+    assert "控仓为主" in upgraded["structured"]["tldr"]
+    assert len(upgraded["structured"]["risks"]) >= 1
+    assert len(upgraded["structured"]["checklist"]) >= 1
+    assert upgraded["structured"]["checklist"][0]["ticker"] == "TQQQ"
+
+
+def test_after_hours_web_api_scope_checklist_and_followup(tmp_path, monkeypatch):
+    """验证 Web API 权限隔离、清单持久化与上下文追问接口。"""
     store = AfterHoursReportStore(tmp_path / "after_hours_reports.json")
     store.save_report({
         "id": "2026-11-25::个人",
@@ -135,7 +208,7 @@ def test_after_hours_web_api_scope_isolation(tmp_path, monkeypatch):
         "model": "gemini-4-hydrogen-high",
         "sync_status": {"ran": True, "ok": True, "message": "ok"},
         "snapshot": {"summary": {"day_pnl": 520.5, "total_market_value": 50000, "trade_count": 2, "holding_count": 3}},
-        "markdown": "# 个人盘后总结",
+        "markdown": "## 一、今日总览\n\n个人总结",
     })
     store.save_report({
         "id": "2026-11-25::拉科",
@@ -149,30 +222,53 @@ def test_after_hours_web_api_scope_isolation(tmp_path, monkeypatch):
         "model": "gemini-4-hydrogen-high",
         "sync_status": {"ran": False, "ok": True, "message": "skip"},
         "snapshot": {"summary": {"day_pnl": -120.0, "total_market_value": 10000, "trade_count": 1, "holding_count": 2}},
-        "markdown": "# 拉科盘后总结",
+        "markdown": "## 一、今日总览\n\n拉科总结",
     })
     monkeypatch.setattr(api_module, "get_after_hours_store", lambda: store)
+    monkeypatch.setattr(
+        "portfolio.services.after_hours_report.CodexAIService.ask",
+        classmethod(lambda cls, prompt, context="", model=None, cancel_event=None, provider="gemini": "建议控制杠杆仓位。"),
+    )
 
-    # 1. 拉科只能看到自己的日报，跨人查看「个人」返回 403
     lake_ctx = build_auth_context(
         "REMOTE_PUBLIC",
         session_user={"user_id": 2, "username": "拉科", "role": "user", "person_id": 5, "person_name": "拉科"},
     )
     lake_client = _make_client(lake_ctx)
-    r_list = lake_client.get("/api/v1/ai/after-hours/reports").get_json()
-    assert r_list["status"] == "ok"
-    assert r_list["can_sync"] is False
-    assert [x["id"] for x in r_list["reports"]] == ["2026-11-25::拉科"]
-    assert lake_client.get("/api/v1/ai/after-hours/report/2026-11-25::个人").status_code == 403
-    assert lake_client.get("/api/v1/ai/after-hours/report/2026-11-25::拉科").status_code == 200
 
-    # 2. 管理员可看到全部人员的日报且允许触发同步
+    # 1. 拉科只能看和改自己的日报，操作「个人」返回 403
+    assert lake_client.get("/api/v1/ai/after-hours/report/2026-11-25::个人").status_code == 403
+    assert lake_client.post(
+        "/api/v1/ai/after-hours/report/2026-11-25::个人/checklist",
+        json={"checked_ids": ["c1"]},
+    ).status_code == 403
+    assert lake_client.post(
+        "/api/v1/ai/after-hours/report/2026-11-25::个人/followup",
+        json={"question": "怎么调仓？"},
+    ).status_code == 403
+
+    # 2. 拉科勾选清单与追问正常持久化
+    chk = lake_client.post(
+        "/api/v1/ai/after-hours/report/2026-11-25::拉科/checklist",
+        json={"checked_ids": ["c1"]},
+    )
+    assert chk.status_code == 200
+    assert chk.get_json()["checked_ids"] == ["c1"]
+
+    fq = lake_client.post(
+        "/api/v1/ai/after-hours/report/2026-11-25::拉科/followup",
+        json={"question": "明天怎么应对？"},
+    )
+    assert fq.status_code == 200
+    assert fq.get_json()["answer"] == "建议控制杠杆仓位。"
+    assert len(fq.get_json()["followups_history"]) == 1
+
+    # 3. 管理员可看到全部人员且带 structured 字段
     admin_ctx = build_auth_context(
         "REMOTE_PUBLIC",
         session_user={"user_id": 1, "username": "admin", "role": "admin", "person_id": None, "person_name": "管理员"},
     )
     admin_client = _make_client(admin_ctx)
-    a_list = admin_client.get("/api/v1/ai/after-hours/reports").get_json()
-    assert a_list["status"] == "ok"
-    assert a_list["can_sync"] is True
-    assert len(a_list["reports"]) == 2
+    detail_resp = admin_client.get("/api/v1/ai/after-hours/report/2026-11-25::拉科").get_json()
+    assert detail_resp["report"]["checked_ids"] == ["c1"]
+    assert "structured" in detail_resp["report"]

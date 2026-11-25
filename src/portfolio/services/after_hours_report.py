@@ -13,6 +13,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -38,6 +39,12 @@ NY_TZ = ZoneInfo("America/New_York")
 BJ_TZ = ZoneInfo("Asia/Shanghai")
 
 AFTER_HOURS_FILENAME = "after_hours_reports.json"
+LEVERAGED_ETF_SYMBOLS = frozenset({
+    "TQQQ", "SQQQ", "SOXL", "SOXS", "KORU", "NVDL", "NVDS",
+    "TSLL", "TSLS", "CONL", "MSTU", "MSTX", "UPRO", "SPXL",
+    "AAOX", "AVGX", "GGLL", "INTW", "LITX", "MUU", "ORCX",
+    "SNXX", "SPAL", "STXL", "WDCX",
+})
 _STORE_LOCK = threading.RLock()
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
@@ -168,6 +175,38 @@ class AfterHoursReportStore:
             self._save_raw(data)
             return report
 
+    def update_checklist_state(self, report_id: str, checked_ids: List[str]) -> Optional[Dict[str, Any]]:
+        """持久化次日盘前关注清单的勾选状态。"""
+        clean_ids = [str(cid).strip() for cid in (checked_ids or []) if str(cid).strip()]
+        with _STORE_LOCK:
+            data = self._load_raw()
+            item = data["reports"].get(report_id)
+            if not isinstance(item, dict):
+                return None
+            item["checked_ids"] = clean_ids
+            self._save_raw(data)
+            return dict(item)
+
+    def append_followup(self, report_id: str, question: str, answer: str, model: str = "") -> Optional[Dict[str, Any]]:
+        """将基于当前盘后日报的追问与 AI 回答追加保存到该日报记录中。"""
+        with _STORE_LOCK:
+            data = self._load_raw()
+            item = data["reports"].get(report_id)
+            if not isinstance(item, dict):
+                return None
+            history = list(item.get("followups_history") or [])
+            now_bj = datetime.now(BJ_TZ)
+            history.append({
+                "question": question,
+                "answer": answer,
+                "model": model,
+                "time_str": now_bj.strftime("%m-%d %H:%M"),
+                "time": now_bj.isoformat(timespec="seconds"),
+            })
+            item["followups_history"] = history[-30:]
+            self._save_raw(data)
+            return dict(item)
+
     def list_reports(
         self,
         person_key: Optional[str] = None,
@@ -182,22 +221,29 @@ class AfterHoursReportStore:
                     continue
                 if person_key and rep.get("person_key") != person_key:
                     continue
-                summary = (rep.get("snapshot") or {}).get("summary") or {}
+                rep_ready = ensure_structured(rep)
+                summary = (rep_ready.get("snapshot") or {}).get("summary") or {}
+                structured = rep_ready.get("structured") or {}
+                tldr = str(structured.get("tldr") or "")
                 items.append({
-                    "id": rep.get("id"),
-                    "trade_date": rep.get("trade_date"),
-                    "person_key": rep.get("person_key"),
-                    "person_id": rep.get("person_id"),
-                    "person_name": rep.get("person_name"),
-                    "generated_at": rep.get("generated_at"),
-                    "trigger": rep.get("trigger", "manual"),
-                    "provider": rep.get("provider", "gemini"),
-                    "model": rep.get("model", ""),
-                    "sync_status": rep.get("sync_status") or {},
+                    "id": rep_ready.get("id"),
+                    "trade_date": rep_ready.get("trade_date"),
+                    "person_key": rep_ready.get("person_key"),
+                    "person_id": rep_ready.get("person_id"),
+                    "person_name": rep_ready.get("person_name"),
+                    "generated_at": rep_ready.get("generated_at"),
+                    "trigger": rep_ready.get("trigger", "manual"),
+                    "provider": rep_ready.get("provider", "gemini"),
+                    "model": rep_ready.get("model", ""),
+                    "sync_status": rep_ready.get("sync_status") or {},
                     "day_pnl": summary.get("day_pnl"),
+                    "day_pnl_pct": summary.get("day_pnl_pct"),
+                    "leverage_pct": summary.get("leverage_pct"),
                     "total_market_value": summary.get("total_market_value"),
                     "trade_count": summary.get("trade_count", 0),
                     "holding_count": summary.get("holding_count", 0),
+                    "regime": structured.get("regime"),
+                    "tldr": tldr[:80] + ("…" if len(tldr) > 80 else ""),
                 })
             items.sort(
                 key=lambda x: (x.get("trade_date") or "", x.get("generated_at") or ""),
@@ -571,6 +617,45 @@ def build_after_hours_snapshot(
         if sym in quotes
     }
 
+    # 为当日每笔成交补充收盘价与相对收盘价差口径
+    for t in trades:
+        q = quotes.get(t.get("symbol") or "") or {}
+        close_p = _to_dec(q.get("regular_close"))
+        trade_p = _to_dec(t.get("price"))
+        t["close_price"] = _serialize_dec(close_p)
+        vs_close = None
+        if close_p is not None and trade_p is not None and trade_p > 0:
+            side_up = str(t.get("side") or "").upper()
+            if side_up in ("BUY", "买入"):
+                vs_close = (close_p - trade_p) / trade_p
+            elif side_up in ("SELL", "卖出"):
+                vs_close = (trade_p - close_p) / trade_p
+        t["vs_close_pct"] = _serialize_dec(vs_close)
+
+    # 判断账本当日盈亏是否缺失或需要行情估算兜底
+    day_pnl_basis = "ledger"
+    has_nonzero_ledger = total_day_pnl is not None and (
+        total_day_pnl != Decimal("0") or any(v != Decimal("0") for v in day_pnl_by_sym.values())
+    )
+    if not has_nonzero_ledger and holdings_map and quotes:
+        est_total = Decimal("0")
+        est_count = 0
+        est_by_sym: Dict[str, Decimal] = {}
+        for sym, item in holdings_map.items():
+            q = quotes.get(sym) or {}
+            reg_c = _to_dec(q.get("regular_close"))
+            prev_c = _to_dec(q.get("prev_close"))
+            if reg_c is not None and prev_c is not None:
+                dp_est = item["quantity"] * (reg_c - prev_c)
+                est_by_sym[sym] = dp_est
+                est_total += dp_est
+                est_count += 1
+        if est_count > 0:
+            day_pnl_by_sym = est_by_sym
+            total_day_pnl = est_total
+            day_pnl_basis = "quote_estimated"
+
+    leverage_mv = Decimal("0")
     holdings_list: List[Dict[str, Any]] = []
     for sym, item in sorted(holdings_map.items(), key=lambda kv: -kv[1]["market_value"]):
         q = quotes.get(sym) or {}
@@ -579,15 +664,31 @@ def build_after_hours_snapshot(
         cost_d = item["cost"]
         avg_d = (cost_d / qty_d) if qty_d > 0 else item["avg_cost"]
         weight = (mv_d / total_mv) if total_mv > 0 else None
+        is_lev = (
+            item.get("category") == "杠杆"
+            or (f"{sym}.US" in DEFAULT_LINKS)
+            or (sym in LEVERAGED_ETF_SYMBOLS)
+        )
+        if is_lev and mv_d > 0:
+            leverage_mv += mv_d
+        ref_price = _to_dec(q.get("regular_close"))
+        if ref_price is None and qty_d > 0 and mv_d > 0:
+            ref_price = mv_d / qty_d
+        need_breakeven = None
+        if avg_d is not None and ref_price is not None and ref_price > 0 and ref_price < avg_d:
+            need_breakeven = (avg_d - ref_price) / ref_price
+
         holdings_list.append({
             "symbol": sym,
             "underlying": item["underlying"],
             "category": item["category"],
+            "is_leveraged": is_lev,
             "channels": item["channels"],
             "quantity": _serialize_dec(qty_d),
             "avg_cost": _serialize_dec(avg_d),
             "market_value": _serialize_dec(mv_d),
             "weight_pct": _serialize_dec(weight),
+            "need_breakeven_pct": _serialize_dec(need_breakeven),
             "unrealized_pnl": _serialize_dec(item["unrealized_pnl"]),
             "day_pnl": _serialize_dec(day_pnl_by_sym.get(sym)),
             "regular_close": q.get("regular_close"),
@@ -597,6 +698,21 @@ def build_after_hours_snapshot(
             "total_change_pct": q.get("total_change_pct"),
             "quote_source": q.get("source"),
         })
+
+    # 汇总衍生指标：当日收益率、累计浮盈率、杠杆暴露率、相对 QQQ Alpha
+    day_pnl_pct: Optional[Decimal] = None
+    if total_day_pnl is not None and total_mv > 0:
+        prev_mv = total_mv - total_day_pnl
+        if prev_mv > 0:
+            day_pnl_pct = total_day_pnl / prev_mv
+
+    unrealized_pct: Optional[Decimal] = None
+    if total_cost > 0:
+        unrealized_pct = total_unrealized / total_cost
+
+    leverage_pct = (leverage_mv / total_mv) if total_mv > 0 else Decimal("0")
+    qqq_reg_pct = _to_dec((benchmarks.get("QQQ") or {}).get("regular_change_pct"))
+    alpha_vs_qqq = (day_pnl_pct - qqq_reg_pct) if (day_pnl_pct is not None and qqq_reg_pct is not None) else None
 
     # 5. 采集近期突发新闻
     news_map = news_fetcher(sorted(all_symbols)) if all_symbols else {}
@@ -612,7 +728,12 @@ def build_after_hours_snapshot(
             "total_market_value": _serialize_dec(total_mv),
             "total_cost": _serialize_dec(total_cost),
             "total_unrealized_pnl": _serialize_dec(total_unrealized),
+            "unrealized_pct": _serialize_dec(unrealized_pct),
             "day_pnl": _serialize_dec(total_day_pnl),
+            "day_pnl_pct": _serialize_dec(day_pnl_pct),
+            "day_pnl_basis": day_pnl_basis,
+            "leverage_pct": _serialize_dec(leverage_pct),
+            "alpha_vs_qqq": _serialize_dec(alpha_vs_qqq),
         },
         "market_benchmarks": benchmarks,
         "trades": trades,
@@ -623,7 +744,7 @@ def build_after_hours_snapshot(
 
 
 def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, Any]) -> str:
-    """将结构化盘后事实快照拼装为发给 Gemini 的严谨中文复盘指令。"""
+    """将结构化盘后事实快照拼装为发给 Gemini 的双轨（JSON + Markdown）复盘指令。"""
     summary = snapshot.get("summary") or {}
     benchmarks = snapshot.get("market_benchmarks") or {}
     trades = snapshot.get("trades") or []
@@ -648,15 +769,16 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         trade_lines.append(
             f"- [{t.get('channel') or '未知渠道'}] {t.get('side')} {t.get('symbol')} "
             f"{_fmt_dec(_to_dec(t.get('quantity')))} 股 @ ${_fmt_dec(_to_dec(t.get('price')))} "
-            f"(金额 ${_fmt_dec(_to_dec(t.get('amount')))})"
+            f"(金额 ${_fmt_dec(_to_dec(t.get('amount')))} | 当日收盘 ${_fmt_dec(_to_dec(t.get('close_price')))})"
         )
     trade_text = "\n".join(trade_lines) if trade_lines else "- 当日无成交记录"
 
     holding_lines = []
     for h in holdings[:30]:
         u_tag = f"（关联正股 {h['underlying']}）" if h.get("underlying") else ""
+        lev_tag = " [杠杆]" if h.get("is_leveraged") else ""
         holding_lines.append(
-            f"- {h['symbol']}{u_tag} [{','.join(h.get('channels') or [])}]: "
+            f"- {h['symbol']}{u_tag}{lev_tag} [{','.join(h.get('channels') or [])}]: "
             f"持股 {_fmt_dec(_to_dec(h.get('quantity')))} | 均价 ${_fmt_dec(_to_dec(h.get('avg_cost')))} | "
             f"市值 ${_fmt_dec(_to_dec(h.get('market_value')))} (占比 {_fmt_dec(_to_dec(h.get('weight_pct')), pct=True)}) | "
             f"常规收盘 ${_fmt_dec(_to_dec(h.get('regular_close')))} ({_fmt_dec(_to_dec(h.get('regular_change_pct')), signed=True, pct=True)}) | "
@@ -681,26 +803,306 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         f"为【{snapshot.get('person_name')}】撰写一份 {snapshot.get('trade_date')} 的《美股盘后复盘日报》。\n\n"
         f"【同步与数据状态】\n"
         f"- 券商同步：{sync_note}\n"
+        f"- 当日盈亏口径：{summary.get('day_pnl_basis', 'ledger')}\n"
         f"- 告警提示：{warn_text}\n\n"
         f"【组合总览】\n"
-        f"- 持仓标的数：{summary.get('holding_count', 0)} | 当日成交笔数：{summary.get('trade_count', 0)}\n"
+        f"- 持仓标的数：{summary.get('holding_count', 0)} | 当日成交笔数：{summary.get('trade_count', 0)} | 杠杆仓位占比：{_fmt_dec(_to_dec(summary.get('leverage_pct')), pct=True)}\n"
         f"- 当前总市值：${_fmt_dec(_to_dec(summary.get('total_market_value')))} | "
         f"总持仓成本：${_fmt_dec(_to_dec(summary.get('total_cost')))} | "
         f"累计浮盈：${_fmt_dec(_to_dec(summary.get('total_unrealized_pnl')), signed=True)} | "
-        f"当日盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)}\n\n"
+        f"当日盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} ({_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)})\n\n"
         f"【大盘基准 (盘中 + 盘后)】\n{bench_text}\n\n"
         f"【当日真实交易记录】\n{trade_text}\n\n"
         f"【当前持仓与盘后最终行情】\n{holding_text}\n\n"
         f"【近 36 小时抓取到的相关新闻】\n{news_text}\n\n"
-        f"【写作与严谨性要求】\n"
+        f"【输出格式要求（务必严格遵守）】\n"
+        f"第一步：先输出一个合法的 ```json 代码块（供客户端渲染仪表盘），格式如下：\n"
+        "```json\n"
+        "{\n"
+        '  "regime": {"label": "四到八字情绪标签（如 震荡承压 · 防御优先）", "tone": "success|warning|error"},\n'
+        '  "tldr": "60~120字的一句话核心定性，讲清今天盈亏、跑赢/跑输大盘核心原因及明日重点",\n'
+        '  "mover_reasons": {"标的Ticker": "结合涨跌幅、盘后表现或新闻的一句话归因"},\n'
+        '  "news_sentiments": {"新闻原标题": "利好|利空|中性"},\n'
+        '  "risks": [{"level": "高危|中危|提示", "title": "风险标题", "detail": "具体说明"}],\n'
+        '  "checklist": [{"id": "c1", "ticker": "标的或大盘", "level": "关键价位或指标", "text": "具体盘前关注动作"}],\n'
+        '  "trades_summary": "今日操作总体点评（一句话）",\n'
+        '  "trade_reviews": [{"symbol": "Ticker", "side": "BUY|SELL", "verdict": "四字短评", "tone": "success|warning|neutral", "comment": "逐笔点评"}],\n'
+        '  "followups": ["适合继续追问的简短问题1", "问题2", "问题3"]\n'
+        "}\n"
+        "```\n\n"
+        f"第二步：在 JSON 代码块之后，继续输出完整的 5 章节 Markdown 正文：\n"
         f"1. 严禁编造任何未在上方提供的价格、涨跌幅、成交记录或新闻；若某标的盘后价为「—」或无新闻，如实说明即可。\n"
-        f"2. 请按以下 5 个清晰 Markdown 章节输出，观点犀利、数据准确、可直接阅读：\n"
-        f"   - ## 一、今日总览与大盘对比（一句话定性今天表现 + 盈亏核心驱动）\n"
-        f"   - ## 二、今日交易操作复盘（逐笔点评今日买卖/做 T 的时机、价位与成本影响；若当日无交易则点评空仓/持股不动是否合理）\n"
-        f"   - ## 三、重点持仓异动与盘后/新闻归因（重点分析涨跌幅较大及盘后显著波动的标的，结合抓取到的真实新闻与杠杆 ETF 关联正股）\n"
-        f"   - ## 四、仓位结构与风险提示（集中度、杠杆 ETF 波动风险、盘后跳空风险）\n"
-        f"   - ## 五、次日盘前关注清单（给出 3~5 条具体、可盯盘的观察点）"
+        f"2. 章节标题严格使用：\n"
+        f"   - ## 一、今日总览与大盘对比\n"
+        f"   - ## 二、今日交易操作复盘\n"
+        f"   - ## 三、重点持仓异动与盘后/新闻归因\n"
+        f"   - ## 四、仓位结构与风险提示\n"
+        f"   - ## 五、次日盘前关注清单"
     )
+
+
+def _extract_markdown_section_bullets(markdown: str, heading_prefix: str) -> List[str]:
+    """从旧版 Markdown 正文中提取指定章节下的要点行（用于兼容降级解析）。"""
+    lines = (markdown or "").splitlines()
+    in_sec = False
+    bullets: List[str] = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("## "):
+            if in_sec:
+                break
+            if heading_prefix in s:
+                in_sec = True
+            continue
+        if not in_sec or not s:
+            continue
+        cleaned = re.sub(r"^(\d+\.|[-*•])\s*", "", s).replace("**", "").strip()
+        if cleaned and len(cleaned) >= 6:
+            bullets.append(cleaned)
+    return bullets
+
+
+def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """补齐并校验结构化字段，确保新旧日报均具备完整的 2.0 渲染数据。"""
+    src = parsed if isinstance(parsed, dict) else {}
+    summary = snapshot.get("summary") or {}
+    holdings = snapshot.get("holdings") or []
+    trades = snapshot.get("trades") or []
+
+    day_pnl = _to_dec(summary.get("day_pnl"))
+    lev_pct = _to_dec(summary.get("leverage_pct")) or Decimal("0")
+
+    # 1. regime
+    raw_regime = src.get("regime") if isinstance(src.get("regime"), dict) else {}
+    tone = str(raw_regime.get("tone") or "").strip().lower()
+    if tone not in ("success", "warning", "error"):
+        if lev_pct >= Decimal("0.5") or (day_pnl is not None and day_pnl < Decimal("-500")):
+            tone = "error"
+        elif day_pnl is not None and day_pnl > 0:
+            tone = "success"
+        else:
+            tone = "warning"
+    label = str(raw_regime.get("label") or "").strip()
+    if not label:
+        label = (
+            "高杠杆承压 · 防控回撤" if tone == "error"
+            else ("多头进攻 · 表现占优" if tone == "success" else "震荡整理 · 控制节奏")
+        )
+
+    # 2. tldr
+    tldr = str(src.get("tldr") or "").strip()
+    if not tldr:
+        sec1 = _extract_markdown_section_bullets(markdown, "一、")
+        if sec1:
+            tldr = " ".join(sec1[:2])[:180]
+        else:
+            tldr = (
+                f"{snapshot.get('trade_date')} {snapshot.get('person_name')} 组合持仓 {summary.get('holding_count', 0)} 只、"
+                f"成交 {summary.get('trade_count', 0)} 笔，当日盈亏 {_fmt_dec(day_pnl, signed=True)}。"
+            )
+
+    # 3. mover_reasons
+    raw_reasons = src.get("mover_reasons") if isinstance(src.get("mover_reasons"), dict) else {}
+    mover_reasons: Dict[str, str] = {}
+    for k, v in raw_reasons.items():
+        sym = str(k).strip().upper().removesuffix(".US")
+        if sym and str(v or "").strip():
+            mover_reasons[sym] = str(v).strip()
+
+    # 4. news_sentiments
+    raw_sentiments = src.get("news_sentiments") if isinstance(src.get("news_sentiments"), dict) else {}
+    news_sentiments: Dict[str, str] = {}
+    for k, v in raw_sentiments.items():
+        val = str(v or "").strip()
+        if val in ("利好", "利空", "中性"):
+            news_sentiments[str(k).strip()] = val
+
+    # 5. risks
+    raw_risks = src.get("risks") if isinstance(src.get("risks"), list) else []
+    risks: List[Dict[str, str]] = []
+    for r in raw_risks[:6]:
+        if isinstance(r, dict) and (r.get("title") or r.get("detail")):
+            lv = str(r.get("level") or "提示").strip()
+            if lv not in ("高危", "中危", "提示"):
+                lv = "中危"
+            risks.append({
+                "level": lv,
+                "title": str(r.get("title") or "风险提示").strip(),
+                "detail": str(r.get("detail") or "").strip(),
+            })
+    if not risks:
+        for b in _extract_markdown_section_bullets(markdown, "四、")[:4]:
+            risks.append({
+                "level": "高危" if ("高危" in b or "杠杆" in b or "单一" in b) else "提示",
+                "title": b[:22] + ("…" if len(b) > 22 else ""),
+                "detail": b,
+            })
+    if not risks and lev_pct >= Decimal("0.35"):
+        risks.append({
+            "level": "高危" if lev_pct >= Decimal("0.5") else "中危",
+            "title": f"杠杆 ETF 仓位占比 {_fmt_dec(lev_pct, pct=True)}",
+            "detail": "高杠杆标的在震荡市中存在复利波动率损耗，建议关注仓位控制与止盈保护。",
+        })
+
+    # 6. checklist
+    raw_cl = src.get("checklist") if isinstance(src.get("checklist"), list) else []
+    checklist: List[Dict[str, str]] = []
+    for idx, c in enumerate(raw_cl[:8], 1):
+        if isinstance(c, dict) and str(c.get("text") or "").strip():
+            checklist.append({
+                "id": str(c.get("id") or f"c{idx}").strip(),
+                "ticker": str(c.get("ticker") or "组合").strip(),
+                "level": str(c.get("level") or "重点观察").strip(),
+                "text": str(c.get("text") or "").strip(),
+            })
+    if not checklist:
+        syms = [h.get("symbol") for h in holdings if h.get("symbol")]
+        for idx, b in enumerate(_extract_markdown_section_bullets(markdown, "五、")[:5], 1):
+            matched_sym = next((s for s in syms if s in b.upper()), "关注")
+            checklist.append({
+                "id": f"c{idx}",
+                "ticker": matched_sym,
+                "level": "盘前核查",
+                "text": b,
+            })
+
+    # 7. trades_summary & trade_reviews
+    trades_summary = str(src.get("trades_summary") or "").strip()
+    if not trades_summary:
+        if not trades:
+            trades_summary = "当日无成交记录，保持原有持仓观察市场节奏。"
+        else:
+            trades_summary = f"当日共成交 {len(trades)} 笔交易，可结合各笔成交价与收盘价对比评估进出场节奏。"
+
+    raw_tr = src.get("trade_reviews") if isinstance(src.get("trade_reviews"), list) else []
+    trade_reviews: List[Dict[str, str]] = []
+    for r in raw_tr:
+        if isinstance(r, dict) and r.get("symbol"):
+            tr_tone = str(r.get("tone") or "neutral").strip().lower()
+            if tr_tone not in ("success", "warning", "neutral"):
+                tr_tone = "neutral"
+            trade_reviews.append({
+                "symbol": str(r.get("symbol")).strip().upper(),
+                "side": str(r.get("side") or "").strip().upper(),
+                "verdict": str(r.get("verdict") or "已复盘").strip(),
+                "tone": tr_tone,
+                "comment": str(r.get("comment") or "").strip(),
+            })
+
+    # 8. followups
+    raw_fq = src.get("followups") if isinstance(src.get("followups"), list) else []
+    followups = [str(q).strip() for q in raw_fq if str(q).strip()][:4]
+    if not followups:
+        top_sym = holdings[0]["symbol"] if holdings else "核心持仓"
+        followups = [
+            f"如果明天盘前 {top_sym} 回调 3%，应该减仓控制风险还是做 T？",
+            "帮我测算把高杠杆仓位降到更稳健区间的调仓方案",
+            "把这份盘后复盘提炼成 200 字精简笔记",
+        ]
+
+    return {
+        "regime": {"label": label, "tone": tone},
+        "tldr": tldr,
+        "mover_reasons": mover_reasons,
+        "news_sentiments": news_sentiments,
+        "risks": risks,
+        "checklist": checklist,
+        "trades_summary": trades_summary,
+        "trade_reviews": trade_reviews,
+        "followups": followups,
+    }
+
+
+def parse_structured_report(raw_text: str, snapshot: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+    """解析 Gemini 双轨输出：分离前置 JSON 块与 Markdown 正文，失败时无损降级。"""
+    text = (raw_text or "").strip()
+    parsed_json: Optional[Dict[str, Any]] = None
+    markdown = text
+
+    match = re.match(r"^\s*```(?:json)?\s*\n(.*?)\n```\s*\n?(.*)$", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        json_str, rest_md = match.group(1).strip(), match.group(2).strip()
+        try:
+            candidate = json.loads(json_str)
+            if isinstance(candidate, dict):
+                parsed_json = candidate
+                markdown = rest_md or text
+        except json.JSONDecodeError:
+            parsed_json = None
+
+    structured = _normalize_structured(parsed_json, markdown, snapshot)
+    return structured, markdown
+
+
+def ensure_structured(report: Dict[str, Any]) -> Dict[str, Any]:
+    """确保任意历史/新版日报对象均携带完整的 structured、checked_ids 与 followups_history。"""
+    if not isinstance(report, dict):
+        return report
+    snapshot = report.get("snapshot") or {}
+    markdown = str(report.get("markdown") or "")
+    existing = report.get("structured")
+    if isinstance(existing, dict) and existing.get("tldr") and isinstance(existing.get("checklist"), list):
+        report["structured"] = _normalize_structured(existing, markdown, snapshot)
+    else:
+        structured, clean_md = parse_structured_report(markdown, snapshot)
+        report["structured"] = structured
+        report["markdown"] = clean_md
+    if not isinstance(report.get("checked_ids"), list):
+        report["checked_ids"] = []
+    if not isinstance(report.get("followups_history"), list):
+        report["followups_history"] = []
+    return report
+
+
+def ask_after_hours_followup(
+    report: Dict[str, Any],
+    question: str,
+    provider: str = "gemini",
+    model: Optional[str] = None,
+    store: Optional[AfterHoursReportStore] = None,
+    ai_asker: Optional[Callable[[str, str, Optional[str]], str]] = None,
+) -> Dict[str, Any]:
+    """基于指定盘后日报的完整快照与复盘总结向 AI 发起追问，并落盘追问记录。"""
+    q = (question or "").strip()
+    if not q:
+        raise ValueError("请输入追问问题")
+
+    rep = ensure_structured(dict(report))
+    snap = rep.get("snapshot") or {}
+    summary = snap.get("summary") or {}
+    structured = rep.get("structured") or {}
+    prov = normalize_ai_provider(provider)
+    chosen_model = (model or "").strip() or None
+
+    hist_lines = []
+    for item in (rep.get("followups_history") or [])[-6:]:
+        hist_lines.append(f"用户：{item.get('question')}\n助手：{str(item.get('answer') or '')[:1200]}")
+    hist_text = "\n\n".join(hist_lines) if hist_lines else "无"
+
+    prompt = (
+        f"你是一位熟悉用户资产情况的资深美股投顾。以下是用户 {rep.get('trade_date')}（范围：{rep.get('person_name')}）的盘后复盘总结与事实快照：\n\n"
+        f"- 核心定性：{structured.get('tldr')}\n"
+        f"- 当日盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)}（{_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)}） | "
+        f"总市值：${_fmt_dec(_to_dec(summary.get('total_market_value')))} | 杠杆占比：{_fmt_dec(_to_dec(summary.get('leverage_pct')), pct=True)}\n"
+        f"- 完整复盘要点：\n{str(rep.get('markdown') or '')[:4500]}\n\n"
+        f"【历史追问上下文】\n{hist_text}\n\n"
+        f"【用户本次追问】\n{q}\n\n"
+        f"请直接结合上述持仓数据、成本与盘后走势给出具体、可落地的建议（Markdown 排版，避免空泛套话）。"
+    )
+
+    if ai_asker is not None:
+        answer = ai_asker(prompt, prov, chosen_model)
+    else:
+        answer = CodexAIService.ask(prompt, context="", model=chosen_model, provider=prov)
+
+    target_store = store or AfterHoursReportStore()
+    used_model = chosen_model or (CodexAIService.get_agy_model() if prov == "gemini" else "")
+    updated = target_store.append_followup(str(rep["id"]), q, answer, model=used_model)
+    return {
+        "answer": answer,
+        "model": used_model,
+        "followups_history": (updated or {}).get("followups_history") or [],
+    }
 
 
 def generate_after_hours_report(
@@ -718,7 +1120,7 @@ def generate_after_hours_report(
     news_fetcher: Callable[[List[str]], Dict[str, List[Dict[str, Any]]]] = fetch_ticker_news,
     ai_asker: Optional[Callable[[str, str, Optional[str]], str]] = None,
 ) -> Dict[str, Any]:
-    """执行完整盘后复盘生成流程：可选同步券商流水 -> 采集行情与新闻 -> Gemini 总结 -> 落盘保存。"""
+    """执行完整盘后复盘生成流程：可选同步券商流水 -> 采集行情与新闻 -> Gemini 双轨总结 -> 落盘保存。"""
     target_date = trade_date or resolve_default_trade_date()
     target_store = store or AfterHoursReportStore()
     prov = normalize_ai_provider(provider)
@@ -748,17 +1150,21 @@ def generate_after_hours_report(
     if sync_status.get("ran") and not sync_status.get("ok"):
         snapshot.setdefault("warnings", []).append(sync_status.get("message") or "券商同步失败")
 
-    # 3. 调用 AI 生成复盘报告
+    # 3. 调用 AI 生成双轨复盘报告并解析结构化字段
     prompt = _build_after_hours_prompt(snapshot, sync_status)
     chosen_model = (model or "").strip() or None
     if ai_asker is not None:
-        markdown = ai_asker(prompt, prov, chosen_model)
+        raw_reply = ai_asker(prompt, prov, chosen_model)
     else:
-        markdown = CodexAIService.ask(prompt, context="", model=chosen_model, provider=prov)
+        raw_reply = CodexAIService.ask(prompt, context="", model=chosen_model, provider=prov)
+
+    structured, markdown = parse_structured_report(raw_reply, snapshot)
 
     date_str = target_date.isoformat()
+    report_id = make_report_id(date_str, p_key)
+    existing = target_store.get_report(report_id) or {}
     report = {
-        "id": make_report_id(date_str, p_key),
+        "id": report_id,
         "trade_date": date_str,
         "person_key": p_key,
         "person_id": p_id,
@@ -769,7 +1175,10 @@ def generate_after_hours_report(
         "model": chosen_model or (CodexAIService.get_agy_model() if prov == "gemini" else ""),
         "sync_status": sync_status,
         "snapshot": snapshot,
+        "structured": structured,
         "markdown": markdown,
+        "checked_ids": existing.get("checked_ids") if isinstance(existing.get("checked_ids"), list) else [],
+        "followups_history": existing.get("followups_history") if isinstance(existing.get("followups_history"), list) else [],
     }
     return target_store.save_report(report)
 

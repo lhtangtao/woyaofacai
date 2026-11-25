@@ -2497,7 +2497,9 @@ def api_ai_after_hours_reports():
 @api_v1.route("/ai/after-hours/report/<path:report_id>", methods=["GET"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_after_hours_report_detail(report_id: str):
-    """获取单份盘后复盘日报的完整 Markdown 正文与原始事实快照。"""
+    """获取单份盘后复盘日报的完整结构化数据、Markdown 正文与原始事实快照。"""
+    from portfolio.services.after_hours_report import ensure_structured
+
     ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
     _, scoped_pname = get_current_user_scope()
     is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
@@ -2507,14 +2509,76 @@ def api_ai_after_hours_report_detail(report_id: str):
         return jsonify({"status": "error", "message": "未找到对应的盘后复盘日报"}), 404
     if is_isolated and report.get("person_key") != scoped_pname:
         return jsonify({"status": "error", "message": "无权查看其他人员的盘后复盘日报"}), 403
-    return jsonify({"status": "ok", "report": report})
+    return jsonify({"status": "ok", "report": ensure_structured(report)})
+
+
+@api_v1.route("/ai/after-hours/report/<path:report_id>/checklist", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_checklist(report_id: str):
+    """持久化次日盘前关注清单的勾选状态。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    _, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    store = get_after_hours_store()
+    report = store.get_report(report_id)
+    if not report:
+        return jsonify({"status": "error", "message": "未找到对应的盘后复盘日报"}), 404
+    if is_isolated and report.get("person_key") != scoped_pname:
+        return jsonify({"status": "error", "message": "无权修改其他人员的关注清单"}), 403
+
+    data = request.get_json(silent=True) or {}
+    checked_ids = data.get("checked_ids") if isinstance(data.get("checked_ids"), list) else []
+    updated = store.update_checklist_state(report_id, checked_ids)
+    return jsonify({"status": "ok", "checked_ids": (updated or {}).get("checked_ids", [])})
+
+
+@api_v1.route("/ai/after-hours/report/<path:report_id>/followup", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_followup(report_id: str):
+    """基于指定盘后复盘日报向 Gemini 发起带上下文追问。"""
+    from portfolio.services.after_hours_report import ask_after_hours_followup
+
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    _, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    store = get_after_hours_store()
+    report = store.get_report(report_id)
+    if not report:
+        return jsonify({"status": "error", "message": "未找到对应的盘后复盘日报"}), 404
+    if is_isolated and report.get("person_key") != scoped_pname:
+        return jsonify({"status": "error", "message": "无权对其他人员的盘后日报追问"}), 403
+
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question") or data.get("prompt") or "").strip()
+    if not question:
+        return jsonify({"status": "error", "message": "请输入追问内容"}), 400
+
+    provider = normalize_ai_provider(data.get("provider"))
+    model = str(data.get("model") or "").strip() or None
+    try:
+        res = ask_after_hours_followup(
+            report=report,
+            question=question,
+            provider=provider,
+            model=model,
+            store=store,
+        )
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 502
+    return jsonify({"status": "ok", **res})
 
 
 @api_v1.route("/ai/after-hours/generate", methods=["POST"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_after_hours_generate():
     """手动触发生成（或重新生成）指定交易日与人员范围的盘后复盘日报。"""
-    from portfolio.services.after_hours_report import generate_after_hours_report, resolve_default_trade_date
+    from portfolio.services.after_hours_report import (
+        ensure_structured,
+        generate_after_hours_report,
+        resolve_default_trade_date,
+    )
 
     ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
     scoped_pid, scoped_pname = get_current_user_scope()
@@ -2555,7 +2619,7 @@ def api_ai_after_hours_generate():
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 502
 
-    return jsonify({"status": "ok", "report": report})
+    return jsonify({"status": "ok", "report": ensure_structured(report)})
 
 
 # ------------------------------------------------------------------------------

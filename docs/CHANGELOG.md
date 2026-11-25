@@ -1,3 +1,8 @@
+## 2026-11-25 22:15 盘后复盘日报升级 2.0（驾驶舱 KPI、持仓归因、风险雷达与清单勾选追问）
+
+- 修改者：Antigravity（代码修改）
+- 升级 `after_hours_report.py`、`api_v1.py`、Web 端 `AfterHoursReportView.tsx` 与 Mac 桌面端 `after_hours_report_page.py`：引入 Gemini `JSON + Markdown` 双轨输出与旧日报无损降级解析，补齐无账本当日盈亏时的行情估算口径；全面落地「驾驶舱 Hero + TL;DR + 4 KPI（含 vs QQQ Alpha 与杠杆警戒条）+ 4 视角 Tab（持仓过滤展开与新闻情绪 / 逐笔操作对比 / 新闻情报流 / 完整长文）+ 风险雷达 + 可持久化勾选次日清单 + 底部带上下文追问」。前端构建、`ruff` 及 24 项单元测试全部通过。
+
 ## 2026-11-25 21:35 新增美股每日盘后复盘日报（Web 端 + Mac 桌面端）
 
 - 修改者：Antigravity（代码修改）

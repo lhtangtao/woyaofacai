@@ -451,6 +451,23 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  aiAfterHoursSaveChecklist: (reportId: string, checkedIds: string[]) =>
+    requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}/checklist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checked_ids: checkedIds }),
+    }),
+  aiAfterHoursFollowup: (
+    reportId: string,
+    question: string,
+    model?: string,
+    provider: "codex" | "gemini" | "google_api" = "gemini"
+  ) =>
+    requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}/followup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, provider, ...(model ? { model } : {}) }),
+    }),
 
   // Unified Holdings Management
   holdingsDashboard: (person_id?: number | null, broker?: string, ticker?: string) => {

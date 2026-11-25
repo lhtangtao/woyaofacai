@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Calendar,
   Check,
@@ -7,6 +7,7 @@ import {
   Copy,
   FileText,
   RefreshCw,
+  Send,
   Sparkles,
   User,
 } from "lucide-react";
@@ -25,9 +26,13 @@ interface ReportSummary {
   model: string;
   sync_status?: { ran?: boolean; ok?: boolean; message?: string; finished_at?: string };
   day_pnl?: number | null;
+  day_pnl_pct?: number | null;
+  leverage_pct?: number | null;
   total_market_value?: number | null;
   trade_count: number;
   holding_count: number;
+  regime?: { label?: string; tone?: string };
+  tldr?: string;
 }
 
 interface PersonOption {
@@ -49,19 +54,47 @@ const DEFAULT_MODELS: AgyModelOption[] = [
   { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
 ];
 
-function fmtMoney(v: number | null | undefined, signed = false): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  const prefix = signed && v > 0 ? "+$" : v < 0 ? "-$" : "$";
-  return `${prefix}${Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+function getWeekday(dateStr?: string): string {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? "" : WEEKDAYS[d.getDay()];
 }
 
-function fmtPct(v: number | null | undefined): string {
+function fmtMoney(v: number | null | undefined, signed = false): string {
   if (v == null || Number.isNaN(v)) return "—";
-  const pct = v * 100;
+  const prefix = signed ? (v > 0 ? "+$" : v < 0 ? "-$" : "$") : v < 0 ? "-$" : "$";
+  return `${prefix}${Math.abs(v).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function fmtPct(v: number | null | undefined, alreadyPercent = false): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  const pct = alreadyPercent ? v : v * 100;
   return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
-/** 美股盘后复盘日报页面（支持按人员/日期生成、自动同步流水、历史存档回看与事实快照核对） */
+function toneColor(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v) || v === 0) return "var(--text-muted)";
+  return v > 0 ? "var(--profit-color)" : "var(--loss-color)";
+}
+
+function regimeStyle(tone?: string): { bg: string; fg: string } {
+  if (tone === "success") return { bg: "rgba(22, 163, 74, 0.14)", fg: "#16A34A" };
+  if (tone === "error") return { bg: "rgba(220, 38, 38, 0.14)", fg: "#DC2626" };
+  return { bg: "rgba(217, 119, 6, 0.15)", fg: "#D97706" };
+}
+
+function sentimentStyle(s?: string): { bg: string; fg: string } {
+  if (s === "利好") return { bg: "rgba(22, 163, 74, 0.14)", fg: "#16A34A" };
+  if (s === "利空") return { bg: "rgba(220, 38, 38, 0.14)", fg: "#DC2626" };
+  return { bg: "var(--hover-bg)", fg: "var(--text-muted)" };
+}
+
+/** 美股盘后复盘日报 2.0 页面 */
 export const AfterHoursReportView: React.FC = () => {
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [personOptions, setPersonOptions] = useState<PersonOption[]>([
@@ -86,7 +119,14 @@ export const AfterHoursReportView: React.FC = () => {
   const [elapsedSec, setElapsedSec] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [copied, setCopied] = useState(false);
-  const [showSnapshot, setShowSnapshot] = useState(false);
+
+  // 2.0 交互状态
+  const [activeTab, setActiveTab] = useState<"overview" | "trades" | "news" | "markdown">("overview");
+  const [moverFilter, setMoverFilter] = useState<"all" | "up" | "down" | "after" | "news">("all");
+  const [expandedSymbols, setExpandedSymbols] = useState<Record<string, boolean>>({});
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [followupInput, setFollowupInput] = useState("");
+  const [followupLoading, setFollowupLoading] = useState(false);
 
   const loadList = (personFilter = filterPerson, preferId?: string) => {
     setLoadingList(true);
@@ -146,8 +186,15 @@ export const AfterHoursReportView: React.FC = () => {
     api
       .aiAfterHoursDetail(selectedId)
       .then((res) => {
-        if (res.status === "ok") {
+        if (res.status === "ok" && res.report) {
           setDetail(res.report);
+          setCheckedIds(Array.isArray(res.report.checked_ids) ? res.report.checked_ids : []);
+          const holdings = res.report.snapshot?.holdings || [];
+          const initExpanded: Record<string, boolean> = {};
+          holdings.slice(0, 2).forEach((h: any) => {
+            if (h?.symbol) initExpanded[h.symbol] = true;
+          });
+          setExpandedSymbols(initExpanded);
         }
       })
       .catch((err) => setErrorMsg(err.message || "加载日报详情失败"))
@@ -177,6 +224,7 @@ export const AfterHoursReportView: React.FC = () => {
       });
       if (res.status === "ok" && res.report) {
         setDetail(res.report);
+        setCheckedIds(Array.isArray(res.report.checked_ids) ? res.report.checked_ids : []);
         setSelectedId(res.report.id);
         loadList(filterPerson, res.report.id);
       } else {
@@ -197,17 +245,97 @@ export const AfterHoursReportView: React.FC = () => {
     });
   };
 
-  const snap = detail?.snapshot;
+  const handleToggleChecklist = (cid: string) => {
+    if (!detail?.id) return;
+    const next = checkedIds.includes(cid)
+      ? checkedIds.filter((x) => x !== cid)
+      : [...checkedIds, cid];
+    setCheckedIds(next);
+    api.aiAfterHoursSaveChecklist(detail.id, next).catch(() => {});
+  };
+
+  const handleSendFollowup = async (customQ?: string) => {
+    const q = (customQ ?? followupInput).trim();
+    if (!q || !detail?.id || followupLoading) return;
+    if (customQ === undefined) setFollowupInput("");
+    setFollowupLoading(true);
+    setErrorMsg("");
+    try {
+      const res = await api.aiAfterHoursFollowup(detail.id, q, selectedModel, "gemini");
+      if (res.status === "ok") {
+        setDetail((prev: any) =>
+          prev ? { ...prev, followups_history: res.followups_history || [] } : prev
+        );
+      } else {
+        setErrorMsg(res.message || "追问请求未成功");
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "追问请求异常");
+    } finally {
+      setFollowupLoading(false);
+    }
+  };
+
+  const snap = detail?.snapshot || {};
   const summary = snap?.summary || {};
   const benchmarks = snap?.market_benchmarks || {};
+  const structured = detail?.structured || {};
+  const holdings: any[] = snap?.holdings || [];
+  const trades: any[] = snap?.trades || [];
+  const newsMap: Record<string, any[]> = snap?.news || {};
+  const moverReasons: Record<string, string> = structured?.mover_reasons || {};
+  const newsSentiments: Record<string, string> = structured?.news_sentiments || {};
+  const risks: any[] = structured?.risks || [];
+  const checklist: any[] = structured?.checklist || [];
+  const followups: string[] = structured?.followups || [];
+  const followupsHistory: any[] = detail?.followups_history || [];
+
+  const getNewsForHolding = (h: any) => {
+    const own = newsMap[h.symbol] || [];
+    const under = h.underlying ? newsMap[h.underlying] || [] : [];
+    const merged = [...own, ...under];
+    const seen = new Set<string>();
+    return merged.filter((n) => {
+      const k = String(n.title || "");
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  };
+
+  const filteredHoldings = useMemo(() => {
+    return holdings.filter((h) => {
+      if (moverFilter === "up") return (h.regular_change_pct || 0) > 0;
+      if (moverFilter === "down") return (h.regular_change_pct || 0) < 0;
+      if (moverFilter === "after") {
+        return h.after_hours_change_pct != null && Math.abs(h.after_hours_change_pct) >= 0.005;
+      }
+      if (moverFilter === "news") return getNewsForHolding(h).length > 0;
+      return true;
+    });
+  }, [holdings, moverFilter, newsMap]);
+
+  const allNewsFeed = useMemo(() => {
+    const out: any[] = [];
+    Object.entries(newsMap).forEach(([sym, items]) => {
+      (items || []).forEach((it: any) => {
+        out.push({ ...it, symbol: sym, sentiment: newsSentiments[it.title] || "中性" });
+      });
+    });
+    return out;
+  }, [newsMap, newsSentiments]);
+
+  const levPctNum = summary.leverage_pct != null ? Number(summary.leverage_pct) * 100 : 0;
+  const regStyle = regimeStyle(structured?.regime?.tone);
+  const doneChecklistCount = checklist.filter((c) => checkedIds.includes(c.id)).length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: "12px", minHeight: 0 }}>
-      {/* 顶部控制栏：日期、人员范围、模型、同步开关与生成按钮 */}
+      {/* 顶部全局操作栏 */}
       <div
         className="card-panel"
         style={{
-          padding: "12px 16px",
+          padding: "10px 16px",
           display: "flex",
           flexWrap: "wrap",
           alignItems: "center",
@@ -237,7 +365,7 @@ export const AfterHoursReportView: React.FC = () => {
               value={genPerson}
               onChange={(e) => setGenPerson(e.target.value)}
               disabled={generating || isIsolated}
-              style={{ fontSize: "12px", padding: "4px 8px", minWidth: "110px" }}
+              style={{ fontSize: "12px", padding: "4px 8px", minWidth: "108px" }}
             >
               {personOptions.map((opt) => (
                 <option key={opt.key} value={opt.key}>
@@ -254,7 +382,7 @@ export const AfterHoursReportView: React.FC = () => {
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               disabled={generating}
-              style={{ fontSize: "12px", padding: "4px 8px", minWidth: "190px" }}
+              style={{ fontSize: "12px", padding: "4px 8px", minWidth: "185px" }}
             >
               {models.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -272,7 +400,7 @@ export const AfterHoursReportView: React.FC = () => {
                 onChange={(e) => setRunSync(e.target.checked)}
                 disabled={generating}
               />
-              <span>生成前同步券商流水</span>
+              <span>生成前同步流水</span>
             </label>
           )}
         </div>
@@ -285,7 +413,7 @@ export const AfterHoursReportView: React.FC = () => {
             style={{ fontSize: "12px", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "4px" }}
           >
             <RefreshCw size={13} />
-            刷新列表
+            刷新
           </button>
           <button
             className="btn btn-primary"
@@ -294,33 +422,25 @@ export const AfterHoursReportView: React.FC = () => {
             style={{ fontSize: "12.5px", padding: "6px 14px", display: "inline-flex", alignItems: "center", gap: "6px", fontWeight: 600 }}
           >
             <Sparkles size={14} />
-            {generating ? `正在同步并生成 (${elapsedSec}s)...` : "生成 / 重算复盘日报"}
+            {generating ? `正在同步并生成 (${elapsedSec}s)...` : "生成 / 重算日报"}
           </button>
         </div>
       </div>
 
       {errorMsg && (
-        <div
-          style={{
-            padding: "8px 12px",
-            borderRadius: "8px",
-            background: "#FEE2E2",
-            color: "#991B1B",
-            fontSize: "12.5px",
-          }}
-        >
+        <div style={{ padding: "8px 12px", borderRadius: "8px", background: "#FEE2E2", color: "#991B1B", fontSize: "12.5px" }}>
           ⚠️ {errorMsg}
         </div>
       )}
 
-      {/* 主体左右双栏 */}
+      {/* 主体左右布局 */}
       <div style={{ flex: 1, display: "flex", gap: "12px", minHeight: 0 }}>
-        {/* 左侧：按交易日倒序的历史日报列表 */}
+        {/* 左侧历史复盘时间轴 */}
         <div
           className="card-panel"
           style={{
-            width: "270px",
-            minWidth: "240px",
+            width: "268px",
+            minWidth: "235px",
             padding: "12px",
             display: "flex",
             flexDirection: "column",
@@ -328,47 +448,61 @@ export const AfterHoursReportView: React.FC = () => {
             minHeight: 0,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-            <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-heading)" }}>
-              历史复盘 ({reports.length})
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--text-heading)" }}>
+              历史复盘存档
             </span>
-            {!isIsolated && (
-              <select
-                className="input-control"
-                value={filterPerson}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setFilterPerson(val);
-                  loadList(val);
-                }}
-                style={{ fontSize: "11.5px", padding: "2px 6px" }}
-              >
-                <option value="">全部范围</option>
-                {personOptions.map((opt) => (
-                  <option key={opt.key} value={opt.key}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            )}
+            <span className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+              {reports.length} 份
+            </span>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" }}>
+          {!isIsolated && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+              {[{ key: "", label: "全部" }, ...personOptions.slice(0, 4)].map((opt) => {
+                const active = filterPerson === opt.key;
+                return (
+                  <button
+                    key={opt.key || "ALL_FILTER"}
+                    type="button"
+                    onClick={() => {
+                      setFilterPerson(opt.key);
+                      loadList(opt.key);
+                    }}
+                    style={{
+                      fontSize: "11.5px",
+                      padding: "3px 9px",
+                      borderRadius: "999px",
+                      border: active ? "1px solid var(--brand)" : "1px solid var(--border-color)",
+                      background: active ? "var(--brand-selected)" : "var(--bg-app)",
+                      color: active ? "var(--brand)" : "var(--text-muted)",
+                      fontWeight: active ? 600 : 500,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
             {loadingList ? (
-              <div style={{ fontSize: "12px", color: "var(--text-muted)", textAlign: "center", padding: "16px" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", textAlign: "center", padding: "18px" }}>
                 加载中...
               </div>
             ) : reports.length === 0 ? (
               <div style={{ fontSize: "12px", color: "var(--text-muted)", textAlign: "center", padding: "20px 8px", lineHeight: 1.6 }}>
-                暂无历史盘后日报。
-                <br />
-                点击右上角「生成 / 重算复盘日报」立即生成，或等待美股盘后（美东 20:10）自动生成。
+                暂无历史盘后日报。点击右上角「生成 / 重算日报」即可生成。
               </div>
             ) : (
               reports.map((rep) => {
                 const active = rep.id === selectedId;
                 const pnl = rep.day_pnl;
-                const pnlColor = pnl == null ? "var(--text-muted)" : pnl > 0 ? "var(--profit-color)" : pnl < 0 ? "var(--loss-color)" : "var(--text-main)";
+                const pct = rep.day_pnl_pct;
+                const barWidth = pct != null ? Math.min(100, Math.max(12, Math.abs(pct * 100) * 14)) : 0;
+                const barCol = pnl == null ? "var(--border-color)" : pnl >= 0 ? "#16A34A" : "#DC2626";
                 return (
                   <button
                     key={rep.id}
@@ -377,42 +511,58 @@ export const AfterHoursReportView: React.FC = () => {
                     style={{
                       textAlign: "left",
                       padding: "10px",
-                      borderRadius: "8px",
+                      borderRadius: "10px",
                       border: active ? "1px solid var(--brand)" : "1px solid var(--border-color)",
                       background: active ? "var(--brand-selected)" : "var(--bg-app)",
                       cursor: "pointer",
                       display: "flex",
                       flexDirection: "column",
-                      gap: "4px",
+                      gap: "5px",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span className="font-mono" style={{ fontWeight: 700, fontSize: "13px", color: "var(--text-heading)" }}>
-                        {rep.trade_date}
-                      </span>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <span className="font-mono" style={{ fontWeight: 700, fontSize: "12.5px", color: "var(--text-heading)" }}>
+                          {rep.trade_date}
+                        </span>
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>{getWeekday(rep.trade_date)}</span>
+                      </div>
                       <span
                         style={{
                           fontSize: "10.5px",
                           padding: "1px 6px",
-                          borderRadius: "10px",
-                          background: "var(--hover-bg)",
-                          color: "var(--brand)",
+                          borderRadius: "6px",
+                          background: "var(--bg-panel)",
+                          border: "1px solid var(--border-color)",
+                          color: "var(--text-main)",
                           fontWeight: 600,
                         }}
                       >
                         {rep.person_name}
                       </span>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px" }}>
-                      <span style={{ color: "var(--text-muted)" }}>
-                        成交 {rep.trade_count} 笔 · 持仓 {rep.holding_count}
-                      </span>
-                      <span className="font-mono" style={{ fontWeight: 600, color: pnlColor }}>
+
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span className="font-mono" style={{ fontSize: "14px", fontWeight: 700, color: toneColor(pnl) }}>
                         {fmtMoney(pnl, true)}
                       </span>
+                      <span className="font-mono" style={{ fontSize: "11.5px", fontWeight: 600, color: toneColor(pct) }}>
+                        {fmtPct(pct)}
+                      </span>
                     </div>
-                    <div style={{ fontSize: "10.5px", color: "var(--text-subtle)" }}>
-                      {rep.trigger === "auto" ? "定时自动" : "手动生成"} · {(rep.generated_at || "").slice(5, 16).replace("T", " ")}
+
+                    {pct != null && (
+                      <div style={{ height: "4px", width: "100%", borderRadius: "999px", background: "var(--border-color)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${barWidth}%`, background: barCol, borderRadius: "999px" }} />
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-muted)" }}>
+                      <span>
+                        {rep.trade_count} 笔成交
+                        {rep.leverage_pct != null ? ` · 杠杆 ${(rep.leverage_pct * 100).toFixed(0)}%` : ""}
+                      </span>
+                      <span>{rep.trigger === "auto" ? "自动" : "手动"}</span>
                     </div>
                   </button>
                 );
@@ -421,167 +571,666 @@ export const AfterHoursReportView: React.FC = () => {
           </div>
         </div>
 
-        {/* 右侧：完整复盘正文与事实快照 */}
-        <div
-          className="card-panel"
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "20px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "14px",
-            minHeight: 0,
-          }}
-        >
+        {/* 右侧多维复盘工作台 */}
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", minHeight: 0, paddingRight: "2px" }}>
           {loadingDetail ? (
-            <div style={{ margin: "auto", color: "var(--text-muted)", fontSize: "13px" }}>
-              正在读取复盘日报详情...
+            <div className="card-panel" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "13px" }}>
+              正在加载复盘驾驶舱...
             </div>
           ) : !detail ? (
-            <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)", fontSize: "13px", lineHeight: 1.8 }}>
+            <div className="card-panel" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: "13px", lineHeight: 1.8, padding: "24px" }}>
               <FileText size={32} style={{ opacity: 0.4, marginBottom: "8px" }} />
-              <div>选择一个历史交易日查看盘后总结，或点击上方按钮立即生成。</div>
-              <div style={{ fontSize: "12px", opacity: 0.8 }}>
-                每个美股交易日盘后（美东 20:10）会自动先同步券商流水，再结合盘后收盘价、涨跌幅与新闻生成「个人」盘后复盘日报。
-              </div>
+              <div>选择左侧历史交易日查看结构化盘后复盘，或点击右上角「生成 / 重算日报」立即生成。</div>
             </div>
           ) : (
             <>
-              {/* 报告头部与核心指标 */}
-              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-start", gap: "10px", borderBottom: "1px solid var(--border-color)", paddingBottom: "12px" }}>
-                <div>
-                  <div style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-heading)" }}>
-                    {detail.trade_date} 美股盘后复盘日报 · {detail.person_name}
+              {/* 1. 顶部驾驶舱 Hero 卡片 */}
+              <div className="card-panel" style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "14px" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "17px", fontWeight: 700, color: "var(--text-heading)" }}>
+                        {detail.trade_date} ({getWeekday(detail.trade_date)}) 美股盘后复盘 · {detail.person_name}
+                      </span>
+                      {structured?.regime?.label && (
+                        <span style={{ fontSize: "11.5px", fontWeight: 600, padding: "2px 9px", borderRadius: "999px", background: regStyle.bg, color: regStyle.fg }}>
+                          {structured.regime.label}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: "11.5px",
+                          fontWeight: 600,
+                          padding: "2px 9px",
+                          borderRadius: "999px",
+                          background: detail.sync_status?.ok === false ? "rgba(220,38,38,0.12)" : "rgba(22,163,74,0.12)",
+                          color: detail.sync_status?.ok === false ? "#DC2626" : "#16A34A",
+                        }}
+                      >
+                        {detail.sync_status?.ran ? (detail.sync_status?.ok ? "✓ 已自动同步" : "⚠ 同步异常") : "未执行同步"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "4px" }}>
+                      生成时间：{(detail.generated_at || "").replace("T", " ")} · 引擎：{detail.provider}
+                      {detail.model ? ` (${detail.model})` : ""} · 盈亏口径：
+                      {summary.day_pnl_basis === "quote_estimated" ? "收盘行情估算" : "账本流水"}
+                    </div>
                   </div>
-                  <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
-                    生成时间：{(detail.generated_at || "").replace("T", " ")} · 引擎：{detail.provider}
-                    {detail.model ? ` (${detail.model})` : ""} · 同步状态：
-                    <span style={{ color: detail.sync_status?.ok === false ? "var(--loss-color)" : "#16A34A", fontWeight: 600 }}>
-                      {detail.sync_status?.ran ? (detail.sync_status?.ok ? "已自动同步" : "同步异常") : "未执行同步"}
-                    </span>
-                  </div>
+                  <button
+                    className="btn"
+                    onClick={handleCopy}
+                    style={{ fontSize: "12px", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                  >
+                    {copied ? <Check size={13} color="#16A34A" /> : <Copy size={13} />}
+                    {copied ? "已复制" : "复制 Markdown"}
+                  </button>
                 </div>
-                <button
-                  className="btn"
-                  onClick={handleCopy}
-                  style={{ fontSize: "12px", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                >
-                  {copied ? <Check size={13} color="#16A34A" /> : <Copy size={13} />}
-                  {copied ? "已复制 Markdown" : "复制全文"}
-                </button>
-              </div>
 
-              {/* 关键指标卡片 */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px" }}>
-                <div style={{ padding: "10px 12px", borderRadius: "8px", background: "var(--bg-app)", border: "1px solid var(--border-color)" }}>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当日盈亏</div>
-                  <div className="font-mono" style={{ fontSize: "16px", fontWeight: 700, marginTop: "2px" }}>
-                    {fmtMoney(summary.day_pnl, true)}
-                  </div>
-                </div>
-                <div style={{ padding: "10px 12px", borderRadius: "8px", background: "var(--bg-app)", border: "1px solid var(--border-color)" }}>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>总持仓市值</div>
-                  <div className="font-mono" style={{ fontSize: "16px", fontWeight: 700, marginTop: "2px" }}>
-                    {fmtMoney(summary.total_market_value)}
-                  </div>
-                </div>
-                <div style={{ padding: "10px 12px", borderRadius: "8px", background: "var(--bg-app)", border: "1px solid var(--border-color)" }}>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当日成交 / 持仓数</div>
-                  <div className="font-mono" style={{ fontSize: "16px", fontWeight: 700, marginTop: "2px" }}>
-                    {summary.trade_count || 0} 笔 / {summary.holding_count || 0} 只
-                  </div>
-                </div>
-                {(benchmarks.SPY || benchmarks.QQQ) && (
-                  <div style={{ padding: "10px 12px", borderRadius: "8px", background: "var(--bg-app)", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>大盘 SPY / QQQ</div>
-                    <div className="font-mono" style={{ fontSize: "12.5px", fontWeight: 600, marginTop: "4px", lineHeight: 1.5 }}>
-                      {benchmarks.SPY && <div>SPY {fmtPct(benchmarks.SPY.regular_change_pct)} (盘后 {fmtPct(benchmarks.SPY.after_hours_change_pct)})</div>}
-                      {benchmarks.QQQ && <div>QQQ {fmtPct(benchmarks.QQQ.regular_change_pct)} (盘后 {fmtPct(benchmarks.QQQ.after_hours_change_pct)})</div>}
+                {/* AI 一句话核心定性横幅 (TL;DR) */}
+                {structured?.tldr && (
+                  <div
+                    style={{
+                      borderRadius: "10px",
+                      border: "1px solid rgba(37, 99, 235, 0.28)",
+                      background: "var(--brand-selected)",
+                      padding: "11px 14px",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "10px",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "2px 7px",
+                        borderRadius: "6px",
+                        background: "var(--brand)",
+                        color: "#FFFFFF",
+                        flexShrink: 0,
+                        marginTop: "2px",
+                      }}
+                    >
+                      核心定性
+                    </span>
+                    <div style={{ fontSize: "13px", lineHeight: 1.65, color: "var(--text-heading)" }}>
+                      {structured.tldr}
                     </div>
                   </div>
                 )}
-              </div>
 
-              {/* Gemini 完整 Markdown 总结 */}
-              <div style={{ fontSize: "13.5px", lineHeight: 1.75, color: "var(--text-main)" }}>
-                <MarkdownBlock text={detail.markdown || ""} />
-              </div>
-
-              {/* 底部可折叠：原始事实快照 */}
-              {snap && (
-                <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px", marginTop: "8px" }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowSnapshot(!showSnapshot)}
-                    style={{
-                      border: "none",
-                      background: "transparent",
-                      color: "var(--brand)",
-                      fontSize: "12.5px",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "4px",
-                    }}
-                  >
-                    {showSnapshot ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    查看原始事实快照（当日成交 {snap.trades?.length || 0} 笔 · 持仓盘后行情 {snap.holdings?.length || 0} 只 · 新闻 {Object.keys(snap.news || {}).length} 标的）
-                  </button>
-
-                  {showSnapshot && (
-                    <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "12px", fontSize: "12px" }}>
-                      {snap.holdings?.length > 0 && (
-                        <div className="table-container">
-                          <table className="finance-table">
-                            <thead>
-                              <tr>
-                                <th>标的</th>
-                                <th style={{ textAlign: "right" }}>股数</th>
-                                <th style={{ textAlign: "right" }}>常规收盘</th>
-                                <th style={{ textAlign: "right" }}>常规涨跌</th>
-                                <th style={{ textAlign: "right" }}>盘后价</th>
-                                <th style={{ textAlign: "right" }}>盘后涨跌</th>
-                                <th style={{ textAlign: "right" }}>当日盈亏</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {snap.holdings.map((h: any) => (
-                                <tr key={h.symbol}>
-                                  <td style={{ fontWeight: 700 }}>{h.symbol}{h.underlying ? ` (${h.underlying})` : ""}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{h.quantity}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{fmtMoney(h.regular_close)}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{fmtPct(h.regular_change_pct)}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{fmtMoney(h.after_hours_price)}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{fmtPct(h.after_hours_change_pct)}</td>
-                                  <td className="font-mono" style={{ textAlign: "right" }}>{fmtMoney(h.day_pnl, true)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                {/* 4 张 KPI 指标卡 */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "10px" }}>
+                  <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", color: "var(--text-muted)" }}>
+                      <span>当日预估盈亏</span>
+                      {summary.alpha_vs_qqq != null && (
+                        <span className="font-mono" style={{ fontWeight: 600, color: toneColor(summary.alpha_vs_qqq) }}>
+                          vs QQQ {fmtPct(summary.alpha_vs_qqq)}
+                        </span>
                       )}
+                    </div>
+                    <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: toneColor(summary.day_pnl) }}>
+                      {fmtMoney(summary.day_pnl, true)}
+                    </div>
+                    <div className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      日收益率 {fmtPct(summary.day_pnl_pct)}
+                    </div>
+                  </div>
 
-                      {snap.news && Object.keys(snap.news).length > 0 && (
-                        <div style={{ padding: "10px 12px", borderRadius: "8px", background: "var(--bg-app)", border: "1px solid var(--border-color)" }}>
-                          <div style={{ fontWeight: 700, marginBottom: "6px" }}>抓取到的近 36 小时相关新闻</div>
-                          {Object.entries(snap.news).map(([sym, items]: [string, any]) => (
-                            <div key={sym} style={{ marginBottom: "6px" }}>
-                              <strong>{sym}</strong>：
-                              {(items || []).map((n: any, idx: number) => (
-                                <div key={idx} style={{ paddingLeft: "10px", color: "var(--text-muted)", lineHeight: 1.5 }}>
-                                  • [{n.published_bj} · {n.publisher}] {n.title}
-                                </div>
-                              ))}
-                            </div>
-                          ))}
+                  <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
+                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>总持仓市值 / 累计浮盈</div>
+                    <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: "var(--text-heading)" }}>
+                      {fmtMoney(summary.total_market_value)}
+                    </div>
+                    <div className="font-mono" style={{ fontSize: "11.5px", color: toneColor(summary.total_unrealized_pnl), marginTop: "2px" }}>
+                      累计浮盈 {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
+                    </div>
+                  </div>
+
+                  <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
+                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>大盘基准（常规 / 盘后）</div>
+                    <div className="font-mono" style={{ fontSize: "12px", marginTop: "6px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                      {["SPY", "QQQ"].map((k) => {
+                        const b = benchmarks[k];
+                        if (!b) return <div key={k} style={{ color: "var(--text-muted)" }}>{k} 暂无行情</div>;
+                        return (
+                          <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: "6px" }}>
+                            <strong>{k}</strong>
+                            <span style={{ color: toneColor(b.regular_change_pct) }}>收 {fmtPct(b.regular_change_pct)}</span>
+                            <span style={{ color: toneColor(b.after_hours_change_pct) }}>盘后 {fmtPct(b.after_hours_change_pct)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", color: "var(--text-muted)" }}>
+                      <span>杠杆仓位暴露</span>
+                      <span className="font-mono">{summary.trade_count || 0} 笔成交</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "3px" }}>
+                      <span className="font-mono" style={{ fontSize: "19px", fontWeight: 700, color: "var(--text-heading)" }}>
+                        {levPctNum.toFixed(1)}%
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "11.5px",
+                          fontWeight: 600,
+                          color: levPctNum >= 50 ? "#DC2626" : levPctNum >= 35 ? "#D97706" : "#16A34A",
+                        }}
+                      >
+                        {levPctNum >= 50 ? "高杠杆警戒" : levPctNum >= 35 ? "中高暴露" : "稳健可控"}
+                      </span>
+                    </div>
+                    <div style={{ height: "6px", borderRadius: "999px", background: "var(--border-color)", overflow: "hidden", marginTop: "6px" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, levPctNum)}%`,
+                          borderRadius: "999px",
+                          background: levPctNum >= 50 ? "#DC2626" : levPctNum >= 35 ? "#D97706" : "#16A34A",
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. 多视角 Tab 容器 */}
+              <div className="card-panel" style={{ display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px", borderBottom: "1px solid var(--border-color)", padding: "6px 14px 0" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                    {[
+                      { id: "overview", label: "结构化复盘总览" },
+                      { id: "trades", label: `今日操作复盘 (${trades.length})` },
+                      { id: "news", label: `突发新闻情报 (${allNewsFeed.length})` },
+                      { id: "markdown", label: "完整长文 (Markdown)" },
+                    ].map((t) => {
+                      const active = activeTab === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setActiveTab(t.id as any)}
+                          style={{
+                            border: "none",
+                            borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                            background: "transparent",
+                            color: active ? "var(--brand)" : "var(--text-muted)",
+                            fontWeight: active ? 700 : 500,
+                            fontSize: "12.5px",
+                            padding: "8px 12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <span style={{ fontSize: "11.5px", color: "var(--text-muted)", paddingBottom: "6px" }}>
+                    点击标的可展开明细 · 清单勾选自动保存
+                  </span>
+                </div>
+
+                <div style={{ padding: "16px" }}>
+                  {/* TAB 1: 结构化复盘总览 */}
+                  {activeTab === "overview" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+                      {/* 模块 A: 重点持仓异动与归因 */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                          <div>
+                            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-heading)" }}>重点持仓异动与归因</span>
+                            <span style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "8px" }}>
+                              杠杆 ETF 自动关联正股新闻
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                            {[
+                              { id: "all", label: "全部" },
+                              { id: "up", label: "领涨" },
+                              { id: "down", label: "领跌" },
+                              { id: "after", label: "盘后波动" },
+                              { id: "news", label: "有突发新闻" },
+                            ].map((f) => {
+                              const active = moverFilter === f.id;
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  onClick={() => setMoverFilter(f.id as any)}
+                                  style={{
+                                    fontSize: "12px",
+                                    padding: "4px 10px",
+                                    borderRadius: "8px",
+                                    border: active ? "1px solid var(--brand)" : "1px solid var(--border-color)",
+                                    background: active ? "var(--brand-selected)" : "var(--bg-app)",
+                                    color: active ? "var(--brand)" : "var(--text-muted)",
+                                    fontWeight: active ? 600 : 500,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {f.label}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
+
+                        {filteredHoldings.length === 0 ? (
+                          <div style={{ padding: "20px", textAlign: "center", fontSize: "12.5px", color: "var(--text-muted)", border: "1px dashed var(--border-color)", borderRadius: "10px" }}>
+                            当前筛选条件下无匹配持仓标的
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {filteredHoldings.map((h) => {
+                              const expanded = Boolean(expandedSymbols[h.symbol]);
+                              const hNews = getNewsForHolding(h);
+                              const reason = moverReasons[h.symbol];
+                              const pnlNum = h.day_pnl ?? h.unrealized_pnl ?? 0;
+                              return (
+                                <div
+                                  key={h.symbol}
+                                  style={{
+                                    borderRadius: "10px",
+                                    border: "1px solid var(--border-color)",
+                                    background: "var(--bg-app)",
+                                    overflow: "hidden",
+                                  }}
+                                >
+                                  <div
+                                    onClick={() => setExpandedSymbols((prev) => ({ ...prev, [h.symbol]: !prev[h.symbol] }))}
+                                    style={{
+                                      padding: "11px 14px",
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "10px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "200px" }}>
+                                      <div
+                                        style={{
+                                          width: "4px",
+                                          height: "36px",
+                                          borderRadius: "999px",
+                                          background: pnlNum >= 0 ? "#16A34A" : "#DC2626",
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      <div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                          <span className="font-mono" style={{ fontWeight: 700, fontSize: "14px", color: "var(--text-heading)" }}>
+                                            {h.symbol}
+                                          </span>
+                                          {h.underlying && (
+                                            <span className="font-mono" style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)", fontWeight: 600 }}>
+                                              → {h.underlying}
+                                            </span>
+                                          )}
+                                          {h.is_leveraged && (
+                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "rgba(217,119,6,0.14)", color: "#D97706", fontWeight: 600 }}>
+                                              杠杆
+                                            </span>
+                                          )}
+                                          {hNews.length > 0 && (
+                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--bg-panel)", border: "1px solid var(--border-color)", color: "var(--text-muted)" }}>
+                                              新闻 {hNews.length}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
+                                          {(h.channels || []).join(" / ")} · 仓位 {h.weight_pct != null ? `${(h.weight_pct * 100).toFixed(1)}%` : "—"} · 均价 {fmtMoney(h.avg_cost)}
+                                          {h.need_breakeven_pct != null && (
+                                            <span style={{ color: "#D97706" }}> · 回本需 +{(h.need_breakeven_pct * 100).toFixed(1)}%</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="font-mono" style={{ display: "flex", alignItems: "center", gap: "18px", fontSize: "12px", flexWrap: "wrap" }}>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>常规收盘</div>
+                                        <div>
+                                          <strong>{fmtMoney(h.regular_close)}</strong>{" "}
+                                          <span style={{ color: toneColor(h.regular_change_pct) }}>{fmtPct(h.regular_change_pct)}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>盘后最新</div>
+                                        <div>
+                                          <strong>{fmtMoney(h.after_hours_price)}</strong>{" "}
+                                          <span style={{ color: toneColor(h.after_hours_change_pct) }}>{fmtPct(h.after_hours_change_pct)}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right", minWidth: "84px" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当日盈亏</div>
+                                        <div style={{ fontSize: "13.5px", fontWeight: 700, color: toneColor(h.day_pnl) }}>
+                                          {fmtMoney(h.day_pnl, true)}
+                                        </div>
+                                      </div>
+                                      <span style={{ color: "var(--text-muted)" }}>
+                                        {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {expanded && (
+                                    <div style={{ padding: "10px 14px 12px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", background: "var(--bg-panel)" }}>
+                                      <div style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
+                                        <strong style={{ color: "var(--brand)" }}>AI 异动归因：</strong>
+                                        {reason || `当前持仓 ${h.quantity} 股，浮盈 ${fmtMoney(h.unrealized_pnl, true)}；可切换至「完整长文」查看全文点评。`}
+                                      </div>
+                                      {hNews.length > 0 ? (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                          {hNews.map((n, nIdx) => {
+                                            const st = sentimentStyle(newsSentiments[n.title]);
+                                            return (
+                                              <div
+                                                key={nIdx}
+                                                style={{
+                                                  display: "flex",
+                                                  justifyContent: "space-between",
+                                                  alignItems: "center",
+                                                  gap: "10px",
+                                                  padding: "6px 10px",
+                                                  borderRadius: "8px",
+                                                  border: "1px solid var(--border-color)",
+                                                  background: "var(--bg-app)",
+                                                  fontSize: "12px",
+                                                }}
+                                              >
+                                                <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                                                  <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0 }}>
+                                                    {newsSentiments[n.title] || "中性"}
+                                                  </span>
+                                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.title}</span>
+                                                </div>
+                                                <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
+                                                  {n.publisher} · {n.published_bj}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>近 36 小时无显著突发新闻。</div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 模块 B + C: 风险雷达 & 可勾选次日关注清单 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px" }}>
+                        {/* 风险雷达 */}
+                        <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text-heading)" }}>仓位结构与风险雷达</span>
+                            <span
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: 600,
+                                padding: "2px 8px",
+                                borderRadius: "999px",
+                                background: risks.some((r) => r.level === "高危") ? "rgba(220,38,38,0.14)" : "rgba(22,163,74,0.14)",
+                                color: risks.some((r) => r.level === "高危") ? "#DC2626" : "#16A34A",
+                              }}
+                            >
+                              {risks.filter((r) => r.level === "高危").length > 0
+                                ? `${risks.filter((r) => r.level === "高危").length} 项高危提醒`
+                                : "风险整体可控"}
+                            </span>
+                          </div>
+                          {risks.length === 0 ? (
+                            <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>暂无额外结构性风险提醒。</div>
+                          ) : (
+                            risks.map((r, rIdx) => {
+                              const lvBg = r.level === "高危" ? "rgba(220,38,38,0.14)" : r.level === "中危" ? "rgba(217,119,6,0.14)" : "var(--brand-selected)";
+                              const lvFg = r.level === "高危" ? "#DC2626" : r.level === "中危" ? "#D97706" : "var(--brand)";
+                              return (
+                                <div key={rIdx} style={{ borderRadius: "8px", border: "1px solid var(--border-color)", background: "var(--bg-panel)", padding: "10px" }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "7px", marginBottom: "4px" }}>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, padding: "1px 7px", borderRadius: "6px", background: lvBg, color: lvFg }}>
+                                      {r.level}
+                                    </span>
+                                    <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--text-heading)" }}>{r.title}</span>
+                                  </div>
+                                  <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.55 }}>{r.detail}</div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* 次日盘前关注清单 */}
+                        <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text-heading)" }}>次日盘前关注清单</span>
+                            <span className="font-mono" style={{ fontSize: "11.5px", fontWeight: 600, color: "var(--brand)" }}>
+                              {doneChecklistCount} / {checklist.length} 已核查
+                            </span>
+                          </div>
+                          {checklist.length === 0 ? (
+                            <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>暂无次日盘前待办事项。</div>
+                          ) : (
+                            checklist.map((c) => {
+                              const checked = checkedIds.includes(c.id);
+                              return (
+                                <label
+                                  key={c.id}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "flex-start",
+                                    gap: "10px",
+                                    borderRadius: "8px",
+                                    border: "1px solid var(--border-color)",
+                                    background: "var(--bg-panel)",
+                                    padding: "10px",
+                                    cursor: "pointer",
+                                    opacity: checked ? 0.65 : 1,
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => handleToggleChecklist(c.id)}
+                                    style={{ marginTop: "3px", cursor: "pointer" }}
+                                  />
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", marginBottom: "3px" }}>
+                                      <span className="font-mono" style={{ fontSize: "11px", fontWeight: 700, padding: "1px 6px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)" }}>
+                                        {c.ticker}
+                                      </span>
+                                      <span className="font-mono" style={{ fontSize: "11.5px", fontWeight: 600, color: "#D97706" }}>
+                                        {c.level}
+                                      </span>
+                                    </div>
+                                    <div style={{ fontSize: "12px", lineHeight: 1.55, textDecoration: checked ? "line-through" : "none", color: checked ? "var(--text-muted)" : "var(--text-main)" }}>
+                                      {c.text}
+                                    </div>
+                                  </div>
+                                </label>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: 今日操作复盘 */}
+                  {activeTab === "trades" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      <div style={{ borderRadius: "8px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "10px 12px", fontSize: "12.5px", lineHeight: 1.6 }}>
+                        <strong>今日操作总评：</strong>
+                        {structured?.trades_summary || "暂无操作点评。"}
+                      </div>
+                      {trades.length === 0 ? (
+                        <div style={{ padding: "24px", textAlign: "center", fontSize: "12.5px", color: "var(--text-muted)", border: "1px dashed var(--border-color)", borderRadius: "10px" }}>
+                          该交易日无真实成交记录
+                        </div>
+                      ) : (
+                        trades.map((t, idx) => {
+                          const isBuy = String(t.side || "").toUpperCase() === "BUY" || t.side === "买入";
+                          const review = (structured?.trade_reviews || []).find(
+                            (r: any) => r.symbol === t.symbol && (!r.side || r.side === String(t.side || "").toUpperCase())
+                          );
+                          const diffPct = t.vs_close_pct;
+                          return (
+                            <div key={idx} style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <span style={{ fontSize: "11.5px", fontWeight: 700, padding: "2px 8px", borderRadius: "6px", background: isBuy ? "rgba(22,163,74,0.14)" : "rgba(220,38,38,0.14)", color: isBuy ? "#16A34A" : "#DC2626" }}>
+                                    {isBuy ? "买入" : "卖出"}
+                                  </span>
+                                  <span className="font-mono" style={{ fontSize: "14px", fontWeight: 700 }}>{t.symbol}</span>
+                                  <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{t.channel} · {t.date}</span>
+                                </div>
+                                <div className="font-mono" style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "12px", flexWrap: "wrap" }}>
+                                  <span>{t.quantity} 股 @ <strong>{fmtMoney(t.price)}</strong></span>
+                                  <span style={{ color: "var(--text-muted)" }}>收盘 {fmtMoney(t.close_price)}</span>
+                                  {diffPct != null && (
+                                    <span style={{ fontSize: "11.5px", fontWeight: 600, padding: "2px 7px", borderRadius: "6px", background: diffPct >= 0 ? "rgba(22,163,74,0.14)" : "rgba(217,119,6,0.14)", color: diffPct >= 0 ? "#16A34A" : "#D97706" }}>
+                                      {review?.verdict || (diffPct >= 0 ? "节奏占优" : "偏早/偏追")} ({fmtPct(diffPct)})
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              {review?.comment && (
+                                <div style={{ fontSize: "12.5px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+                                  <strong style={{ color: "var(--text-main)" }}>AI 复盘点评：</strong>
+                                  {review.comment}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   )}
+
+                  {/* TAB 3: 突发新闻情报 */}
+                  {activeTab === "news" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      {allNewsFeed.length === 0 ? (
+                        <div style={{ padding: "24px", textAlign: "center", fontSize: "12.5px", color: "var(--text-muted)", border: "1px dashed var(--border-color)", borderRadius: "10px" }}>
+                          近 36 小时未抓取到持仓/交易标的的显著突发新闻
+                        </div>
+                      ) : (
+                        allNewsFeed.map((n, idx) => {
+                          const st = sentimentStyle(n.sentiment);
+                          return (
+                            <div key={idx} style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                                <span className="font-mono" style={{ fontSize: "11.5px", fontWeight: 700, padding: "1px 7px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)" }}>
+                                  {n.symbol}
+                                </span>
+                                <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 7px", borderRadius: "6px", background: st.bg, color: st.fg }}>
+                                  {n.sentiment}
+                                </span>
+                                <span className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                                  {n.publisher} · {n.published_bj}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-heading)", lineHeight: 1.5 }}>
+                                {n.title}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 4: 完整长文 Markdown */}
+                  {activeTab === "markdown" && (
+                    <div style={{ fontSize: "13.5px", lineHeight: 1.75, color: "var(--text-main)" }}>
+                      <MarkdownBlock text={detail.markdown || ""} />
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+
+              {/* 3. 底部带上下文追问条 + 历史追问回答 */}
+              <div className="card-panel" style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)" }}>
+                    基于这份盘后日报继续追问 Gemini
+                  </span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    {followups.map((q, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        disabled={followupLoading}
+                        onClick={() => handleSendFollowup(q)}
+                        style={{
+                          fontSize: "11.5px",
+                          padding: "4px 10px",
+                          borderRadius: "999px",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-app)",
+                          color: "var(--text-main)",
+                          cursor: followupLoading ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <input
+                    type="text"
+                    className="input-control"
+                    value={followupInput}
+                    onChange={(e) => setFollowupInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSendFollowup();
+                    }}
+                    disabled={followupLoading}
+                    placeholder="输入想基于这份盘后日报继续追问的问题（自动携带今日快照上下文）..."
+                    style={{ flex: 1, fontSize: "12.5px", padding: "7px 11px" }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={followupLoading || !followupInput.trim()}
+                    onClick={() => handleSendFollowup()}
+                    style={{ padding: "7px 14px", fontSize: "12.5px", display: "inline-flex", alignItems: "center", gap: "5px", fontWeight: 600 }}
+                  >
+                    <Send size={13} />
+                    {followupLoading ? "思考中..." : "追问 Gemini"}
+                  </button>
+                </div>
+
+                {followupsHistory.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "4px", borderTop: "1px solid var(--border-color)", paddingTop: "10px" }}>
+                    {followupsHistory.map((item, idx) => (
+                      <div key={idx} style={{ borderRadius: "8px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "10px 12px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", fontWeight: 700, color: "var(--brand)" }}>
+                          <span>问：{item.question}</span>
+                          <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 400 }}>{item.time_str || ""}</span>
+                        </div>
+                        <div style={{ fontSize: "13px", lineHeight: 1.65 }}>
+                          <MarkdownBlock text={item.answer || ""} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
