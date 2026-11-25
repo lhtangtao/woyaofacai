@@ -1,5 +1,18 @@
 [
   {
+    "title": "补全全链路崩溃日志采集、守护现场快照归档与桌面端崩溃日志查看器",
+    "time": "2026-11-26 00:23",
+    "author": "Antigravity",
+    "tag": "崩溃日志排查已完善",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "进程内异常捕获：在 `src/portfolio/logging_config.py` 新增 `install_crash_hooks()` 与 `install_qt_message_handler()`，同时捕获主线程 `sys.excepthook`、后台线程 `threading.excepthook` 及 `QtCritical/QtFatal` 级致命错误并写入 `logs/crash.log`，并在 `src/portfolio/app.py` 桌面端入口与 `src/portfolio/web/app.py` 独立启动入口全面启用。",
+      "崩溃现场快照归档：扩展 `scripts/watchdog.py` 支持 `--crash-dir`、`--context-log` 与 `--keep-crashes` 参数；前台模式通过独立读线程镜像转发并缓存子进程最后 120 行 `stderr`，发生崩溃时自动将退出摘要、`stderr` 尾部及本次运行新增的关联日志（`crash.log`、`crash_fault.log`、`money3.log`/`web.log` 等）打包保存为 `logs/crashes/crash_YYYYMMDD_HHMMSS_<name>.log`（最多保留 30 份），同步接入 `启动Money3.command`。",
+      "桌面端日志查看：在 `src/portfolio/ui/main_window.py` 菜单栏「帮助 → 查看崩溃日志」新增弹窗查看器，支持下拉切换全部崩溃现场快照与崩溃日志文件、一键刷新、复制全部内容及在 Finder 中直接打开 `logs/` 目录。",
+      "验证范围：`zsh -n 启动Money3.command` 通过；核心改动文件 `ruff check` 0 错误（`main_window.py`/`web/app.py` 新增行无新告警）；`tests/test_watchdog.py` 8 项测试（含异常钩子、stderr+新增日志快照打包与旧快照自动清理）全部通过。"
+    ]
+  },
+  {
     "title": "为桌面端、Web 后台与 Cloudflared 隧道接入崩溃自动重启守护及原生崩溃堆栈采集",
     "time": "2026-11-26 00:17",
     "author": "Antigravity",

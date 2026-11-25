@@ -1,3 +1,10 @@
+## 2026-11-26 00:23 补全全链路崩溃日志采集、现场快照归档与桌面端查看器
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/logging_config.py` 新增 `install_crash_hooks()`（捕获 `sys.excepthook` 与 `threading.excepthook` 未处理异常）和 `install_qt_message_handler()`（捕获 `QtCritical`/`QtFatal` 级错误）统一写入 `logs/crash.log`，分别接入桌面端 `src/portfolio/app.py` 与 Web 服务 `src/portfolio/web/app.py`。
+- 升级 `scripts/watchdog.py` 与 `启动Money3.command`：崩溃重启或熔断时自动截取子进程最后 120 行 `stderr` 及本次运行新增关联日志，打包归档到 `logs/crashes/crash_*.log`（最多保留最近 30 份）。
+- 在桌面端 `src/portfolio/ui/main_window.py` 菜单栏「帮助 → 查看崩溃日志」新增可视化日志查看器，支持切换快照、复制全文与 Finder 打开目录。`zsh -n`、改动范围 `ruff check` 及 `tests/test_watchdog.py` 8 项测试全部通过。
+
 ## 2026-11-26 00:17 新增崩溃自动重启守护（Watchdog）与原生崩溃堆栈采集
 
 - 修改者：Antigravity（代码修改）

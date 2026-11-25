@@ -7,6 +7,7 @@ import importlib.util
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -193,3 +194,112 @@ def test_enable_fault_handler_creates_log_file(tmp_path: Path) -> None:
             logging_config._FAULT_HANDLER_STREAM = None
         if not was_enabled and faulthandler.is_enabled():
             faulthandler.disable()
+
+
+def test_watchdog_writes_crash_snapshot_with_stderr_and_context_logs(tmp_path: Path) -> None:
+    """崩溃时应打包 stderr 尾部与关联日志自启动后新增的内容到 crashes 目录。"""
+    watchdog = _load_watchdog_module()
+    crash_dir = tmp_path / "crashes"
+    fault_log = tmp_path / "crash_fault.log"
+    fault_log.write_text("stale_old_line_before_start\n", encoding="utf-8")
+    count_file = tmp_path / "runs.txt"
+
+    child_code = (
+        f"import sys; from pathlib import Path; "
+        f"cnt = Path({str(count_file)!r}); "
+        f"cnt.open('a', encoding='utf-8').write('1\\n'); "
+        f"n = len(cnt.read_text(encoding='utf-8').splitlines()); "
+        f"fault = Path({str(fault_log)!r}); "
+        f"(\n"
+        f"    sys.stderr.write('RuntimeError: simulated widget explosion\\n'),\n"
+        f"    fault.open('a', encoding='utf-8').write('Fatal Python error: Segmentation fault\\n'),\n"
+        f"    sys.exit(1)\n"
+        f") if n == 1 else sys.exit(0)"
+    )
+    cfg = watchdog.WatchdogConfig(
+        name="desktop",
+        command=(sys.executable, "-c", child_code),
+        log_file=tmp_path / "watchdog.log",
+        crash_dir=crash_dir,
+        context_logs=(fault_log,),
+        backoff_base=0.03,
+        backoff_max=0.05,
+    )
+
+    code = watchdog.run_watchdog(cfg)
+    assert code == 0
+    snapshots = list(crash_dir.glob("crash_*_desktop.log"))
+    assert len(snapshots) == 1
+    body = snapshots[0].read_text(encoding="utf-8")
+    assert "RuntimeError: simulated widget explosion" in body
+    assert "Fatal Python error: Segmentation fault" in body
+    assert "stale_old_line_before_start" not in body
+
+
+def test_watchdog_prunes_old_crash_snapshots(tmp_path: Path) -> None:
+    """崩溃快照超过 keep_crashes 数量时应自动清理最旧文件。"""
+    watchdog = _load_watchdog_module()
+    crash_dir = tmp_path / "crashes"
+    crash_dir.mkdir()
+    for idx in range(5):
+        old = crash_dir / f"crash_20260101_00000{idx}_desktop.log"
+        old.write_text(f"old {idx}\n", encoding="utf-8")
+
+    cfg = watchdog.WatchdogConfig(
+        name="desktop",
+        command=(sys.executable, "-c", "import sys; sys.exit(2)"),
+        crash_dir=crash_dir,
+        max_rapid_restarts=1,
+        keep_crashes=3,
+        backoff_base=0.02,
+        backoff_max=0.03,
+    )
+
+    code = watchdog.run_watchdog(cfg)
+    assert code == 2
+    remaining = sorted(p.name for p in crash_dir.glob("crash_*.log"))
+    assert len(remaining) == 3
+    assert "crash_20260101_000000_desktop.log" not in remaining
+    assert "crash_20260101_000001_desktop.log" not in remaining
+
+
+def test_install_crash_hooks_captures_sys_and_thread_exceptions(tmp_path: Path) -> None:
+    """install_crash_hooks 应同时捕获主线程与子线程未处理异常并写入 crash.log。"""
+    prev_sys_hook = sys.excepthook
+    prev_thread_hook = threading.excepthook
+    chained_calls: list[str] = []
+    # 在 pytest/pytest-qt 环境中先临时换为可观测 stub，避免转发给 pytest 钩子导致测试误判失败。
+    sys.excepthook = lambda *_args: chained_calls.append("sys")
+    threading.excepthook = lambda *_args: chained_calls.append("thread")
+    try:
+        crash_log = logging_config.install_crash_hooks(
+            app_name="test_app",
+            logs_dir=tmp_path,
+            enable_faulthandler_log=False,
+        )
+        assert crash_log == tmp_path / "crash.log"
+
+        # 模拟主线程未捕获异常钩子调用
+        try:
+            raise ValueError("main thread boom")
+        except ValueError as exc:
+            sys.excepthook(type(exc), exc, exc.__traceback__)
+
+        # 模拟后台线程未捕获异常
+        def _worker_boom() -> None:
+            raise RuntimeError("background thread boom")
+
+        t = threading.Thread(target=_worker_boom, name="bg-crash-worker")
+        t.start()
+        t.join(timeout=3.0)
+
+        text = crash_log.read_text(encoding="utf-8")
+        assert "ValueError: main thread boom" in text
+        assert "sys.excepthook" in text
+        assert "RuntimeError: background thread boom" in text
+        assert "threading.excepthook" in text
+        assert "bg-crash-worker" in text
+        assert chained_calls == ["sys", "thread"]
+    finally:
+        sys.excepthook = prev_sys_hook
+        threading.excepthook = prev_thread_hook

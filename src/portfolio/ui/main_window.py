@@ -6,14 +6,20 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QDate, QSettings, Qt, QThreadPool, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QDate, QSettings, Qt, QThreadPool, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QFontDatabase, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QDialog,
     QFileDialog,
+    QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QVBoxLayout,
 )
 
 from portfolio.db.repositories.trades import SORT_FIELDS
@@ -132,6 +138,7 @@ class MainWindow(InteractionMixin, QMainWindow):
         help_menu = self.menuBar().addMenu("帮助")
         help_menu.addAction("关于 Money3", lambda: QMessageBox.information(self, "关于 Money3", "Money3 0.3.0 · macOS 本地只读投资管理\n财务值：Decimal/e8\n账本：人员权益与券商成交独立\n标准会计口径尚未开放；Excel 差异见异常/对账页。\n无遥测、无云同步、无下单。"))
         help_menu.addAction("查看本地运行日志", self.show_log)
+        help_menu.addAction("查看崩溃日志", self.show_crash_logs)
 
     def show_log(self):
         from PySide6.QtCore import QStandardPaths
@@ -141,6 +148,118 @@ class MainWindow(InteractionMixin, QMainWindow):
         except OSError:
             text = "暂无运行日志。"
         QMessageBox.information(self, "本地日志（不含交易明细/Token）", str(path) + "\n\n" + text)
+
+    def show_crash_logs(self):
+        """展示崩溃异常日志、原生堆栈、守护日志与崩溃现场快照列表。"""
+        from portfolio.logging_config import get_project_logs_dir
+
+        logs_dir = get_project_logs_dir()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("崩溃与自动重启日志")
+        dialog.resize(900, 600)
+        layout = QVBoxLayout(dialog)
+
+        top_bar = QHBoxLayout()
+        top_bar.addWidget(QLabel("选择日志文件:"))
+        combo = QComboBox()
+        top_bar.addWidget(combo, 1)
+        layout.addLayout(top_bar)
+
+        path_label = QLabel()
+        path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        path_label.setStyleSheet("color: #64748B; font-size: 12px;")
+        layout.addWidget(path_label)
+
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        layout.addWidget(viewer, 1)
+
+        def collect_files() -> list[tuple[str, Path]]:
+            items: list[tuple[str, Path]] = []
+            crashes_dir = logs_dir / "crashes"
+            if crashes_dir.is_dir():
+                snapshots = sorted(
+                    (p for p in crashes_dir.glob("crash_*.log") if p.is_file()),
+                    key=lambda p: (p.stat().st_mtime_ns, p.name),
+                    reverse=True,
+                )
+                for snap in snapshots[:30]:
+                    items.append((f"[现场快照] {snap.name}", snap))
+            fixed_files = [
+                ("未捕获异常汇总 (crash.log)", logs_dir / "crash.log"),
+                ("原生崩溃堆栈 (crash_fault.log)", logs_dir / "crash_fault.log"),
+                ("自动重启守护记录 (crash_watchdog.log)", logs_dir / "crash_watchdog.log"),
+            ]
+            for label, file_path in fixed_files:
+                if file_path.is_file():
+                    items.append((label, file_path))
+            return items
+
+        def render_selected() -> None:
+            selected = combo.currentData()
+            if not selected:
+                path_label.setText(f"日志目录: {logs_dir}")
+                viewer.setPlainText(
+                    f"当前尚未记录到崩溃或自动重启日志。\n\n"
+                    f"日志保存位置：{logs_dir}\n"
+                    f"- 未捕获异常：crash.log\n"
+                    f"- 原生崩溃堆栈：crash_fault.log\n"
+                    f"- 守护重启记录：crash_watchdog.log\n"
+                    f"- 崩溃现场快照：crashes/crash_*.log"
+                )
+                return
+            file_path = Path(selected)
+            path_label.setText(f"文件路径: {file_path}")
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                if len(content) > 50000:
+                    content = f"（文件较长，已截取最后 50,000 字符）\n\n{content[-50000:]}"
+                viewer.setPlainText(content or "（日志文件当前为空）")
+                cursor = viewer.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                viewer.setTextCursor(cursor)
+            except OSError as exc:
+                viewer.setPlainText(f"读取日志失败: {exc}")
+
+        def refresh_list() -> None:
+            prev_path = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            for label, p in collect_files():
+                combo.addItem(label, str(p))
+            if prev_path:
+                idx = combo.findData(prev_path)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+            render_selected()
+
+        def copy_all() -> None:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(viewer.toPlainText())
+
+        combo.currentIndexChanged.connect(lambda _idx: render_selected())
+
+        btn_bar = QHBoxLayout()
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(refresh_list)
+        copy_btn = QPushButton("复制全部内容")
+        copy_btn.clicked.connect(copy_all)
+        open_dir_btn = QPushButton("在 Finder 中打开日志目录")
+        open_dir_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs_dir))))
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.accept)
+        btn_bar.addWidget(refresh_btn)
+        btn_bar.addWidget(copy_btn)
+        btn_bar.addWidget(open_dir_btn)
+        btn_bar.addStretch(1)
+        btn_bar.addWidget(close_btn)
+        layout.addLayout(btn_bar)
+
+        refresh_list()
+        dialog.exec()
 
     def _set_theme(self, mode):
         self.theme = mode

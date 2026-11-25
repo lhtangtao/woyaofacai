@@ -1741,4 +1741,6 @@ if __name__ == "__main__":
     if options.rebuild_derived:
         from portfolio.derived import prepare_startup
         prepare_startup(DATABASE_PATH,options.rebuild_derived,background=False)
+    from portfolio.logging_config import install_crash_hooks
+    install_crash_hooks(app_name="web")
     run_mobile_server(options.host,options.port)

@@ -40,6 +40,7 @@ WEB_WATCHDOG_PID_FILE="/tmp/money_web_watchdog.pid"
 TUNNEL_WATCHDOG_PID_FILE="/tmp/money_tunnel_watchdog.pid"
 DESKTOP_WATCHDOG_PID_FILE="/tmp/money_desktop_watchdog.pid"
 DESKTOP_WATCHDOG_LOG="$APP_DIR/logs/crash_watchdog.log"
+CRASH_DIR="$APP_DIR/logs/crashes"
 
 APP_ARGS=()
 for arg in "$@"; do
@@ -283,6 +284,11 @@ PY
                 --name web --restart-on-zero --redirect-child-output \
                 --pid-file "$WEB_WATCHDOG_PID_FILE" \
                 --log-file "$MOBILE_LOG" \
+                --crash-dir "$CRASH_DIR" \
+                --context-log "$APP_DIR/logs/crash.log" \
+                --context-log "$APP_DIR/logs/crash_fault.log" \
+                --context-log "$MOBILE_LOG" \
+                --context-log "$APP_DIR/logs/web.log" \
                 -- "$APP_DIR/.venv/bin/python" -m portfolio.web.app >/dev/null 2>&1 &
         else
             nohup "$APP_DIR/.venv/bin/python" -m portfolio.web.app >> "$MOBILE_LOG" 2>&1 &
@@ -339,6 +345,8 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$CLOUDFLARED_
                 --name tunnel --restart-on-zero --redirect-child-output \
                 --pid-file "$TUNNEL_WATCHDOG_PID_FILE" \
                 --log-file "$CLOUDFLARED_LOG" \
+                --crash-dir "$CRASH_DIR" \
+                --context-log "$CLOUDFLARED_LOG" \
                 -- "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate >/dev/null 2>&1 &
         else
             nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
@@ -431,13 +439,17 @@ if [[ "$START_DESKTOP" == "1" ]]; then
     if [[ -x "$DESKTOP_BIN" ]]; then
         print "  🖥️ 桌面端主窗口已启动..."
         print -- "------------------------------------------------------------------\n"
-        mkdir -p "$APP_DIR/logs"
+        mkdir -p "$APP_DIR/logs" "$CRASH_DIR"
         set +e
         if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
             "$APP_DIR/.venv/bin/python" "$WATCHDOG_SCRIPT" \
                 --name desktop --notify \
                 --pid-file "$DESKTOP_WATCHDOG_PID_FILE" \
                 --log-file "$DESKTOP_WATCHDOG_LOG" \
+                --crash-dir "$CRASH_DIR" \
+                --context-log "$APP_DIR/logs/crash.log" \
+                --context-log "$APP_DIR/logs/crash_fault.log" \
+                --context-log "$APP_DIR/logs/money3.log" \
                 -- "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
         else
             "$DESKTOP_BIN" -m portfolio "${APP_ARGS[@]}"
@@ -450,8 +462,10 @@ if [[ "$START_DESKTOP" == "1" ]]; then
             print "  ℹ️ 桌面端已安全退出 (状态码: $DESKTOP_EXIT)"
         else
             print "  ⚠️ 桌面端异常退出或触发连续崩溃熔断 (状态码: $DESKTOP_EXIT)"
-            print "  • 排查日志: $DESKTOP_WATCHDOG_LOG"
+            print "  • 守护日志: $DESKTOP_WATCHDOG_LOG"
+            print "  • 异常日志: $APP_DIR/logs/crash.log"
             print "  • 原生堆栈: $APP_DIR/logs/crash_fault.log"
+            print "  • 现场快照: $CRASH_DIR"
         fi
         if [[ "$START_MOBILE" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
             print "  📱 手机端后台服务 (Port 8888) 与 🌐 公网隧道 仍在持续运行中"

@@ -40,6 +40,9 @@ class WatchdogConfig:
     backoff_base: float = 2.0
     backoff_max: float = 15.0
     notify: bool = False
+    crash_dir: Path | None = None
+    context_logs: tuple[Path, ...] = ()
+    keep_crashes: int = 30
 
 
 def format_exit_reason(returncode: int) -> str:
@@ -147,6 +150,153 @@ def _wait_child_or_stop(proc: subprocess.Popen[bytes] | subprocess.Popen[str], s
         time.sleep(0.1)
 
 
+def _snapshot_file_offsets(paths: Sequence[Path]) -> dict[Path, int]:
+    """在启动子进程前记录各关联日志的当前字节偏移量。"""
+    offsets: dict[Path, int] = {}
+    for p in paths:
+        try:
+            offsets[p] = p.stat().st_size if p.is_file() else 0
+        except OSError:
+            offsets[p] = 0
+    return offsets
+
+
+def _read_context_excerpt(
+    path: Path,
+    start_offset: int,
+    *,
+    max_bytes: int = 16 * 1024,
+    tail_lines: int = 60,
+) -> tuple[str, str]:
+    """读取日志摘要：优先抓取本次运行期间新增内容，否则回退读取末尾行。"""
+    if not path.is_file():
+        return "", "文件不存在"
+    try:
+        size = path.stat().st_size
+        if size > start_offset >= 0:
+            read_from = max(start_offset, size - max_bytes)
+            truncated = read_from > start_offset
+            with path.open("rb") as fh:
+                fh.seek(read_from)
+                raw = fh.read()
+            text = raw.decode("utf-8", errors="replace").strip()
+            mode = "本次运行期间新增（已截断尾部）" if truncated else "本次运行期间新增"
+            return text, mode
+        with path.open("rb") as fh:
+            if size > max_bytes * 2:
+                fh.seek(size - max_bytes * 2)
+            raw = fh.read()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        excerpt = "\n".join(lines[-tail_lines:]).strip()
+        if len(excerpt.encode("utf-8")) > max_bytes:
+            excerpt = excerpt.encode("utf-8")[-max_bytes:].decode("utf-8", errors="replace").strip()
+        return excerpt, ("日志文件为空" if not excerpt else f"末尾最新 {min(tail_lines, len(lines))} 行")
+    except OSError as exc:
+        return "", f"读取失败: {exc}"
+
+
+def _prune_crash_snapshots(crash_dir: Path, keep_crashes: int) -> None:
+    """仅保留最新 keep_crashes 份崩溃快照文件，清理过旧记录。"""
+    if keep_crashes <= 0 or not crash_dir.is_dir():
+        return
+    try:
+        files = sorted(
+            (p for p in crash_dir.glob("crash_*.log") if p.is_file()),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+            reverse=True,
+        )
+        for old_file in files[keep_crashes:]:
+            try:
+                old_file.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _write_crash_snapshot(
+    config: WatchdogConfig,
+    *,
+    reason: str,
+    elapsed: float,
+    crash_count: int,
+    circuit_broken: bool,
+    stderr_tail: Sequence[str],
+    start_offsets: dict[Path, int],
+) -> Path | None:
+    """将崩溃摘要、子进程 stderr 尾部与关联日志上下文打包为独立现场快照。"""
+    if config.crash_dir is None:
+        return None
+    try:
+        config.crash_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = "".join(ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in config.name) or "app"
+        target = config.crash_dir / f"crash_{stamp}_{safe_name}.log"
+        seq = 1
+        while target.exists():
+            seq += 1
+            target = config.crash_dir / f"crash_{stamp}_{seq}_{safe_name}.log"
+
+        sections: list[str] = [
+            "========================================================================",
+            f"Money3 崩溃现场报告 ({config.name})",
+            "========================================================================",
+            f"记录时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"守护进程 PID: {os.getpid()}",
+            f"启动命令: {' '.join(config.command)}",
+            f"退出原因: {reason}",
+            f"运行时长: {elapsed:.2f}s",
+            f"窗口内崩溃次数: {crash_count}/{config.max_rapid_restarts}"
+            + ("（已触发熔断停止重启）" if circuit_broken else "（正在准备自动重启）"),
+        ]
+
+        if stderr_tail:
+            sections.extend(
+                [
+                    "",
+                    f"--- 子进程崩溃前 stderr 尾部（共 {len(stderr_tail)} 行）---",
+                    "\n".join(stderr_tail),
+                ]
+            )
+
+        for ctx_path in config.context_logs:
+            offset = start_offsets.get(ctx_path, 0)
+            content, mode = _read_context_excerpt(ctx_path, offset)
+            sections.append("")
+            sections.append(f"--- 关联日志: {ctx_path} [{mode}] ---")
+            sections.append(content if content else "(无内容)")
+
+        target.write_text("\n".join(sections) + "\n", encoding="utf-8")
+        _prune_crash_snapshots(config.crash_dir, config.keep_crashes)
+        return target
+    except Exception:
+        return None
+
+
+def _pump_stderr(pipe, stderr_tail: deque[str]) -> None:
+    """持续读取子进程 stderr，原样回显到终端并保留最后若干行用于崩溃快照。"""
+    try:
+        for raw_line in iter(pipe.readline, b""):
+            try:
+                buf = getattr(sys.stderr, "buffer", None)
+                if buf is not None:
+                    buf.write(raw_line)
+                    buf.flush()
+                else:
+                    sys.stderr.write(raw_line.decode("utf-8", errors="replace"))
+                    sys.stderr.flush()
+            except Exception:
+                pass
+            stderr_tail.append(raw_line.decode("utf-8", errors="replace").rstrip("\r\n"))
+    except Exception:
+        pass
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def run_watchdog(config: WatchdogConfig) -> int:
     """运行进程守护主循环，返回守护进程最终退出码。"""
     if not config.command:
@@ -177,6 +327,9 @@ def run_watchdog(config: WatchdogConfig) -> int:
         while not stop_event.is_set():
             attempt += 1
             started_at = time.monotonic()
+            start_offsets = _snapshot_file_offsets(config.context_logs)
+            stderr_tail: deque[str] = deque(maxlen=120)
+            stderr_thread: threading.Thread | None = None
             child_log_stream = None
             try:
                 if config.redirect_child_output and config.log_file is not None:
@@ -188,7 +341,15 @@ def run_watchdog(config: WatchdogConfig) -> int:
                         stderr=subprocess.STDOUT,
                     )
                 else:
-                    proc = subprocess.Popen(list(config.command))
+                    proc = subprocess.Popen(list(config.command), stderr=subprocess.PIPE)
+                    if proc.stderr is not None:
+                        stderr_thread = threading.Thread(
+                            target=_pump_stderr,
+                            args=(proc.stderr, stderr_tail),
+                            name=f"watchdog-stderr-{config.name}",
+                            daemon=True,
+                        )
+                        stderr_thread.start()
             except OSError as exc:
                 _write_log(
                     config.log_file,
@@ -205,6 +366,8 @@ def run_watchdog(config: WatchdogConfig) -> int:
                         pass
 
             returncode = _wait_child_or_stop(proc, stop_event)
+            if stderr_thread is not None:
+                stderr_thread.join(timeout=1.5)
             elapsed = time.monotonic() - started_at
 
             if stop_event.is_set():
@@ -237,17 +400,35 @@ def run_watchdog(config: WatchdogConfig) -> int:
 
             reason = format_exit_reason(returncode)
             crash_count = len(recent_crashes)
+            circuit_broken = crash_count >= config.max_rapid_restarts
 
-            if crash_count >= config.max_rapid_restarts:
+            snapshot_path = _write_crash_snapshot(
+                config,
+                reason=reason,
+                elapsed=elapsed,
+                crash_count=crash_count,
+                circuit_broken=circuit_broken,
+                stderr_tail=list(stderr_tail),
+                start_offsets=start_offsets,
+            )
+            if snapshot_path is not None:
+                _write_log(
+                    config.log_file,
+                    config.name,
+                    f"已保存崩溃现场报告: {snapshot_path}",
+                    also_stderr=also_stderr,
+                )
+
+            if circuit_broken:
                 alert = (
                     f"触发熔断保护：{config.window_sec:.0f}s 内连续异常退出 {crash_count} 次"
-                    f"（最近一次 {reason}），已停止自动重启，请检查 logs/money3.log 与 logs/crash_fault.log。"
+                    f"（最近一次 {reason}），已停止自动重启，请检查 logs/money3.log、logs/crash.log 与 logs/crash_fault.log。"
                 )
                 _write_log(config.log_file, config.name, alert, also_stderr=also_stderr)
                 if config.notify:
                     send_macos_notification(
                         "我要发财 · 自动重启已熔断",
-                        f"{config.name} 短时间内连续崩溃 {crash_count} 次，请查看日志排查。",
+                        f"{config.name} 短时间内连续崩溃 {crash_count} 次，已保存崩溃日志请排查。",
                     )
                 return returncode if returncode != 0 else 1
 
@@ -260,10 +441,10 @@ def run_watchdog(config: WatchdogConfig) -> int:
                 also_stderr=also_stderr,
             )
             if config.notify:
-                send_macos_notification(
-                    "我要发财 · 检测到异常退出",
-                    f"{config.name} {reason}，正在自动重启恢复…",
-                )
+                msg = f"{config.name} {reason}，正在自动重启恢复…"
+                if snapshot_path is not None:
+                    msg = f"{config.name} {reason}，已保存崩溃日志并正在自动重启…"
+                send_macos_notification("我要发财 · 检测到异常退出", msg)
 
             if stop_event.wait(delay):
                 _write_log(
@@ -303,6 +484,16 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
     parser.add_argument("--backoff-base", type=float, default=2.0, help="指数退避基础等待秒数")
     parser.add_argument("--backoff-max", type=float, default=15.0, help="指数退避最大等待秒数")
     parser.add_argument("--notify", action="store_true", help="异常重启或熔断时发送 macOS 通知")
+    parser.add_argument("--crash-dir", type=Path, help="崩溃现场快照保存目录")
+    parser.add_argument(
+        "--context-log",
+        dest="context_logs",
+        action="append",
+        type=Path,
+        default=[],
+        help="崩溃时需要打包进现场快照的关联日志路径（可多次传入）",
+    )
+    parser.add_argument("--keep-crashes", type=int, default=30, help="崩溃快照目录最多保留的文件数")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="待执行的目标命令（建议在前面加 --）")
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
@@ -325,6 +516,9 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
         backoff_base=max(0.01, ns.backoff_base),
         backoff_max=max(0.01, ns.backoff_max),
         notify=ns.notify,
+        crash_dir=ns.crash_dir,
+        context_logs=tuple(ns.context_logs),
+        keep_crashes=max(1, ns.keep_crashes),
     )
 
 

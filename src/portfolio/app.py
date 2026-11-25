@@ -33,11 +33,12 @@ def main(argv=None):
     app.setOrganizationName("MoneyPortfolio")
     from portfolio.ui.icons import app_icon
     app.setWindowIcon(app_icon())
-    from portfolio.logging_config import configure_logging, enable_fault_handler
+    from portfolio.logging_config import configure_logging, install_crash_hooks, install_qt_message_handler
     app_log_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)) / "logs" if not args.no_settings else None
     configure_logging(app_log_dir, app_name="money3")
     if not args.no_settings and not args.demo:
-        enable_fault_handler()
+        install_crash_hooks(app_name="money3")
+        install_qt_message_handler()
     window = MainWindow(settings=not args.no_settings)
     temporary = tempfile.TemporaryDirectory(prefix="money3-demo-") if args.demo else None
     if temporary:

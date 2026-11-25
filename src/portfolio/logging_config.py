@@ -9,8 +9,12 @@ Supports:
 """
 import faulthandler
 import logging
+import os
+import platform
 import sys
+import threading
 import time
+import traceback
 from contextlib import contextmanager
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -21,6 +25,8 @@ from portfolio.paths import DATABASE_PATH
 LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(threadName)s] [%(name)s]: %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _FAULT_HANDLER_STREAM = None
+_CRASH_WRITE_LOCK = threading.Lock()
+_QT_MSG_HANDLER_INSTALLED = False
 
 
 def get_project_logs_dir() -> Path:
@@ -134,3 +140,151 @@ def enable_fault_handler(logs_dir: Path | None = None, filename: str = "crash_fa
         return target
     except Exception:
         return None
+
+
+def _append_crash_record(
+    crash_log: Path,
+    app_name: str,
+    source: str,
+    exc_type,
+    exc_value,
+    exc_tb,
+    *,
+    thread_name: str | None = None,
+) -> None:
+    """将未捕获异常的完整上下文与堆栈追加写入 crash.log。"""
+    if exc_type is not None and isinstance(exc_type, type) and issubclass(exc_type, KeyboardInterrupt):
+        return
+    try:
+        crash_log.parent.mkdir(parents=True, exist_ok=True)
+        now_str = datetime.now().strftime(DATE_FORMAT)
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb)).rstrip()
+        header = (
+            f"\n==================== [{now_str}] 未捕获异常 ({source}) ====================\n"
+            f"组件: {app_name} | PID: {os.getpid()} | 线程: {thread_name or threading.current_thread().name}\n"
+            f"Python: {sys.version.split()[0]} | 平台: {platform.platform()}\n"
+            f"------------------------------------------------------------------------\n"
+            f"{tb_text}\n"
+            f"========================================================================\n"
+        )
+        with _CRASH_WRITE_LOCK:
+            with crash_log.open("a", encoding="utf-8") as fh:
+                fh.write(header)
+                fh.flush()
+    except Exception:
+        pass
+    try:
+        logging.getLogger("portfolio.crash").critical(
+            "捕获到未处理异常 (%s | 线程=%s): %s: %s\n%s",
+            source,
+            thread_name or threading.current_thread().name,
+            getattr(exc_type, "__name__", str(exc_type)),
+            exc_value,
+            "".join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+        )
+    except Exception:
+        pass
+
+
+def install_crash_hooks(
+    app_name: str = "money3",
+    logs_dir: Path | None = None,
+    *,
+    enable_faulthandler_log: bool = True,
+) -> Path | None:
+    """安装主线程与子线程未捕获异常钩子，并按需开启 faulthandler。"""
+    try:
+        target_dir = Path(logs_dir) if logs_dir is not None else get_project_logs_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        crash_log = target_dir / "crash.log"
+
+        prev_sys_hook = sys.excepthook
+        prev_thread_hook = threading.excepthook
+
+        def _sys_excepthook(exc_type, exc_value, exc_tb) -> None:
+            _append_crash_record(
+                crash_log,
+                app_name,
+                "sys.excepthook",
+                exc_type,
+                exc_value,
+                exc_tb,
+                thread_name=threading.current_thread().name,
+            )
+            if prev_sys_hook is not None and prev_sys_hook is not _sys_excepthook:
+                try:
+                    prev_sys_hook(exc_type, exc_value, exc_tb)
+                except Exception:
+                    pass
+
+        def _threading_excepthook(args) -> None:
+            thread_obj = getattr(args, "thread", None)
+            t_name = getattr(thread_obj, "name", "unknown") if thread_obj is not None else "unknown"
+            _append_crash_record(
+                crash_log,
+                app_name,
+                "threading.excepthook",
+                args.exc_type,
+                args.exc_value,
+                args.exc_traceback,
+                thread_name=t_name,
+            )
+            if prev_thread_hook is not None and prev_thread_hook is not _threading_excepthook:
+                try:
+                    prev_thread_hook(args)
+                except Exception:
+                    pass
+
+        sys.excepthook = _sys_excepthook
+        threading.excepthook = _threading_excepthook
+
+        if enable_faulthandler_log:
+            enable_fault_handler(logs_dir=target_dir, filename="crash_fault.log")
+
+        return crash_log
+    except Exception:
+        return None
+
+
+def install_qt_message_handler(logs_dir: Path | None = None) -> None:
+    """安装 Qt 消息处理器，将 QtCritical / QtFatal 级错误写入 crash.log。"""
+    global _QT_MSG_HANDLER_INSTALLED
+    try:
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+
+        target_dir = Path(logs_dir) if logs_dir is not None else get_project_logs_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        crash_log = target_dir / "crash.log"
+
+        def _qt_message_handler(mode, context, message) -> None:
+            level_map = {
+                QtMsgType.QtCriticalMsg: "QtCritical",
+                QtMsgType.QtFatalMsg: "QtFatal",
+            }
+            level_label = level_map.get(mode)
+            if level_label:
+                now_str = datetime.now().strftime(DATE_FORMAT)
+                ctx_file = getattr(context, "file", None) or "-"
+                ctx_line = getattr(context, "line", 0) or 0
+                ctx_func = getattr(context, "function", None) or "-"
+                line = (
+                    f"\n[{now_str}] [{level_label}] [PID:{os.getpid()}] "
+                    f"[{ctx_file}:{ctx_line} {ctx_func}] {message}\n"
+                )
+                try:
+                    with _CRASH_WRITE_LOCK:
+                        with crash_log.open("a", encoding="utf-8") as fh:
+                            fh.write(line)
+                            fh.flush()
+                except Exception:
+                    pass
+            try:
+                sys.stderr.write(f"[Qt] {message}\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+        qInstallMessageHandler(_qt_message_handler)
+        _QT_MSG_HANDLER_INSTALLED = True
+    except Exception:
+        pass
