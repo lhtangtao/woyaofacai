@@ -71,6 +71,16 @@ class AuthContext:
         """Check if current context is an unauthenticated remote visitor."""
         return self.principal_type == "UNAUTHENTICATED"
 
+    def can_access_lake_writer(self) -> bool:
+        """判断是否具备访问「拉科专属」Gemini 写作空间的权限（仅拉科本人与管理员可见）。"""
+        if self.is_admin():
+            return True
+        if not self.is_authenticated:
+            return False
+        uname = (self.username or "").strip()
+        pname = (self.person_name or "").strip()
+        return uname == "拉科" or pname == "拉科"
+
     def can_access_person(self, target_person_id: Optional[int]) -> bool:
         """Check if user is permitted to query the specific target_person_id."""
         if self.principal_type in ("ADMIN", "LAN_VIEWER"):
@@ -109,6 +119,7 @@ class AuthContext:
             "can_write": self.has_capability(CAP_MANAGE_RULES),
             "can_chat": self.has_capability(CAP_AI_CHAT),
             "can_bark": self.has_capability(CAP_MANAGE_BARK),
+            "can_view_lake_writer": self.can_access_lake_writer(),
             "capabilities": list(self.capabilities),
         }
 

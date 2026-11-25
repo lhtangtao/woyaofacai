@@ -1348,3 +1348,60 @@ class CodexAIService:
                 f"请使用规范清晰的 Markdown 格式排版，观点明确、逻辑严谨。"
             )
         return cls.ask(full_prompt, context="", model=model, cancel_event=cancel_event, provider=provider)
+
+    @classmethod
+    def ask_article_writer(
+        cls,
+        prompt: str,
+        history: list[dict] | None = None,
+        model: str | None = None,
+        cancel_event: threading.Event | None = None,
+        provider: str = "gemini",
+    ) -> str:
+        """
+        拉科专属 Gemini 文章写作助手：纯通用写作与多轮改稿，不注入任何投资账本数据。
+        仅允许使用 Gemini 系列通道（gemini / google_api），其他值自动回退为 gemini。
+        """
+        prov = normalize_ai_provider(provider)
+        if prov not in ("gemini", "google_api"):
+            prov = "gemini"
+
+        # 拼接最近若干轮历史对话，支持多轮改稿、润色与续写，同时控制上下文总长度
+        history_blocks: list[str] = []
+        if history:
+            recent = history[-12:]
+            total_chars = 0
+            selected: list[str] = []
+            for msg in reversed(recent):
+                role = "用户" if msg.get("role") == "user" else "助手"
+                content = str(msg.get("content") or "").strip()
+                if not content:
+                    continue
+                if len(content) > 4000:
+                    content = content[:4000] + "\n...(已截断)"
+                entry = f"【{role}】:\n{content}"
+                if total_chars + len(entry) > 16000 and selected:
+                    break
+                selected.append(entry)
+                total_chars += len(entry)
+            history_blocks = list(reversed(selected))
+
+        history_section = ""
+        if history_blocks:
+            history_section = (
+                "【历史对话记录（按时间顺序，便于衔接改稿与润色）】:\n"
+                + "\n\n".join(history_blocks)
+                + "\n\n"
+            )
+
+        full_prompt = (
+            "你是一位资深中文内容创作者与专业文章写作助手，擅长撰写公众号长文、专栏评论、小红书/知乎图文、故事叙事、商业洞察、标题拟定与文章润色改写。\n"
+            "请完全聚焦于用户的写作需求，不要主动提及或关联任何股票持仓或投资账本信息。\n\n"
+            f"{history_section}"
+            f"【用户本次写作指令】:\n{prompt.strip()}\n\n"
+            "【输出要求】:\n"
+            "1. 紧扣用户的主题、语气与篇幅要求，直接给出可直接发布或继续打磨的高质量正文，避免冗长的开场寒暄；\n"
+            "2. 使用结构清晰、排版优雅的 Markdown 格式（合理分段、小标题、重点加粗或要点列表）；\n"
+            "3. 若用户要求修改、扩写、精简或调整风格，请精准结合上文历史稿件完成迭代。"
+        )
+        return cls.ask(full_prompt, context="", model=model, cancel_event=cancel_event, provider=prov)

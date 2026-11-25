@@ -16,6 +16,7 @@ import { ChartsView } from "./views/ChartsView";
 import { EntitiesView } from "./views/EntitiesView";
 import { EarningsView } from "./views/EarningsView";
 import { AiViews } from "./views/AiViews";
+import { LakeWriterView } from "./views/LakeWriterView";
 import { SystemViews } from "./views/SystemViews";
 import { HoldingsView } from "./views/HoldingsView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -247,6 +248,7 @@ export const App: React.FC = () => {
     if (currentRoute === "monitor") return { title: "行情监控中心", subtitle: "实时行情、多周期均线系统与 Bark 预警规则" };
     if (currentRoute === "ai_chat") return { title: "AI 投资问答", subtitle: "基于账本真实财务数据的智能分析顾问" };
     if (currentRoute === "ai_stock") return { title: "AI 股票分析", subtitle: "单标的深度技术面与基本面研报" };
+    if (currentRoute === "ai_lake") return { title: "拉科专属", subtitle: "专属 Gemini 写作空间 · 自由创作、改稿与润色" };
     if (currentRoute === "charts:trend") return { title: "走势图", subtitle: "从资产规模、持仓结构、渠道配置和集中度等维度，观察投资组合的长期变化趋势。" };
     if (currentRoute === "charts") return { title: "资产走势图", subtitle: "全时期资产净值增长曲线" };
     if (currentRoute === "charts:monthly") return { title: "月度走势详情", subtitle: "月度真实盈亏与现金流动" };
@@ -272,6 +274,7 @@ export const App: React.FC = () => {
       <Sidebar
         canViewOwnership={bootstrap?.user?.can_view_ownership === true}
         canViewDomestic={bootstrap?.user?.role === "admin"}
+        canViewLakeWriter={bootstrap?.user?.can_view_lake_writer === true}
         currentRoute={currentRoute === "holdings:closed" ? "holdings" : currentRoute}
         onRouteChange={navigate}
         collapsed={sidebarCollapsed}
@@ -288,7 +291,7 @@ export const App: React.FC = () => {
           onLogout={handleLogout}
           onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
           user={bootstrap?.user || null}
-          hidePersonSelector={currentRoute === "domestic:holdings" || currentRoute === "trades" || (assetRoute && currentRoute !== "overview") ||
+          hidePersonSelector={currentRoute === "domestic:holdings" || currentRoute === "trades" || currentRoute === "ai_lake" || (assetRoute && currentRoute !== "overview") ||
             ["people", "brokers", "reports:当前持仓", "reports:股票汇总"].includes(currentRoute)}
           persons={bootstrap?.persons || []}
           currentPersonId={selectedPersonId}
@@ -437,6 +440,11 @@ export const App: React.FC = () => {
 
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
+            {currentRoute === "ai_lake" && (
+              bootstrap?.user?.can_view_lake_writer
+                ? <LakeWriterView />
+                : <div role="alert" style={{ padding: "24px", color: "var(--loss-color)" }}>当前账号无权访问拉科专属写作空间。</div>
+            )}
 
             {currentRoute === "charts:trend" && <PortfolioTrendView personId={selectedPersonId} broker={selectedBroker} refreshKey={refreshKey} />}
             {currentRoute === "charts" && <ChartsView mode="asset" personId={selectedPersonId} />}

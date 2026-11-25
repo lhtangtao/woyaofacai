@@ -68,7 +68,7 @@ function providerLabel(p: AiProvider): string {
 }
 
 /** 轻量安全 Markdown 渲染（支持标题、粗体、行内代码、代码块与列表） */
-const MarkdownBlock: React.FC<{ text: string }> = ({ text }) => {
+export const MarkdownBlock: React.FC<{ text: string }> = ({ text }) => {
   const renderInline = (line: string, keyPrefix: string): React.ReactNode[] => {
     const parts: React.ReactNode[] = [];
     const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;

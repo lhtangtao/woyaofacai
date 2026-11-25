@@ -2291,6 +2291,95 @@ def api_ai_stock_chat():
     })
 
 
+def _lake_writer_session_key() -> tuple[Optional[AuthContext], str]:
+    """返回当前请求的鉴权上下文与拉科专属写作会话 Key（按登录账号隔离）。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    uname = (ctx.username if ctx and ctx.username else "default").strip() or "default"
+    return ctx, f"lake_writer::{uname}"
+
+
+@api_v1.route("/ai/lake-writer/history", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_history():
+    """获取拉科专属 Gemini 写作助手的历史对话记录（仅拉科与管理员可访问）。"""
+    ctx, session_key = _lake_writer_session_key()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
+    history = sessions.get(session_key, [])
+    return jsonify({"status": "ok", "session_key": session_key, "messages": history})
+
+
+@api_v1.route("/ai/lake-writer/chat", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_chat():
+    """调用 Gemini 为拉科专属写作空间生成或修改文章（不注入任何账本数据）。"""
+    ctx, session_key = _lake_writer_session_key()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or data.get("message") or "").strip()
+    if not prompt:
+        return jsonify({"status": "error", "message": "请输入写作需求或修改意见"}), 400
+
+    raw_provider = normalize_ai_provider(data.get("provider"))
+    provider = raw_provider if raw_provider in ("gemini", "google_api") else "gemini"
+    model = str(data.get("model") or "").strip() or None
+
+    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
+    current_msgs = list(sessions.get(session_key, []))
+
+    try:
+        answer = AIService.ask_article_writer(
+            prompt,
+            history=current_msgs,
+            model=model,
+            provider=provider,
+        )
+    except Exception as exc:
+        return jsonify({"status": "error", "provider": provider, "message": str(exc)}), 502
+
+    now_dt = datetime.now()
+    now_hms = now_dt.strftime("%H:%M:%S")
+    now_iso = now_dt.isoformat()
+    current_msgs.append({"role": "user", "content": prompt, "time_str": now_hms, "time": now_iso})
+    current_msgs.append({
+        "role": "assistant",
+        "content": answer,
+        "time_str": now_hms,
+        "time": now_iso,
+        "model": model or "",
+    })
+    sessions[session_key] = current_msgs[-100:]
+    save_ai_sessions("ai_lake_writer_sessions.json", sessions)
+
+    return jsonify({
+        "status": "ok",
+        "provider": provider,
+        "model": model,
+        "answer": answer,
+        "reply": answer,
+        "content": answer,
+        "response": answer,
+        "session_key": session_key,
+    })
+
+
+@api_v1.route("/ai/lake-writer/clear", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_clear():
+    """清空当前用户在拉科专属写作空间的对话历史。"""
+    ctx, session_key = _lake_writer_session_key()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
+    if session_key in sessions:
+        sessions[session_key] = []
+        save_ai_sessions("ai_lake_writer_sessions.json", sessions)
+    return jsonify({"status": "ok", "message": "写作历史已清空"})
+
+
 # ------------------------------------------------------------------------------
 # 10. System, Reconciliation & Diagnostics
 # ------------------------------------------------------------------------------

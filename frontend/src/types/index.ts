@@ -13,6 +13,7 @@ export interface UserProfile {
   can_admin: boolean;
   can_write: boolean;
   can_chat: boolean;
+  can_view_lake_writer?: boolean;
   capabilities: string[];
 }
 

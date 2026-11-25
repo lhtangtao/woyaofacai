@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
+  PenTool,
 } from "lucide-react";
 
 export interface NavEntry {
@@ -59,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "ai_chat", label: "AI 投资问答", icon: <Bot size={16} /> },
       { id: "monitor", label: "行情监控中心", icon: <Activity size={16} /> },
       { id: "ai_stock", label: "AI 股票分析", icon: <TrendingUp size={16} /> },
+      { id: "ai_lake", label: "拉科专属", icon: <PenTool size={16} /> },
     ],
   },
   {
@@ -91,6 +93,7 @@ export const NAV_GROUPS: NavGroup[] = [
 interface SidebarProps {
   canViewOwnership?: boolean;
   canViewDomestic?: boolean;
+  canViewLakeWriter?: boolean;
   currentRoute: string;
   onRouteChange: (route: string) => void;
   collapsed: boolean;
@@ -100,6 +103,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   canViewOwnership = false,
   canViewDomestic = false,
+  canViewLakeWriter = false,
   currentRoute,
   onRouteChange,
   collapsed,
@@ -181,7 +185,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {group.title}
               </div>
             )}
-            {group.entries.filter(entry => entry.id !== "ownership" || canViewOwnership).map((entry) => {
+            {group.entries
+              .filter(
+                (entry) =>
+                  (entry.id !== "ownership" || canViewOwnership) &&
+                  (entry.id !== "ai_lake" || canViewLakeWriter)
+              )
+              .map((entry) => {
               const active = currentRoute === entry.id;
               return (
                 <button

@@ -1,3 +1,8 @@
+## 2026-11-25 17:06 Web 端新增「拉科专属」Gemini 写作空间
+
+- 修改者：Antigravity（代码修改）
+- 在 `auth_context.py`、`ai_service.py`、`api_v1.py` 以及 Web 端 `Sidebar.tsx`、`App.tsx`、`LakeWriterView.tsx` 中新增「拉科专属」写作入口与后端接口：仅「拉科」（匹配 `username` 或 `person_name`）与管理员可见/可访问，非授权账号返回 403；页面提供纯粹的 Gemini 写作多轮对话、模型切换、一键复制、失败重试与按账号隔离的独立历史记录，不注入任何投资账本数据。前端 `npm run build` 已打包至 `src/portfolio/web/static_dist/`，`tests/test_lake_writer.py` 与 `tests/test_ai_providers.py` 共 18 项测试全部通过。
+
 ## 2026-11-25 00:51 「配置 Google API」按钮按引擎联动显隐
 
 - 修改者：Antigravity（代码修改）

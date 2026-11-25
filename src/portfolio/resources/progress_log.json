@@ -1,5 +1,18 @@
 [
   {
+    "title": "Web 端新增「拉科专属」Gemini 写作空间入口与权限隔离",
+    "time": "2026-11-25 17:06",
+    "author": "Antigravity",
+    "tag": "拉科专属写作页已上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "权限控制：在 auth_context.py 新增 can_access_lake_writer() 并随 bootstrap 输出 can_view_lake_writer，仅当登录账号 username 或绑定人员 person_name 为「拉科」，或为管理员时展示侧边栏「AI 助手 → 拉科专属」入口并放行后端接口，其余账号与局域网访客不可见且直调返回 403。",
+      "纯写作后端：在 ai_service.py 新增 ask_article_writer()，强制限定 Gemini 通道、不注入任何投资账本数据、支持携带多轮历史对话改稿润色；在 api_v1.py 新增 /api/v1/ai/lake-writer/{history,chat,clear} 三个接口，按登录用户独立持久化至 ai_lake_writer_sessions.json。",
+      "前端页面：新增 LakeWriterView.tsx，提供纯粹的 Gemini 写作多轮对话界面，支持 Gemini 模型切换、连接状态刷新、写作快捷引导、Markdown 渲染、一键复制文章、失败一键重试与清空对话。",
+      "验证范围：frontend `npm run build` 编译打包至 src/portfolio/web/static_dist/ 通过；tests/test_lake_writer.py 与 tests/test_ai_providers.py 共 18 项测试全部通过。"
+    ]
+  },
+  {
     "title": "「配置 Google API」按钮按引擎联动显隐（仅在选中 Google API 时展示）",
     "time": "2026-11-25 00:51",
     "author": "Antigravity",

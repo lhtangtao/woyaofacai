@@ -377,6 +377,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol, prompt: message, message, provider, ...(model ? { model } : {}) }),
     }),
+  aiLakeWriterHistory: () => requestApi("/api/v1/ai/lake-writer/history"),
+  aiLakeWriterClear: () =>
+    requestApi("/api/v1/ai/lake-writer/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }),
+  aiLakeWriterChat: (
+    message: string,
+    model?: string,
+    provider: "gemini" | "google_api" = "gemini"
+  ) =>
+    requestApi("/api/v1/ai/lake-writer/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: message,
+        message,
+        provider,
+        ...(model ? { model } : {}),
+      }),
+    }),
 
   // Unified Holdings Management
   holdingsDashboard: (person_id?: number | null, broker?: string, ticker?: string) => {
