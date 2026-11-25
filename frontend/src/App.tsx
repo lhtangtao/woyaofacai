@@ -60,6 +60,15 @@ export const App: React.FC = () => {
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
+
+  // Change Password Modal State
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [pwdCurrent, setPwdCurrent] = useState("");
+  const [pwdNew, setPwdNew] = useState("");
+  const [pwdConfirm, setPwdConfirm] = useState("");
+  const [pwdError, setPwdError] = useState("");
+  const [pwdSubmitting, setPwdSubmitting] = useState(false);
 
   const loadBootstrap = () => {
     setLoading(true);
@@ -191,7 +200,71 @@ export const App: React.FC = () => {
     setLoginUsername("");
     setLoginPassword("");
     setLoginError("");
+    setLoginNotice("");
     setShowLogin(true);
+  };
+
+  const openPasswordModal = () => {
+    setPwdCurrent("");
+    setPwdNew("");
+    setPwdConfirm("");
+    setPwdError("");
+    setShowPwdModal(true);
+  };
+
+  const handleSelfPasswordChanged = (usernameHint?: string) => {
+    setShowPwdModal(false);
+    setBootstrap(null);
+    setSelectedPersonId(null);
+    setSelectedBroker("");
+    setSelectedTicker("");
+    setLoginUsername(usernameHint || bootstrap?.user?.username || "");
+    setLoginPassword("");
+    setLoginError("");
+    setLoginNotice("密码修改成功，旧登录会话已注销，请使用新密码重新登录。");
+    setShowLogin(true);
+  };
+
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPwdError("");
+    if (!pwdCurrent) {
+      setPwdError("请输入当前原密码");
+      return;
+    }
+    if (pwdNew.length < 6 || pwdNew.length > 64) {
+      setPwdError("新密码长度需在 6 至 64 位之间");
+      return;
+    }
+    if (pwdNew !== pwdNew.trim()) {
+      setPwdError("新密码首尾不能包含空格");
+      return;
+    }
+    if (pwdNew !== pwdConfirm) {
+      setPwdError("两次输入的新密码不一致");
+      return;
+    }
+    if (pwdNew === pwdCurrent) {
+      setPwdError("新密码不能与当前密码相同");
+      return;
+    }
+    setPwdSubmitting(true);
+    try {
+      const res = await api.updatePassword({
+        username: bootstrap?.user?.username || "",
+        current_password: pwdCurrent,
+        password: pwdNew,
+      });
+      if (res.status === "ok") {
+        handleSelfPasswordChanged(bootstrap?.user?.username || "");
+      } else {
+        setPwdError(res.message || "密码修改失败");
+      }
+    } catch (err: any) {
+      setPwdError(err.message || "密码修改请求异常");
+    } finally {
+      setPwdSubmitting(false);
+    }
   };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -201,6 +274,7 @@ export const App: React.FC = () => {
       const res = await api.login(loginUsername, loginPassword);
       if (res.status === "ok") {
         setShowLogin(false);
+        setLoginNotice("");
         handleRefresh();
       } else {
         setLoginError(res.message || "登录失败");
@@ -288,6 +362,7 @@ export const App: React.FC = () => {
           title={headerMeta.title}
           subtitle={headerMeta.subtitle}
           onRefresh={handleRefresh}
+          onChangePassword={bootstrap?.user?.is_authenticated ? openPasswordModal : undefined}
           onLogout={handleLogout}
           onResetFilters={currentRoute === "overview" || currentRoute === "ownership" ? resetAssetFilters : undefined}
           user={bootstrap?.user || null}
@@ -442,7 +517,7 @@ export const App: React.FC = () => {
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
             {currentRoute === "ai_lake" && (
               bootstrap?.user?.can_view_lake_writer
-                ? <LakeWriterView />
+                ? <LakeWriterView isAdmin={bootstrap?.user?.can_admin === true} />
                 : <div role="alert" style={{ padding: "24px", color: "var(--loss-color)" }}>当前账号无权访问拉科专属写作空间。</div>
             )}
 
@@ -503,6 +578,7 @@ export const App: React.FC = () => {
                 onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
                 greenProfit={greenProfit}
                 onToggleGreenProfit={() => setGreenProfit(!greenProfit)}
+                onSelfPasswordChanged={handleSelfPasswordChanged}
               />
             )}
           </ErrorBoundary>
@@ -530,6 +606,20 @@ export const App: React.FC = () => {
             <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px" }}>
               外出或公网访问时，请输入账户密码进行身份鉴权。
             </p>
+            {loginNotice && (
+              <div
+                style={{
+                  background: "#DCFCE7",
+                  color: "#166534",
+                  borderRadius: "8px",
+                  padding: "8px 10px",
+                  fontSize: "12px",
+                  marginBottom: "12px",
+                }}
+              >
+                {loginNotice}
+              </div>
+            )}
 
             <form onSubmit={handleLoginSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               <div>
@@ -565,6 +655,89 @@ export const App: React.FC = () => {
                   登录
                 </button>
                 <button type="button" onClick={() => setShowLogin(false)} className="btn">
+                  取消
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Change Password Modal */}
+      {showPwdModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div className="card-panel" style={{ width: "380px", padding: "24px" }}>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, marginBottom: "6px" }}>修改登录密码</h2>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px" }}>
+              当前账号：<strong>{bootstrap?.user?.username}</strong>。修改成功后将自动注销所有设备上的旧会话，需用新密码重新登录。
+            </p>
+
+            <form onSubmit={handlePasswordSubmit} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>当前原密码</label>
+                <input
+                  type="password"
+                  value={pwdCurrent}
+                  onChange={(e) => setPwdCurrent(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>新密码（6~64 位）</label>
+                <input
+                  type="password"
+                  value={pwdNew}
+                  onChange={(e) => setPwdNew(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>确认新密码</label>
+                <input
+                  type="password"
+                  value={pwdConfirm}
+                  onChange={(e) => setPwdConfirm(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  required
+                />
+              </div>
+
+              {pwdError && (
+                <div style={{ color: "var(--loss-color)", fontSize: "12px" }}>{pwdError}</div>
+              )}
+
+              <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={pwdSubmitting}>
+                  {pwdSubmitting ? "提交中..." : "确认修改"}
+                </button>
+                <button type="button" onClick={() => setShowPwdModal(false)} className="btn" disabled={pwdSubmitting}>
                   取消
                 </button>
               </div>

@@ -1,3 +1,10 @@
+## 2026-11-25 18:46 公网隧道切换为 Cloudflared；上线账号改密、多标签写作与软清空归档
+
+- 修改者：Antigravity（代码修改）
+- 在 `启动Money3.command` 中将公网隧道从 `ngrok` 切换为内置 `tools/cloudflared`，解决国内直连心跳超时导致的 `ERR_NGROK_3004` 报错。
+- 在 `web/app.py`、`WorkspaceHeader.tsx`、`App.tsx` 与 `SystemViews.tsx` 实现完整的密码修改与管理员重置功能（本人改密校验原密码并吊销旧会话，管理员可快捷重置成员密码）。
+- 新增 `lake_writer_store.py` 与桌面端 `lake_writer_archive_page.py`，升级 `api_v1.py` 与 `LakeWriterView.tsx`：支持多对话框标签隔离上下文，软清空与软删除保留全部历史归档；Web 端管理员与 Mac 桌面端均可只读检索全部活跃与已清空对话。`npm run build` 及 20 项测试全部通过。
+
 ## 2026-11-25 17:06 Web 端新增「拉科专属」Gemini 写作空间
 
 - 修改者：Antigravity（代码修改）

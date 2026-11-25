@@ -7,6 +7,7 @@ import {
   Sun,
   Moon,
   LogOut,
+  KeyRound,
 } from "lucide-react";
 import { PersonItem, UserProfile } from "../types";
 
@@ -16,6 +17,7 @@ interface WorkspaceHeaderProps {
   onRefresh: () => void;
   onResetFilters?: () => void;
   onExport?: () => void;
+  onChangePassword?: () => void;
   onLogout?: () => void;
   user: UserProfile | null;
   persons: PersonItem[];
@@ -33,6 +35,7 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
   onRefresh,
   onResetFilters,
   onExport,
+  onChangePassword,
   onLogout,
   user,
   hidePersonSelector = false,
@@ -164,6 +167,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             >
               <Download size={14} />
               <span>导出</span>
+            </button>
+          )}
+
+          {/* Change Password (Only for authenticated users) */}
+          {onChangePassword && user?.is_authenticated && (
+            <button
+              onClick={onChangePassword}
+              className="btn btn-quiet"
+              style={{ height: "32px", border: "1px solid var(--border-color)" }}
+              title={`修改当前账号 (${user.username || ""}) 的登录密码`}
+            >
+              <KeyRound size={14} />
+              <span>改密</span>
             </button>
           )}
 

@@ -457,6 +457,9 @@ def build_workspace(self):
     from portfolio.ui.domestic_overview_page import DomesticOverviewPage
     self.domestic_overview_page = DomesticOverviewPage(self)
     self.pages.addWidget(self.domestic_overview_page)
+    from portfolio.ui.lake_writer_archive_page import LakeWriterArchivePage
+    self.lake_writer_archive_page = LakeWriterArchivePage(self)
+    self.pages.addWidget(self.lake_writer_archive_page)
 
     def _jump_domestic_day(day_str: str):
         self.domestic_daily_performance_page.select_period(day_str)

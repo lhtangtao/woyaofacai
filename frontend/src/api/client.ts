@@ -377,17 +377,41 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol, prompt: message, message, provider, ...(model ? { model } : {}) }),
     }),
-  aiLakeWriterHistory: () => requestApi("/api/v1/ai/lake-writer/history"),
-  aiLakeWriterClear: () =>
-    requestApi("/api/v1/ai/lake-writer/clear", {
+  aiLakeWriterHistory: (tabId?: string) =>
+    requestApi(
+      tabId
+        ? `/api/v1/ai/lake-writer/history?tab_id=${encodeURIComponent(tabId)}`
+        : "/api/v1/ai/lake-writer/history"
+    ),
+  aiLakeWriterCreateTab: (title?: string) =>
+    requestApi("/api/v1/ai/lake-writer/tabs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(title ? { title } : {}),
+    }),
+  aiLakeWriterRenameTab: (tabId: string, title: string) =>
+    requestApi(`/api/v1/ai/lake-writer/tabs/${encodeURIComponent(tabId)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    }),
+  aiLakeWriterDeleteTab: (tabId: string) =>
+    requestApi(`/api/v1/ai/lake-writer/tabs/${encodeURIComponent(tabId)}/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     }),
+  aiLakeWriterClear: (tabId?: string) =>
+    requestApi("/api/v1/ai/lake-writer/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tabId ? { tab_id: tabId } : {}),
+    }),
   aiLakeWriterChat: (
     message: string,
     model?: string,
-    provider: "gemini" | "google_api" = "gemini"
+    provider: "gemini" | "google_api" = "gemini",
+    tabId?: string
   ) =>
     requestApi("/api/v1/ai/lake-writer/chat", {
       method: "POST",
@@ -397,8 +421,16 @@ export const api = {
         message,
         provider,
         ...(model ? { model } : {}),
+        ...(tabId ? { tab_id: tabId } : {}),
       }),
     }),
+  aiLakeWriterAdminArchives: (owner?: string, q?: string) => {
+    const params = new URLSearchParams();
+    if (owner) params.set("owner", owner);
+    if (q) params.set("q", q);
+    const qs = params.toString();
+    return requestApi(qs ? `/api/v1/ai/lake-writer/admin/archives?${qs}` : "/api/v1/ai/lake-writer/admin/archives");
+  },
 
   // Unified Holdings Management
   holdingsDashboard: (person_id?: number | null, broker?: string, ticker?: string) => {

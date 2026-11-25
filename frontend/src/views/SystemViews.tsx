@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Database, ShieldCheck, History, BookOpen, Sliders, CheckCircle2, AlertTriangle, Bell } from "lucide-react";
+import { Database, ShieldCheck, History, BookOpen, Sliders, CheckCircle2, AlertTriangle, Bell, KeyRound, Users } from "lucide-react";
 import { api } from "../api/client";
 import { UserProfile } from "../types";
 
@@ -10,6 +10,7 @@ interface SystemViewsProps {
   onToggleTheme: () => void;
   greenProfit: boolean;
   onToggleGreenProfit: () => void;
+  onSelfPasswordChanged?: (username?: string) => void;
 }
 
 export const SystemViews: React.FC<SystemViewsProps> = ({
@@ -19,6 +20,7 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
   onToggleTheme,
   greenProfit,
   onToggleGreenProfit,
+  onSelfPasswordChanged,
 }) => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -26,6 +28,20 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
   // Settings: Bark
   const [barkUrl, setBarkUrl] = useState("");
   const [barkStatus, setBarkStatus] = useState<string | null>(null);
+
+  // Settings: 修改本人密码
+  const [selfCurPwd, setSelfCurPwd] = useState("");
+  const [selfNewPwd, setSelfNewPwd] = useState("");
+  const [selfConfirmPwd, setSelfConfirmPwd] = useState("");
+  const [selfPwdStatus, setSelfPwdStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [selfPwdSaving, setSelfPwdSaving] = useState(false);
+
+  // Settings: 管理员重置他人密码
+  const [managedUsers, setManagedUsers] = useState<Array<{ id: number; username: string; person_name?: string; role: string }>>([]);
+  const [resetTargetUser, setResetTargetUser] = useState("");
+  const [resetNewPwd, setResetNewPwd] = useState("");
+  const [resetStatus, setResetStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const [resetSaving, setResetSaving] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -52,7 +68,104 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
       })
       .catch((err) => console.error("System view error:", err))
       .finally(() => setLoading(false));
-  }, [mode]);
+
+    if (mode === "settings" && user?.can_admin) {
+      api
+        .getUsers()
+        .then((res) => {
+          if (res.status === "ok" && Array.isArray(res.users)) {
+            const others = res.users.filter((u: any) => u.username !== user?.username);
+            setManagedUsers(others);
+            if (others.length > 0 && !resetTargetUser) {
+              setResetTargetUser(others[0].username);
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, [mode, user?.can_admin]);
+
+  const handleSelfPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSelfPwdStatus(null);
+    if (!selfCurPwd) {
+      setSelfPwdStatus({ ok: false, text: "请输入当前原密码" });
+      return;
+    }
+    if (selfNewPwd.length < 6 || selfNewPwd.length > 64) {
+      setSelfPwdStatus({ ok: false, text: "新密码长度需在 6 至 64 位之间" });
+      return;
+    }
+    if (selfNewPwd !== selfNewPwd.trim()) {
+      setSelfPwdStatus({ ok: false, text: "新密码首尾不能包含空格" });
+      return;
+    }
+    if (selfNewPwd !== selfConfirmPwd) {
+      setSelfPwdStatus({ ok: false, text: "两次输入的新密码不一致" });
+      return;
+    }
+    if (selfNewPwd === selfCurPwd) {
+      setSelfPwdStatus({ ok: false, text: "新密码不能与当前密码相同" });
+      return;
+    }
+    setSelfPwdSaving(true);
+    try {
+      const res = await api.updatePassword({
+        username: user?.username || "",
+        current_password: selfCurPwd,
+        password: selfNewPwd,
+      });
+      if (res.status === "ok") {
+        setSelfCurPwd("");
+        setSelfNewPwd("");
+        setSelfConfirmPwd("");
+        setSelfPwdStatus({ ok: true, text: res.message || "密码修改成功，请重新登录" });
+        if (onSelfPasswordChanged) {
+          onSelfPasswordChanged(user?.username || "");
+        }
+      } else {
+        setSelfPwdStatus({ ok: false, text: res.message || "修改失败" });
+      }
+    } catch (err: any) {
+      setSelfPwdStatus({ ok: false, text: err.message || "修改密码异常" });
+    } finally {
+      setSelfPwdSaving(false);
+    }
+  };
+
+  const handleAdminResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetStatus(null);
+    if (!resetTargetUser) {
+      setResetStatus({ ok: false, text: "请选择需要重置密码的成员账号" });
+      return;
+    }
+    if (resetNewPwd.length < 6 || resetNewPwd.length > 64) {
+      setResetStatus({ ok: false, text: "新密码长度需在 6 至 64 位之间" });
+      return;
+    }
+    if (resetNewPwd !== resetNewPwd.trim()) {
+      setResetStatus({ ok: false, text: "新密码首尾不能包含空格" });
+      return;
+    }
+    setResetSaving(true);
+    try {
+      const res = await api.updatePassword({
+        username: resetTargetUser,
+        password: resetNewPwd,
+      });
+      if (res.status === "ok") {
+        setResetNewPwd("");
+        setResetStatus({ ok: true, text: res.message || `已重置 ${resetTargetUser} 的密码` });
+      } else {
+        setResetStatus({ ok: false, text: res.message || "重置失败" });
+      }
+    } catch (err: any) {
+      setResetStatus({ ok: false, text: err.message || "重置密码异常" });
+    } finally {
+      setResetSaving(false);
+    }
+  };
 
   const handleSaveBark = async () => {
     try {
@@ -274,7 +387,127 @@ export const SystemViews: React.FC<SystemViewsProps> = ({
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px", overflowY: "auto", maxWidth: "700px" }}>
       <div style={{ fontSize: "14px", fontWeight: 700, display: "flex", alignItems: "center", gap: "8px" }}>
         <Sliders size={18} color="var(--brand)" />
-        <span>系统首选项与推送配置</span>
+        <span>系统首选项、账号安全与推送配置</span>
+      </div>
+
+      {/* 账号与安全（修改本人密码 + 管理员重置成员密码） */}
+      <div className="card-panel" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", fontWeight: 600, color: "var(--text-heading)" }}>
+          <KeyRound size={16} color="var(--brand)" />
+          <span>账号与登录密码</span>
+        </div>
+
+        {user?.is_authenticated ? (
+          <>
+            <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: "1.6" }}>
+              当前登录账号：<strong>{user.username}</strong>
+              {user.person_name ? `（归属人员：${user.person_name}）` : ""}。修改密码后将注销所有设备上的旧会话，需使用新密码重新登录。
+            </div>
+
+            <form onSubmit={handleSelfPasswordSubmit} style={{ display: "flex", flexDirection: "column", gap: "10px", maxWidth: "420px" }}>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>当前原密码</label>
+                <input
+                  type="password"
+                  value={selfCurPwd}
+                  onChange={(e) => setSelfCurPwd(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>新密码（6~64 位）</label>
+                <input
+                  type="password"
+                  value={selfNewPwd}
+                  onChange={(e) => setSelfNewPwd(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  required
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>确认新密码</label>
+                <input
+                  type="password"
+                  value={selfConfirmPwd}
+                  onChange={(e) => setSelfConfirmPwd(e.target.value)}
+                  className="input-control"
+                  style={{ width: "100%" }}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  required
+                />
+              </div>
+              {selfPwdStatus && (
+                <div style={{ fontSize: "12px", fontWeight: 600, color: selfPwdStatus.ok ? "#16A34A" : "var(--loss-color)" }}>
+                  {selfPwdStatus.text}
+                </div>
+              )}
+              <div>
+                <button type="submit" className="btn btn-primary" disabled={selfPwdSaving}>
+                  {selfPwdSaving ? "正在保存..." : "修改我的密码"}
+                </button>
+              </div>
+            </form>
+
+            {user.can_admin && (
+              <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: 600, color: "var(--text-heading)" }}>
+                  <Users size={15} color="var(--brand)" />
+                  <span>管理员快捷重置成员密码（免原密码）</span>
+                </div>
+                {managedUsers.length > 0 ? (
+                  <form onSubmit={handleAdminResetPassword} style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
+                    <select
+                      className="input-control"
+                      value={resetTargetUser}
+                      onChange={(e) => setResetTargetUser(e.target.value)}
+                      style={{ minWidth: "160px" }}
+                    >
+                      {managedUsers.map((u) => (
+                        <option key={u.id} value={u.username}>
+                          {u.username}{u.person_name && u.person_name !== u.username ? ` (${u.person_name})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="password"
+                      value={resetNewPwd}
+                      onChange={(e) => setResetNewPwd(e.target.value)}
+                      placeholder="输入成员新密码（至少 6 位）"
+                      className="input-control"
+                      style={{ flex: 1, minWidth: "200px" }}
+                      minLength={6}
+                      maxLength={64}
+                      required
+                    />
+                    <button type="submit" className="btn" disabled={resetSaving}>
+                      {resetSaving ? "重置中..." : "重置该成员密码"}
+                    </button>
+                  </form>
+                ) : (
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>暂无其他可管理的成员账号。</div>
+                )}
+                {resetStatus && (
+                  <div style={{ fontSize: "12px", fontWeight: 600, color: resetStatus.ok ? "#16A34A" : "var(--loss-color)" }}>
+                    {resetStatus.text}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ background: "var(--table-alternate)", padding: "10px", borderRadius: "6px", fontSize: "12px", color: "var(--text-muted)" }}>
+            当前为免登录访问状态。如需修改账户密码，请先使用对应账号登录。
+          </div>
+        )}
       </div>
 
       {/* Theme & Display Preferences */}

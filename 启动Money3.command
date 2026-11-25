@@ -236,60 +236,37 @@ PY
 fi
 
 # ------------------------------------------------------------------------------
-# 2. 启动并检测公网直连隧道 (ngrok -> Port 8888)
+# 2. 启动并检测公网直连隧道 (cloudflared -> Port 8888)
 # ------------------------------------------------------------------------------
-NGROK_BIN="$APP_DIR/tools/ngrok"
-NGROK_LOG="/tmp/money_ngrok.log"
+CLOUDFLARED_BIN="$APP_DIR/tools/cloudflared"
+CLOUDFLARED_LOG="/tmp/money_cloudflared.log"
 PUBLIC_URL=""
-IS_NGROK_RUNNING=0
+IS_TUNNEL_RUNNING=0
 
-if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$NGROK_BIN" ]]; then
-    # 先检查是否已有运行中的 ngrok 隧道并提取 URL
-    PUBLIC_URL=$("$APP_DIR/.venv/bin/python" -c "
-import urllib.request, json
-try:
-    with urllib.request.urlopen('http://127.0.0.1:4040/api/tunnels', timeout=0.8) as resp:
-        data = json.loads(resp.read().decode())
-        for t in data.get('tunnels', []):
-            if t.get('proto') == 'https':
-                print(t.get('public_url', ''))
-                break
-        else:
-            if data.get('tunnels'):
-                print(data['tunnels'][0].get('public_url', ''))
-except Exception:
-    pass
-" 2>/dev/null || true)
+if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$CLOUDFLARED_BIN" ]]; then
+    # 停掉残留的旧 ngrok 进程，避免占用或混淆隧道地址
+    pkill -f "$APP_DIR/tools/ngrok" 2>/dev/null || true
+
+    # 先检查是否已有运行中的 cloudflared 隧道并提取 URL
+    if pgrep -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 && [[ -f "$CLOUDFLARED_LOG" ]]; then
+        PUBLIC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | tail -n 1 || true)
+    fi
 
     if [[ -n "$PUBLIC_URL" ]]; then
-        IS_NGROK_RUNNING=1
+        IS_TUNNEL_RUNNING=1
     else
-        # 若未运行且已配置 Token，启动后台守护进程（清除代理环境变量，避免免费版 ngrok 触发 ERR_NGROK_9009）
-        if "$NGROK_BIN" config check &>/dev/null; then
-            nohup env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY "$NGROK_BIN" http 8888 --log=stdout > "$NGROK_LOG" 2>&1 &
-            for i in {1..30}; do
-                sleep 0.25
-                PUBLIC_URL=$("$APP_DIR/.venv/bin/python" -c "
-import urllib.request, json
-try:
-    with urllib.request.urlopen('http://127.0.0.1:4040/api/tunnels', timeout=0.8) as resp:
-        data = json.loads(resp.read().decode())
-        for t in data.get('tunnels', []):
-            if t.get('proto') == 'https':
-                print(t.get('public_url', ''))
+        # 若未运行或日志无 URL，清理旧进程并启动新的 cloudflared Quick Tunnel
+        pkill -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
+        : > "$CLOUDFLARED_LOG"
+        nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
+        for i in {1..40}; do
+            sleep 0.3
+            PUBLIC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" 2>/dev/null | tail -n 1 || true)
+            if [[ -n "$PUBLIC_URL" ]]; then
+                IS_TUNNEL_RUNNING=1
                 break
-        else:
-            if data.get('tunnels'):
-                print(data['tunnels'][0].get('public_url', ''))
-except Exception:
-    pass
-" 2>/dev/null || true)
-                if [[ -n "$PUBLIC_URL" ]]; then
-                    IS_NGROK_RUNNING=1
-                    break
-                fi
-            done
-        fi
+            fi
+        done
     fi
 
     # 自动将公网地址存入系统剪贴板
@@ -319,9 +296,9 @@ else
 fi
 
 if [[ -n "$PUBLIC_URL" ]]; then
-    print "  ✅ 2. 公网直连安全隧道已建立 (已自动复制公网网址到剪贴板！)"
+    print "  ✅ 2. 公网直连安全隧道已建立 (Cloudflare Tunnel · 已自动复制网址到剪贴板！)"
 else
-    print "  ℹ️ 2. 公网隧道未运行 (如需开启请确认已配置 tools/ngrok)"
+    print "  ℹ️ 2. 公网隧道未运行 (如需开启请确认已配置 tools/cloudflared)"
 fi
 
 if [[ "$START_DESKTOP" == "1" ]]; then

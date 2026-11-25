@@ -723,30 +723,67 @@ def api_auth_users_toggle():
 
 @app.route("/api/auth/users/password", methods=["POST"])
 def api_auth_users_password():
-    """Update user password (Admin can update any; regular user can update own)."""
+    """更新用户密码：普通登录用户可改自己密码（需校验原密码）；管理员可改自己（需原密码）或免原密码重置他人密码。"""
     ctx: AuthContext = getattr(g, "auth_context", None)
-    if ctx.is_unauthenticated() or ctx.is_lan_viewer():
+    if not ctx or ctx.is_unauthenticated() or ctx.is_lan_viewer():
         return jsonify({"status": "error", "message": "请先登录账户后再修改密码"}), 401
 
     data = request.get_json(silent=True) or {}
-    target_username = data.get("username", "").strip() or ctx.username
-    new_password = data.get("password", "").strip()
+    target_username = str(data.get("username") or "").strip() or (ctx.username or "")
+    current_password = str(data.get("current_password") or data.get("old_password") or "")
+    new_password = str(data.get("password") or data.get("new_password") or "")
 
-    if not new_password or len(new_password) < 4:
-        return jsonify({"status": "error", "message": "新密码长度至少为 4 位"}), 400
+    if not new_password or not new_password.strip():
+        return jsonify({"status": "error", "message": "请输入新密码"}), 400
+    if len(new_password) < 6 or len(new_password) > 64:
+        return jsonify({"status": "error", "message": "新密码长度需在 6 至 64 位之间"}), 400
+    if new_password != new_password.strip():
+        return jsonify({"status": "error", "message": "新密码首尾不能包含空格"}), 400
 
-    # Only admin can change someone else's password
-    if target_username != ctx.username and not ctx.is_admin():
-        return jsonify({"status": "error", "message": "权限不足，无法修改他人密码"}), 403
+    is_self = target_username == ctx.username
+    # 非管理员禁止修改他人密码
+    if not is_self and not ctx.is_admin():
+        return jsonify({"status": "error", "message": "权限不足，仅可修改当前登录账号自己的密码"}), 403
 
     target_user = get_user_by_username(target_username)
     if not target_user:
         return jsonify({"status": "error", "message": f"用户 '{target_username}' 不存在"}), 404
 
+    # 修改本人密码必须校验当前密码，并禁止与原密码相同
+    if is_self:
+        if not current_password:
+            return jsonify({"status": "error", "message": "请输入当前原密码进行身份验证"}), 400
+        if not verify_password(current_password, target_user["password_hash"]):
+            record_audit_event(
+                "PASSWORD_CHANGE_FAILED",
+                ctx.username,
+                ctx.access_mode,
+                request.remote_addr,
+                "INVALID_CURRENT_PASSWORD",
+            )
+            return jsonify({"status": "error", "message": "当前密码不正确，请重新输入"}), 400
+        if verify_password(new_password, target_user["password_hash"]):
+            return jsonify({"status": "error", "message": "新密码不能与当前密码相同"}), 400
+
     set_user_password(target_username, new_password)
     revoke_all_user_sessions(target_user["id"])
-    record_audit_event("PASSWORD_CHANGE", ctx.username, ctx.access_mode, request.remote_addr, f"PASSWORD_RESET_{target_username}")
-    return jsonify({"status": "ok", "message": f"用户 '{target_username}' 密码已成功重置，旧会话已注销"})
+    audit_action = "PASSWORD_CHANGE_SELF" if is_self else "PASSWORD_RESET_BY_ADMIN"
+    record_audit_event(audit_action, ctx.username, ctx.access_mode, request.remote_addr, f"TARGET_{target_username}")
+
+    if is_self:
+        resp = jsonify({
+            "status": "ok",
+            "relogin_required": True,
+            "message": "密码修改成功，旧登录会话已注销，请使用新密码重新登录",
+        })
+        resp.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return resp
+
+    return jsonify({
+        "status": "ok",
+        "relogin_required": False,
+        "message": f"已成功重置用户 '{target_username}' 的密码，对方所有旧会话已注销",
+    })
 
 
 # ------------------------------------------------------------------------------

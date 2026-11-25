@@ -1,5 +1,18 @@
 [
   {
+    "title": "公网隧道切换为 Cloudflared；上线账号改密、多标签写作与软清空归档查看",
+    "time": "2026-11-25 18:46",
+    "author": "Antigravity",
+    "tag": "隧道切换与写作增强",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "外网隧道切换：在 `启动Money3.command` 中将公网直连隧道由 ngrok 替换为项目内置 `tools/cloudflared`（Quick Tunnel -> 8888），解决免费版 ngrok 国内直连心跳超时频繁触发 ERR_NGROK_3004 的问题。",
+      "账号密码管理：加固 `POST /api/auth/users/password`（本人改密强制校验原密码、6~64 位校验、禁用首尾空格、改密后吊销全部旧会话并要求重登；管理员可免原密码重置成员密码）；Web 端顶栏新增「改密」弹窗，设置页新增「账号与登录密码」卡片及管理员快捷重置面板。",
+      "多标签写作与软清空归档：新增 `lake_writer_store.py`，为「拉科专属」提供多对话框标签（新建/切换/重命名/关闭，隔离上下文节约 Token）；用户「清空对话」或关闭标签时不物理删除，而是按批次完整归档；Web 端管理员可切换「全部对话存档」查看，Mac 桌面端「AI 助手 → 拉科写作记录」同步支持只读检索全部活跃与清空归档记录。",
+      "验证范围：`frontend npm run build` 编译打包至 `src/portfolio/web/static_dist/` 通过；`zsh -n 启动Money3.command` 语法通过；`tests/test_lake_writer.py`、`tests/test_password_change.py`、`tests/test_ai_providers.py` 共 20 项测试全部通过。"
+    ]
+  },
+  {
     "title": "Web 端新增「拉科专属」Gemini 写作空间入口与权限隔离",
     "time": "2026-11-25 17:06",
     "author": "Antigravity",

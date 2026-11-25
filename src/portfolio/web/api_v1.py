@@ -49,6 +49,7 @@ from portfolio.services.ai_service import (
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.charts_service import build_charts, rank_chart
 from portfolio.services.earnings_service import EarningsService
+from portfolio.services.lake_writer_store import LAKE_WRITER_FILENAME, LakeWriterStore
 from portfolio.services.monitor_store import BASIS, MonitorRule, MonitorStore
 from portfolio.services.notification_service import notification_service
 from portfolio.services.trades_service import TradesService
@@ -2291,30 +2292,82 @@ def api_ai_stock_chat():
     })
 
 
-def _lake_writer_session_key() -> tuple[Optional[AuthContext], str]:
-    """返回当前请求的鉴权上下文与拉科专属写作会话 Key（按登录账号隔离）。"""
+def get_lake_writer_store() -> LakeWriterStore:
+    """获取拉科专属写作会话持久化存储实例（与桌面客户端共享同一 JSON 文件）。"""
+    return LakeWriterStore(get_ai_data_dir() / LAKE_WRITER_FILENAME)
+
+
+def _lake_writer_owner() -> tuple[Optional[AuthContext], str]:
+    """返回当前请求的鉴权上下文与拉科专属写作归属账号名（按登录账号隔离）。"""
     ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
     uname = (ctx.username if ctx and ctx.username else "default").strip() or "default"
-    return ctx, f"lake_writer::{uname}"
+    return ctx, uname
 
 
 @api_v1.route("/ai/lake-writer/history", methods=["GET"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_lake_writer_history():
-    """获取拉科专属 Gemini 写作助手的历史对话记录（仅拉科与管理员可访问）。"""
-    ctx, session_key = _lake_writer_session_key()
+    """获取当前用户在拉科专属写作空间的活跃标签列表及指定标签对话记录。"""
+    ctx, owner = _lake_writer_owner()
     if not ctx or not ctx.can_access_lake_writer():
         return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
-    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
-    history = sessions.get(session_key, [])
-    return jsonify({"status": "ok", "session_key": session_key, "messages": history})
+    tab_id = (request.args.get("tab_id") or "").strip() or None
+    payload = get_lake_writer_store().list_user_tabs(owner, tab_id=tab_id)
+    return jsonify({
+        "status": "ok",
+        "owner": owner,
+        "active_tab_id": payload["active_tab_id"],
+        "tabs": payload["tabs"],
+        "messages": payload["messages"],
+    })
+
+
+@api_v1.route("/ai/lake-writer/tabs", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_create_tab():
+    """新建一个独立的写作对话框标签，隔离上下文以节约 Token。"""
+    ctx, owner = _lake_writer_owner()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+    data = request.get_json(silent=True) or {}
+    title = str(data.get("title") or "").strip() or None
+    payload = get_lake_writer_store().create_tab(owner, title=title)
+    return jsonify({"status": "ok", **payload})
+
+
+@api_v1.route("/ai/lake-writer/tabs/<tab_id>/rename", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_rename_tab(tab_id: str):
+    """重命名指定的写作对话框标签。"""
+    ctx, owner = _lake_writer_owner()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+    data = request.get_json(silent=True) or {}
+    title = str(data.get("title") or "").strip()
+    if not title:
+        return jsonify({"status": "error", "message": "请输入有效的标签名称"}), 400
+    payload = get_lake_writer_store().rename_tab(owner, tab_id, title)
+    if payload is None:
+        return jsonify({"status": "error", "message": "未找到对应的对话标签"}), 404
+    return jsonify({"status": "ok", **payload})
+
+
+@api_v1.route("/ai/lake-writer/tabs/<tab_id>/delete", methods=["POST"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_lake_writer_delete_tab(tab_id: str):
+    """软删除（关闭）指定标签：完整保留原对话和清空归档，仅对普通用户隐藏。"""
+    ctx, owner = _lake_writer_owner()
+    if not ctx or not ctx.can_access_lake_writer():
+        return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
+    payload = get_lake_writer_store().soft_delete_tab(owner, tab_id)
+    return jsonify({"status": "ok", **payload})
 
 
 @api_v1.route("/ai/lake-writer/chat", methods=["POST"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_lake_writer_chat():
-    """调用 Gemini 为拉科专属写作空间生成或修改文章（不注入任何账本数据）。"""
-    ctx, session_key = _lake_writer_session_key()
+    """调用 Gemini 为拉科专属指定标签生成或修改文章（仅携带当前标签上下文，不注入账本数据）。"""
+    ctx, owner = _lake_writer_owner()
     if not ctx or not ctx.can_access_lake_writer():
         return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
 
@@ -2326,9 +2379,10 @@ def api_ai_lake_writer_chat():
     raw_provider = normalize_ai_provider(data.get("provider"))
     provider = raw_provider if raw_provider in ("gemini", "google_api") else "gemini"
     model = str(data.get("model") or "").strip() or None
+    req_tab_id = str(data.get("tab_id") or "").strip() or None
 
-    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
-    current_msgs = list(sessions.get(session_key, []))
+    store = get_lake_writer_store()
+    resolved_tab_id, current_msgs = store.get_tab_context_messages(owner, tab_id=req_tab_id)
 
     try:
         answer = AIService.ask_article_writer(
@@ -2340,19 +2394,13 @@ def api_ai_lake_writer_chat():
     except Exception as exc:
         return jsonify({"status": "error", "provider": provider, "message": str(exc)}), 502
 
-    now_dt = datetime.now()
-    now_hms = now_dt.strftime("%H:%M:%S")
-    now_iso = now_dt.isoformat()
-    current_msgs.append({"role": "user", "content": prompt, "time_str": now_hms, "time": now_iso})
-    current_msgs.append({
-        "role": "assistant",
-        "content": answer,
-        "time_str": now_hms,
-        "time": now_iso,
-        "model": model or "",
-    })
-    sessions[session_key] = current_msgs[-100:]
-    save_ai_sessions("ai_lake_writer_sessions.json", sessions)
+    saved = store.append_exchange(
+        owner=owner,
+        tab_id=resolved_tab_id,
+        prompt=prompt,
+        answer=answer,
+        model=model or "",
+    )
 
     return jsonify({
         "status": "ok",
@@ -2362,22 +2410,36 @@ def api_ai_lake_writer_chat():
         "reply": answer,
         "content": answer,
         "response": answer,
-        "session_key": session_key,
+        "tab_id": resolved_tab_id,
+        "active_tab_id": saved["active_tab_id"],
+        "tabs": saved["tabs"],
     })
 
 
 @api_v1.route("/ai/lake-writer/clear", methods=["POST"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_lake_writer_clear():
-    """清空当前用户在拉科专属写作空间的对话历史。"""
-    ctx, session_key = _lake_writer_session_key()
+    """软清空指定标签的当前对话：把当前对话完整归档保存，不物理删除。"""
+    ctx, owner = _lake_writer_owner()
     if not ctx or not ctx.can_access_lake_writer():
         return jsonify({"status": "error", "message": "当前账号无权访问拉科专属写作空间"}), 403
-    sessions = load_ai_sessions("ai_lake_writer_sessions.json")
-    if session_key in sessions:
-        sessions[session_key] = []
-        save_ai_sessions("ai_lake_writer_sessions.json", sessions)
-    return jsonify({"status": "ok", "message": "写作历史已清空"})
+    data = request.get_json(silent=True) or {}
+    tab_id = str(data.get("tab_id") or "").strip() or None
+    payload = get_lake_writer_store().soft_clear_tab(owner, tab_id=tab_id)
+    return jsonify({"status": "ok", "message": "当前对话已清空", **payload})
+
+
+@api_v1.route("/ai/lake-writer/admin/archives", methods=["GET"])
+@require_capability(CAP_MANAGE_USERS)
+def api_ai_lake_writer_admin_archives():
+    """仅管理员可访问：查看全部账号的活跃对话、已关闭标签以及已清空归档记录。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    if not ctx or not ctx.is_admin():
+        return jsonify({"status": "error", "message": "仅管理员可查看全部写作对话存档"}), 403
+    owner_filter = (request.args.get("owner") or "").strip() or None
+    keyword = (request.args.get("q") or "").strip() or None
+    payload = get_lake_writer_store().list_all_archives(owner_filter=owner_filter, keyword=keyword)
+    return jsonify({"status": "ok", **payload})
 
 
 # ------------------------------------------------------------------------------
