@@ -1,3 +1,9 @@
+## 2026-11-26 13:28 盘后复盘日报升级为后台异步生成+轮询，并修复长桥行情解包
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/web/api_v1.py`、`frontend/src/api/client.ts` 与 `frontend/src/views/AfterHoursReportView.tsx` 将盘后日报生成改为后台异步任务 + 3 秒容错轮询（保持默认模型不变与单人权限隔离），彻底解决公网长时间生成触发 `Failed to fetch` 超时的问题。
+- 在 `src/portfolio/services/after_hours_report.py` 修复 `load_longbridge_credentials()` 三元组解包异常。`npm run build`、`ruff` 与 9 项回归测试全部通过。
+
 ## 2026-11-26 13:05 将「Gemini 写作助手」默认模型调整为 Gemini 4 Neon (Medium)
 
 - 修改者：Antigravity（代码修改）

@@ -281,3 +281,112 @@ def test_after_hours_web_api_scope_checklist_and_followup(tmp_path, monkeypatch)
     detail_resp = admin_client.get("/api/v1/ai/after-hours/report/2026-11-25::拉科").get_json()
     assert detail_resp["report"]["checked_ids"] == ["c1"]
     assert "structured" in detail_resp["report"]
+
+
+def test_fetch_after_hours_quotes_unpacks_longbridge_tuple_credentials(monkeypatch):
+    """验证 load_longbridge_credentials 返回三元组 (token, key, secret) 时能正确调用长桥 QuoteContext。"""
+    import sys
+    import types
+
+    from portfolio.services import after_hours_report as svc
+    from portfolio.sync import longbridge_credentials
+
+    captured = {}
+
+    class _FakePost:
+        last_done = "102.50"
+
+    class _FakeQuote:
+        symbol = "QQQ.US"
+        last_done = "100.00"
+        prev_close = "98.00"
+        post_market_quote = _FakePost()
+
+    class _FakeConfig:
+        def __init__(self, app_key, app_secret, access_token):
+            captured["cfg"] = (app_key, app_secret, access_token)
+
+    class _FakeQuoteContext:
+        def __init__(self, cfg):
+            pass
+
+        def quote(self, symbols):
+            captured["symbols"] = list(symbols)
+            return [_FakeQuote()]
+
+    fake_mod = types.ModuleType("longbridge.openapi")
+    fake_mod.Config = _FakeConfig
+    fake_mod.QuoteContext = _FakeQuoteContext
+    fake_pkg = types.ModuleType("longbridge")
+    fake_pkg.openapi = fake_mod
+
+    monkeypatch.setitem(sys.modules, "longbridge", fake_pkg)
+    monkeypatch.setitem(sys.modules, "longbridge.openapi", fake_mod)
+    monkeypatch.setattr(longbridge_credentials, "load_longbridge_credentials", lambda: ("tok-1", "key-2", "sec-3"))
+
+    quotes = svc.fetch_after_hours_quotes(["QQQ"])
+    assert captured["cfg"] == ("key-2", "sec-3", "tok-1")
+    assert captured["symbols"] == ["QQQ.US"]
+    assert quotes["QQQ"]["source"] == "longbridge"
+    assert quotes["QQQ"]["after_hours_price"] == 102.5
+
+
+def test_after_hours_generate_async_task_polling_and_isolation(tmp_path, monkeypatch):
+    """验证盘后日报 async=True 立刻返回 202 任务号，可轮询获取结果且严格隔离人员权限。"""
+    import time
+
+    from portfolio.services.after_hours_report import AfterHoursReportStore
+
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    monkeypatch.setattr(api_module, "get_after_hours_store", lambda: store)
+    with api_module._AFTER_HOURS_TASKS_LOCK:
+        api_module._AFTER_HOURS_TASKS.clear()
+
+    def _fake_generate(**kwargs):
+        return {
+            "id": "2026-11-25::拉科",
+            "trade_date": "2026-11-25",
+            "person": kwargs["person_key"],
+            "model": kwargs.get("model") or "",
+            "markdown": "# 复盘\n\n## 一、核心结论\n测试生成成功。",
+        }
+
+    import portfolio.services.after_hours_report as svc
+
+    monkeypatch.setattr(svc, "generate_after_hours_report", _fake_generate)
+
+    lake_ctx = build_auth_context(
+        "REMOTE_PUBLIC",
+        session_user={"user_id": 2, "username": "拉科", "role": "user", "person_id": 5, "person_name": "拉科"},
+    )
+    other_ctx = build_auth_context(
+        "REMOTE_PUBLIC",
+        session_user={"user_id": 3, "username": "华", "role": "user", "person_id": 2, "person_name": "华"},
+    )
+    lake_client = _make_client(lake_ctx)
+    other_client = _make_client(other_ctx)
+
+    resp = lake_client.post(
+        "/api/v1/ai/after-hours/generate",
+        json={"trade_date": "2026-11-25", "person": "拉科", "async": True},
+    )
+    assert resp.status_code == 202
+    task_id = resp.get_json()["task_id"]
+
+    # 其他隔离人员查询该任务应返回 403
+    assert other_client.get(f"/api/v1/ai/after-hours/task/{task_id}").status_code == 403
+
+    # 拉科轮询直至任务完成
+    final = None
+    for _ in range(30):
+        st = lake_client.get(f"/api/v1/ai/after-hours/task/{task_id}")
+        assert st.status_code == 200
+        task = st.get_json()["task"]
+        if task["status"] == "done":
+            final = task
+            break
+        time.sleep(0.05)
+
+    assert final is not None
+    assert final["report"]["id"] == "2026-11-25::拉科"
+    assert "structured" in final["report"]

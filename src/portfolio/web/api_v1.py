@@ -27,8 +27,11 @@ import math
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
+import time
 from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 from flask import Blueprint, Response, g, jsonify, request
 
@@ -2570,10 +2573,42 @@ def api_ai_after_hours_followup(report_id: str):
     return jsonify({"status": "ok", **res})
 
 
+_AFTER_HOURS_TASKS_LOCK = RLock()
+_AFTER_HOURS_TASKS: Dict[str, Dict[str, Any]] = {}
+
+
+def _prune_after_hours_tasks_locked() -> None:
+    """保留最近 30 条复盘异步任务记录，避免内存无限增长。"""
+    if len(_AFTER_HOURS_TASKS) <= 30:
+        return
+    ordered = sorted(_AFTER_HOURS_TASKS.items(), key=lambda kv: kv[1].get("created_ts", 0.0))
+    for tid, item in ordered[:-30]:
+        if item.get("status") != "running":
+            _AFTER_HOURS_TASKS.pop(tid, None)
+
+
+def _snapshot_after_hours_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """构建可供前端轮询的复盘任务状态视图。"""
+    created_ts = float(task.get("created_ts") or time.monotonic())
+    finished_ts = task.get("finished_ts")
+    elapsed = max(0, int((finished_ts or time.monotonic()) - created_ts))
+    return {
+        "task_id": task["task_id"],
+        "status": task["status"],
+        "stage": task.get("stage", ""),
+        "trade_date": task["trade_date"],
+        "person": task["person"],
+        "model": task.get("model") or "",
+        "elapsed_sec": elapsed,
+        "error": task.get("error") or "",
+        "report": task.get("report"),
+    }
+
+
 @api_v1.route("/ai/after-hours/generate", methods=["POST"])
 @require_capability(CAP_AI_CHAT)
 def api_ai_after_hours_generate():
-    """手动触发生成（或重新生成）指定交易日与人员范围的盘后复盘日报。"""
+    """手动触发生成（或重新生成）指定交易日与人员范围的盘后复盘日报（支持后台异步模式）。"""
     from portfolio.services.after_hours_report import (
         ensure_structured,
         generate_after_hours_report,
@@ -2603,6 +2638,75 @@ def api_ai_after_hours_generate():
 
     provider = normalize_ai_provider(data.get("provider"))
     model = str(data.get("model") or "").strip() or None
+    async_mode = bool(data.get("async", False))
+    store = get_after_hours_store()
+
+    if async_mode:
+        now_ts = time.monotonic()
+        with _AFTER_HOURS_TASKS_LOCK:
+            for existing in _AFTER_HOURS_TASKS.values():
+                if (
+                    existing.get("status") == "running"
+                    and existing.get("trade_date") == target_date.isoformat()
+                    and existing.get("person") == req_person
+                    and (existing.get("model") or "") == (model or "")
+                    and (now_ts - float(existing.get("created_ts") or 0.0)) < 600
+                ):
+                    snap = _snapshot_after_hours_task(existing)
+                    return jsonify({"status": "accepted", "task_id": existing["task_id"], "task": snap}), 202
+
+            task_id = uuid.uuid4().hex[:12]
+            task_record: Dict[str, Any] = {
+                "task_id": task_id,
+                "status": "running",
+                "stage": "正在同步行情、新闻并生成复盘总结...",
+                "trade_date": target_date.isoformat(),
+                "person": req_person,
+                "model": model or "",
+                "created_ts": now_ts,
+                "finished_ts": None,
+                "error": "",
+                "report": None,
+            }
+            _AFTER_HOURS_TASKS[task_id] = task_record
+            _prune_after_hours_tasks_locked()
+
+        def _worker() -> None:
+            try:
+                report = generate_after_hours_report(
+                    trade_date=target_date,
+                    person_key=req_person,
+                    person_id=req_person_id,
+                    run_sync=allow_sync,
+                    provider=provider,
+                    model=model,
+                    trigger="manual",
+                    db_path=DATABASE_PATH,
+                    store=store,
+                )
+                structured = ensure_structured(report)
+                with _AFTER_HOURS_TASKS_LOCK:
+                    t = _AFTER_HOURS_TASKS.get(task_id)
+                    if t is not None:
+                        t["status"] = "done"
+                        t["stage"] = "复盘日报生成完成"
+                        t["report"] = structured
+                        t["finished_ts"] = time.monotonic()
+            except Exception as exc:
+                with _AFTER_HOURS_TASKS_LOCK:
+                    t = _AFTER_HOURS_TASKS.get(task_id)
+                    if t is not None:
+                        t["status"] = "error"
+                        t["stage"] = "生成失败"
+                        t["error"] = str(exc)
+                        t["finished_ts"] = time.monotonic()
+
+        threading.Thread(target=_worker, name=f"after-hours-{task_id}", daemon=True).start()
+        return jsonify({
+            "status": "accepted",
+            "task_id": task_id,
+            "task": _snapshot_after_hours_task(task_record),
+        }), 202
 
     try:
         report = generate_after_hours_report(
@@ -2614,12 +2718,30 @@ def api_ai_after_hours_generate():
             model=model,
             trigger="manual",
             db_path=DATABASE_PATH,
-            store=get_after_hours_store(),
+            store=store,
         )
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 502
 
     return jsonify({"status": "ok", "report": ensure_structured(report)})
+
+
+@api_v1.route("/ai/after-hours/task/<task_id>", methods=["GET"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_task_status(task_id: str):
+    """查询后台盘后复盘日报生成任务状态与结果。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    scoped_pid, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    with _AFTER_HOURS_TASKS_LOCK:
+        task = _AFTER_HOURS_TASKS.get(task_id)
+        if task is None:
+            return jsonify({"status": "error", "message": "未找到对应的生成任务"}), 404
+        if is_isolated and task.get("person") != scoped_pname:
+            return jsonify({"status": "error", "message": "无权查询该人员的生成任务"}), 403
+        snap = _snapshot_after_hours_task(task)
+    return jsonify({"status": "ok", "task": snap})
 
 
 # ------------------------------------------------------------------------------

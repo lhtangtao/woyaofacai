@@ -1,5 +1,17 @@
 [
   {
+    "title": "盘后复盘日报升级为后台异步生成+容错轮询，并修复长桥盘后行情凭证解包异常",
+    "time": "2026-11-26 13:28",
+    "author": "Antigravity",
+    "tag": "盘后生成防超时修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "异步后台生成与轮询（`src/portfolio/web/api_v1.py`、`frontend/src/api/client.ts`、`frontend/src/views/AfterHoursReportView.tsx`）：`POST /api/v1/ai/after-hours/generate` 新增 `async: true` 模式立即返回 `202` 与 `task_id`（支持同日期/人员/模型并发去重），并新增 `GET /api/v1/ai/after-hours/task/<task_id>`（严格保持单人隔离权限 403）；前端每 3 秒自动轮询任务状态并容忍连续 5 次短暂网络波动，彻底消除外网触发 XHigh 生成因耗时较长导致的 `Failed to fetch` 超时误报（默认模型保持现状不变）。",
+      "修复长桥盘后行情报错（`src/portfolio/services/after_hours_report.py`）：在 `fetch_after_hours_quotes()` 中兼容 `load_longbridge_credentials()` 返回的 `(access_token, app_key, app_secret)` 三元组与字典格式，解决 `tuple indices must be integers or slices, not str` 告警并恢复长桥盘后直取。",
+      "验证范围：`frontend npm run build` 编译打包至 `src/portfolio/web/static_dist/` 通过；`ruff check` 0 错误；`tests/test_after_hours_report.py` 与 `tests/test_web_compression.py` 共 9 项测试（含三元组解包与异步轮询权限隔离）全部通过；8888 服务已平滑重载生效。"
+    ]
+  },
+  {
     "title": "将「Gemini 写作助手」默认模型调整为 Gemini 4 Neon (Medium)",
     "time": "2026-11-26 13:05",
     "author": "Antigravity",

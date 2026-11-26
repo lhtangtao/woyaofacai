@@ -445,12 +445,15 @@ export const api = {
     run_sync?: boolean;
     provider?: "codex" | "gemini" | "google_api";
     model?: string;
+    async?: boolean;
   }) =>
     requestApi("/api/v1/ai/after-hours/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  aiAfterHoursTaskStatus: (taskId: string) =>
+    requestApi(`/api/v1/ai/after-hours/task/${encodeURIComponent(taskId)}`),
   aiAfterHoursSaveChecklist: (reportId: string, checkedIds: string[]) =>
     requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}/checklist`, {
       method: "POST",

@@ -311,8 +311,18 @@ def fetch_after_hours_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
         from portfolio.sync.longbridge_credentials import load_longbridge_credentials
 
         creds = load_longbridge_credentials()
-        if creds:
-            cfg = Config(creds["app_key"], creds["app_secret"], creds["access_token"])
+        app_key = app_secret = access_token = ""
+        if isinstance(creds, dict):
+            app_key = str(creds.get("app_key") or "").strip()
+            app_secret = str(creds.get("app_secret") or "").strip()
+            access_token = str(creds.get("access_token") or "").strip()
+        elif isinstance(creds, (tuple, list)) and len(creds) >= 3:
+            # load_longbridge_credentials() 返回 (access_token, app_key, app_secret)
+            access_token = str(creds[0] or "").strip()
+            app_key = str(creds[1] or "").strip()
+            app_secret = str(creds[2] or "").strip()
+        if app_key and app_secret and access_token:
+            cfg = Config(app_key, app_secret, access_token)
             ctx = QuoteContext(cfg)
             lb_syms = [f"{s}.US" for s in clean_syms]
             quotes = ctx.quote(lb_syms)

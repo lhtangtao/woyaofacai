@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Calendar,
   Check,
@@ -201,6 +201,17 @@ export const AfterHoursReportView: React.FC = () => {
       .finally(() => setLoadingDetail(false));
   }, [selectedId]);
 
+  const pollTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current !== null) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!generating) {
       setElapsedSec(0);
@@ -210,8 +221,51 @@ export const AfterHoursReportView: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [generating]);
 
+  const applyGeneratedReport = (report: any) => {
+    setDetail(report);
+    setCheckedIds(Array.isArray(report.checked_ids) ? report.checked_ids : []);
+    setSelectedId(report.id);
+    loadList(filterPerson, report.id);
+  };
+
+  const pollTaskUntilDone = (taskId: string, consecutiveFailures = 0) => {
+    pollTimerRef.current = window.setTimeout(async () => {
+      try {
+        const st = await api.aiAfterHoursTaskStatus(taskId);
+        const task = st?.task;
+        if (!task) {
+          setErrorMsg("任务状态响应为空");
+          setGenerating(false);
+          return;
+        }
+        if (task.status === "done" && task.report) {
+          applyGeneratedReport(task.report);
+          setGenerating(false);
+          return;
+        }
+        if (task.status === "error") {
+          setErrorMsg(task.error || "生成日报失败");
+          setGenerating(false);
+          return;
+        }
+        pollTaskUntilDone(taskId, 0);
+      } catch (err: any) {
+        if (consecutiveFailures + 1 >= 5) {
+          setErrorMsg(err?.message || "轮询生成结果超时，请点击右上角刷新查看");
+          setGenerating(false);
+          return;
+        }
+        pollTaskUntilDone(taskId, consecutiveFailures + 1);
+      }
+    }, 3000);
+  };
+
   const handleGenerate = async () => {
     if (generating) return;
+    if (pollTimerRef.current !== null) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
     setErrorMsg("");
     setGenerating(true);
     try {
@@ -221,18 +275,21 @@ export const AfterHoursReportView: React.FC = () => {
         run_sync: canSync ? runSync : false,
         provider: "gemini",
         model: selectedModel,
+        async: true,
       });
+      if (res.status === "accepted" && res.task_id) {
+        pollTaskUntilDone(res.task_id, 0);
+        return;
+      }
       if (res.status === "ok" && res.report) {
-        setDetail(res.report);
-        setCheckedIds(Array.isArray(res.report.checked_ids) ? res.report.checked_ids : []);
-        setSelectedId(res.report.id);
-        loadList(filterPerson, res.report.id);
+        applyGeneratedReport(res.report);
+        setGenerating(false);
       } else {
         setErrorMsg(res.message || "生成日报失败");
+        setGenerating(false);
       }
     } catch (err: any) {
       setErrorMsg(err.message || "生成日报请求异常");
-    } finally {
       setGenerating(false);
     }
   };
