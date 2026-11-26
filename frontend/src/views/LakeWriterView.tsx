@@ -68,13 +68,15 @@ interface AgyModelOption {
   label: string;
 }
 
+const DEFAULT_LAKE_WRITER_MODEL = "gemini-4-neon-medium";
+
 const DEFAULT_GEMINI_MODELS: AgyModelOption[] = [
-  { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
-  { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
-  { id: "gemini-4-hydrogen-xhigh", label: "Gemini 4 Hydrogen (XHigh)" },
   { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)" },
   { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
   { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)" },
+  { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
+  { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
+  { id: "gemini-4-hydrogen-xhigh", label: "Gemini 4 Hydrogen (XHigh)" },
   { id: "gemini-4-argon-medium", label: "Gemini 4 Argon (Medium)" },
   { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
   { id: "gemini-4-carbon-medium", label: "Gemini 4 Carbon (Medium)" },
@@ -98,13 +100,14 @@ export const LakeWriterView: React.FC<LakeWriterViewProps> = ({ isAdmin = false 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [geminiModels, setGeminiModels] = useState<AgyModelOption[]>(DEFAULT_GEMINI_MODELS);
-  const [selectedModel, setSelectedModel] = useState("gemini-4-hydrogen-high");
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_LAKE_WRITER_MODEL);
   const [geminiStatus, setGeminiStatus] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const userChangedModelRef = useRef(false);
 
   // 管理员存档视图状态
   const [archiveOwners, setArchiveOwners] = useState<string[]>([]);
@@ -121,9 +124,6 @@ export const LakeWriterView: React.FC<LakeWriterViewProps> = ({ isAdmin = false 
         if (res.status === "ok") {
           const st = res.providers?.gemini || res.ai_status;
           if (st) setGeminiStatus(st);
-          if (res.agy_model && String(res.agy_model).toLowerCase().includes("gemini")) {
-            setSelectedModel(res.agy_model);
-          }
         }
       })
       .catch(() => {});
@@ -139,8 +139,16 @@ export const LakeWriterView: React.FC<LakeWriterViewProps> = ({ isAdmin = false 
           );
           const list = onlyGemini.length > 0 ? onlyGemini : DEFAULT_GEMINI_MODELS;
           setGeminiModels(list);
-          if (res.current_model && list.some((m: AgyModelOption) => m.id === res.current_model)) {
-            setSelectedModel(res.current_model);
+          // 写作助手默认独立固定优先使用 Gemini 4 Neon (Medium)，不被全局 XHigh 配置覆盖。
+          if (!userChangedModelRef.current) {
+            if (list.some((m: AgyModelOption) => m.id === DEFAULT_LAKE_WRITER_MODEL)) {
+              setSelectedModel(DEFAULT_LAKE_WRITER_MODEL);
+            } else {
+              const firstMedium = list.find((m: AgyModelOption) =>
+                String(m.id || "").toLowerCase().includes("medium")
+              );
+              setSelectedModel(firstMedium ? firstMedium.id : list[0].id);
+            }
           } else if (!list.some((m: AgyModelOption) => m.id === selectedModel)) {
             setSelectedModel(list[0].id);
           }
@@ -217,8 +225,8 @@ export const LakeWriterView: React.FC<LakeWriterViewProps> = ({ isAdmin = false 
   }, [loading, geminiStatus]);
 
   const handleModelChange = (nextModel: string) => {
+    userChangedModelRef.current = true;
     setSelectedModel(nextModel);
-    api.aiSaveAgyModel(nextModel).catch(() => {});
   };
 
   const handleCreateTab = async () => {

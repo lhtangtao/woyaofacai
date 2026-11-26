@@ -1,3 +1,8 @@
+## 2026-11-26 13:05 将「Gemini 写作助手」默认模型调整为 Gemini 4 Neon (Medium)
+
+- 修改者：Antigravity（代码修改）
+- 更新 `frontend/src/views/LakeWriterView.tsx` 与 `src/portfolio/web/api_v1.py`：写作助手默认固定优先选用 `Gemini 4 Neon (Medium)`（不被全局分析页的 `XHigh` 覆盖，且写作页切换模型不影响全局配置）。`npm run build`、`ruff` 与 `tests/test_lake_writer.py`、`tests/test_web_compression.py` 6 项测试通过。
+
 ## 2026-11-26 12:55 默认公网隧道切回 ngrok 固定域名并完成全链路实测
 
 - 修改者：Antigravity（代码修改）

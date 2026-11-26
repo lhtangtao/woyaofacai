@@ -104,7 +104,7 @@ def test_lake_writer_multi_tab_soft_clear_and_admin_archives(tmp_path, monkeypat
     seen_calls = []
 
     def fake_writer(cls, prompt, history=None, model=None, cancel_event=None, provider="gemini"):
-        seen_calls.append({"prompt": prompt, "history_len": len(history or []), "provider": provider})
+        seen_calls.append({"prompt": prompt, "history_len": len(history or []), "provider": provider, "model": model})
         return f"成稿：{prompt}"
 
     monkeypatch.setattr(api_module.AIService, "ask_article_writer", classmethod(fake_writer))
@@ -159,9 +159,10 @@ def test_lake_writer_multi_tab_soft_clear_and_admin_archives(tmp_path, monkeypat
     assert clr.get_json()["archived_count"] == 2
     assert lake_client.get(f"/api/v1/ai/lake-writer/history?tab_id={tab2_id}").get_json()["messages"] == []
 
-    # 软清空后再发消息，Gemini 只看到清空后的新上下文（0 条）
+    # 软清空后再发消息，Gemini 只看到清空后的新上下文（0 条），且默认模型应为 gemini-4-neon-medium
     lake_client.post("/api/v1/ai/lake-writer/chat", json={"prompt": "重新写一版", "tab_id": tab2_id})
     assert seen_calls[-1]["history_len"] == 0
+    assert seen_calls[-1]["model"] == "gemini-4-neon-medium"
 
     # 软删除（关闭）tab2：拉科活跃列表只剩 tab1，但后台档案依然存在
     deleted = lake_client.post(f"/api/v1/ai/lake-writer/tabs/{tab2_id}/delete", json={}).get_json()

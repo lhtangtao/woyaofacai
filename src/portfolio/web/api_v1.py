@@ -2378,7 +2378,7 @@ def api_ai_lake_writer_chat():
 
     raw_provider = normalize_ai_provider(data.get("provider"))
     provider = raw_provider if raw_provider in ("gemini", "google_api") else "gemini"
-    model = str(data.get("model") or "").strip() or None
+    model = str(data.get("model") or "").strip() or "gemini-4-neon-medium"
     req_tab_id = str(data.get("tab_id") or "").strip() or None
 
     store = get_lake_writer_store()
