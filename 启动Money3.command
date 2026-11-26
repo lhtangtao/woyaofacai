@@ -10,7 +10,7 @@ export MONEY3_HOME="$APP_DIR"
 # 功能说明：
 # - 默认行为：双击一键启动全部组件：
 #   1. 手机端后台服务 (Flask Web / PWA on Port 8888)
-#   2. 公网安全直连隧道 (优先 cpolar 国内高速节点 cn_top，未绑定 Token 时自动回退 Cloudflare Tunnel)
+#   2. 公网安全直连隧道 (按可用配置自动择优: cpolar 国内节点 -> ngrok 固定域名 -> Cloudflare Tunnel)
 #   3. 桌面端图形界面 (PySide6 GUI)
 #   4. 崩溃自动重启守护 (Watchdog：桌面端异常崩溃自动重启，Web/隧道异常断开或假死自动拉起)
 # - 数据同步参数：
@@ -21,7 +21,7 @@ export MONEY3_HOME="$APP_DIR"
 #   ./启动Money3.command --only-mobile     (仅启动手机后台与公网隧道，不打开桌面端GUI)
 #   ./启动Money3.command --no-public       (仅启动桌面端与局域网手机端，不开启公网隧道)
 #   ./启动Money3.command --no-mobile       (仅启动桌面端GUI，不启动手机端服务与公网)
-#   ./启动Money3.command --tunnel=cpolar|cloudflared|auto  (指定公网隧道引擎，默认 auto 优先 cpolar)
+#   ./启动Money3.command --tunnel=auto|ngrok|cpolar|cloudflared  (指定公网隧道引擎)
 #   ./启动Money3.command --no-auto-restart (关闭崩溃自动重启守护，便于调试)
 #   ./启动Money3.command --stop            (一键停止手机后台服务、公网隧道与守护进程)
 # ==============================================================================
@@ -76,7 +76,7 @@ for arg in "$@"; do
             START_MOBILE=0
             START_PUBLIC=0
             ;;
-        --tunnel=cpolar|--tunnel=cloudflared|--tunnel=auto)
+        --tunnel=ngrok|--tunnel=cpolar|--tunnel=cloudflared|--tunnel=auto)
             TUNNEL_MODE="${arg#*=}"
             ;;
         --no-auto-restart)
@@ -93,7 +93,7 @@ for arg in "$@"; do
             print "  --only-mobile      仅启动手机后台服务与公网隧道，不打开桌面端图形窗口"
             print "  --no-public        仅启动桌面端与局域网手机端，不建立公网隧道"
             print "  --no-mobile        仅启动桌面端 GUI，不启动手机端服务"
-            print "  --tunnel=MODE      指定公网隧道引擎: auto(默认优先cpolar) | cpolar | cloudflared"
+            print "  --tunnel=MODE      指定公网隧道引擎: auto | ngrok | cpolar | cloudflared"
             print "  --no-auto-restart  关闭崩溃自动重启守护机制（方便开发调试）"
             print "  --stop             一键停止手机端后台服务、公网隧道与自动重启守护"
             print ""
@@ -162,6 +162,11 @@ if [[ "$STOP_ALL" == "1" ]]; then
     fi
 
     STOPPED_ANY_TUNNEL=0
+    if pgrep -f "^$APP_DIR/tools/ngrok http" &>/dev/null; then
+        pkill -f "^$APP_DIR/tools/ngrok http" 2>/dev/null || true
+        print "✅ 公网隧道 (ngrok) 已安全停止。"
+        STOPPED_ANY_TUNNEL=1
+    fi
     if pgrep -f "^$APP_DIR/tools/cpolar http" &>/dev/null; then
         pkill -f "^$APP_DIR/tools/cpolar http" 2>/dev/null || true
         print "✅ 公网隧道 (cpolar 国内高速节点) 已安全停止。"
@@ -170,11 +175,6 @@ if [[ "$STOP_ALL" == "1" ]]; then
     if pgrep -f "^$APP_DIR/tools/cloudflared tunnel --url http://127.0.0.1:8888" &>/dev/null; then
         pkill -f "^$APP_DIR/tools/cloudflared tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
         print "✅ 公网隧道 (cloudflared) 已安全停止。"
-        STOPPED_ANY_TUNNEL=1
-    fi
-    if pgrep -f "ngrok http 8888" &>/dev/null; then
-        pkill -f "ngrok http 8888" 2>/dev/null || true
-        print "✅ 残留公网隧道 (ngrok) 已安全停止。"
         STOPPED_ANY_TUNNEL=1
     fi
     if [[ "$STOPPED_ANY_TUNNEL" == "0" ]]; then
@@ -323,11 +323,13 @@ PY
 fi
 
 # ------------------------------------------------------------------------------
-# 2. 启动并检测公网直连隧道 (优先 cpolar 国内高速节点 -> 备选 cloudflared)
+# 2. 启动并检测公网直连隧道 (cpolar -> ngrok -> cloudflared)
 # ------------------------------------------------------------------------------
 CPOLAR_BIN="$APP_DIR/tools/cpolar"
 CPOLAR_LOG="/tmp/money_cpolar.log"
 CPOLAR_CFG="$HOME/.cpolar/cpolar.yml"
+NGROK_BIN="$APP_DIR/tools/ngrok"
+NGROK_LOG="/tmp/money_ngrok.log"
 CLOUDFLARED_BIN="$APP_DIR/tools/cloudflared"
 CLOUDFLARED_LOG="/tmp/money_cloudflared.log"
 PUBLIC_URL=""
@@ -344,9 +346,13 @@ if [[ -x "$CPOLAR_BIN" && -f "$CPOLAR_CFG" ]] && grep -Eq '^[[:space:]]*authtoke
     HAS_CPOLAR_AUTH=1
 fi
 
-extract_cpolar_public_url() {
-    local url=""
-    url=$("$APP_DIR/.venv/bin/python" - <<'PY' 2>/dev/null || true
+HAS_NGROK_AUTH=0
+if [[ -x "$NGROK_BIN" ]] && "$NGROK_BIN" config check >/dev/null 2>&1; then
+    HAS_NGROK_AUTH=1
+fi
+
+extract_local_4040_tunnel_url() {
+    "$APP_DIR/.venv/bin/python" - <<'PY' 2>/dev/null || true
 import json
 import urllib.request
 
@@ -366,7 +372,11 @@ try:
 except Exception:
     pass
 PY
-)
+}
+
+extract_cpolar_public_url() {
+    local url=""
+    url=$(extract_local_4040_tunnel_url)
     if [[ -n "$url" ]]; then
         print -r -- "$url"
         return 0
@@ -376,10 +386,19 @@ PY
     fi
 }
 
-if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
-    # 停掉残留的旧 ngrok 进程，避免占用或混淆隧道地址
-    pkill -f "$APP_DIR/tools/ngrok" 2>/dev/null || true
+extract_ngrok_public_url() {
+    local url=""
+    url=$(extract_local_4040_tunnel_url)
+    if [[ -n "$url" ]]; then
+        print -r -- "$url"
+        return 0
+    fi
+    if [[ -f "$NGROK_LOG" ]]; then
+        grep -Eo 'https://[a-zA-Z0-9.-]+\.ngrok(-free)?\.(dev|app|io)' "$NGROK_LOG" 2>/dev/null | tail -n 1 || true
+    fi
+}
 
+if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
     TUNNEL_WATCHDOG_ALIVE=1
     if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
         TUNNEL_WATCHDOG_ALIVE=0
@@ -391,23 +410,43 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
         fi
     fi
 
-    USE_CPOLAR=0
-    if [[ "$TUNNEL_MODE" == "cpolar" ]]; then
+    SELECTED_ENGINE=""
+    case "$TUNNEL_MODE" in
+        cpolar)
+            if [[ "$HAS_CPOLAR_AUTH" == "1" ]]; then
+                SELECTED_ENGINE="cpolar"
+            else
+                print "⚠️ 未检测到 cpolar Authtoken（~/.cpolar/cpolar.yml），本次回退选择其他可用隧道。"
+            fi
+            ;;
+        ngrok)
+            if [[ "$HAS_NGROK_AUTH" == "1" ]]; then
+                SELECTED_ENGINE="ngrok"
+            else
+                print "⚠️ ngrok 配置检查未通过，本次回退选择 Cloudflare Tunnel。"
+            fi
+            ;;
+        cloudflared)
+            SELECTED_ENGINE="cloudflared"
+            ;;
+    esac
+
+    if [[ -z "$SELECTED_ENGINE" ]]; then
         if [[ "$HAS_CPOLAR_AUTH" == "1" ]]; then
-            USE_CPOLAR=1
-        else
-            print "⚠️ 未检测到 cpolar Authtoken（~/.cpolar/cpolar.yml），本次回退使用 cloudflared。"
+            SELECTED_ENGINE="cpolar"
+        elif [[ "$HAS_NGROK_AUTH" == "1" ]]; then
+            SELECTED_ENGINE="ngrok"
+        elif [[ -x "$CLOUDFLARED_BIN" ]]; then
+            SELECTED_ENGINE="cloudflared"
         fi
-    elif [[ "$TUNNEL_MODE" == "auto" && "$HAS_CPOLAR_AUTH" == "1" ]]; then
-        USE_CPOLAR=1
     fi
 
-    if [[ "$USE_CPOLAR" == "1" ]]; then
+    if [[ "$SELECTED_ENGINE" == "cpolar" ]]; then
         TUNNEL_PROVIDER="cpolar"
         ACTIVE_TUNNEL_LOG="$CPOLAR_LOG"
-        # 切换为 cpolar 前清理旧的 cloudflared，避免双隧道混用
-        if pgrep -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1; then
+        if pgrep -f "^$NGROK_BIN http" >/dev/null 2>&1 || pgrep -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1; then
             stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
+            pkill -f "^$NGROK_BIN http" 2>/dev/null || true
             pkill -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
             TUNNEL_WATCHDOG_ALIVE=0
         fi
@@ -449,9 +488,62 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" ]]; then
                 fi
             done
         fi
+    elif [[ "$SELECTED_ENGINE" == "ngrok" ]]; then
+        TUNNEL_PROVIDER="ngrok"
+        ACTIVE_TUNNEL_LOG="$NGROK_LOG"
+        if pgrep -f "^$CPOLAR_BIN http" >/dev/null 2>&1 || pgrep -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1; then
+            stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
+            pkill -f "^$CPOLAR_BIN http" 2>/dev/null || true
+            pkill -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
+            TUNNEL_WATCHDOG_ALIVE=0
+        fi
+
+        if [[ "$TUNNEL_WATCHDOG_ALIVE" == "1" ]] \
+            && pgrep -f "^$NGROK_BIN http" >/dev/null 2>&1 \
+            && curl -sf --noproxy '*' --max-time 2 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+            PUBLIC_URL=$(extract_ngrok_public_url)
+        fi
+
+        if [[ -n "$PUBLIC_URL" ]]; then
+            IS_TUNNEL_RUNNING=1
+        else
+            stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
+            pkill -f "^$NGROK_BIN http" 2>/dev/null || true
+            : > "$NGROK_LOG"
+            # 清除代理环境变量防 ERR_NGROK_9009；显式转发到 http://127.0.0.1:8888 避免 macOS IPv6 ::1 握手异常触发 ERR_NGROK_3004
+            if [[ "$AUTO_RESTART" == "1" && -f "$WATCHDOG_SCRIPT" ]]; then
+                nohup env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
+                    "$APP_DIR/.venv/bin/python" "$WATCHDOG_SCRIPT" \
+                    --name tunnel --restart-on-zero --redirect-child-output \
+                    --pid-file "$TUNNEL_WATCHDOG_PID_FILE" \
+                    --log-file "$NGROK_LOG" \
+                    --crash-dir "$CRASH_DIR" \
+                    --context-log "$NGROK_LOG" \
+                    --health-url "http://127.0.0.1:4040/api/tunnels" \
+                    --health-interval 30 --health-grace 20 --health-failures 3 \
+                    -- "$NGROK_BIN" http http://127.0.0.1:8888 --log=stdout --log-level=info >/dev/null 2>&1 &
+            else
+                nohup env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
+                    "$NGROK_BIN" http http://127.0.0.1:8888 --log=stdout --log-level=info > "$NGROK_LOG" 2>&1 &
+            fi
+            for i in {1..40}; do
+                sleep 0.3
+                PUBLIC_URL=$(extract_ngrok_public_url)
+                if [[ -n "$PUBLIC_URL" ]]; then
+                    IS_TUNNEL_RUNNING=1
+                    break
+                fi
+            done
+        fi
     elif [[ -x "$CLOUDFLARED_BIN" ]]; then
         TUNNEL_PROVIDER="cloudflared"
         ACTIVE_TUNNEL_LOG="$CLOUDFLARED_LOG"
+        if pgrep -f "^$NGROK_BIN http" >/dev/null 2>&1 || pgrep -f "^$CPOLAR_BIN http" >/dev/null 2>&1; then
+            stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
+            pkill -f "^$NGROK_BIN http" 2>/dev/null || true
+            pkill -f "^$CPOLAR_BIN http" 2>/dev/null || true
+            TUNNEL_WATCHDOG_ALIVE=0
+        fi
         # 先检查是否已有健康运行中的 cloudflared 隧道（受 watchdog 托管且 /ready 为 200）并提取 URL
         if [[ "$TUNNEL_WATCHDOG_ALIVE" == "1" ]] \
             && pgrep -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 \
@@ -522,14 +614,13 @@ fi
 if [[ -n "$PUBLIC_URL" ]]; then
     if [[ "$TUNNEL_PROVIDER" == "cpolar" ]]; then
         print "  ✅ 2. 公网直连高速隧道已建立 (cpolar 国内节点 ${CPOLAR_REGION} · 已复制网址！)"
+    elif [[ "$TUNNEL_PROVIDER" == "ngrok" ]]; then
+        print "  ✅ 2. 公网直连安全隧道已建立 (ngrok 固定域名 · 已自动复制网址到剪贴板！)"
     else
         print "  ✅ 2. 公网直连安全隧道已建立 (Cloudflare Tunnel · 已自动复制网址到剪贴板！)"
-        if [[ -x "$CPOLAR_BIN" && "$HAS_CPOLAR_AUTH" == "0" ]]; then
-            print "     💡 提示: 绑定 cpolar Authtoken 可升级国内高速节点: ./tools/cpolar authtoken <Token>"
-        fi
     fi
 else
-    print "  ℹ️ 2. 公网隧道未运行 (如需开启请确认已配置 tools/cpolar 或 tools/cloudflared)"
+    print "  ℹ️ 2. 公网隧道未运行 (如需开启请确认已配置 tools/ngrok、tools/cpolar 或 tools/cloudflared)"
 fi
 
 if [[ "$START_DESKTOP" == "1" ]]; then
@@ -627,6 +718,6 @@ else
     [[ -n "$PUBLIC_URL" ]] && print "  • 隧道日志: $ACTIVE_TUNNEL_LOG"
     print "  • 若需停止服务，可按 Ctrl + C 或执行 ./启动Money3.command --stop"
     print "=================================================================="
-    trap 'stop_pid_file "$WEB_WATCHDOG_PID_FILE" "watchdog.py" || true; stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true; kill "$MOBILE_PID" 2>/dev/null || true; pkill -f "^$CPOLAR_BIN http" 2>/dev/null || true; pkill -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true; exit 0' INT TERM
+    trap 'stop_pid_file "$WEB_WATCHDOG_PID_FILE" "watchdog.py" || true; stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true; kill "$MOBILE_PID" 2>/dev/null || true; pkill -f "^$NGROK_BIN http" 2>/dev/null || true; pkill -f "^$CPOLAR_BIN http" 2>/dev/null || true; pkill -f "^$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true; exit 0' INT TERM
     tail -f "$MOBILE_LOG"
 fi

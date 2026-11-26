@@ -1,3 +1,9 @@
+## 2026-11-26 12:55 默认公网隧道切回 ngrok 固定域名并完成全链路实测
+
+- 修改者：Antigravity（代码修改）
+- 在 `启动Money3.command` 新增 `--tunnel=auto|ngrok|cpolar|cloudflared` 参数，将本机已认证的 `tools/ngrok` 重新纳入默认优先通道，显式清除代理环境变量并转发至 `http://127.0.0.1:8888`，接入 Watchdog `4040` API 守护。
+- `zsh -n` 校验通过，并亲自完成公网固定域名全链路实测：首页（0.87s / 直连 1.06s）、Gzip CSS（2.97s）、504 KB Gzip 主 JS（11.20s，带 `immutable` 强缓存）及 `/api/auth/me`（1.41s）全部返回 `HTTP 200`。
+
 ## 2026-11-26 12:36 安装 cpolar 国内高速节点客户端并接入启动器
 
 - 修改者：Antigravity（代码修改）

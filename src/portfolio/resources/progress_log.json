@@ -1,5 +1,17 @@
 [
   {
+    "title": "默认公网隧道切回 ngrok 固定域名，修复本地转发与代理冲突并完成全链路实测",
+    "time": "2026-11-26 12:55",
+    "author": "Antigravity",
+    "tag": "ngrok 固定域名已恢复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "升级 `启动Money3.command` 新增 `--tunnel=auto|ngrok|cpolar|cloudflared` 选项，并在 `auto` 模式下按 `cpolar(已配Token) -> ngrok(已配置) -> cloudflared` 自动择优。",
+      "切回 `tools/ngrok` 时显式清除代理环境变量（`env -u HTTP_PROXY/...` 防 `ERR_NGROK_9009`）并显式转发至 `http://127.0.0.1:8888`（避开 macOS IPv6 `::1` 与短连接中断导致的 `ERR_NGROK_3004`），接入 Watchdog `http://127.0.0.1:4040/api/tunnels` 周期探活，同步完善 `--stop` 与 `--only-mobile` 清理。",
+      "验证范围：`zsh -n 启动Money3.command` 与 `--help` 通过；对恢复后的固定域名亲自完成端到端访问实测——首页 `HTTP 200`（0.87s，无代理直连东京 IP 1.06s）、压缩 CSS `HTTP 200`（8.2 KB，2.97s）、504 KB 压缩主 JS `HTTP 200`（11.20s，带 `immutable` 缓存）及 `/api/auth/me` `HTTP 200`（1.41s），无 `ERR_NGROK_3004` / `9009` / `3200` 报错。"
+    ]
+  },
+  {
     "title": "安装 cpolar 国内高速节点客户端并接入启动器（自动优先国内 cn_top，未绑定回退 Cloudflared）",
     "time": "2026-11-26 12:36",
     "author": "Antigravity",
