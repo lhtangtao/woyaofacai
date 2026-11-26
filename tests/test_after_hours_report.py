@@ -480,3 +480,37 @@ def test_ai_service_injects_system_proxies_when_env_missing(monkeypatch):
     CodexAIService._inject_system_proxies(env)
     assert env["HTTP_PROXY"] == "http://127.0.0.1:7897"
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7897"
+
+
+def test_after_hours_default_model_timeout_and_news_dedup():
+    """验证默认模型为 gemini-4-neon-high、CLI 超时 600 秒及新闻去重限流逻辑。"""
+    import inspect
+
+    from portfolio.services.after_hours_report import (
+        DEFAULT_AFTER_HOURS_MODEL,
+        _dedupe_and_trim_news_for_prompt,
+    )
+    from portfolio.services.ai_service import CodexAIService
+
+    assert DEFAULT_AFTER_HOURS_MODEL == "gemini-4-neon-high"
+    sig = inspect.signature(CodexAIService._run_cli_process)
+    assert sig.parameters["max_timeout"].default == 600.0
+
+    news = {
+        "TQQQ": [
+            {"title": "Nasdaq tumbles on AI chip selloff today", "publisher": "Reuters"},
+            {"title": "Nasdaq tumbles on AI chip selloff today!", "publisher": "Yahoo"},
+            {"title": "ProShares TQQQ sees heavy volume", "publisher": "MarketWatch"},
+            {"title": "Third distinct story for TQQQ", "publisher": "CNBC"},
+        ],
+        "SOXL": [
+            {"title": "Nasdaq tumbles on AI chip selloff today", "publisher": "Reuters"},
+            {"title": "Semiconductor index drops 5%", "publisher": "Bloomberg"},
+        ],
+    }
+    holdings = [{"symbol": "TQQQ"}, {"symbol": "SOXL"}]
+    trimmed = _dedupe_and_trim_news_for_prompt(news, holdings, max_per_symbol=2, max_total=10)
+    trimmed_dict = dict(trimmed)
+    assert len(trimmed_dict["TQQQ"]) == 2
+    assert len(trimmed_dict["SOXL"]) == 1
+    assert trimmed_dict["SOXL"][0]["title"] == "Semiconductor index drops 5%"

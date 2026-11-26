@@ -40,6 +40,7 @@ NY_TZ = ZoneInfo("America/New_York")
 BJ_TZ = ZoneInfo("Asia/Shanghai")
 
 AFTER_HOURS_FILENAME = "after_hours_reports.json"
+DEFAULT_AFTER_HOURS_MODEL = "gemini-4-neon-high"
 LEVERAGED_ETF_SYMBOLS = frozenset({
     "TQQQ", "SQQQ", "SOXL", "SOXS", "KORU", "NVDL", "NVDS",
     "TSLL", "TSLS", "CONL", "MSTU", "MSTX", "UPRO", "SPXL",
@@ -831,6 +832,54 @@ def build_after_hours_snapshot(
     }
 
 
+def _dedupe_and_trim_news_for_prompt(
+    news: Dict[str, List[Dict[str, Any]]],
+    holdings: List[Dict[str, Any]],
+    *,
+    max_per_symbol: int = 2,
+    max_total: int = 16,
+) -> List[tuple[str, List[Dict[str, Any]]]]:
+    """按持仓权重优先去重并精简传给 AI 的新闻（每只标的最多 2~3 条不同新闻，防提示词过长超时）。"""
+    if not news:
+        return []
+    priority_syms: List[str] = []
+    for h in holdings:
+        for s in (h.get("symbol"), h.get("underlying")):
+            su = str(s or "").strip().upper()
+            if su and su in news and su not in priority_syms:
+                priority_syms.append(su)
+    for s in sorted(news.keys()):
+        if s not in priority_syms:
+            priority_syms.append(s)
+
+    seen_norm: set[str] = set()
+    seen_prefix: set[str] = set()
+    total_cnt = 0
+    result: List[tuple[str, List[Dict[str, Any]]]] = []
+    for sym in priority_syms:
+        if total_cnt >= max_total:
+            break
+        picked: List[Dict[str, Any]] = []
+        for it in news.get(sym) or []:
+            title = str(it.get("title") or "").strip()
+            if not title:
+                continue
+            norm = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
+            prefix = norm[:42]
+            if not norm or norm in seen_norm or (len(prefix) >= 24 and prefix in seen_prefix):
+                continue
+            seen_norm.add(norm)
+            if prefix:
+                seen_prefix.add(prefix)
+            picked.append(it)
+            total_cnt += 1
+            if len(picked) >= max_per_symbol or total_cnt >= max_total:
+                break
+        if picked:
+            result.append((sym, picked))
+    return result
+
+
 def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, Any]) -> str:
     """将结构化盘后事实快照拼装为发给 Gemini 的双轨（JSON + Markdown）复盘指令。"""
     summary = snapshot.get("summary") or {}
@@ -875,8 +924,9 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         )
     holding_text = "\n".join(holding_lines) if holding_lines else "- 当前无持仓"
 
+    trimmed_news = _dedupe_and_trim_news_for_prompt(news, holdings, max_per_symbol=2, max_total=16)
     news_lines = []
-    for sym, items in sorted(news.items()):
+    for sym, items in trimmed_news:
         for it in items:
             news_lines.append(
                 f"- [{sym}] ({it.get('published_bj') or '近期'} · {it.get('publisher') or '媒体'}) {it.get('title')}"
@@ -1267,13 +1317,14 @@ def ask_after_hours_followup(
         f"请直接结合上述持仓数据、成本与盘后走势给出具体、可落地的建议（Markdown 排版，避免空泛套话）。"
     )
 
+    chosen_model = (model or "").strip() or (DEFAULT_AFTER_HOURS_MODEL if prov == "gemini" else None)
     if ai_asker is not None:
         answer = ai_asker(prompt, prov, chosen_model)
     else:
         answer = CodexAIService.ask(prompt, context="", model=chosen_model, provider=prov)
 
     target_store = store or AfterHoursReportStore()
-    used_model = chosen_model or (CodexAIService.get_agy_model() if prov == "gemini" else "")
+    used_model = chosen_model or (DEFAULT_AFTER_HOURS_MODEL if prov == "gemini" else "")
     updated = target_store.append_followup(str(rep["id"]), q, answer, model=used_model)
     return {
         "answer": answer,
@@ -1329,7 +1380,7 @@ def generate_after_hours_report(
 
     # 3. 调用 AI 生成双轨复盘报告并解析结构化字段
     prompt = _build_after_hours_prompt(snapshot, sync_status)
-    chosen_model = (model or "").strip() or None
+    chosen_model = (model or "").strip() or (DEFAULT_AFTER_HOURS_MODEL if prov == "gemini" else None)
     if ai_asker is not None:
         raw_reply = ai_asker(prompt, prov, chosen_model)
     else:

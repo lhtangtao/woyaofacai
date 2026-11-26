@@ -1,3 +1,9 @@
+## 2026-11-26 21:23 盘后复盘默认模型切换为 Gemini 4 Neon (High)，超时放宽至 10 分钟并去重精简新闻
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/services/after_hours_report.py`、`src/portfolio/ui/after_hours_report_page.py` 与 `frontend/src/views/AfterHoursReportView.tsx` 将盘后复盘及追问默认模型统一为 `gemini-4-neon-high`（不被全局 `XHigh` 覆盖），并新增 `_dedupe_and_trim_news_for_prompt()` 按持仓权重去重精简为每只标的最多 2 条不同新闻（总上限 16 条）。
+- 在 `src/portfolio/services/ai_service.py` 将 `_run_cli_process()` 默认超时从 300 秒放宽至 600 秒（10 分钟），并增加 `EOF`/`connection reset` 偶发网络中断自动重试 1 次。`npm run build`、`ruff check` 与 `tests/test_after_hours_report.py` 9 项测试全部通过。
+
 ## 2026-11-26 20:47 修复长桥盘后行情 Config.from_apikey、AI 子进程系统代理注入与桌面端失败日志
 
 - 修改者：Antigravity（代码修改）

@@ -1,5 +1,18 @@
 [
   {
+    "title": "盘后复盘默认模型切换为 Gemini 4 Neon (High)，超时放宽至 10 分钟并去重精简新闻",
+    "time": "2026-11-26 21:23",
+    "author": "Antigravity",
+    "tag": "Neon High + 10分钟超时",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "切换盘后复盘默认模型（`src/portfolio/services/after_hours_report.py`、`src/portfolio/ui/after_hours_report_page.py`、`frontend/src/views/AfterHoursReportView.tsx`）：新增 `DEFAULT_AFTER_HOURS_MODEL = \"gemini-4-neon-high\"`，Web 与桌面端盘后复盘生成及追问均默认优先使用 `Gemini 4 Neon (High)`（不被全局分析页 `XHigh` 覆盖）。",
+      "去重并精简传入 AI 的新闻（`_dedupe_and_trim_news_for_prompt`）：按持仓权重优先顺序对新闻标题归一化去重与同源前缀去重，每只标的最多传入 2 条不同新闻（总上限 16 条），避免 42 条重复/噪音新闻撑爆 Prompt。",
+      "放宽 CLI 超时与偶发 EOF 重试（`src/portfolio/services/ai_service.py`）：将 `_run_cli_process` 默认 `max_timeout` 从 300 秒提升至 600 秒（10 分钟），并在 `_ask_gemini()` 遇到 `EOF`/`connection reset`/`broken pipe` 偶发中断时自动等待 2 秒重试 1 次。",
+      "验证范围：`frontend npm run build` 打包至 `src/portfolio/web/static_dist/` 通过；`ruff check` 0 错误；`tests/test_after_hours_report.py` 9 项测试全部通过；8888 服务已平滑重载。"
+    ]
+  },
+  {
     "title": "修复长桥盘后行情 Config.from_apikey 调用异常、AI 子进程自动继承系统代理及桌面端失败日志",
     "time": "2026-11-26 20:47",
     "author": "Antigravity",

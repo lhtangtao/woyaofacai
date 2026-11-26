@@ -46,11 +46,13 @@ interface AgyModelOption {
   label: string;
 }
 
+const DEFAULT_AFTER_HOURS_MODEL = "gemini-4-neon-high";
+
 const DEFAULT_MODELS: AgyModelOption[] = [
+  { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
+  { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)" },
   { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
   { id: "gemini-4-hydrogen-medium", label: "Gemini 4 Hydrogen (Medium)" },
-  { id: "gemini-4-neon-medium", label: "Gemini 4 Neon (Medium)" },
-  { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
   { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
 ];
 
@@ -109,7 +111,7 @@ export const AfterHoursReportView: React.FC = () => {
   const [genDate, setGenDate] = useState<string>("");
   const [runSync, setRunSync] = useState<boolean>(true);
   const [models, setModels] = useState<AgyModelOption[]>(DEFAULT_MODELS);
-  const [selectedModel, setSelectedModel] = useState<string>("gemini-4-hydrogen-high");
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_AFTER_HOURS_MODEL);
 
   const [selectedId, setSelectedId] = useState<string>("");
   const [detail, setDetail] = useState<any>(null);
@@ -171,7 +173,12 @@ export const AfterHoursReportView: React.FC = () => {
       .then((res) => {
         if (res.status === "ok" && Array.isArray(res.models) && res.models.length > 0) {
           setModels(res.models);
-          if (res.current_model) setSelectedModel(res.current_model);
+          const hasDefault = res.models.some((m: AgyModelOption) => m.id === DEFAULT_AFTER_HOURS_MODEL);
+          if (hasDefault) {
+            setSelectedModel(DEFAULT_AFTER_HOURS_MODEL);
+          } else if (res.current_model) {
+            setSelectedModel(res.current_model);
+          }
         }
       })
       .catch(() => {});

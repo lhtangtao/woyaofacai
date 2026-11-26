@@ -34,13 +34,13 @@ from PySide6.QtWidgets import (
 
 from portfolio.paths import DATABASE_PATH
 from portfolio.services.after_hours_report import (
+    DEFAULT_AFTER_HOURS_MODEL,
     AfterHoursReportStore,
     ask_after_hours_followup,
     ensure_structured,
     generate_after_hours_report,
     resolve_default_trade_date,
 )
-from portfolio.services.ai_service import CodexAIService
 
 logger = logging.getLogger(__name__)
 
@@ -1095,7 +1095,7 @@ class AfterHoursReportPage(QWidget):
         target_date = date(qd.year(), qd.month(), qd.day())
         person_key = str(self.person_combo.currentData() or "个人")
         run_sync = self.sync_check.isChecked()
-        model = CodexAIService.get_agy_model()
+        model = DEFAULT_AFTER_HOURS_MODEL
 
         self.generate_btn.setEnabled(False)
         self.generate_btn.setText("正在同步并生成...")
@@ -1148,7 +1148,7 @@ class AfterHoursReportPage(QWidget):
         self._followup_worker = _FollowupWorker(
             report=self._current_report,
             question=q,
-            model=CodexAIService.get_agy_model(),
+            model=DEFAULT_AFTER_HOURS_MODEL,
             store=self.store,
         )
         self._followup_worker.finished_reply.connect(self._on_followup_ok)

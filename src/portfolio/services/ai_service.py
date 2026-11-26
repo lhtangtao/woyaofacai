@@ -4,11 +4,8 @@ Bridges the local Codex CLI subscription to provide AI investment assistant capa
 without requiring manual API key configuration or extra token billing.
 Supports multi-dimensional contextual filtering across Person, Channel, and Ticker.
 """
-from datetime import datetime
-from decimal import Decimal
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
@@ -17,9 +14,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
 
 from portfolio.paths import API_CONFIG_PATH, quote_cache_path
-
 
 SUPPORTED_AI_PROVIDERS = ("codex", "gemini", "google_api")
 DEFAULT_GOOGLE_API_MODEL = "gemini-3.8-flash"
@@ -923,7 +922,7 @@ class CodexAIService:
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         cancel_event: threading.Event | None = None,
-        max_timeout: float = 300.0,
+        max_timeout: float = 600.0,
     ) -> int:
         """统一执行外部 AI CLI 子进程并支持实时取消与超时保护，防止 PIPE 阻塞。"""
         proc = None
@@ -1084,19 +1083,30 @@ class CodexAIService:
             provider_label = "Gemini (Antigravity CLI)"
 
         try:
-            rc = cls._run_cli_process(
-                cmd,
-                provider_label=provider_label,
-                stdout_path=out_path,
-                stderr_path=err_path,
-                cwd=tempfile.gettempdir(),
-                env=env,
-                cancel_event=cancel_event,
-            )
-            stdout_text = Path(out_path).read_text(encoding="utf-8", errors="replace").strip() if Path(out_path).exists() else ""
-            stderr_text = Path(err_path).read_text(encoding="utf-8", errors="replace").strip() if Path(err_path).exists() else ""
-            if rc != 0:
+            max_attempts = 2
+            stdout_text = ""
+            stderr_text = ""
+            rc = 0
+            for attempt in range(max_attempts):
+                rc = cls._run_cli_process(
+                    cmd,
+                    provider_label=provider_label,
+                    stdout_path=out_path,
+                    stderr_path=err_path,
+                    cwd=tempfile.gettempdir(),
+                    env=env,
+                    cancel_event=cancel_event,
+                )
+                stdout_text = Path(out_path).read_text(encoding="utf-8", errors="replace").strip() if Path(out_path).exists() else ""
+                stderr_text = Path(err_path).read_text(encoding="utf-8", errors="replace").strip() if Path(err_path).exists() else ""
+                if rc == 0:
+                    break
                 err_msg = stderr_text[-2000:] or stdout_text[-2000:] or f"退出码 {rc}"
+                low_err = err_msg.lower()
+                is_transient = any(tok in low_err for tok in ("eof", "connection reset", "broken pipe", "tls handshake timeout"))
+                if attempt + 1 < max_attempts and is_transient and not (cancel_event and cancel_event.is_set()):
+                    time.sleep(2.0)
+                    continue
                 if "UNSUPPORTED_CLIENT" in err_msg or "IneligibleTierError" in err_msg:
                     raise RuntimeError(
                         "Google 个人账号已不再支持旧版 gemini-cli；请改用本机 Antigravity CLI (agy) 或配置 GEMINI_API_KEY。"
