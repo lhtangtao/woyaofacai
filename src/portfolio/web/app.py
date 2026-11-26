@@ -17,9 +17,11 @@ Security & Access Control (PRD v2.0):
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from functools import wraps
+import gzip
 import json
 import logging
 import math
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -146,24 +148,73 @@ def authenticate_and_authorize_request():
         g.needs_csrf_cookie = False
 
 
+_GZIP_MIN_BYTES = 1024
+_COMPRESSIBLE_MIMETYPES = frozenset({
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "application/json",
+    "image/svg+xml",
+    "text/plain",
+})
+_COMPRESSED_ASSET_CACHE: dict[tuple[str, int, int], bytes] = {}
+
+
+def _accepts_gzip() -> bool:
+    """判断客户端请求头是否声明支持 gzip 压缩编码。"""
+    return "gzip" in request.headers.get("Accept-Encoding", "").lower()
+
+
+def _maybe_gzip_response(response):
+    """对大于阈值且可压缩的 HTTP 响应自动应用 Gzip 压缩（跳过已压缩或直通响应）。"""
+    if request.method == "HEAD":
+        return response
+    if not (200 <= response.status_code < 300):
+        return response
+    if "Content-Encoding" in response.headers or response.direct_passthrough:
+        return response
+    if not _accepts_gzip() or response.mimetype not in _COMPRESSIBLE_MIMETYPES:
+        return response
+    try:
+        data = response.get_data()
+    except RuntimeError:
+        return response
+    if len(data) < _GZIP_MIN_BYTES:
+        return response
+    compressed = gzip.compress(data, compresslevel=6)
+    if len(compressed) >= len(data):
+        return response
+    response.set_data(compressed)
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = str(len(compressed))
+    response.vary.add("Accept-Encoding")
+    etag = response.headers.get("ETag")
+    if etag and not etag.startswith("W/"):
+        response.headers["ETag"] = f"W/{etag}"
+    return response
+
+
 @app.after_request
 def inject_security_headers_and_csrf(response):
-    """Set CSRF cookie and standard security response headers."""
-    # Ensure client has fresh CSRF cookie matching g.csrf_token if not already in request cookies
-    if getattr(g, "needs_csrf_cookie", False) or CSRF_COOKIE_NAME not in request.cookies:
-        token = getattr(g, "csrf_token", None) or generate_csrf_token()
-        is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
-        response.set_cookie(
-            CSRF_COOKIE_NAME,
-            token,
-            httponly=False,  # Needs to be readable by JS for X-CSRF-Token header
-            samesite="Lax",
-            secure=is_secure,
-            path="/",
-        )
+    """Set CSRF cookie, standard security response headers, and transparent gzip compression."""
+    # 带哈希的静态构建资源跳过 Set-Cookie，确保浏览器和 Cloudflare 边缘可正常缓存。
+    if not request.path.startswith("/assets/"):
+        if getattr(g, "needs_csrf_cookie", False) or CSRF_COOKIE_NAME not in request.cookies:
+            token = getattr(g, "csrf_token", None) or generate_csrf_token()
+            is_secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
+            response.set_cookie(
+                CSRF_COOKIE_NAME,
+                token,
+                httponly=False,  # Needs to be readable by JS for X-CSRF-Token header
+                samesite="Lax",
+                secure=is_secure,
+                path="/",
+            )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    return response
+    return _maybe_gzip_response(response)
 
 
 # ------------------------------------------------------------------------------
@@ -476,12 +527,54 @@ app.register_blueprint(domestic_api)
 
 @app.route("/assets/<path:filename>")
 def serve_static_dist_assets(filename):
-    """Serve compiled frontend static bundles (JS, CSS, SVGs, etc.)."""
-    from flask import send_from_directory
-    assets_dir = STATIC_DIST_DIR / "assets"
-    if assets_dir.exists():
-        return send_from_directory(assets_dir, filename)
-    return jsonify({"status": "error", "message": "Static assets not found"}), 404
+    """返回编译后的前端静态资源，支持 ETag 协商、长期强缓存与内存缓存 Gzip 压缩。"""
+    from flask import make_response, send_from_directory
+
+    assets_dir = (STATIC_DIST_DIR / "assets").resolve()
+    if not assets_dir.is_dir():
+        return jsonify({"status": "error", "message": "Static assets not found"}), 404
+
+    target = (assets_dir / filename).resolve()
+    if not target.is_relative_to(assets_dir) or not target.is_file():
+        return jsonify({"status": "error", "message": "Static asset not found"}), 404
+
+    stat = target.stat()
+    etag = f'W/"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+    cache_control = "public, max-age=31536000, immutable"
+
+    if request.headers.get("If-None-Match") == etag:
+        not_modified = make_response("", 304)
+        not_modified.headers["ETag"] = etag
+        not_modified.headers["Cache-Control"] = cache_control
+        not_modified.vary.add("Accept-Encoding")
+        return not_modified
+
+    suffix = target.suffix.lower()
+    if suffix in (".js", ".mjs"):
+        mimetype = "application/javascript"
+    elif suffix == ".css":
+        mimetype = "text/css"
+    else:
+        mimetype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+
+    if _accepts_gzip() and mimetype in _COMPRESSIBLE_MIMETYPES and stat.st_size >= _GZIP_MIN_BYTES:
+        cache_key = (str(target), stat.st_mtime_ns, stat.st_size)
+        compressed = _COMPRESSED_ASSET_CACHE.get(cache_key)
+        if compressed is None:
+            compressed = gzip.compress(target.read_bytes(), compresslevel=6)
+            if len(_COMPRESSED_ASSET_CACHE) >= 64:
+                _COMPRESSED_ASSET_CACHE.pop(next(iter(_COMPRESSED_ASSET_CACHE)))
+            _COMPRESSED_ASSET_CACHE[cache_key] = compressed
+        resp = app.response_class(compressed, status=200, mimetype=mimetype)
+        resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["Content-Length"] = str(len(compressed))
+    else:
+        resp = send_from_directory(assets_dir, filename, mimetype=mimetype, max_age=31536000)
+
+    resp.headers["Cache-Control"] = cache_control
+    resp.headers["ETag"] = etag
+    resp.vary.add("Accept-Encoding")
+    return resp
 
 
 # ------------------------------------------------------------------------------
@@ -493,7 +586,10 @@ def serve_static_dist_assets(filename):
 def index():
     if not app.testing and (STATIC_DIST_DIR / "index.html").exists() and request.args.get("ui") != "mobile":
         from flask import send_from_directory
-        return send_from_directory(STATIC_DIST_DIR, "index.html")
+
+        resp = send_from_directory(STATIC_DIST_DIR, "index.html")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     net = get_network_info()
     ctx: AuthContext = getattr(g, "auth_context", None)

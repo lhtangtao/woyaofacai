@@ -1,5 +1,18 @@
 [
   {
+    "title": "开启 Web 端 Gzip 压缩、静态资源强缓存与公网隧道 25 秒双向保活防断流",
+    "time": "2026-11-26 12:24",
+    "author": "Antigravity",
+    "tag": "公网加速与保活上线",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "定位并解决两个核心痛点：（1）原前端主 JS 包 `index-*.js` 未压缩达 1.68 MB，走跨海隧道下载需 15～19 秒极易超时；（2）`cloudflared` QUIC 连接在宿主机代理/TUN 环境下空闲 2～3 分钟易被回收 NAT 映射导致公网超时无响应，但 `/ready` 仍返回 200。",
+      "Web 压缩与缓存（`src/portfolio/web/app.py`）：为 `/assets/*` 带哈希静态资源启用内存缓存 Gzip 压缩（1.68 MB 降至 504 KB，压缩率约 70%）、`Cache-Control: public, max-age=31536000, immutable`、弱 `ETag` / `304` 协商，并跳过静态资源 `Set-Cookie` 避免阻止缓存；对 `index.html` 显式设置 `Cache-Control: no-cache`；对所有 `>=1KB` 可压缩接口 JSON/HTML 自动应用 Gzip 压缩。",
+      "隧道双向保活与精准进程匹配（`scripts/watchdog.py`、`启动Money3.command`）：新增 `--keepalive-url-regex` / `--keepalive-path` 周期公网端到端穿透探活（每 25 秒探测 `/api/auth/me`），兼顾 UDP NAT 保活与假死真判；修复启动脚本 `pgrep/pkill -f` 未使用 `^` 锚点误匹配守护进程本身的隐患。",
+      "验证范围：`zsh -n 启动Money3.command` 通过；`ruff check` 核心改动文件 0 错误；`tests/test_watchdog.py`、`tests/test_web_compression.py`、`tests/test_password_change.py`、`tests/test_after_hours_report.py` 共 19 项测试全部通过；公网实测压缩版 JS 下载耗时从超时/19s 降至 4.93s～8.65s（后续走浏览器 `immutable` 缓存免下载）。"
+    ]
+  },
+  {
     "title": "为公网隧道新增假死健康检查自愈并恢复自适应协议传输",
     "time": "2026-11-26 12:09",
     "author": "Antigravity",

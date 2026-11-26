@@ -1,3 +1,9 @@
+## 2026-11-26 12:24 开启 Web 端 Gzip 压缩、强缓存与公网隧道 25 秒双向保活
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/web/app.py` 为 `/assets/*` 静态资源启用内存缓存 Gzip 压缩（1.68 MB → 504 KB）、`immutable` 长期强缓存与 `ETag/304` 协商，去除静态资源多余 `Set-Cookie` 并对所有 `>=1KB` API JSON/HTML 响应开启 Gzip 压缩。
+- 在 `scripts/watchdog.py` 与 `启动Money3.command` 增加 `--keepalive-url-regex` 端到端公网轻量保活探活（每 25 秒探测 `/api/auth/me` 防止 QUIC/NAT 空闲回收假死），同时修复 `pgrep/pkill -f` 行首 `^` 锚点匹配。`zsh -n`、改动范围 `ruff check`、19 项单元测试及公网 Gzip 实测全部通过。
+
 ## 2026-11-26 12:09 为公网隧道新增假死健康检查自愈与自适应协议传输
 
 - 修改者：Antigravity（代码修改）

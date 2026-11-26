@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -49,6 +50,8 @@ class WatchdogConfig:
     health_interval: float = 30.0
     health_grace: float = 45.0
     health_failures: int = 3
+    keepalive_url_regex: str | None = None
+    keepalive_path: str = "/"
 
 
 def format_exit_reason(returncode: int) -> str:
@@ -144,9 +147,13 @@ def _terminate_child(proc: subprocess.Popen[bytes] | subprocess.Popen[str], grac
             pass
 
 
-def _probe_health_url(url: str, timeout: float = 3.0) -> bool:
-    """绕过代理直连探测本地健康检查接口，返回是否健康。"""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def _probe_health_url(url: str, timeout: float = 3.0, *, bypass_proxy: bool = True) -> bool:
+    """探测目标 URL 是否返回 2xx；本地探活默认绕过代理，公网保活默认按系统路由穿透探测。"""
+    opener = (
+        urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        if bypass_proxy
+        else urllib.request.build_opener()
+    )
     req = urllib.request.Request(url, method="GET")
     try:
         with opener.open(req, timeout=timeout) as resp:
@@ -155,14 +162,31 @@ def _probe_health_url(url: str, timeout: float = 3.0) -> bool:
         return False
 
 
+def _extract_latest_url_since(log_file: Path | None, start_offset: int, pattern: str | None) -> str | None:
+    """从子进程本次启动后的日志片段提取最新匹配的公网 URL。"""
+    if not pattern or log_file is None or not log_file.is_file():
+        return None
+    try:
+        size = log_file.stat().st_size
+        offset = start_offset if 0 <= start_offset <= size else 0
+        with log_file.open("rb") as fh:
+            fh.seek(offset)
+            text = fh.read().decode("utf-8", errors="replace")
+        matches = re.findall(pattern, text)
+        return matches[-1] if matches else None
+    except Exception:
+        return None
+
+
 def _wait_child_or_stop(
     proc: subprocess.Popen[bytes] | subprocess.Popen[str],
     stop_event: threading.Event,
     config: WatchdogConfig,
     *,
     also_stderr: bool,
+    log_start_offset: int = 0,
 ) -> tuple[int, bool]:
-    """等待子进程退出；支持停止信号及可选健康检查假死判定。"""
+    """等待子进程退出；支持停止信号、本地健康检查及公网端到端双向保活探活。"""
     start_at = time.monotonic()
     next_probe_at = start_at + config.health_grace
     consecutive_failures = 0
@@ -175,18 +199,36 @@ def _wait_child_or_stop(
             _terminate_child(proc)
             return (proc.poll() if proc.poll() is not None else 0), False
 
-        if config.health_url:
+        if config.health_url or config.keepalive_url_regex:
             now = time.monotonic()
             if now >= next_probe_at:
                 next_probe_at = now + config.health_interval
-                if _probe_health_url(config.health_url):
+                failed_target: str | None = None
+
+                if config.health_url and not _probe_health_url(config.health_url, timeout=3.0, bypass_proxy=True):
+                    failed_target = config.health_url
+                elif config.keepalive_url_regex:
+                    public_base = _extract_latest_url_since(
+                        config.log_file,
+                        log_start_offset,
+                        config.keepalive_url_regex,
+                    )
+                    if public_base:
+                        suffix = config.keepalive_path if config.keepalive_path.startswith("/") else f"/{config.keepalive_path}"
+                        probe_url = f"{public_base.rstrip('/')}{suffix}"
+                        if not _probe_health_url(probe_url, timeout=8.0, bypass_proxy=False):
+                            failed_target = probe_url
+                    elif not config.health_url:
+                        failed_target = "公网地址未就绪"
+
+                if failed_target is None:
                     consecutive_failures = 0
                 else:
                     consecutive_failures += 1
                     _write_log(
                         config.log_file,
                         config.name,
-                        f"健康检查未就绪 ({consecutive_failures}/{config.health_failures}): {config.health_url}",
+                        f"健康/保活探测未通过 ({consecutive_failures}/{config.health_failures}): {failed_target}",
                         also_stderr=also_stderr,
                     )
                     if consecutive_failures >= config.health_failures:
@@ -380,6 +422,11 @@ def run_watchdog(config: WatchdogConfig) -> int:
             attempt += 1
             started_at = time.monotonic()
             start_offsets = _snapshot_file_offsets(config.context_logs)
+            log_start_offset = (
+                config.log_file.stat().st_size
+                if (config.log_file is not None and config.log_file.is_file())
+                else 0
+            )
             stderr_tail: deque[str] = deque(maxlen=120)
             stderr_thread: threading.Thread | None = None
             child_log_stream = None
@@ -422,6 +469,7 @@ def run_watchdog(config: WatchdogConfig) -> int:
                 stop_event,
                 config,
                 also_stderr=also_stderr,
+                log_start_offset=log_start_offset,
             )
             if stderr_thread is not None:
                 stderr_thread.join(timeout=1.5)
@@ -559,6 +607,8 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
     parser.add_argument("--health-interval", type=float, default=30.0, help="健康检查探测间隔（秒）")
     parser.add_argument("--health-grace", type=float, default=45.0, help="启动后跳过健康检查的宽限时长（秒）")
     parser.add_argument("--health-failures", type=int, default=3, help="连续健康检查失败多少次后判定假死并重启")
+    parser.add_argument("--keepalive-url-regex", help="从 --log-file 提取最新公网保活探测基准 URL 的正则")
+    parser.add_argument("--keepalive-path", default="/", help="公网保活探测附加路径（默认 /）")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="待执行的目标命令（建议在前面加 --）")
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
@@ -588,6 +638,8 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
         health_interval=max(0.1, ns.health_interval),
         health_grace=max(0.0, ns.health_grace),
         health_failures=max(1, ns.health_failures),
+        keepalive_url_regex=ns.keepalive_url_regex,
+        keepalive_path=ns.keepalive_path or "/",
     )
 
 

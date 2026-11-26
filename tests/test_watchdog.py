@@ -359,3 +359,84 @@ def test_watchdog_restarts_on_consecutive_health_check_failures(tmp_path: Path) 
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_watchdog_keepalive_public_url_restarts_when_local_ready_lies(tmp_path: Path) -> None:
+    """即便本地 /ready 持续返回 200，若公网保活 URL 连续不通也应触发重启恢复。"""
+    watchdog = _load_watchdog_module()
+    count_file = tmp_path / "runs.txt"
+    log_file = tmp_path / "tunnel.log"
+    state = {"run": 0}
+
+    class _DualHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/ready":
+                # 模拟本地 /ready 误报始终返回 200。
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ready")
+                return
+            if self.path == "/api/auth/me":
+                # 第 1 次启动期间公网黑洞返回 503；重启后返回 200。
+                status = 503 if state["run"] <= 1 else 200
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(b"ok")
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format: str, *args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _DualHandler)
+    port = server.server_address[1]
+    srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    srv_thread.start()
+
+    # 子进程向重定向后的 stdout/log 打印公开地址，并模拟第 1 次卡死、第 2 次正常退出。
+    child_code = (
+        f"import sys, time; from pathlib import Path; "
+        f"p = Path({str(count_file)!r}); "
+        f"p.open('a', encoding='utf-8').write('1\\n'); "
+        f"n = len(p.read_text(encoding='utf-8').splitlines()); "
+        f"print('URL: http://127.0.0.1:{port}', flush=True); "
+        f"time.sleep(30 if n == 1 else 0.25); "
+        f"sys.exit(0)"
+    )
+
+    # 通过计数器同步当前启动次数到模拟服务器状态。
+    orig_snapshot = watchdog._snapshot_file_offsets
+
+    def _track_run(paths):
+        state["run"] += 1
+        return orig_snapshot(paths)
+
+    old_snap = watchdog._snapshot_file_offsets
+    watchdog._snapshot_file_offsets = _track_run
+    try:
+        cfg = watchdog.WatchdogConfig(
+            name="tunnel",
+            command=(sys.executable, "-c", child_code),
+            log_file=log_file,
+            redirect_child_output=True,
+            restart_on_zero=False,
+            health_url=f"http://127.0.0.1:{port}/ready",
+            health_interval=0.1,
+            health_grace=0.05,
+            health_failures=2,
+            keepalive_url_regex=r"http://127\.0\.0\.1:[0-9]+",
+            keepalive_path="/api/auth/me",
+            backoff_base=0.03,
+            backoff_max=0.05,
+        )
+        code = watchdog.run_watchdog(cfg)
+        assert code == 0
+        assert len(count_file.read_text(encoding="utf-8").splitlines()) == 2
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "/api/auth/me" in log_text
+        assert "健康检查连续失败 2 次，判定进程假死" in log_text
+    finally:
+        watchdog._snapshot_file_offsets = old_snap
+        server.shutdown()
+        server.server_close()
