@@ -167,7 +167,7 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     assert offline_report["snapshot"]["summary"]["day_pnl"] == 0.0
     assert offline_report["snapshot"]["summary"]["day_pnl_basis"] == "ledger"
 
-    # 对于账本缺当日盈亏的日期，同样按持仓股数 * (常规+盘后) 计算
+    # 2026-01-05 账本第 19 列「当日收益($)」为 -30.0，叠加 6 股盘后 +15.0 = -15.0
     est_report = generate_after_hours_report(
         trade_date=date(2026, 1, 5),
         person_key="ALL",
@@ -178,8 +178,26 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
         news_fetcher=fake_news,
         ai_asker=fake_ai,
     )
-    assert est_report["snapshot"]["summary"]["day_pnl"] == 30.0
-    assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_after_hours"
+    assert est_report["snapshot"]["summary"]["day_pnl"] == -15.0
+    assert est_report["snapshot"]["summary"]["regular_day_pnl"] == -30.0
+    assert est_report["snapshot"]["summary"]["after_hours_day_pnl"] == 15.0
+    assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "ledger_plus_after_hours"
+
+    # 对于账本完全没有该日收盘记录的日期 (2026-02-02)，回退使用行情估算常规盘 + 盘后 (15.0 + 15.0 = 30.0)
+    quote_only_report = generate_after_hours_report(
+        trade_date=date(2026, 2, 2),
+        person_key="ALL",
+        run_sync=False,
+        db_path=demo_path,
+        store=store,
+        quote_fetcher=fake_quotes,
+        news_fetcher=fake_news,
+        ai_asker=fake_ai,
+    )
+    assert quote_only_report["snapshot"]["summary"]["day_pnl"] == 30.0
+    assert quote_only_report["snapshot"]["summary"]["regular_day_pnl"] == 15.0
+    assert quote_only_report["snapshot"]["summary"]["after_hours_day_pnl"] == 15.0
+    assert quote_only_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_after_hours"
 
     # 桌面端 2.0 页面可渲染并勾选清单落盘，且 1280x800 下绝无横向溢出
     from PySide6.QtCore import Qt
@@ -190,7 +208,7 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     page.show()
     qtbot.wait(50)
 
-    assert page.report_list.count() == 2
+    assert page.report_list.count() == 3
     assert "DEMO 财报超预期" in page.tldr_lbl.text()
     assert page.cl_progress_lbl.text() == "0 / 2 已核查"
     assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
@@ -199,7 +217,7 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
 
     page._on_checklist_toggled("c1")
     assert page.cl_progress_lbl.text() == "1 / 2 已核查"
-    reloaded = store.get_report("2026-01-05::ALL")
+    reloaded = store.get_report("2026-02-02::ALL")
     assert reloaded["checked_ids"] == ["c1"]
 
 
