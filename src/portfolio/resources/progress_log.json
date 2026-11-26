@@ -1,5 +1,18 @@
 [
   {
+    "title": "为公网隧道新增假死健康检查自愈并恢复自适应协议传输",
+    "time": "2026-11-26 12:09",
+    "author": "Antigravity",
+    "tag": "公网隧道自愈已增强",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "问题定位与修复：排查发现公网 `530` 报错系旧 `cloudflared` 进程断流（且宿主机代理环境切换 Fake-IP 网段后旧进程持续内循环重试但未退出）导致；为 `scripts/watchdog.py` 新增通用健康检查机制（`--health-url`、`--health-interval`、`--health-grace`、`--health-failures`），支持绕过系统代理直连探测，连续失败达到阈值自动终止假死进程并重启拉起。",
+      "在 `启动Money3.command` 为 `cloudflared` 开启 `--metrics 127.0.0.1:20241 --edge-ip-version 4` 保持默认自适应协议协商（同时兼容代理 UDP/QUIC 与直连网络 HTTP/2），接入 Watchdog `http://127.0.0.1:20241/ready` 每 30 秒探活（启动宽限 45 秒，连续 3 次未就绪自动重连），复用检查同样校验证明 `/ready` 健康才复用。",
+      "在 `tests/test_watchdog.py` 新增连续健康检查失败触发假死重启测试。",
+      "验证范围：`zsh -n 启动Money3.command` 通过；`ruff check scripts/watchdog.py tests/test_watchdog.py` 0 错误；`tests/test_watchdog.py` 9 项测试全部通过；实测无代理（`--noproxy '*'`）访问新公网隧道首页及 1.68MB 主 JS 资源均返回 `HTTP 200`。"
+    ]
+  },
+  {
     "title": "补全全链路崩溃日志采集、守护现场快照归档与桌面端崩溃日志查看器",
     "time": "2026-11-26 00:23",
     "author": "Antigravity",

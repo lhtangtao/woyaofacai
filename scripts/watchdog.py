@@ -17,6 +17,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -43,6 +45,10 @@ class WatchdogConfig:
     crash_dir: Path | None = None
     context_logs: tuple[Path, ...] = ()
     keep_crashes: int = 30
+    health_url: str | None = None
+    health_interval: float = 30.0
+    health_grace: float = 45.0
+    health_failures: int = 3
 
 
 def format_exit_reason(returncode: int) -> str:
@@ -138,15 +144,61 @@ def _terminate_child(proc: subprocess.Popen[bytes] | subprocess.Popen[str], grac
             pass
 
 
-def _wait_child_or_stop(proc: subprocess.Popen[bytes] | subprocess.Popen[str], stop_event: threading.Event) -> int:
-    """等待子进程退出；若收到守护停止信号，立即优雅终止子进程。"""
+def _probe_health_url(url: str, timeout: float = 3.0) -> bool:
+    """绕过代理直连探测本地健康检查接口，返回是否健康。"""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            return 200 <= getattr(resp, "status", 0) < 300
+    except Exception:
+        return False
+
+
+def _wait_child_or_stop(
+    proc: subprocess.Popen[bytes] | subprocess.Popen[str],
+    stop_event: threading.Event,
+    config: WatchdogConfig,
+    *,
+    also_stderr: bool,
+) -> tuple[int, bool]:
+    """等待子进程退出；支持停止信号及可选健康检查假死判定。"""
+    start_at = time.monotonic()
+    next_probe_at = start_at + config.health_grace
+    consecutive_failures = 0
+
     while True:
         code = proc.poll()
         if code is not None:
-            return code
+            return code, False
         if stop_event.is_set():
             _terminate_child(proc)
-            return proc.poll() if proc.poll() is not None else 0
+            return (proc.poll() if proc.poll() is not None else 0), False
+
+        if config.health_url:
+            now = time.monotonic()
+            if now >= next_probe_at:
+                next_probe_at = now + config.health_interval
+                if _probe_health_url(config.health_url):
+                    consecutive_failures = 0
+                else:
+                    consecutive_failures += 1
+                    _write_log(
+                        config.log_file,
+                        config.name,
+                        f"健康检查未就绪 ({consecutive_failures}/{config.health_failures}): {config.health_url}",
+                        also_stderr=also_stderr,
+                    )
+                    if consecutive_failures >= config.health_failures:
+                        _write_log(
+                            config.log_file,
+                            config.name,
+                            f"健康检查连续失败 {consecutive_failures} 次，判定进程假死，正在自动终止并重启恢复...",
+                            also_stderr=also_stderr,
+                        )
+                        _terminate_child(proc)
+                        final_code = proc.poll()
+                        return (final_code if final_code is not None else -signal.SIGTERM), True
         time.sleep(0.1)
 
 
@@ -365,7 +417,12 @@ def run_watchdog(config: WatchdogConfig) -> int:
                     except Exception:
                         pass
 
-            returncode = _wait_child_or_stop(proc, stop_event)
+            returncode, health_killed = _wait_child_or_stop(
+                proc,
+                stop_event,
+                config,
+                also_stderr=also_stderr,
+            )
             if stderr_thread is not None:
                 stderr_thread.join(timeout=1.5)
             elapsed = time.monotonic() - started_at
@@ -379,7 +436,7 @@ def run_watchdog(config: WatchdogConfig) -> int:
                 )
                 return 0
 
-            if returncode == 0 and not config.restart_on_zero:
+            if not health_killed and returncode == 0 and not config.restart_on_zero:
                 _write_log(
                     config.log_file,
                     config.name,
@@ -398,7 +455,11 @@ def run_watchdog(config: WatchdogConfig) -> int:
             while recent_crashes and recent_crashes[0] < cutoff:
                 recent_crashes.popleft()
 
-            reason = format_exit_reason(returncode)
+            reason = (
+                f"健康检查连续失败 {config.health_failures} 次判定假死"
+                if health_killed
+                else format_exit_reason(returncode)
+            )
             crash_count = len(recent_crashes)
             circuit_broken = crash_count >= config.max_rapid_restarts
 
@@ -494,6 +555,10 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
         help="崩溃时需要打包进现场快照的关联日志路径（可多次传入）",
     )
     parser.add_argument("--keep-crashes", type=int, default=30, help="崩溃快照目录最多保留的文件数")
+    parser.add_argument("--health-url", help="周期探测的本机健康检查 URL（如 http://127.0.0.1:20241/ready）")
+    parser.add_argument("--health-interval", type=float, default=30.0, help="健康检查探测间隔（秒）")
+    parser.add_argument("--health-grace", type=float, default=45.0, help="启动后跳过健康检查的宽限时长（秒）")
+    parser.add_argument("--health-failures", type=int, default=3, help="连续健康检查失败多少次后判定假死并重启")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="待执行的目标命令（建议在前面加 --）")
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
@@ -519,6 +584,10 @@ def parse_args(argv: Sequence[str] | None = None) -> WatchdogConfig:
         crash_dir=ns.crash_dir,
         context_logs=tuple(ns.context_logs),
         keep_crashes=max(1, ns.keep_crashes),
+        health_url=ns.health_url,
+        health_interval=max(0.1, ns.health_interval),
+        health_grace=max(0.0, ns.health_grace),
+        health_failures=max(1, ns.health_failures),
     )
 
 

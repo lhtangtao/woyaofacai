@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from portfolio import logging_config
@@ -303,3 +304,58 @@ def test_install_crash_hooks_captures_sys_and_thread_exceptions(tmp_path: Path) 
     finally:
         sys.excepthook = prev_sys_hook
         threading.excepthook = prev_thread_hook
+
+
+def test_watchdog_restarts_on_consecutive_health_check_failures(tmp_path: Path) -> None:
+    """连续健康检查失败达到阈值时，应判定子进程假死并触发自动重启。"""
+    watchdog = _load_watchdog_module()
+    count_file = tmp_path / "runs.txt"
+    log_file = tmp_path / "tunnel.log"
+    state = {"probe_count": 0}
+
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            state["probe_count"] += 1
+            # 第 1 次启动期间连续返回 503 触发假死判定；重启后返回 200。
+            status = 503 if state["probe_count"] <= 2 else 200
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(b"ok" if status == 200 else b"unready")
+
+        def log_message(self, format: str, *args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
+    port = server.server_address[1]
+    srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    srv_thread.start()
+
+    child_code = (
+        f"import sys, time; from pathlib import Path; "
+        f"p = Path({str(count_file)!r}); "
+        f"p.open('a', encoding='utf-8').write('1\\n'); "
+        f"n = len(p.read_text(encoding='utf-8').splitlines()); "
+        f"time.sleep(30 if n == 1 else 0.15); "
+        f"sys.exit(0)"
+    )
+    try:
+        cfg = watchdog.WatchdogConfig(
+            name="tunnel",
+            command=(sys.executable, "-c", child_code),
+            log_file=log_file,
+            restart_on_zero=False,
+            health_url=f"http://127.0.0.1:{port}/ready",
+            health_interval=0.1,
+            health_grace=0.05,
+            health_failures=2,
+            backoff_base=0.03,
+            backoff_max=0.05,
+        )
+        code = watchdog.run_watchdog(cfg)
+        assert code == 0
+        assert len(count_file.read_text(encoding="utf-8").splitlines()) == 2
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "健康检查连续失败 2 次，判定进程假死" in log_text
+    finally:
+        server.shutdown()
+        server.server_close()

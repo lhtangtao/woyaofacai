@@ -328,15 +328,18 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$CLOUDFLARED_
         fi
     fi
 
-    # 先检查是否已有运行中的 cloudflared 隧道（且在开启守护时已受 watchdog 托管）并提取 URL
-    if [[ "$TUNNEL_WATCHDOG_ALIVE" == "1" ]] && pgrep -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 && [[ -f "$CLOUDFLARED_LOG" ]]; then
+    # 先检查是否已有健康运行中的 cloudflared 隧道（受 watchdog 托管且 /ready 为 200）并提取 URL
+    if [[ "$TUNNEL_WATCHDOG_ALIVE" == "1" ]] \
+        && pgrep -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" >/dev/null 2>&1 \
+        && [[ -f "$CLOUDFLARED_LOG" ]] \
+        && curl -sf --noproxy '*' --max-time 2 http://127.0.0.1:20241/ready >/dev/null 2>&1; then
         PUBLIC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | tail -n 1 || true)
     fi
 
     if [[ -n "$PUBLIC_URL" ]]; then
         IS_TUNNEL_RUNNING=1
     else
-        # 若未运行或日志无 URL，清理旧守护与旧进程并启动新的 cloudflared Quick Tunnel
+        # 若未运行、无 URL 或隧道假死不健康，清理旧守护与旧进程并启动新的 cloudflared Quick Tunnel（自动协商协议 + IPv4 + 假死探测）
         stop_pid_file "$TUNNEL_WATCHDOG_PID_FILE" "watchdog.py" || true
         pkill -f "$CLOUDFLARED_BIN tunnel --url http://127.0.0.1:8888" 2>/dev/null || true
         : > "$CLOUDFLARED_LOG"
@@ -347,9 +350,11 @@ if [[ "$START_PUBLIC" == "1" && "$IS_MOBILE_RUNNING" == "1" && -x "$CLOUDFLARED_
                 --log-file "$CLOUDFLARED_LOG" \
                 --crash-dir "$CRASH_DIR" \
                 --context-log "$CLOUDFLARED_LOG" \
-                -- "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate >/dev/null 2>&1 &
+                --health-url "http://127.0.0.1:20241/ready" \
+                --health-interval 30 --health-grace 45 --health-failures 3 \
+                -- "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --edge-ip-version 4 --metrics 127.0.0.1:20241 --no-autoupdate >/dev/null 2>&1 &
         else
-            nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
+            nohup "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8888 --edge-ip-version 4 --metrics 127.0.0.1:20241 --no-autoupdate > "$CLOUDFLARED_LOG" 2>&1 &
         fi
         for i in {1..40}; do
             sleep 0.3

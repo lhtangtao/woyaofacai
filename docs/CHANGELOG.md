@@ -1,3 +1,9 @@
+## 2026-11-26 12:09 为公网隧道新增假死健康检查自愈与自适应协议传输
+
+- 修改者：Antigravity（代码修改）
+- 在 `scripts/watchdog.py` 新增 `--health-url` / `--health-interval` / `--health-grace` / `--health-failures` 周期健康探测与假死自动重启能力，并在 `tests/test_watchdog.py` 新增对应单测。
+- 在 `启动Money3.command` 为 `cloudflared` 启用 `--metrics 127.0.0.1:20241 --edge-ip-version 4`（保留自适应协议）并接入 `http://127.0.0.1:20241/ready` 假死探活自愈；`zsh -n`、`ruff check` 与 `tests/test_watchdog.py`（9 项）全部通过，且已实测无代理访问公网隧道首页与前端静态资源返回 `HTTP 200`。
+
 ## 2026-11-26 00:23 补全全链路崩溃日志采集、现场快照归档与桌面端查看器
 
 - 修改者：Antigravity（代码修改）
