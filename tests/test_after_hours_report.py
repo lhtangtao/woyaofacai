@@ -333,8 +333,10 @@ def test_fetch_after_hours_quotes_unpacks_longbridge_tuple_credentials(monkeypat
         post_market_quote = _FakePost()
 
     class _FakeConfig:
-        def __init__(self, app_key, app_secret, access_token):
+        @classmethod
+        def from_apikey(cls, app_key, app_secret, access_token, **_kwargs):
             captured["cfg"] = (app_key, app_secret, access_token)
+            return object()
 
     class _FakeQuoteContext:
         def __init__(self, cfg):
@@ -461,3 +463,20 @@ def test_after_hours_cash_balance_and_missing_scope_never_fakes_zero(demo_path, 
     assert snap_no_cash["summary"]["cash_balance"] is None
     assert snap_no_cash["summary"]["cash_pct"] is None
     assert snap_no_cash["summary"]["cash_breakdown"] == []
+
+
+def test_ai_service_injects_system_proxies_when_env_missing(monkeypatch):
+    """验证无代理环境变量时，_inject_system_proxies 自动从系统代理读取并注入。"""
+    import urllib.request
+
+    from portfolio.services.ai_service import CodexAIService
+
+    monkeypatch.setattr(
+        urllib.request,
+        "getproxies",
+        lambda: {"http": "http://127.0.0.1:7897", "https": "http://127.0.0.1:7897"},
+    )
+    env = {}
+    CodexAIService._inject_system_proxies(env)
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:7897"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:7897"

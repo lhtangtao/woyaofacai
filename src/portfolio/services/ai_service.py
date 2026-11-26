@@ -1003,6 +1003,27 @@ class CodexAIService:
                     raise RuntimeError("AI 引擎返回了空回复，请重试或切换其他模型。")
         return None
 
+    @staticmethod
+    def _inject_system_proxies(env: dict[str, str]) -> dict[str, str]:
+        """若子进程环境变量缺失代理配置，则自动从系统代理读取并注入 HTTP_PROXY/HTTPS_PROXY。"""
+        has_http = bool(env.get("HTTP_PROXY") or env.get("http_proxy"))
+        has_https = bool(env.get("HTTPS_PROXY") or env.get("https_proxy"))
+        if has_http and has_https:
+            return env
+        try:
+            sys_proxies = urllib.request.getproxies() or {}
+        except Exception:
+            sys_proxies = {}
+        http_p = str(sys_proxies.get("http") or "").strip()
+        https_p = str(sys_proxies.get("https") or http_p).strip()
+        if not has_http and http_p:
+            env["HTTP_PROXY"] = http_p
+            env["http_proxy"] = http_p
+        if not has_https and https_p:
+            env["HTTPS_PROXY"] = https_p
+            env["https_proxy"] = https_p
+        return env
+
     @classmethod
     def _ask_gemini(
         cls,
@@ -1029,6 +1050,7 @@ class CodexAIService:
         log_out.close()
 
         env = os.environ.copy()
+        cls._inject_system_proxies(env)
         extra_bins = [os.path.dirname(cli), "/opt/homebrew/bin", "/usr/local/bin"]
         existing_path = env.get("PATH", "")
         env["PATH"] = os.pathsep.join(dict.fromkeys([*extra_bins, *(existing_path.split(os.pathsep) if existing_path else [])]))

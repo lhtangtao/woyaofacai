@@ -1,5 +1,18 @@
 [
   {
+    "title": "修复长桥盘后行情 Config.from_apikey 调用异常、AI 子进程自动继承系统代理及桌面端失败日志",
+    "time": "2026-11-26 20:47",
+    "author": "Antigravity",
+    "tag": "盘后行情与代理修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "修复长桥盘后行情初始化（`src/portfolio/services/after_hours_report.py`）：将 `Config(app_key, app_secret, access_token)` 改为优先调用新版 `longbridge` SDK 的 `Config.from_apikey(app_key, app_secret, access_token, enable_overnight=True, enable_print_quote_packages=False)`，消除 `cannot create 'builtins.Config' instances` 降级告警并恢复盘后实时价直取。",
+      "AI CLI 子进程自动注入系统代理（`src/portfolio/services/ai_service.py`）：在 `_ask_gemini()` 中新增 `_inject_system_proxies()`，当桌面端或后台进程未显式设置 `HTTP_PROXY`/`HTTPS_PROXY` 时自动读取 macOS 系统代理（`127.0.0.1:7897`）并注入，防止双击启动时 `agy` 裸连触发地域受限报错。",
+      "增强桌面端失败可观测性（`src/portfolio/ui/after_hours_report_page.py`）：`_on_generate_fail()` 写入 `money3.log` 并在顶部状态栏直接显示精简错误原因。",
+      "验证范围：`ruff check` 0 错误；`tests/test_after_hours_report.py` 8 项测试全部通过；真实调用 `fetch_after_hours_quotes([\"QQQ\", \"SPY\"])` 验证 `source='longbridge'` 且成功拉取盘后价；8888 服务已平滑重载。"
+    ]
+  },
+  {
     "title": "盘后复盘日报 3.0 升级：统一当日真实盈亏口径、新闻中文化摘要与可用现金余额展示",
     "time": "2026-11-26 20:14",
     "author": "Antigravity",

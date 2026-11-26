@@ -1,3 +1,9 @@
+## 2026-11-26 20:47 修复长桥盘后行情 Config.from_apikey、AI 子进程系统代理注入与桌面端失败日志
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/services/after_hours_report.py` 使用 `Config.from_apikey(..., enable_overnight=True)` 修复长桥盘后行情 `cannot create 'builtins.Config' instances` 报错（已实测 `QQQ`/`SPY` 返回 `source='longbridge'` 盘后价）。
+- 在 `src/portfolio/services/ai_service.py` 新增 `_inject_system_proxies()` 自动继承 macOS 系统代理；在 `src/portfolio/ui/after_hours_report_page.py` 将生成失败写入 `money3.log` 并在状态栏显示摘要。`ruff check` 与 `tests/test_after_hours_report.py` 8 项测试全部通过。
+
 ## 2026-11-26 20:14 盘后复盘日报 3.0 升级：统一当日真实盈亏、新闻中文化摘要与可用现金展示
 
 - 修改者：Antigravity（代码修改）

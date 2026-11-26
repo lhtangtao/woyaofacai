@@ -323,7 +323,16 @@ def fetch_after_hours_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
             app_key = str(creds[1] or "").strip()
             app_secret = str(creds[2] or "").strip()
         if app_key and app_secret and access_token:
-            cfg = Config(app_key, app_secret, access_token)
+            if hasattr(Config, "from_apikey"):
+                cfg = Config.from_apikey(
+                    app_key,
+                    app_secret,
+                    access_token,
+                    enable_overnight=True,
+                    enable_print_quote_packages=False,
+                )
+            else:
+                cfg = Config(app_key, app_secret, access_token)
             ctx = QuoteContext(cfg)
             lb_syms = [f"{s}.US" for s in clean_syms]
             quotes = ctx.quote(lb_syms)

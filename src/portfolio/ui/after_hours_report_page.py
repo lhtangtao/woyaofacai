@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import logging
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -40,6 +41,8 @@ from portfolio.services.after_hours_report import (
     resolve_default_trade_date,
 )
 from portfolio.services.ai_service import CodexAIService
+
+logger = logging.getLogger(__name__)
 
 
 def _fmt_money(v, signed: bool = False) -> str:
@@ -1117,9 +1120,13 @@ class AfterHoursReportPage(QWidget):
         self.reload(prefer_id=report.get("id"))
 
     def _on_generate_fail(self, err: str):
+        logger.error("桌面端生成盘后复盘日报失败: %s", err)
         self.generate_btn.setEnabled(True)
         self.generate_btn.setText("生成 / 重算日报")
-        self.status_lbl.setText("⚠️ 生成失败")
+        brief = " ".join(str(err or "").splitlines()).strip()
+        if len(brief) > 72:
+            brief = brief[:72] + "…"
+        self.status_lbl.setText(f"⚠️ 生成失败：{brief}" if brief else "⚠️ 生成失败")
         self.viewer.setHtml(
             f"<div style='color:#B91C1C; padding:12px;'><b>盘后复盘日报生成失败：</b><br>{html.escape(err)}</div>"
         )
