@@ -214,6 +214,11 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert page.right_container.width() <= page.right_scroll.viewport().width() + 2
     assert page.kpi_card_4.isVisible()
+    # 默认全部展开持仓卡片且新闻标题带可点击外链
+    from PySide6.QtWidgets import QLabel
+
+    labels = page.movers_box.parentWidget().findChildren(QLabel) if page.movers_box.parentWidget() else []
+    assert any("https://example.com/news/1" in lbl.text() and lbl.openExternalLinks() for lbl in labels)
 
     page._on_checklist_toggled("c1")
     assert page.cl_progress_lbl.text() == "1 / 2 已核查"

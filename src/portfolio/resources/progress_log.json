@@ -1,5 +1,17 @@
 [
   {
+    "title": "盘后复盘日报：新闻标题支持点击跳转原文外链，重点持仓默认全部展开",
+    "time": "2026-11-26 22:34",
+    "author": "Antigravity",
+    "tag": "新闻外链与默认展开",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "新闻标题可点击跳转原文（`src/portfolio/ui/after_hours_report_page.py`、`frontend/src/views/AfterHoursReportView.tsx`）：在重点持仓异动卡片与「突发新闻情报」Tab 中透传新闻原文 `url`/`link`，标题支持直接点击用浏览器打开原文（带 `↗` 标识）。",
+      "重点持仓默认全部展开：移除桌面端「收起/详情」按钮及 Web 端折叠切换，打开日报后直接展示全部持仓的「AI 异动归因」与相关新闻摘要。",
+      "验证范围：`frontend npm run build` 0 错误打包通过；`ruff check` 0 错误；`tests/test_after_hours_report.py` 10 项测试全部通过；8888 服务已平滑重载。"
+    ]
+  },
+  {
     "title": "修复盘后复盘当日收益列号错位 Bug，并统一为「账本精确常规盘收益 + 盘后实时变动」口径",
     "time": "2026-11-26 21:59",
     "author": "Antigravity",

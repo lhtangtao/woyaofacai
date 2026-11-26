@@ -2,8 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Calendar,
   Check,
-  ChevronDown,
-  ChevronRight,
   Copy,
   FileText,
   RefreshCw,
@@ -133,7 +131,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   // 2.0 交互状态
   const [activeTab, setActiveTab] = useState<"overview" | "trades" | "news" | "markdown">("overview");
   const [moverFilter, setMoverFilter] = useState<"all" | "up" | "down" | "after" | "news">("all");
-  const [expandedSymbols, setExpandedSymbols] = useState<Record<string, boolean>>({});
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [followupInput, setFollowupInput] = useState("");
   const [followupLoading, setFollowupLoading] = useState(false);
@@ -219,12 +216,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
         if (res.status === "ok" && res.report) {
           setDetail(res.report);
           setCheckedIds(Array.isArray(res.report.checked_ids) ? res.report.checked_ids : []);
-          const holdings = res.report.snapshot?.holdings || [];
-          const initExpanded: Record<string, boolean> = {};
-          holdings.slice(0, 2).forEach((h: any) => {
-            if (h?.symbol) initExpanded[h.symbol] = true;
-          });
-          setExpandedSymbols(initExpanded);
         }
       })
       .catch((err) => setErrorMsg(err.message || "加载日报详情失败"))
@@ -393,6 +384,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
           sentiment: d.sentiment || newsSentiments[d.original_title] || "中性",
           publisher: d.publisher || "",
           published_bj: d.published_bj || "",
+          url: d.url || d.link || "",
         }));
       }
     }
@@ -415,6 +407,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
           zh_title: zh?.zh_title || n.title,
           summary: zh?.summary || "",
           sentiment: zh?.sentiment || newsSentiments[n.title] || "中性",
+          url: n.link || n.url || "",
         };
       });
   };
@@ -441,6 +434,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
         sentiment: d.sentiment || newsSentiments[d.original_title] || "中性",
         publisher: d.publisher || "",
         published_bj: d.published_bj || "",
+        url: d.url || d.link || "",
       }));
     }
     const out: any[] = [];
@@ -453,6 +447,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
           zh_title: zh?.zh_title || it.title,
           summary: zh?.summary || "",
           sentiment: zh?.sentiment || newsSentiments[it.title] || "中性",
+          url: it.link || it.url || "",
         });
       });
     });
@@ -1006,7 +1001,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                         ) : (
                           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                             {filteredHoldings.map((h) => {
-                              const expanded = Boolean(expandedSymbols[h.symbol]);
                               const hNews = getNewsForHolding(h);
                               const reason = moverReasons[h.symbol];
                               const pnlNum = h.day_pnl ?? h.unrealized_pnl ?? 0;
@@ -1021,7 +1015,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                   }}
                                 >
                                   <div
-                                    onClick={() => setExpandedSymbols((prev) => ({ ...prev, [h.symbol]: !prev[h.symbol] }))}
                                     style={{
                                       padding: "11px 14px",
                                       display: "flex",
@@ -1029,7 +1022,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                       alignItems: "center",
                                       justifyContent: "space-between",
                                       gap: "10px",
-                                      cursor: "pointer",
                                     }}
                                   >
                                     <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "200px" }}>
@@ -1093,14 +1085,10 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                           {fmtMoney(h.day_pnl, true)}
                                         </div>
                                       </div>
-                                      <span style={{ color: "var(--text-muted)" }}>
-                                        {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                                      </span>
                                     </div>
                                   </div>
 
-                                  {expanded && (
-                                    <div style={{ padding: "10px 14px 12px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", background: "var(--bg-panel)" }}>
+                                  <div style={{ padding: "10px 14px 12px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", background: "var(--bg-panel)" }}>
                                       <div style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
                                         <strong style={{ color: "var(--brand)" }}>AI 异动归因：</strong>
                                         {reason || `当前持仓 ${h.quantity} 股，浮盈 ${fmtMoney(h.unrealized_pnl, true)}；可切换至「完整长文」查看全文点评。`}
@@ -1111,6 +1099,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                             const sent = n.sentiment || newsSentiments[n.title] || "中性";
                                             const st = sentimentStyle(sent);
                                             const displayTitle = n.zh_title || n.title;
+                                            const hasLink = typeof n.url === "string" && /^https?:\/\//i.test(n.url);
                                             return (
                                               <div
                                                 key={nIdx}
@@ -1131,7 +1120,18 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                                     <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0, marginTop: "1px" }}>
                                                       {sent}
                                                     </span>
-                                                    <span style={{ fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.45 }}>{displayTitle}</span>
+                                                    {hasLink ? (
+                                                      <a
+                                                        href={n.url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{ fontWeight: 600, color: "var(--brand)", lineHeight: 1.45, textDecoration: "none" }}
+                                                      >
+                                                        {displayTitle} ↗
+                                                      </a>
+                                                    ) : (
+                                                      <span style={{ fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.45 }}>{displayTitle}</span>
+                                                    )}
                                                   </div>
                                                   <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
                                                     {n.publisher} · {n.published_bj}
@@ -1149,8 +1149,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                       ) : (
                                         <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>近 36 小时无显著突发新闻。</div>
                                       )}
-                                    </div>
-                                  )}
+                                  </div>
                                 </div>
                               );
                             })}
@@ -1336,7 +1335,18 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                 </span>
                               </div>
                               <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.5 }}>
-                                {displayTitle}
+                                {typeof n.url === "string" && /^https?:\/\//i.test(n.url) ? (
+                                  <a
+                                    href={n.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: "var(--brand)", textDecoration: "none" }}
+                                  >
+                                    {displayTitle} ↗
+                                  </a>
+                                ) : (
+                                  displayTitle
+                                )}
                               </div>
                               {n.summary && (
                                 <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.55 }}>

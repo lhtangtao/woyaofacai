@@ -99,6 +99,16 @@ def _make_wrap_label(text: str = "", style: str = "") -> QLabel:
     return lbl
 
 
+def _format_news_title_html(title: str, url: str) -> str:
+    """将带 http(s) 链接的新闻标题格式化为可点击跳转原文的超链接 HTML。"""
+    esc_t = html.escape(title)
+    clean_u = str(url or "").strip()
+    if clean_u.startswith(("http://", "https://")):
+        esc_u = html.escape(clean_u, quote=True)
+        return f"<a href='{esc_u}' style='color:#2563EB; text-decoration:none;'>{esc_t} ↗</a>"
+    return esc_t
+
+
 class _FitWidthScrollArea(QScrollArea):
     """锁定内容最大宽度等于视口宽度，禁止横向拖动并确保内部文本自然折行。"""
 
@@ -822,6 +832,7 @@ class AfterHoursReportPage(QWidget):
                         "sentiment": d.get("sentiment") or "中性",
                         "publisher": d.get("publisher") or "",
                         "published_bj": d.get("published_bj") or "",
+                        "url": d.get("url") or d.get("link") or "",
                     }
                     for d in matched
                 ]
@@ -841,6 +852,7 @@ class AfterHoursReportPage(QWidget):
                     "zh_title": zh.get("zh_title") or t,
                     "summary": zh.get("summary") or "",
                     "sentiment": zh.get("sentiment") or "",
+                    "url": n.get("link") or n.get("url") or "",
                 })
         return merged
 
@@ -874,7 +886,6 @@ class AfterHoursReportPage(QWidget):
         for h in filtered:
             sym = str(h.get("symbol") or "")
             h_news = self._get_holding_news(snap, h, structured)
-            expanded = sym in self._expanded_syms
 
             card = QFrame()
             card.setMinimumWidth(0)
@@ -883,9 +894,7 @@ class AfterHoursReportPage(QWidget):
             cl.setContentsMargins(10, 8, 10, 8)
             cl.setSpacing(5)
 
-            # 第一行：标题与标签 + 展开按钮
-            row1 = QHBoxLayout()
-            row1.setSpacing(8)
+            # 第一行：标题与标签（默认全部展开，不再折叠收起）
             tags = f"  [→ {h['underlying']}]" if h.get("underlying") else ""
             lev_tag = "  [杠杆]" if h.get("is_leveraged") else ""
             news_tag = f"  [新闻 {len(h_news)}]" if h_news else ""
@@ -893,13 +902,7 @@ class AfterHoursReportPage(QWidget):
                 f"{sym}{tags}{lev_tag}{news_tag}",
                 "font-size: 13px; font-weight: 700; color: #0F172A; border: none;",
             )
-            row1.addWidget(top_lbl, 1)
-
-            toggle_btn = QPushButton("收起" if expanded else "详情")
-            toggle_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
-            toggle_btn.clicked.connect(lambda _=False, s=sym: self._toggle_symbol_expand(s))
-            row1.addWidget(toggle_btn)
-            cl.addLayout(row1)
+            cl.addWidget(top_lbl)
 
             # 第二行：基础仓位数据 + 盘后价与当日盈亏（自动折行绝不截断）
             w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
@@ -913,29 +916,31 @@ class AfterHoursReportPage(QWidget):
             )
             cl.addWidget(row2)
 
-            if expanded:
-                reason = reasons.get(sym) or f"当前持仓 {h.get('quantity')} 股，浮盈 {_fmt_money(h.get('unrealized_pnl'), signed=True)}。"
-                r_lbl = _make_wrap_label(
-                    f"AI 异动归因：{reason}",
-                    "font-size: 12px; color: #1E293B; border: none; padding-top: 4px;",
+            reason = reasons.get(sym) or f"当前持仓 {h.get('quantity')} 股，浮盈 {_fmt_money(h.get('unrealized_pnl'), signed=True)}。"
+            r_lbl = _make_wrap_label(
+                f"AI 异动归因：{reason}",
+                "font-size: 12px; color: #1E293B; border: none; padding-top: 4px;",
+            )
+            cl.addWidget(r_lbl)
+            for n in h_news:
+                sent = n.get("sentiment") or sentiments.get(n.get("title"), "中性")
+                disp_title = str(n.get("zh_title") or n.get("title") or "")
+                news_url = str(n.get("url") or n.get("link") or "")
+                summary_txt = n.get("summary") or ""
+                sum_html = (
+                    f"<br><span style='color:#64748B; font-size:11px;'>摘要：{html.escape(str(summary_txt))}</span>"
+                    if summary_txt
+                    else ""
                 )
-                cl.addWidget(r_lbl)
-                for n in h_news:
-                    sent = n.get("sentiment") or sentiments.get(n.get("title"), "中性")
-                    disp_title = n.get("zh_title") or n.get("title") or ""
-                    summary_txt = n.get("summary") or ""
-                    sum_html = (
-                        f"<br><span style='color:#64748B; font-size:11px;'>摘要：{html.escape(str(summary_txt))}</span>"
-                        if summary_txt
-                        else ""
-                    )
-                    n_lbl = _make_wrap_label(
-                        f"• <b>[{html.escape(str(sent))}]</b> {html.escape(str(disp_title))} "
-                        f"<span style='color:#64748B;'>({html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))})</span>"
-                        f"{sum_html}",
-                        "font-size: 11.5px; color: #334155; border: none; padding-left: 6px;",
-                    )
-                    cl.addWidget(n_lbl)
+                n_lbl = _make_wrap_label(
+                    f"• <b>[{html.escape(str(sent))}]</b> {_format_news_title_html(disp_title, news_url)} "
+                    f"<span style='color:#64748B;'>({html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))})</span>"
+                    f"{sum_html}",
+                    "font-size: 11.5px; color: #334155; border: none; padding-left: 6px;",
+                )
+                n_lbl.setOpenExternalLinks(True)
+                n_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+                cl.addWidget(n_lbl)
 
             self.movers_box.addWidget(card)
 
@@ -1069,6 +1074,7 @@ class AfterHoursReportPage(QWidget):
                 sent = str(d.get("sentiment") or "中性")
                 col = "#16A34A" if sent == "利好" else ("#DC2626" if sent == "利空" else "#64748B")
                 zh_title = str(d.get("zh_title") or d.get("original_title") or "")
+                news_url = str(d.get("url") or d.get("link") or "")
                 sum_txt = str(d.get("summary") or "")
                 sum_html = (
                     f"<br><span style='color:#475569; font-size:11.5px;'>核心影响：{html.escape(sum_txt)}</span>"
@@ -1077,10 +1083,12 @@ class AfterHoursReportPage(QWidget):
                 )
                 lbl = _make_wrap_label(
                     f"<b>[{html.escape(sym)}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
-                    f"<b>{html.escape(zh_title)}</b>{sum_html}<br>"
+                    f"<b>{_format_news_title_html(zh_title, news_url)}</b>{sum_html}<br>"
                     f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(d.get('publisher') or ''))} · {html.escape(str(d.get('published_bj') or ''))}</span>",
                     "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
                 )
+                lbl.setOpenExternalLinks(True)
+                lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
                 self.news_box.addWidget(lbl)
         else:
             for sym, items in news_map.items():
@@ -1089,7 +1097,8 @@ class AfterHoursReportPage(QWidget):
                     raw_t = str(n.get("title") or "")
                     zh = news_zh_map.get(raw_t) or {}
                     sent = zh.get("sentiment") or sentiments.get(raw_t, "中性")
-                    disp_t = zh.get("zh_title") or raw_t
+                    disp_t = str(zh.get("zh_title") or raw_t)
+                    news_url = str(n.get("link") or n.get("url") or "")
                     sum_txt = zh.get("summary") or ""
                     sum_html = (
                         f"<br><span style='color:#475569; font-size:11.5px;'>核心影响：{html.escape(str(sum_txt))}</span>"
@@ -1099,10 +1108,12 @@ class AfterHoursReportPage(QWidget):
                     col = "#16A34A" if sent == "利好" else ("#DC2626" if sent == "利空" else "#64748B")
                     lbl = _make_wrap_label(
                         f"<b>[{html.escape(str(sym))}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
-                        f"{html.escape(str(disp_t))}{sum_html}<br>"
+                        f"{_format_news_title_html(disp_t, news_url)}{sum_html}<br>"
                         f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))}</span>",
                         "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
                     )
+                    lbl.setOpenExternalLinks(True)
+                    lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
                     self.news_box.addWidget(lbl)
         if count == 0:
             empty = _make_wrap_label("近 36 小时未抓取到持仓/交易标的的显著突发新闻。", "padding: 16px; color: #64748B; font-size: 12px;")
