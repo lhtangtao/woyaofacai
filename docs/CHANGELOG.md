@@ -1,3 +1,9 @@
+## 2026-11-26 20:14 盘后复盘日报 3.0 升级：统一当日真实盈亏、新闻中文化摘要与可用现金展示
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/services/after_hours_report.py` 统一采用收盘/盘后行情口径计算组合及个股当日真实盈亏（含常规盘/盘后拆分与真实 `vs QQQ` 超额，无行情时回退账本），接入 `resolve_channel_cash_details` 展示可用现金余额（无独立现金账本保持 `None` 显示 `—`），并在结构化 JSON 新增 `news_digest` / `news_zh_map` 输出中文标题与一句话影响摘要（兼容历史旧日报）。
+- 同步升级 `frontend/src/views/AfterHoursReportView.tsx` 与 `src/portfolio/ui/after_hours_report_page.py`，通过 `npm run build`、`ruff check` 与 10 项 `pytest` 回归测试。
+
 ## 2026-11-26 13:28 盘后复盘日报升级为后台异步生成+轮询，并修复长桥行情解包
 
 - 修改者：Antigravity（代码修改）

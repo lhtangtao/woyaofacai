@@ -362,8 +362,10 @@ class AfterHoursReportPage(QWidget):
         # 4 张 KPI 卡片（等宽拉伸 + 零最小宽限制，确保全部同屏展示）
         kpi_grid = QGridLayout()
         kpi_grid.setSpacing(8)
-        self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, self.kpi_card_1 = self._make_kpi_card("当日预估盈亏")
-        self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总持仓市值 / 浮盈")
+        self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, self.kpi_card_1 = self._make_kpi_card("当日真实盈亏")
+        self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总持仓市值 / 可用现金")
+        self.kpi_cash_sub = _make_wrap_label("", "font-size: 11px; color: #64748B; border: none;")
+        self.kpi_card_2.layout().addWidget(self.kpi_cash_sub)
         self.kpi_bench_val, self.kpi_bench_sub, _, self.kpi_card_3 = self._make_kpi_card("大盘基准")
         self.kpi_lev_val, self.kpi_lev_sub, self.kpi_trades_lbl, self.kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
         self.lev_bar = QProgressBar()
@@ -695,7 +697,13 @@ class AfterHoursReportPage(QWidget):
         # KPI 1-4
         self.kpi_pnl_val.setText(_fmt_money(summary.get("day_pnl"), signed=True))
         self.kpi_pnl_val.setStyleSheet(f"font-size: 15.5px; font-weight: 700; border: none; color: {_tone_color(summary.get('day_pnl'))};")
-        self.kpi_pnl_sub.setText(f"日收益率 {_fmt_pct(summary.get('day_pnl_pct'))}")
+        pnl_sub_txt = f"日收益率 {_fmt_pct(summary.get('day_pnl_pct'))}"
+        if summary.get("after_hours_day_pnl") is not None:
+            pnl_sub_txt += (
+                f"\n常规 {_fmt_money(summary.get('regular_day_pnl'), signed=True)} · "
+                f"盘后 {_fmt_money(summary.get('after_hours_day_pnl'), signed=True)}"
+            )
+        self.kpi_pnl_sub.setText(pnl_sub_txt)
         alpha = summary.get("alpha_vs_qqq")
         if alpha is not None:
             self.kpi_alpha_lbl.setText(f"vs QQQ {_fmt_pct(alpha)}")
@@ -708,6 +716,13 @@ class AfterHoursReportPage(QWidget):
             f"浮盈 {_fmt_money(summary.get('total_unrealized_pnl'), signed=True)} ({_fmt_pct(summary.get('unrealized_pct'))})"
         )
         self.kpi_un_sub.setStyleSheet(f"font-size: 11px; border: none; color: {_tone_color(summary.get('total_unrealized_pnl'))};")
+        cash_bal = summary.get("cash_balance")
+        if cash_bal is not None:
+            cash_pct = summary.get("cash_pct")
+            pct_str = f" ({float(cash_pct) * 100:.1f}%)" if cash_pct is not None else ""
+            self.kpi_cash_sub.setText(f"可用现金 {_fmt_money(cash_bal)}{pct_str}")
+        else:
+            self.kpi_cash_sub.setText("可用现金 —（无独立现金账本）")
 
         b_lines = []
         for k in ("SPY", "QQQ"):
@@ -738,7 +753,29 @@ class AfterHoursReportPage(QWidget):
         self._render_followups(rep)
         self.right_scroll._sync_widget_width()
 
-    def _get_holding_news(self, snap: dict, h: dict) -> list[dict]:
+    def _get_holding_news(self, snap: dict, h: dict, structured: Optional[dict] = None) -> list[dict]:
+        st = structured or {}
+        news_digest = st.get("news_digest") or []
+        news_zh_map = st.get("news_zh_map") or {}
+        syms = {str(h.get("symbol") or "").upper()}
+        if h.get("underlying"):
+            syms.add(str(h.get("underlying") or "").upper())
+
+        if news_digest:
+            matched = [d for d in news_digest if str(d.get("symbol") or "").upper() in syms]
+            if matched:
+                return [
+                    {
+                        "title": d.get("original_title") or d.get("zh_title") or "",
+                        "zh_title": d.get("zh_title") or d.get("original_title") or "",
+                        "summary": d.get("summary") or "",
+                        "sentiment": d.get("sentiment") or "中性",
+                        "publisher": d.get("publisher") or "",
+                        "published_bj": d.get("published_bj") or "",
+                    }
+                    for d in matched
+                ]
+
         news_map = snap.get("news") or {}
         own = news_map.get(h.get("symbol") or "") or []
         under = news_map.get(h.get("underlying") or "") or [] if h.get("underlying") else []
@@ -748,7 +785,13 @@ class AfterHoursReportPage(QWidget):
             t = str(n.get("title") or "")
             if t and t not in seen:
                 seen.add(t)
-                merged.append(n)
+                zh = news_zh_map.get(t) or {}
+                merged.append({
+                    **n,
+                    "zh_title": zh.get("zh_title") or t,
+                    "summary": zh.get("summary") or "",
+                    "sentiment": zh.get("sentiment") or "",
+                })
         return merged
 
     def _render_movers(self, rep: dict):
@@ -769,7 +812,7 @@ class AfterHoursReportPage(QWidget):
                 h.get("after_hours_change_pct") is None or abs(float(h.get("after_hours_change_pct"))) < 0.005
             ):
                 continue
-            if self._mover_filter == "news" and not self._get_holding_news(snap, h):
+            if self._mover_filter == "news" and not self._get_holding_news(snap, h, structured):
                 continue
             filtered.append(h)
 
@@ -780,7 +823,7 @@ class AfterHoursReportPage(QWidget):
 
         for h in filtered:
             sym = str(h.get("symbol") or "")
-            h_news = self._get_holding_news(snap, h)
+            h_news = self._get_holding_news(snap, h, structured)
             expanded = sym in self._expanded_syms
 
             card = QFrame()
@@ -828,10 +871,19 @@ class AfterHoursReportPage(QWidget):
                 )
                 cl.addWidget(r_lbl)
                 for n in h_news:
-                    sent = sentiments.get(n.get("title"), "中性")
+                    sent = n.get("sentiment") or sentiments.get(n.get("title"), "中性")
+                    disp_title = n.get("zh_title") or n.get("title") or ""
+                    summary_txt = n.get("summary") or ""
+                    sum_html = (
+                        f"<br><span style='color:#64748B; font-size:11px;'>摘要：{html.escape(str(summary_txt))}</span>"
+                        if summary_txt
+                        else ""
+                    )
                     n_lbl = _make_wrap_label(
-                        f"• [{sent}] {n.get('title')} ({n.get('publisher')} · {n.get('published_bj')})",
-                        "font-size: 11.5px; color: #475569; border: none; padding-left: 6px;",
+                        f"• <b>[{html.escape(str(sent))}]</b> {html.escape(str(disp_title))} "
+                        f"<span style='color:#64748B;'>({html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))})</span>"
+                        f"{sum_html}",
+                        "font-size: 11.5px; color: #334155; border: none; padding-left: 6px;",
                     )
                     cl.addWidget(n_lbl)
 
@@ -954,20 +1006,54 @@ class AfterHoursReportPage(QWidget):
         _clear_layout(self.news_box)
         snap = rep.get("snapshot") or {}
         news_map = snap.get("news") or {}
-        sentiments = (rep.get("structured") or {}).get("news_sentiments") or {}
+        structured = rep.get("structured") or {}
+        sentiments = structured.get("news_sentiments") or {}
+        news_digest = structured.get("news_digest") or []
+        news_zh_map = structured.get("news_zh_map") or {}
         count = 0
-        for sym, items in news_map.items():
-            for n in items or []:
+
+        if news_digest:
+            for d in news_digest:
                 count += 1
-                sent = sentiments.get(n.get("title"), "中性")
+                sym = str(d.get("symbol") or "组合")
+                sent = str(d.get("sentiment") or "中性")
                 col = "#16A34A" if sent == "利好" else ("#DC2626" if sent == "利空" else "#64748B")
+                zh_title = str(d.get("zh_title") or d.get("original_title") or "")
+                sum_txt = str(d.get("summary") or "")
+                sum_html = (
+                    f"<br><span style='color:#475569; font-size:11.5px;'>核心影响：{html.escape(sum_txt)}</span>"
+                    if sum_txt
+                    else ""
+                )
                 lbl = _make_wrap_label(
-                    f"<b>[{html.escape(str(sym))}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
-                    f"{html.escape(str(n.get('title') or ''))}<br>"
-                    f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))}</span>",
+                    f"<b>[{html.escape(sym)}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
+                    f"<b>{html.escape(zh_title)}</b>{sum_html}<br>"
+                    f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(d.get('publisher') or ''))} · {html.escape(str(d.get('published_bj') or ''))}</span>",
                     "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
                 )
                 self.news_box.addWidget(lbl)
+        else:
+            for sym, items in news_map.items():
+                for n in items or []:
+                    count += 1
+                    raw_t = str(n.get("title") or "")
+                    zh = news_zh_map.get(raw_t) or {}
+                    sent = zh.get("sentiment") or sentiments.get(raw_t, "中性")
+                    disp_t = zh.get("zh_title") or raw_t
+                    sum_txt = zh.get("summary") or ""
+                    sum_html = (
+                        f"<br><span style='color:#475569; font-size:11.5px;'>核心影响：{html.escape(str(sum_txt))}</span>"
+                        if sum_txt
+                        else ""
+                    )
+                    col = "#16A34A" if sent == "利好" else ("#DC2626" if sent == "利空" else "#64748B")
+                    lbl = _make_wrap_label(
+                        f"<b>[{html.escape(str(sym))}]</b> <span style='color:{col}; font-weight:600;'>[{html.escape(sent)}]</span> "
+                        f"{html.escape(str(disp_t))}{sum_html}<br>"
+                        f"<span style='color:#64748B; font-size:11px;'>{html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))}</span>",
+                        "padding: 9px 11px; border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; font-size: 12px;",
+                    )
+                    self.news_box.addWidget(lbl)
         if count == 0:
             empty = _make_wrap_label("近 36 小时未抓取到持仓/交易标的的显著突发新闻。", "padding: 16px; color: #64748B; font-size: 12px;")
             self.news_box.addWidget(empty)

@@ -103,6 +103,15 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
             "tldr": "在 QQQ 收跌背景下组合逆势收涨，DEMO 财报超预期推动盘后走强。",
             "mover_reasons": {"DEMO": "Q4 业绩超预期带动常规与盘后共振走高。"},
             "news_sentiments": {"Demo Corp beats Q4 earnings estimates": "利好"},
+            "news_digest": [
+                {
+                    "symbol": "DEMO",
+                    "original_title": "Demo Corp beats Q4 earnings estimates",
+                    "zh_title": "Demo Corp 四季度业绩全面超预期",
+                    "summary": "四季度营收与利润均超市场一致预期，直接推动盘后买盘走强。",
+                    "sentiment": "利好",
+                }
+            ],
             "risks": [{"level": "提示", "title": "单一持仓集中度较高", "detail": "关注明日盘前获利回吐风险。"}],
             "checklist": [
                 {"id": "c1", "ticker": "DEMO", "level": "$115 关口", "text": "观察盘前是否站稳 $115 上方"},
@@ -132,12 +141,33 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     assert report["id"] == "2026-01-02::ALL"
     assert report["structured"]["regime"]["tone"] == "success"
     assert report["structured"]["checklist"][0]["ticker"] == "DEMO"
-    # 2026-01-02 在 demo_path 中存在真实账本当日盈亏 (2.0)，优先保留账本精确口径
-    assert report["snapshot"]["summary"]["day_pnl"] == 2.0
-    assert report["snapshot"]["summary"]["day_pnl_basis"] == "ledger"
+    assert len(report["structured"]["news_digest"]) == 1
+    assert report["structured"]["news_digest"][0]["zh_title"] == "Demo Corp 四季度业绩全面超预期"
+    assert report["structured"]["news_digest"][0]["publisher"] == "Reuters"
+    assert "Demo Corp beats Q4 earnings estimates" in report["structured"]["news_zh_map"]
+    # 只要拉取到行情，统一以行情口径计算真实当日盈亏（2026-01-02 持仓 10 股：常规 25.0 + 盘后 25.0 = 50.0），覆盖局部账本流水 (2.0)
+    assert report["snapshot"]["summary"]["day_pnl"] == 50.0
+    assert report["snapshot"]["summary"]["regular_day_pnl"] == 25.0
+    assert report["snapshot"]["summary"]["after_hours_day_pnl"] == 25.0
+    assert report["snapshot"]["summary"]["ledger_day_pnl"] == 2.0
+    assert report["snapshot"]["summary"]["day_pnl_basis"] == "quote_after_hours"
     assert report["snapshot"]["summary"]["alpha_vs_qqq"] is not None
 
-    # 对于账本缺当日盈亏的日期，自动按持仓股数 * (常规收盘 - 昨收) 估算补齐
+    # 离线/无行情时回退到账本精确口径 (2.0)
+    offline_report = generate_after_hours_report(
+        trade_date=date(2026, 1, 2),
+        person_key="ALL",
+        run_sync=False,
+        db_path=demo_path,
+        store=store,
+        quote_fetcher=lambda _syms: {},
+        news_fetcher=fake_news,
+        ai_asker=fake_ai,
+    )
+    assert offline_report["snapshot"]["summary"]["day_pnl"] == 2.0
+    assert offline_report["snapshot"]["summary"]["day_pnl_basis"] == "ledger"
+
+    # 对于账本缺当日盈亏的日期，同样按持仓股数 * (常规+盘后) 计算
     est_report = generate_after_hours_report(
         trade_date=date(2026, 1, 5),
         person_key="ALL",
@@ -148,8 +178,8 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
         news_fetcher=fake_news,
         ai_asker=fake_ai,
     )
-    assert est_report["snapshot"]["summary"]["day_pnl"] == 15.0
-    assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_estimated"
+    assert est_report["snapshot"]["summary"]["day_pnl"] == 30.0
+    assert est_report["snapshot"]["summary"]["day_pnl_basis"] == "quote_after_hours"
 
     # 桌面端 2.0 页面可渲染并勾选清单落盘，且 1280x800 下绝无横向溢出
     from PySide6.QtCore import Qt
@@ -390,3 +420,44 @@ def test_after_hours_generate_async_task_polling_and_isolation(tmp_path, monkeyp
     assert final is not None
     assert final["report"]["id"] == "2026-11-25::拉科"
     assert "structured" in final["report"]
+
+
+def test_after_hours_cash_balance_and_missing_scope_never_fakes_zero(demo_path, tmp_path, monkeypatch):
+    """验证现金余额正常汇总与无独立现金账本范围保持 None（绝不伪造 0）。"""
+    from portfolio.services import after_hours_report as svc
+
+    monkeypatch.setattr(
+        svc,
+        "resolve_channel_cash_details",
+        lambda _res: {
+            "LONGBRIDGE": {"channel": "长桥", "amount": 1200.5, "source": "ledger"},
+            "BBAE": {"channel": "BBAE", "amount": 300.0, "source": "ledger"},
+        },
+    )
+    snap_with_cash = svc.build_after_hours_snapshot(
+        trade_date=date(2026, 1, 5),
+        person_key="ALL",
+        person_id=None,
+        person_name="全部人员",
+        db_path=demo_path,
+        quote_fetcher=lambda _syms: {},
+        news_fetcher=lambda _syms: {},
+    )
+    assert snap_with_cash["summary"]["cash_balance"] == 1500.5
+    assert snap_with_cash["summary"]["cash_pct"] is not None
+    assert len(snap_with_cash["summary"]["cash_breakdown"]) == 2
+    assert snap_with_cash["summary"]["cash_breakdown"][0]["channel"] == "长桥"
+
+    monkeypatch.setattr(svc, "resolve_channel_cash_details", lambda _res: {})
+    snap_no_cash = svc.build_after_hours_snapshot(
+        trade_date=date(2026, 1, 5),
+        person_key="ALL",
+        person_id=None,
+        person_name="全部人员",
+        db_path=demo_path,
+        quote_fetcher=lambda _syms: {},
+        news_fetcher=lambda _syms: {},
+    )
+    assert snap_no_cash["summary"]["cash_balance"] is None
+    assert snap_no_cash["summary"]["cash_pct"] is None
+    assert snap_no_cash["summary"]["cash_breakdown"] == []

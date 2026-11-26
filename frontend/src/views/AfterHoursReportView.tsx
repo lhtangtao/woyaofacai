@@ -342,22 +342,51 @@ export const AfterHoursReportView: React.FC = () => {
   const newsMap: Record<string, any[]> = snap?.news || {};
   const moverReasons: Record<string, string> = structured?.mover_reasons || {};
   const newsSentiments: Record<string, string> = structured?.news_sentiments || {};
+  const newsDigest: any[] = structured?.news_digest || [];
+  const newsZhMap: Record<string, any> = structured?.news_zh_map || {};
   const risks: any[] = structured?.risks || [];
   const checklist: any[] = structured?.checklist || [];
   const followups: string[] = structured?.followups || [];
   const followupsHistory: any[] = detail?.followups_history || [];
 
   const getNewsForHolding = (h: any) => {
+    const syms = new Set<string>([String(h.symbol || "").toUpperCase()]);
+    if (h.underlying) syms.add(String(h.underlying).toUpperCase());
+
+    if (newsDigest.length > 0) {
+      const matched = newsDigest.filter((d) => syms.has(String(d.symbol || "").toUpperCase()));
+      if (matched.length > 0) {
+        return matched.map((d) => ({
+          title: d.original_title || d.zh_title,
+          zh_title: d.zh_title || d.original_title,
+          summary: d.summary || "",
+          sentiment: d.sentiment || newsSentiments[d.original_title] || "中性",
+          publisher: d.publisher || "",
+          published_bj: d.published_bj || "",
+        }));
+      }
+    }
+
     const own = newsMap[h.symbol] || [];
     const under = h.underlying ? newsMap[h.underlying] || [] : [];
     const merged = [...own, ...under];
     const seen = new Set<string>();
-    return merged.filter((n) => {
-      const k = String(n.title || "");
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
+    return merged
+      .filter((n) => {
+        const k = String(n.title || "");
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .map((n) => {
+        const zh = newsZhMap[n.title];
+        return {
+          ...n,
+          zh_title: zh?.zh_title || n.title,
+          summary: zh?.summary || "",
+          sentiment: zh?.sentiment || newsSentiments[n.title] || "中性",
+        };
+      });
   };
 
   const filteredHoldings = useMemo(() => {
@@ -370,17 +399,35 @@ export const AfterHoursReportView: React.FC = () => {
       if (moverFilter === "news") return getNewsForHolding(h).length > 0;
       return true;
     });
-  }, [holdings, moverFilter, newsMap]);
+  }, [holdings, moverFilter, newsMap, newsDigest]);
 
   const allNewsFeed = useMemo(() => {
+    if (newsDigest.length > 0) {
+      return newsDigest.map((d) => ({
+        symbol: d.symbol || "组合",
+        title: d.original_title || d.zh_title,
+        zh_title: d.zh_title || d.original_title,
+        summary: d.summary || "",
+        sentiment: d.sentiment || newsSentiments[d.original_title] || "中性",
+        publisher: d.publisher || "",
+        published_bj: d.published_bj || "",
+      }));
+    }
     const out: any[] = [];
     Object.entries(newsMap).forEach(([sym, items]) => {
       (items || []).forEach((it: any) => {
-        out.push({ ...it, symbol: sym, sentiment: newsSentiments[it.title] || "中性" });
+        const zh = newsZhMap[it.title];
+        out.push({
+          ...it,
+          symbol: sym,
+          zh_title: zh?.zh_title || it.title,
+          summary: zh?.summary || "",
+          sentiment: zh?.sentiment || newsSentiments[it.title] || "中性",
+        });
       });
     });
     return out;
-  }, [newsMap, newsSentiments]);
+  }, [newsMap, newsSentiments, newsDigest, newsZhMap]);
 
   const levPctNum = summary.leverage_pct != null ? Number(summary.leverage_pct) * 100 : 0;
   const regStyle = regimeStyle(structured?.regime?.tone);
@@ -719,8 +766,26 @@ export const AfterHoursReportView: React.FC = () => {
                 {/* 4 张 KPI 指标卡 */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "10px" }}>
                   <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", color: "var(--text-muted)" }}>
-                      <span>当日预估盈亏</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "6px", fontSize: "11.5px", color: "var(--text-muted)" }}>
+                      <span>
+                        当日真实盈亏
+                        <span
+                          style={{
+                            marginLeft: "5px",
+                            fontSize: "10px",
+                            padding: "0px 5px",
+                            borderRadius: "4px",
+                            background: "var(--hover-bg)",
+                            color: "var(--text-muted)",
+                          }}
+                        >
+                          {summary.day_pnl_basis === "quote_after_hours"
+                            ? "收盘+盘后"
+                            : summary.day_pnl_basis === "quote_regular" || summary.day_pnl_basis === "quote_estimated"
+                              ? "收盘行情"
+                              : "账本流水"}
+                        </span>
+                      </span>
                       {summary.alpha_vs_qqq != null && (
                         <span className="font-mono" style={{ fontWeight: 600, color: toneColor(summary.alpha_vs_qqq) }}>
                           vs QQQ {fmtPct(summary.alpha_vs_qqq)}
@@ -730,18 +795,36 @@ export const AfterHoursReportView: React.FC = () => {
                     <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: toneColor(summary.day_pnl) }}>
                       {fmtMoney(summary.day_pnl, true)}
                     </div>
-                    <div className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      日收益率 {fmtPct(summary.day_pnl_pct)}
+                    <div className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px", lineHeight: 1.45 }}>
+                      <span>日收益率 {fmtPct(summary.day_pnl_pct)}</span>
+                      {summary.after_hours_day_pnl != null && (
+                        <span style={{ display: "block", fontSize: "11px" }}>
+                          常规 {fmtMoney(summary.regular_day_pnl, true)} · 盘后 {fmtMoney(summary.after_hours_day_pnl, true)}
+                        </span>
+                      )}
                     </div>
                   </div>
 
                   <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
-                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>总持仓市值 / 累计浮盈</div>
+                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>总持仓市值 / 可用现金</div>
                     <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: "var(--text-heading)" }}>
                       {fmtMoney(summary.total_market_value)}
                     </div>
                     <div className="font-mono" style={{ fontSize: "11.5px", color: toneColor(summary.total_unrealized_pnl), marginTop: "2px" }}>
                       累计浮盈 {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
+                    </div>
+                    <div
+                      className="font-mono"
+                      style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "3px" }}
+                      title={
+                        Array.isArray(summary.cash_breakdown) && summary.cash_breakdown.length > 0
+                          ? summary.cash_breakdown.map((c: any) => `${c.channel}: ${fmtMoney(c.amount)}`).join(" | ")
+                          : undefined
+                      }
+                    >
+                      {summary.cash_balance != null
+                        ? `可用现金 ${fmtMoney(summary.cash_balance)}${summary.cash_pct != null ? ` (${(Number(summary.cash_pct) * 100).toFixed(1)}%)` : ""}`
+                        : "可用现金 —（无独立现金账本）"}
                     </div>
                   </div>
 
@@ -986,31 +1069,40 @@ export const AfterHoursReportView: React.FC = () => {
                                       {hNews.length > 0 ? (
                                         <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                                           {hNews.map((n, nIdx) => {
-                                            const st = sentimentStyle(newsSentiments[n.title]);
+                                            const sent = n.sentiment || newsSentiments[n.title] || "中性";
+                                            const st = sentimentStyle(sent);
+                                            const displayTitle = n.zh_title || n.title;
                                             return (
                                               <div
                                                 key={nIdx}
                                                 style={{
                                                   display: "flex",
-                                                  justifyContent: "space-between",
-                                                  alignItems: "center",
-                                                  gap: "10px",
-                                                  padding: "6px 10px",
+                                                  flexDirection: "column",
+                                                  gap: "4px",
+                                                  padding: "8px 10px",
                                                   borderRadius: "8px",
                                                   border: "1px solid var(--border-color)",
                                                   background: "var(--bg-app)",
                                                   fontSize: "12px",
                                                 }}
+                                                title={n.title && n.title !== displayTitle ? `原文：${n.title}` : undefined}
                                               >
-                                                <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                                                  <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0 }}>
-                                                    {newsSentiments[n.title] || "中性"}
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                                                  <div style={{ display: "flex", alignItems: "flex-start", gap: "7px", minWidth: 0, flex: 1 }}>
+                                                    <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0, marginTop: "1px" }}>
+                                                      {sent}
+                                                    </span>
+                                                    <span style={{ fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.45 }}>{displayTitle}</span>
+                                                  </div>
+                                                  <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
+                                                    {n.publisher} · {n.published_bj}
                                                   </span>
-                                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.title}</span>
                                                 </div>
-                                                <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
-                                                  {n.publisher} · {n.published_bj}
-                                                </span>
+                                                {n.summary && (
+                                                  <div style={{ fontSize: "11.5px", color: "var(--text-muted)", lineHeight: 1.5, paddingLeft: "4px" }}>
+                                                    摘要：{n.summary}
+                                                  </div>
+                                                )}
                                               </div>
                                             );
                                           })}
@@ -1186,8 +1278,13 @@ export const AfterHoursReportView: React.FC = () => {
                       ) : (
                         allNewsFeed.map((n, idx) => {
                           const st = sentimentStyle(n.sentiment);
+                          const displayTitle = n.zh_title || n.title;
                           return (
-                            <div key={idx} style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                            <div
+                              key={idx}
+                              style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 14px", display: "flex", flexDirection: "column", gap: "5px" }}
+                              title={n.title && n.title !== displayTitle ? `原文：${n.title}` : undefined}
+                            >
                               <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                                 <span className="font-mono" style={{ fontSize: "11.5px", fontWeight: 700, padding: "1px 7px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)" }}>
                                   {n.symbol}
@@ -1199,9 +1296,14 @@ export const AfterHoursReportView: React.FC = () => {
                                   {n.publisher} · {n.published_bj}
                                 </span>
                               </div>
-                              <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text-heading)", lineHeight: 1.5 }}>
-                                {n.title}
+                              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.5 }}>
+                                {displayTitle}
                               </div>
+                              {n.summary && (
+                                <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.55 }}>
+                                  核心影响：{n.summary}
+                                </div>
+                              )}
                             </div>
                           );
                         })

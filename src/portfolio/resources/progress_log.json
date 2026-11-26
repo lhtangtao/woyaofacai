@@ -1,5 +1,19 @@
 [
   {
+    "title": "盘后复盘日报 3.0 升级：统一当日真实盈亏口径、新闻中文化摘要与可用现金余额展示",
+    "time": "2026-11-26 20:14",
+    "author": "Antigravity",
+    "tag": "盘后复盘 3.0 升级",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "统一当日真实盈亏口径（`src/portfolio/services/after_hours_report.py`）：只要拉取到持仓标的收盘/盘后行情，始终以统一行情口径计算组合及每只持仓的当日真实盈亏（拆分为 `regular_day_pnl` 常规盘与 `after_hours_day_pnl` 盘后，基于昨收市值算真实日收益率与 `vs QQQ` 超额），彻底消除账本局部成交导致的 `+$1.00` / `$0.00` 失真；离线无行情时安全回退至账本流水口径。",
+      "接入可用现金余额：调用 `resolve_channel_cash_details(res)` 汇总当前范围真实可用现金、占总资产比例与分渠道明细；对于无分人现金账本的范围（如独立人员范围），严格保持 `None` 并在 UI 显示 `—`，绝不伪造 `0`。",
+      "新闻中文化去噪与摘要：在 Prompt 与结构化 JSON 新增 `news_digest`（及 `news_zh_map` 索引），由 Gemini 为每只重点持仓筛选 1~2 条高相关新闻并翻译为精炼简体中文标题 `zh_title` 与一句话核心影响摘要 `summary`；强化次日盘前清单可操作性（明确标的 + 触发价位/条件 + 具体动作），保持默认 AI 模型不变。",
+      "Web 前端与 Mac 桌面端同步升级（`frontend/src/views/AfterHoursReportView.tsx`、`src/portfolio/ui/after_hours_report_page.py`）：KPI 卡片 1 展示常规/盘后拆分与口径标签，KPI 卡片 2 展示可用现金与占比，持仓异动卡片与新闻 Tab 展示中文标题与影响摘要并兼容历史旧日报；桌面端保持 1280×800 零横向溢出。",
+      "验证范围：`frontend npm run build` 0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_after_hours_report.py` 与 `tests/test_web_compression.py` 共 10 项测试全部通过；8888 服务已平滑重载生效。"
+    ]
+  },
+  {
     "title": "盘后复盘日报升级为后台异步生成+容错轮询，并修复长桥盘后行情凭证解包异常",
     "time": "2026-11-26 13:28",
     "author": "Antigravity",

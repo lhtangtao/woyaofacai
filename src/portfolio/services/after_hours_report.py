@@ -31,6 +31,7 @@ from portfolio.domain.models import QueryScope
 from portfolio.paths import DATABASE_PATH, PROJECT_DIR
 from portfolio.services.ai_service import CodexAIService, normalize_ai_provider
 from portfolio.services.analytics_service import AnalyticsService
+from portfolio.services.channel_cash import resolve_channel_cash_details
 from portfolio.services.earnings_links import DEFAULT_LINKS
 
 logger = logging.getLogger(__name__)
@@ -642,28 +643,54 @@ def build_after_hours_snapshot(
                 vs_close = (trade_p - close_p) / trade_p
         t["vs_close_pct"] = _serialize_dec(vs_close)
 
-    # 判断账本当日盈亏是否缺失或需要行情估算兜底
+    # 判断当日盈亏口径：只要拉取到持仓标的收盘/盘后行情，始终以统一行情口径计算真实当日盈亏（常规盘 + 盘后），
+    # 彻底避免账本局部成交导致 +$1.00 / $0.00 失真；仅在离线或无行情时回退至账本流水口径。
+    ledger_day_pnl = total_day_pnl
     day_pnl_basis = "ledger"
-    has_nonzero_ledger = total_day_pnl is not None and (
-        total_day_pnl != Decimal("0") or any(v != Decimal("0") for v in day_pnl_by_sym.values())
-    )
-    if not has_nonzero_ledger and holdings_map and quotes:
+    reg_day_pnl_by_sym: Dict[str, Decimal] = {}
+    ah_day_pnl_by_sym: Dict[str, Decimal] = {}
+    est_reg_total: Optional[Decimal] = None
+    est_ah_total: Optional[Decimal] = None
+    est_prev_mv = Decimal("0")
+
+    if holdings_map and quotes:
         est_total = Decimal("0")
+        reg_sum = Decimal("0")
+        ah_sum = Decimal("0")
         est_count = 0
+        ah_count = 0
         est_by_sym: Dict[str, Decimal] = {}
         for sym, item in holdings_map.items():
             q = quotes.get(sym) or {}
             reg_c = _to_dec(q.get("regular_close"))
             prev_c = _to_dec(q.get("prev_close"))
             if reg_c is not None and prev_c is not None:
-                dp_est = item["quantity"] * (reg_c - prev_c)
-                est_by_sym[sym] = dp_est
-                est_total += dp_est
+                qty_d = item["quantity"]
+                reg_dp = qty_d * (reg_c - prev_c)
+                reg_day_pnl_by_sym[sym] = reg_dp
+                reg_sum += reg_dp
+                est_prev_mv += qty_d * prev_c
+
+                ah_p = _to_dec(q.get("after_hours_price"))
+                if ah_p is not None:
+                    ah_dp = qty_d * (ah_p - reg_c)
+                    ah_day_pnl_by_sym[sym] = ah_dp
+                    ah_sum += ah_dp
+                    ah_count += 1
+                    sym_dp = reg_dp + ah_dp
+                else:
+                    sym_dp = reg_dp
+
+                est_by_sym[sym] = sym_dp
+                est_total += sym_dp
                 est_count += 1
+
         if est_count > 0:
             day_pnl_by_sym = est_by_sym
             total_day_pnl = est_total
-            day_pnl_basis = "quote_estimated"
+            est_reg_total = reg_sum
+            est_ah_total = ah_sum if ah_count > 0 else None
+            day_pnl_basis = "quote_after_hours" if ah_count > 0 else "quote_regular"
 
     leverage_mv = Decimal("0")
     holdings_list: List[Dict[str, Any]] = []
@@ -701,6 +728,8 @@ def build_after_hours_snapshot(
             "need_breakeven_pct": _serialize_dec(need_breakeven),
             "unrealized_pnl": _serialize_dec(item["unrealized_pnl"]),
             "day_pnl": _serialize_dec(day_pnl_by_sym.get(sym)),
+            "regular_day_pnl": _serialize_dec(reg_day_pnl_by_sym.get(sym)),
+            "after_hours_day_pnl": _serialize_dec(ah_day_pnl_by_sym.get(sym)),
             "regular_close": q.get("regular_close"),
             "regular_change_pct": q.get("regular_change_pct"),
             "after_hours_price": q.get("after_hours_price"),
@@ -711,18 +740,52 @@ def build_after_hours_snapshot(
 
     # 汇总衍生指标：当日收益率、累计浮盈率、杠杆暴露率、相对 QQQ Alpha
     day_pnl_pct: Optional[Decimal] = None
-    if total_day_pnl is not None and total_mv > 0:
-        prev_mv = total_mv - total_day_pnl
-        if prev_mv > 0:
-            day_pnl_pct = total_day_pnl / prev_mv
+    if total_day_pnl is not None:
+        if day_pnl_basis != "ledger" and est_prev_mv > 0:
+            day_pnl_pct = total_day_pnl / est_prev_mv
+        elif total_mv > 0:
+            prev_mv = total_mv - total_day_pnl
+            if prev_mv > 0:
+                day_pnl_pct = total_day_pnl / prev_mv
 
     unrealized_pct: Optional[Decimal] = None
     if total_cost > 0:
         unrealized_pct = total_unrealized / total_cost
 
     leverage_pct = (leverage_mv / total_mv) if total_mv > 0 else Decimal("0")
-    qqq_reg_pct = _to_dec((benchmarks.get("QQQ") or {}).get("regular_change_pct"))
-    alpha_vs_qqq = (day_pnl_pct - qqq_reg_pct) if (day_pnl_pct is not None and qqq_reg_pct is not None) else None
+    qqq_bench = benchmarks.get("QQQ") or {}
+    qqq_cmp_pct = (
+        _to_dec(qqq_bench.get("total_change_pct"))
+        if day_pnl_basis == "quote_after_hours" and qqq_bench.get("total_change_pct") is not None
+        else _to_dec(qqq_bench.get("regular_change_pct"))
+    )
+    alpha_vs_qqq = (day_pnl_pct - qqq_cmp_pct) if (day_pnl_pct is not None and qqq_cmp_pct is not None) else None
+
+    # 4.5 采集可用现金余额（仅当当前范围具备真实分渠道现金账本时返回，无独立账本保持 None 绝不伪造 0）
+    cash_total: Optional[Decimal] = None
+    cash_pct: Optional[Decimal] = None
+    cash_breakdown: List[Dict[str, Any]] = []
+    try:
+        cash_details = resolve_channel_cash_details(res)
+    except Exception:
+        cash_details = {}
+    if isinstance(cash_details, dict) and cash_details:
+        c_sum = Decimal("0")
+        for ch_key, info in cash_details.items():
+            amt = _to_dec((info or {}).get("amount"))
+            if amt is not None:
+                c_sum += amt
+                cash_breakdown.append({
+                    "channel": str((info or {}).get("channel") or ch_key),
+                    "amount": _serialize_dec(amt),
+                    "source": str((info or {}).get("source") or ""),
+                })
+        if cash_breakdown:
+            cash_breakdown.sort(key=lambda x: -(x.get("amount") or 0))
+            cash_total = c_sum
+            total_assets = total_mv + cash_total
+            if total_assets > 0:
+                cash_pct = cash_total / total_assets
 
     # 5. 采集近期突发新闻
     news_map = news_fetcher(sorted(all_symbols)) if all_symbols else {}
@@ -740,10 +803,16 @@ def build_after_hours_snapshot(
             "total_unrealized_pnl": _serialize_dec(total_unrealized),
             "unrealized_pct": _serialize_dec(unrealized_pct),
             "day_pnl": _serialize_dec(total_day_pnl),
+            "regular_day_pnl": _serialize_dec(est_reg_total),
+            "after_hours_day_pnl": _serialize_dec(est_ah_total),
+            "ledger_day_pnl": _serialize_dec(ledger_day_pnl),
             "day_pnl_pct": _serialize_dec(day_pnl_pct),
             "day_pnl_basis": day_pnl_basis,
             "leverage_pct": _serialize_dec(leverage_pct),
             "alpha_vs_qqq": _serialize_dec(alpha_vs_qqq),
+            "cash_balance": _serialize_dec(cash_total),
+            "cash_pct": _serialize_dec(cash_pct),
+            "cash_breakdown": cash_breakdown,
         },
         "market_benchmarks": benchmarks,
         "trades": trades,
@@ -808,6 +877,29 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
     sync_note = sync_status.get("message") or ("同步成功" if sync_status.get("ok") else "未执行同步")
     warn_text = "\n".join(f"- {w}" for w in warnings) if warnings else "无"
 
+    reg_dp = _to_dec(summary.get("regular_day_pnl"))
+    ah_dp = _to_dec(summary.get("after_hours_day_pnl"))
+    pnl_split = ""
+    if reg_dp is not None and ah_dp is not None:
+        pnl_split = f"（常规盘 ${_fmt_dec(reg_dp, signed=True)} / 盘后 ${_fmt_dec(ah_dp, signed=True)}）"
+
+    cash_bal = _to_dec(summary.get("cash_balance"))
+    cash_pct = _to_dec(summary.get("cash_pct"))
+    cash_bd = summary.get("cash_breakdown") or []
+    if cash_bal is not None:
+        ch_txt = "、".join(
+            f"{c.get('channel')} ${_fmt_dec(_to_dec(c.get('amount')))}"
+            for c in cash_bd
+            if c.get("amount") is not None
+        )
+        cash_line = (
+            f"- 可用现金余额：${_fmt_dec(cash_bal)}（占总资产 {_fmt_dec(cash_pct, pct=True)}）"
+            + (f" [{ch_txt}]" if ch_txt else "")
+            + "\n"
+        )
+    else:
+        cash_line = "- 可用现金余额：当前人员范围无独立现金账本（以「—」展示，勿编造金额）\n"
+
     return (
         f"你是一位资深美股投资组合经理与盘后复盘分析师。请严格基于以下真实账本、盘后行情与抓取到的新闻事实，"
         f"为【{snapshot.get('person_name')}】撰写一份 {snapshot.get('trade_date')} 的《美股盘后复盘日报》。\n\n"
@@ -820,7 +912,8 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         f"- 当前总市值：${_fmt_dec(_to_dec(summary.get('total_market_value')))} | "
         f"总持仓成本：${_fmt_dec(_to_dec(summary.get('total_cost')))} | "
         f"累计浮盈：${_fmt_dec(_to_dec(summary.get('total_unrealized_pnl')), signed=True)} | "
-        f"当日盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} ({_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)})\n\n"
+        f"当日真实盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} ({_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)}){pnl_split}\n"
+        f"{cash_line}\n"
         f"【大盘基准 (盘中 + 盘后)】\n{bench_text}\n\n"
         f"【当日真实交易记录】\n{trade_text}\n\n"
         f"【当前持仓与盘后最终行情】\n{holding_text}\n\n"
@@ -833,13 +926,17 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         '  "tldr": "60~120字的一句话核心定性，讲清今天盈亏、跑赢/跑输大盘核心原因及明日重点",\n'
         '  "mover_reasons": {"标的Ticker": "结合涨跌幅、盘后表现或新闻的一句话归因"},\n'
         '  "news_sentiments": {"新闻原标题": "利好|利空|中性"},\n'
+        '  "news_digest": [{"symbol": "Ticker", "original_title": "上方新闻原标题", "zh_title": "精炼中文标题(15~32字)", "summary": "一句话中文核心影响摘要(25~55字)", "sentiment": "利好|利空|中性"}],\n'
         '  "risks": [{"level": "高危|中危|提示", "title": "风险标题", "detail": "具体说明"}],\n'
-        '  "checklist": [{"id": "c1", "ticker": "标的或大盘", "level": "关键价位或指标", "text": "具体盘前关注动作"}],\n'
+        '  "checklist": [{"id": "c1", "ticker": "标的或大盘", "level": "关键价位或触发条件", "text": "具体可执行的盘前关注动作（写明价格阈值与应对动作）"}],\n'
         '  "trades_summary": "今日操作总体点评（一句话）",\n'
         '  "trade_reviews": [{"symbol": "Ticker", "side": "BUY|SELL", "verdict": "四字短评", "tone": "success|warning|neutral", "comment": "逐笔点评"}],\n'
         '  "followups": ["适合继续追问的简短问题1", "问题2", "问题3"]\n'
         "}\n"
         "```\n\n"
+        f"补充要求：\n"
+        f"- `news_digest` 必须对上方抓取的英文新闻去噪，每只重点持仓筛选 1~2 条最相关的高价值新闻，全部翻译为流畅简体中文标题 `zh_title`，并写明一句话核心影响摘要 `summary`；若无新闻则输出空数组 `[]`。\n"
+        f"- `checklist` 输出 3~5 条，每条必须包含具体标的 + 关键价位/触发条件 + 明确应对动作（如「若盘前跌破 $XX 则减仓 Y%」）。\n\n"
         f"第二步：在 JSON 代码块之后，继续输出完整的 5 章节 Markdown 正文：\n"
         f"1. 严禁编造任何未在上方提供的价格、涨跌幅、成交记录或新闻；若某标的盘后价为「—」或无新闻，如实说明即可。\n"
         f"2. 章节标题严格使用：\n"
@@ -923,13 +1020,68 @@ def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snaps
         if sym and str(v or "").strip():
             mover_reasons[sym] = str(v).strip()
 
-    # 4. news_sentiments
+    # 4. news_sentiments & news_digest（中文精炼标题 + 一句话影响摘要）
     raw_sentiments = src.get("news_sentiments") if isinstance(src.get("news_sentiments"), dict) else {}
     news_sentiments: Dict[str, str] = {}
     for k, v in raw_sentiments.items():
         val = str(v or "").strip()
         if val in ("利好", "利空", "中性"):
             news_sentiments[str(k).strip()] = val
+
+    # 建立 snapshot["news"] 索引，用于反查 publisher / published_bj / url
+    snap_news = snapshot.get("news") or {}
+    news_lookup: Dict[str, Dict[str, Any]] = {}
+    for s_sym, s_items in snap_news.items():
+        for it in s_items or []:
+            raw_t = str(it.get("title") or "").strip()
+            if raw_t and raw_t not in news_lookup:
+                news_lookup[raw_t] = {
+                    "symbol": str(s_sym).strip().upper().removesuffix(".US"),
+                    "publisher": str(it.get("publisher") or "").strip(),
+                    "published_bj": str(it.get("published_bj") or "").strip(),
+                    "url": str(it.get("link") or it.get("url") or "").strip(),
+                }
+
+    raw_digest = src.get("news_digest") if isinstance(src.get("news_digest"), list) else []
+    news_digest: List[Dict[str, str]] = []
+    news_zh_map: Dict[str, Dict[str, str]] = {}
+    seen_orig_titles = set()
+    for item in raw_digest[:24]:
+        if not isinstance(item, dict):
+            continue
+        orig_t = str(item.get("original_title") or "").strip()
+        zh_t = str(item.get("zh_title") or "").strip()
+        sum_t = str(item.get("summary") or "").strip()
+        if not (zh_t or orig_t):
+            continue
+        sent_val = str(item.get("sentiment") or "").strip()
+        if sent_val not in ("利好", "利空", "中性"):
+            sent_val = news_sentiments.get(orig_t, "中性")
+        meta = news_lookup.get(orig_t, {})
+        sym_val = str(item.get("symbol") or meta.get("symbol") or "").strip().upper().removesuffix(".US")
+        dedup_key = orig_t or f"{sym_val}::{zh_t}"
+        if dedup_key in seen_orig_titles:
+            continue
+        seen_orig_titles.add(dedup_key)
+
+        entry = {
+            "symbol": sym_val,
+            "original_title": orig_t,
+            "zh_title": zh_t or orig_t,
+            "summary": sum_t,
+            "sentiment": sent_val,
+            "publisher": meta.get("publisher") or str(item.get("publisher") or "").strip(),
+            "published_bj": meta.get("published_bj") or str(item.get("published_bj") or "").strip(),
+            "url": meta.get("url") or str(item.get("url") or "").strip(),
+        }
+        news_digest.append(entry)
+        if orig_t:
+            news_sentiments.setdefault(orig_t, sent_val)
+            news_zh_map[orig_t] = {
+                "zh_title": entry["zh_title"],
+                "summary": entry["summary"],
+                "sentiment": sent_val,
+            }
 
     # 5. risks
     raw_risks = src.get("risks") if isinstance(src.get("risks"), list) else []
@@ -1019,6 +1171,8 @@ def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snaps
         "tldr": tldr,
         "mover_reasons": mover_reasons,
         "news_sentiments": news_sentiments,
+        "news_digest": news_digest,
+        "news_zh_map": news_zh_map,
         "risks": risks,
         "checklist": checklist,
         "trades_summary": trades_summary,
