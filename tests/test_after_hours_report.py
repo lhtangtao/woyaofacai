@@ -145,15 +145,15 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
     assert report["structured"]["news_digest"][0]["zh_title"] == "Demo Corp 四季度业绩全面超预期"
     assert report["structured"]["news_digest"][0]["publisher"] == "Reuters"
     assert "Demo Corp beats Q4 earnings estimates" in report["structured"]["news_zh_map"]
-    # 只要拉取到行情，统一以行情口径计算真实当日盈亏（2026-01-02 持仓 10 股：常规 25.0 + 盘后 25.0 = 50.0），覆盖局部账本流水 (2.0)
-    assert report["snapshot"]["summary"]["day_pnl"] == 50.0
-    assert report["snapshot"]["summary"]["regular_day_pnl"] == 25.0
+    # 2026-01-02 账本第 19 列「当日收益($)」为 0.0，叠加 10 股盘后变动 +25.0 = 25.0
+    assert report["snapshot"]["summary"]["day_pnl"] == 25.0
+    assert report["snapshot"]["summary"]["regular_day_pnl"] == 0.0
     assert report["snapshot"]["summary"]["after_hours_day_pnl"] == 25.0
-    assert report["snapshot"]["summary"]["ledger_day_pnl"] == 2.0
-    assert report["snapshot"]["summary"]["day_pnl_basis"] == "quote_after_hours"
+    assert report["snapshot"]["summary"]["ledger_day_pnl"] == 0.0
+    assert report["snapshot"]["summary"]["day_pnl_basis"] == "ledger_plus_after_hours"
     assert report["snapshot"]["summary"]["alpha_vs_qqq"] is not None
 
-    # 离线/无行情时回退到账本精确口径 (2.0)
+    # 离线/无行情时回退到账本精确口径 (0.0)
     offline_report = generate_after_hours_report(
         trade_date=date(2026, 1, 2),
         person_key="ALL",
@@ -164,7 +164,7 @@ def test_generate_structured_report_quote_fallback_and_desktop_2_0(demo_path, tm
         news_fetcher=fake_news,
         ai_asker=fake_ai,
     )
-    assert offline_report["snapshot"]["summary"]["day_pnl"] == 2.0
+    assert offline_report["snapshot"]["summary"]["day_pnl"] == 0.0
     assert offline_report["snapshot"]["summary"]["day_pnl_basis"] == "ledger"
 
     # 对于账本缺当日盈亏的日期，同样按持仓股数 * (常规+盘后) 计算

@@ -816,11 +816,13 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                             color: "var(--text-muted)",
                           }}
                         >
-                          {summary.day_pnl_basis === "quote_after_hours"
-                            ? "收盘+盘后"
-                            : summary.day_pnl_basis === "quote_regular" || summary.day_pnl_basis === "quote_estimated"
-                              ? "收盘行情"
-                              : "账本流水"}
+                          {summary.day_pnl_basis === "ledger_plus_after_hours"
+                            ? "账本+盘后"
+                            : summary.day_pnl_basis === "quote_after_hours"
+                              ? "收盘+盘后"
+                              : summary.day_pnl_basis === "quote_regular" || summary.day_pnl_basis === "quote_estimated"
+                                ? "收盘行情"
+                                : "账本流水"}
                         </span>
                       </span>
                       {summary.alpha_vs_qqq != null && (

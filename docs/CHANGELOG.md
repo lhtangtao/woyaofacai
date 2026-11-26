@@ -1,3 +1,9 @@
+## 2026-11-26 21:59 修复盘后复盘当日收益列号错位 Bug，并统一为「账本精确常规盘收益 + 盘后实时变动」口径
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/services/after_hours_report.py` 修复 `每日持仓收益` 误读第 18 列操作笔数的问题（改为真实第 19 列 `当日收益($)`、第 3 列 `Ticker`、第 15 列 `期初市值($)`），并将口径统一为「账本精确常规盘收益（含留存与当日清仓损益）+ 长桥盘后实时变动」（`ledger_plus_after_hours`），真实库 `2026-11-25` 对账常规盘精确为 `-1891.8772`（与资产总览 `-1,891.88` 一致）。
+- 同步更新 `frontend/src/views/AfterHoursReportView.tsx` 与 `tests/test_after_hours_report.py`，`npm run build`、`ruff check` 与 10 项测试全部通过。
+
 ## 2026-11-26 21:37 全局人员筛选框与 AI 页面实现双向统一联动
 
 - 修改者：Antigravity（代码修改）

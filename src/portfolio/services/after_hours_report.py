@@ -601,9 +601,10 @@ def build_after_hours_snapshot(
             item["cost"] += cost
             item["unrealized_pnl"] += pnl
 
-    # 3. 当日盈亏（来自「每日持仓收益」目标日汇总）
+    # 3. 当日盈亏（来自「每日持仓收益」目标日汇总，真实列名「当日收益($)」第 19 列）
     day_pnl_by_sym: Dict[str, Decimal] = {}
     total_day_pnl: Optional[Decimal] = None
+    ledger_prev_mv = Decimal("0")
     daily_rep = res.reports.get("每日持仓收益")
     if daily_rep and daily_rep.rows:
         cols = list(daily_rep.columns)
@@ -616,12 +617,15 @@ def build_after_hours_snapshot(
             if r_date != date_str:
                 continue
             matched_rows += 1
-            dp = _to_dec(_pick(vals, idx, ("当日盈亏($)", "当日盈亏", "今日盈亏($)", "今日盈亏"), 18))
+            dp = _to_dec(_pick(vals, idx, ("当日收益($)", "当日盈亏($)", "当日盈亏", "今日盈亏($)", "今日盈亏"), 19))
             if dp is not None:
                 day_sum += dp
-                s = str(_pick(vals, idx, ("Ticker", "股票", "代码"), 2) or "").strip().upper().removesuffix(".US")
+                s = str(_pick(vals, idx, ("Ticker", "股票", "代码"), 3) or "").strip().upper().removesuffix(".US")
                 if s:
                     day_pnl_by_sym[s] = day_pnl_by_sym.get(s, Decimal("0")) + dp
+            pmv = _to_dec(_pick(vals, idx, ("期初市值($)", "期初市值"), 15))
+            if pmv is not None and pmv > 0:
+                ledger_prev_mv += pmv
         if matched_rows > 0:
             total_day_pnl = day_sum
 
@@ -653,53 +657,65 @@ def build_after_hours_snapshot(
                 vs_close = (trade_p - close_p) / trade_p
         t["vs_close_pct"] = _serialize_dec(vs_close)
 
-    # 判断当日盈亏口径：只要拉取到持仓标的收盘/盘后行情，始终以统一行情口径计算真实当日盈亏（常规盘 + 盘后），
-    # 彻底避免账本局部成交导致 +$1.00 / $0.00 失真；仅在离线或无行情时回退至账本流水口径。
+    # 判断当日盈亏口径：
+    # 1. 若账本「每日持仓收益」已有目标日收盘记录，优先采用账本精确常规盘收益（包含留存持仓与当日清仓/卖出损益，与资产总览 100% 对齐），
+    #    并在此基础上叠加当前留存持仓的盘后实时变动（after_hours_price - regular_close）；
+    # 2. 若目标日账本尚无收盘记录，则回退使用行情估算常规盘 + 盘后。
     ledger_day_pnl = total_day_pnl
+    ledger_by_sym = dict(day_pnl_by_sym)
+    has_ledger_day = ledger_day_pnl is not None
     day_pnl_basis = "ledger"
-    reg_day_pnl_by_sym: Dict[str, Decimal] = {}
+    reg_day_pnl_by_sym: Dict[str, Decimal] = dict(ledger_by_sym) if has_ledger_day else {}
     ah_day_pnl_by_sym: Dict[str, Decimal] = {}
-    est_reg_total: Optional[Decimal] = None
+    est_reg_total: Optional[Decimal] = ledger_day_pnl if has_ledger_day else None
     est_ah_total: Optional[Decimal] = None
     est_prev_mv = Decimal("0")
 
     if holdings_map and quotes:
-        est_total = Decimal("0")
-        reg_sum = Decimal("0")
+        est_reg_sum = Decimal("0")
         ah_sum = Decimal("0")
         est_count = 0
         ah_count = 0
-        est_by_sym: Dict[str, Decimal] = {}
+        est_reg_by_sym: Dict[str, Decimal] = {}
         for sym, item in holdings_map.items():
             q = quotes.get(sym) or {}
+            qty_d = item["quantity"]
             reg_c = _to_dec(q.get("regular_close"))
             prev_c = _to_dec(q.get("prev_close"))
             if reg_c is not None and prev_c is not None:
-                qty_d = item["quantity"]
                 reg_dp = qty_d * (reg_c - prev_c)
-                reg_day_pnl_by_sym[sym] = reg_dp
-                reg_sum += reg_dp
+                est_reg_by_sym[sym] = reg_dp
+                est_reg_sum += reg_dp
                 est_prev_mv += qty_d * prev_c
-
-                ah_p = _to_dec(q.get("after_hours_price"))
-                if ah_p is not None:
-                    ah_dp = qty_d * (ah_p - reg_c)
-                    ah_day_pnl_by_sym[sym] = ah_dp
-                    ah_sum += ah_dp
-                    ah_count += 1
-                    sym_dp = reg_dp + ah_dp
-                else:
-                    sym_dp = reg_dp
-
-                est_by_sym[sym] = sym_dp
-                est_total += sym_dp
                 est_count += 1
 
-        if est_count > 0:
-            day_pnl_by_sym = est_by_sym
-            total_day_pnl = est_total
-            est_reg_total = reg_sum
+            ah_p = _to_dec(q.get("after_hours_price"))
+            if reg_c is not None and ah_p is not None:
+                ah_dp = qty_d * (ah_p - reg_c)
+                ah_day_pnl_by_sym[sym] = ah_dp
+                ah_sum += ah_dp
+                ah_count += 1
+
+        if has_ledger_day:
+            if ah_count > 0:
+                est_ah_total = ah_sum
+                total_day_pnl = (ledger_day_pnl or Decimal("0")) + ah_sum
+                day_pnl_by_sym = {
+                    s: ledger_by_sym.get(s, Decimal("0")) + ah_day_pnl_by_sym.get(s, Decimal("0"))
+                    for s in set(ledger_by_sym) | set(ah_day_pnl_by_sym)
+                }
+                day_pnl_basis = "ledger_plus_after_hours"
+            else:
+                day_pnl_basis = "ledger"
+        elif est_count > 0:
+            reg_day_pnl_by_sym = est_reg_by_sym
+            est_reg_total = est_reg_sum
             est_ah_total = ah_sum if ah_count > 0 else None
+            total_day_pnl = est_reg_sum + (ah_sum if ah_count > 0 else Decimal("0"))
+            day_pnl_by_sym = {
+                s: est_reg_by_sym.get(s, Decimal("0")) + ah_day_pnl_by_sym.get(s, Decimal("0"))
+                for s in set(est_reg_by_sym) | set(ah_day_pnl_by_sym)
+            }
             day_pnl_basis = "quote_after_hours" if ah_count > 0 else "quote_regular"
 
     leverage_mv = Decimal("0")
@@ -751,7 +767,9 @@ def build_after_hours_snapshot(
     # 汇总衍生指标：当日收益率、累计浮盈率、杠杆暴露率、相对 QQQ Alpha
     day_pnl_pct: Optional[Decimal] = None
     if total_day_pnl is not None:
-        if day_pnl_basis != "ledger" and est_prev_mv > 0:
+        if day_pnl_basis in ("ledger", "ledger_plus_after_hours") and ledger_prev_mv > 0:
+            day_pnl_pct = total_day_pnl / ledger_prev_mv
+        elif day_pnl_basis in ("quote_after_hours", "quote_regular") and est_prev_mv > 0:
             day_pnl_pct = total_day_pnl / est_prev_mv
         elif total_mv > 0:
             prev_mv = total_mv - total_day_pnl
@@ -766,7 +784,7 @@ def build_after_hours_snapshot(
     qqq_bench = benchmarks.get("QQQ") or {}
     qqq_cmp_pct = (
         _to_dec(qqq_bench.get("total_change_pct"))
-        if day_pnl_basis == "quote_after_hours" and qqq_bench.get("total_change_pct") is not None
+        if day_pnl_basis in ("ledger_plus_after_hours", "quote_after_hours") and qqq_bench.get("total_change_pct") is not None
         else _to_dec(qqq_bench.get("regular_change_pct"))
     )
     alpha_vs_qqq = (day_pnl_pct - qqq_cmp_pct) if (day_pnl_pct is not None and qqq_cmp_pct is not None) else None
