@@ -1,3 +1,8 @@
+## 2026-11-26 12:36 安装 cpolar 国内高速节点客户端并接入启动器
+
+- 修改者：Antigravity（代码修改）
+- 在 `tools/cpolar` 安装官方 Apple Silicon（arm64）3.3.12 版 cpolar 客户端，并在 `启动Money3.command` 新增 `--tunnel=auto|cpolar|cloudflared` 调度：绑定 Authtoken 后自动剥离本机代理环境变量直连国内 `cn_top` 高速节点并接入 Watchdog `4040` 健康检查守护，未配置 Token 时平滑回退 Cloudflare Tunnel。`zsh -n` 与 `tests/test_watchdog.py`、`tests/test_web_compression.py` 共 13 项测试通过（国内实测需绑定用户 cpolar Authtoken）。
+
 ## 2026-11-26 12:24 开启 Web 端 Gzip 压缩、强缓存与公网隧道 25 秒双向保活
 
 - 修改者：Antigravity（代码修改）

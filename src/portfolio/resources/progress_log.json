@@ -1,5 +1,17 @@
 [
   {
+    "title": "安装 cpolar 国内高速节点客户端并接入启动器（自动优先国内 cn_top，未绑定回退 Cloudflared）",
+    "time": "2026-11-26 12:36",
+    "author": "Antigravity",
+    "tag": "国内高速隧道已接入",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "在 `tools/cpolar` 安装官方 Apple Silicon（arm64）v3.3.12 客户端（已由 `.gitignore` 忽略，不入库，无需管理员权限或 Homebrew）。",
+      "升级 `启动Money3.command` 新增 `--tunnel=auto|cpolar|cloudflared` 参数：自动检测 `~/.cpolar/cpolar.yml` 或 `CPOLAR_AUTHTOKEN` 环境变量，已绑定 Token 时自动切换 `cpolar` 国内高速节点（`-region=cn_top`）并剥离代理环境变量以毫秒级直连国内机房，同时接入 Watchdog `127.0.0.1:4040/api/tunnels` 探活与 `--stop` 清理；未绑定时平滑回退到现有 Cloudflare Tunnel。",
+      "验证范围：`tools/cpolar version`（arm64 v3.3.12）运行正常；`zsh -n 启动Money3.command` 与 `--help` 输出通过；`tests/test_watchdog.py` 与 `tests/test_web_compression.py` 共 13 项回归测试全部通过；国内节点实际链路待用户提供 cpolar Authtoken 绑定后立即可测启用。"
+    ]
+  },
+  {
     "title": "开启 Web 端 Gzip 压缩、静态资源强缓存与公网隧道 25 秒双向保活防断流",
     "time": "2026-11-26 12:24",
     "author": "Antigravity",
