@@ -1,3 +1,9 @@
+## 2026-11-26 21:37 全局人员筛选框与 AI 页面实现双向统一联动
+
+- 修改者：Antigravity（代码修改）
+- 在桌面端（`after_hours_report_page.py`、`ai_assistant_page.py`、`workspace.py`、`main_window.py`、`interactions.py`）与 Web 端（`App.tsx`、`AfterHoursReportView.tsx`）实现全局人员筛选框与盘后复盘日报「范围」/ AI 投资问答人员下拉框的双向统一联动（如切换「拉科」后 AI 页自动同步为「拉科」并聚焦其最新复盘，反之亦然）。
+- `npm run build`、`ruff check` 与 `tests/test_after_hours_report.py` 10 项测试全部通过。
+
 ## 2026-11-26 21:23 盘后复盘默认模型切换为 Gemini 4 Neon (High)，超时放宽至 10 分钟并去重精简新闻
 
 - 修改者：Antigravity（代码修改）

@@ -241,10 +241,13 @@ class AIAssistantPage(QWidget):
     4. 携带真实持仓、成本及清仓表现数据。
     """
 
+    personSelectionChanged = Signal(object)
+
     def __init__(self, window=None):
         super().__init__(window)
         self.window = window
         self.worker = None
+        self._syncing_person = False
 
         # 思考动态耗时计时器与心跳指示
         self._thinking_timer = QTimer(self)
@@ -666,11 +669,29 @@ class AIAssistantPage(QWidget):
                 f"如需针对某只具体标的（如 TSLL、NVDA）深入诊断，只需在上方「输入 Ticker」中选择该股票即可无缝切换独立频道。"
             )
 
+    def sync_person_from_main(self, person_id):
+        """跟随主窗口全局人员筛选框同步当前问答归属人员。"""
+        idx = self.person_combo.findData(person_id)
+        if idx < 0:
+            return
+        if self.person_combo.currentIndex() != idx:
+            self._syncing_person = True
+            self.person_combo.blockSignals(True)
+            self.person_combo.setCurrentIndex(idx)
+            self.person_combo.blockSignals(False)
+            self._syncing_person = False
+            self._update_filter_hint()
+            new_key = self.current_session_key()
+            if new_key != self.active_session_key:
+                self.switch_to_session(new_key)
+
     def _on_filter_changed(self, *_):
         self._update_filter_hint()
         new_key = self.current_session_key()
         if new_key != self.active_session_key:
             self.switch_to_session(new_key)
+        if not self._syncing_person and self.sender() is self.person_combo:
+            self.personSelectionChanged.emit(self.person_combo.currentData())
 
     def _update_filter_hint(self):
         person_txt = self.person_combo.currentText()

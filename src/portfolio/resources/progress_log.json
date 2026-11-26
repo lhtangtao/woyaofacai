@@ -1,5 +1,17 @@
 [
   {
+    "title": "全局人员筛选框与 AI 页面（盘后复盘日报 + AI 投资问答）实现双向统一联动",
+    "time": "2026-11-26 21:37",
+    "author": "Antigravity",
+    "tag": "全局人员联动统一",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "Mac 桌面端双向联动（`src/portfolio/ui/after_hours_report_page.py`、`src/portfolio/ui/ai_assistant_page.py`、`src/portfolio/ui/workspace.py`、`src/portfolio/ui/main_window.py`、`src/portfolio/ui/interactions.py`）：在盘后复盘日报与 AI 投资问答页新增 `personSelectionChanged` 信号及 `sync_person_from_main()`，并与主窗口全局人员筛选框双向绑定；在资产总览等全局页面选择「拉科」/「个人」/「全部启用人员」后，AI 页面自动切换为对应范围并优先定位该人员的最新复盘存档；在 AI 页面手动切换人员时也会反向同步全局人员筛选器。",
+      "Web 端双向联动（`frontend/src/App.tsx`、`frontend/src/views/AfterHoursReportView.tsx`）：将全局 `selectedPersonId` 与 `setSelectedPersonId` 透传至盘后复盘日报页（非隔离模式下生效），实现顶栏人员筛选与盘后复盘「范围」下拉框双向一致。",
+      "验证范围：`frontend npm run build` 0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_after_hours_report.py` 10 项测试（含双向联动测试）全部通过；8888 服务已平滑重载。"
+    ]
+  },
+  {
     "title": "盘后复盘默认模型切换为 Gemini 4 Neon (High)，超时放宽至 10 分钟并去重精简新闻",
     "time": "2026-11-26 21:23",
     "author": "Antigravity",

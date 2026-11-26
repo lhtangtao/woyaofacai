@@ -96,8 +96,16 @@ function sentimentStyle(s?: string): { bg: string; fg: string } {
   return { bg: "var(--hover-bg)", fg: "var(--text-muted)" };
 }
 
+interface AfterHoursReportViewProps {
+  personId?: number | null;
+  onPersonChange?: (pid: number | null) => void;
+}
+
 /** 美股盘后复盘日报 2.0 页面 */
-export const AfterHoursReportView: React.FC = () => {
+export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
+  personId,
+  onPersonChange,
+}) => {
   const [reports, setReports] = useState<ReportSummary[]>([]);
   const [personOptions, setPersonOptions] = useState<PersonOption[]>([
     { key: "个人", label: "个人" },
@@ -165,6 +173,21 @@ export const AfterHoursReportView: React.FC = () => {
       .catch((err) => setErrorMsg(err.message || "加载日报列表失败"))
       .finally(() => setLoadingList(false));
   };
+
+  useEffect(() => {
+    if (isIsolated || personId === undefined || personOptions.length === 0) return;
+    const matched =
+      personId == null
+        ? personOptions.find((o) => o.key === "ALL")
+        : personOptions.find((o) => o.id === personId);
+    if (matched && matched.key !== genPerson) {
+      setGenPerson(matched.key);
+      const hit = reports.find((r) => r.person_key === matched.key);
+      if (hit?.id && hit.id !== selectedId) {
+        setSelectedId(hit.id);
+      }
+    }
+  }, [personId, personOptions, isIsolated]);
 
   useEffect(() => {
     loadList("");
@@ -474,7 +497,14 @@ export const AfterHoursReportView: React.FC = () => {
             <select
               className="input-control"
               value={genPerson}
-              onChange={(e) => setGenPerson(e.target.value)}
+              onChange={(e) => {
+                const nextKey = e.target.value;
+                setGenPerson(nextKey);
+                if (!isIsolated && onPersonChange) {
+                  const opt = personOptions.find((o) => o.key === nextKey);
+                  onPersonChange(nextKey === "ALL" ? null : opt?.id ?? null);
+                }
+              }}
               disabled={generating || isIsolated}
               style={{ fontSize: "12px", padding: "4px 8px", minWidth: "108px" }}
             >

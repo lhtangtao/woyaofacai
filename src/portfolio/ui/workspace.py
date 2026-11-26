@@ -414,6 +414,7 @@ def build_workspace(self):
         lambda *_: self.asset_trend.sync_person_from_main(self.person.currentData()) if self.asset_trend.isVisible() else None)
     from portfolio.ui.ai_assistant_page import AIAssistantPage
     self.ai_assistant_page = AIAssistantPage(self)
+    self.ai_assistant_page.personSelectionChanged.connect(self.sync_person_from_holdings)
     self.pages.addWidget(self.ai_assistant_page)
     from portfolio.ui.ai_stock_analysis_page import AIStockAnalysisPage
     self.stock_analysis_page = AIStockAnalysisPage(self)
@@ -462,6 +463,7 @@ def build_workspace(self):
     self.pages.addWidget(self.lake_writer_archive_page)
     from portfolio.ui.after_hours_report_page import AfterHoursReportPage
     self.after_hours_report_page = AfterHoursReportPage(self)
+    self.after_hours_report_page.personSelectionChanged.connect(self.sync_person_from_holdings)
     self.pages.addWidget(self.after_hours_report_page)
     from portfolio.services.after_hours_report import start_after_hours_scheduler
     start_after_hours_scheduler()

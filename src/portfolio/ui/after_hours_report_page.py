@@ -189,6 +189,8 @@ class _FollowupWorker(QThread):
 class AfterHoursReportPage(QWidget):
     """美股盘后复盘日报 2.0 桌面端交互视图（全自动折行、无需左右拖动）。"""
 
+    personSelectionChanged = Signal(object)
+
     def __init__(self, parent=None, store: Optional[AfterHoursReportStore] = None, db_path: Path = DATABASE_PATH):
         super().__init__(parent)
         self.store = store or AfterHoursReportStore()
@@ -196,6 +198,8 @@ class AfterHoursReportPage(QWidget):
         self._reports: list[dict] = []
         self._current_report: Optional[dict] = None
         self._person_filter: Optional[str] = None
+        self._person_id_by_key: dict[str, Optional[int]] = {"个人": 1, "ALL": None}
+        self._syncing_person: bool = False
         self._mover_filter: str = "all"
         self._expanded_syms: set[str] = set()
         self._worker: Optional[_AfterHoursWorker] = None
@@ -228,6 +232,7 @@ class AfterHoursReportPage(QWidget):
         self.person_combo.setMinimumWidth(100)
         self.person_combo.addItem("个人", "个人")
         self.person_combo.addItem("全部人员", "ALL")
+        self.person_combo.currentIndexChanged.connect(self._on_person_combo_changed)
         top.addWidget(self.person_combo)
 
         self.sync_check = QCheckBox("生成前同步流水")
@@ -589,17 +594,59 @@ class AfterHoursReportPage(QWidget):
 
     def populate_persons(self, persons: list[dict] | tuple[dict, ...]):
         current = self.person_combo.currentData() or "个人"
+        self._person_id_by_key = {"ALL": None, "个人": 1}
         self.person_combo.blockSignals(True)
         self.person_combo.clear()
         self.person_combo.addItem("个人", "个人")
         self.person_combo.addItem("全部人员", "ALL")
         for p in persons or ():
             name = str(p.get("name") or "").strip()
-            if name and name != "个人":
+            pid = p.get("id")
+            if name == "个人" and pid is not None:
+                self._person_id_by_key["个人"] = pid
+            elif name and name != "个人":
+                self._person_id_by_key[name] = pid
                 self.person_combo.addItem(name, name)
         idx = self.person_combo.findData(current)
         self.person_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.person_combo.blockSignals(False)
+
+    def _focus_latest_report_for_key(self, person_key: str):
+        """在当前存档列表中优先聚焦到匹配人员的最新一份复盘。"""
+        if not self._reports:
+            return
+        for i, rep in enumerate(self._reports):
+            if str(rep.get("person_key") or "") == person_key:
+                self.report_list.setCurrentRow(i)
+                return
+
+    def sync_person_from_main(self, person_id, persons: list[dict] | tuple[dict, ...] | None = None):
+        """跟随主窗口全局人员筛选框同步当前范围，并聚焦该人员最新复盘。"""
+        if persons and self.person_combo.count() <= 2:
+            self.populate_persons(persons)
+        if person_id is None:
+            target_key = "ALL"
+        else:
+            matched_key = next((k for k, v in self._person_id_by_key.items() if v == person_id), None)
+            target_key = matched_key or "个人"
+        idx = self.person_combo.findData(target_key)
+        if idx >= 0 and self.person_combo.currentIndex() != idx:
+            self._syncing_person = True
+            self.person_combo.blockSignals(True)
+            self.person_combo.setCurrentIndex(idx)
+            self.person_combo.blockSignals(False)
+            self._syncing_person = False
+        self._focus_latest_report_for_key(target_key)
+
+    def _on_person_combo_changed(self):
+        if self._syncing_person:
+            return
+        key = str(self.person_combo.currentData() or "个人")
+        self._focus_latest_report_for_key(key)
+        pid = self._person_id_by_key.get(key)
+        if key == "ALL":
+            pid = None
+        self.personSelectionChanged.emit(pid)
 
     def _set_person_filter(self, pkey: Optional[str]):
         self._person_filter = pkey

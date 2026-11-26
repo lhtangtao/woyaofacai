@@ -506,6 +506,11 @@ class MainWindow(InteractionMixin, QMainWindow):
             )
             self._sync_global_filter_from_legacy()
             self.global_asset_filter.setEnabled(True)
+        if hasattr(self, "after_hours_report_page"):
+            self.after_hours_report_page.populate_persons(info.persons)
+            self.after_hours_report_page.sync_person_from_main(self.person.currentData(), info.persons)
+        if hasattr(self, "ai_assistant_page"):
+            self.ai_assistant_page.sync_person_from_main(self.person.currentData())
         self.filters_widget.setEnabled(True)
         self.page_number = state.get("page_number", 0)
         if self.restore_state:
@@ -722,6 +727,12 @@ class MainWindow(InteractionMixin, QMainWindow):
         if hasattr(self, "trade_center") and hasattr(self.trade_center, "sync_from_global_filter") and hasattr(self, "global_asset_filter"):
             if self.pages.currentIndex() == 0:
                 self.trade_center.sync_from_global_filter(self.global_asset_filter.state())
+        if hasattr(self, "after_hours_report_page"):
+            self.after_hours_report_page.sync_person_from_main(
+                self.person.currentData(), getattr(self.info, "persons", None)
+            )
+        if hasattr(self, "ai_assistant_page"):
+            self.ai_assistant_page.sync_person_from_main(self.person.currentData())
         self.refresh()
 
     def sync_person_from_holdings(self, person_id):

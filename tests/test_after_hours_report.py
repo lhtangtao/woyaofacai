@@ -514,3 +514,59 @@ def test_after_hours_default_model_timeout_and_news_dedup():
     assert len(trimmed_dict["TQQQ"]) == 2
     assert len(trimmed_dict["SOXL"]) == 1
     assert trimmed_dict["SOXL"][0]["title"] == "Semiconductor index drops 5%"
+
+
+def test_desktop_after_hours_sync_person_bidirectional(demo_path, tmp_path, qtbot):
+    """验证桌面端盘后复盘页与全局人员筛选框双向联动（例如拉科/ALL/个人）。"""
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    store.save_report({
+        "id": "2026-11-25::个人",
+        "trade_date": "2026-11-25",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-25T21:10:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {"summary": {"day_pnl": 100.0, "total_market_value": 10000, "trade_count": 0, "holding_count": 1}},
+        "markdown": "## 一、今日总览\n\n个人",
+    })
+    store.save_report({
+        "id": "2026-11-25::拉科",
+        "trade_date": "2026-11-25",
+        "person_key": "拉科",
+        "person_id": 5,
+        "person_name": "拉科",
+        "generated_at": "2026-11-25T21:12:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {"summary": {"day_pnl": -50.0, "total_market_value": 2000, "trade_count": 0, "holding_count": 1}},
+        "markdown": "## 一、今日总览\n\n拉科",
+    })
+
+    page = AfterHoursReportPage(store=store, db_path=demo_path)
+    qtbot.addWidget(page)
+    persons = [{"id": 1, "name": "个人"}, {"id": 5, "name": "拉科"}]
+    page.populate_persons(persons)
+
+    emitted: list[object] = []
+    page.personSelectionChanged.connect(emitted.append)
+
+    # 1. 全局选中「拉科」(id=5) -> 盘后页自动切到「拉科」并定位拉科存档，不回发信号
+    page.sync_person_from_main(5, persons)
+    assert page.person_combo.currentData() == "拉科"
+    assert emitted == []
+
+    # 2. 全局选中「全部启用人员」(id=None) -> 盘后页自动切到「ALL」
+    page.sync_person_from_main(None, persons)
+    assert page.person_combo.currentData() == "ALL"
+    assert emitted == []
+
+    # 3. 在盘后页手动切回「拉科」-> 发射 personSelectionChanged(5)
+    idx_lake = page.person_combo.findData("拉科")
+    page.person_combo.setCurrentIndex(idx_lake)
+    assert emitted == [5]

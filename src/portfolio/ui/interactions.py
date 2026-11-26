@@ -467,6 +467,7 @@ class InteractionMixin:
                 widget.hide()
             if getattr(self, "info", None) and getattr(self.info, "persons", None):
                 self.after_hours_report_page.populate_persons(self.info.persons)
+                self.after_hours_report_page.sync_person_from_main(self.person.currentData(), self.info.persons)
             self.after_hours_report_page.reload()
             self.update_history_buttons()
             return

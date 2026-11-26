@@ -516,7 +516,12 @@ export const App: React.FC = () => {
             {currentRoute === "earnings" && <EarningsView personId={selectedPersonId} broker={selectedBroker} ticker={selectedTicker} refreshKey={refreshKey} />}
 
             {currentRoute === "ai_chat" && <AiViews mode="chat" personId={selectedPersonId} />}
-            {currentRoute === "ai_after_hours" && <AfterHoursReportView />}
+            {currentRoute === "ai_after_hours" && (
+              <AfterHoursReportView
+                personId={selectedPersonId}
+                onPersonChange={setSelectedPersonId}
+              />
+            )}
             {currentRoute === "ai_stock" && <AiViews mode="stock" personId={selectedPersonId} />}
             {currentRoute === "ai_lake" && (
               bootstrap?.user?.can_view_lake_writer
