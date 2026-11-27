@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -370,9 +371,20 @@ class AfterHoursReportPage(QWidget):
         title_col.addWidget(self.detail_meta)
         hero_top.addLayout(title_col, 1)
 
+        hero_actions = QHBoxLayout()
+        hero_actions.setSpacing(6)
         self.copy_btn = QPushButton("复制 Markdown")
         self.copy_btn.clicked.connect(self._copy_markdown)
-        hero_top.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.copy_btn.setEnabled(False)
+        hero_actions.addWidget(self.copy_btn)
+
+        self.delete_btn = QPushButton("删除存档")
+        self.delete_btn.setStyleSheet("color: #DC2626; border: 1px solid #FCA5A5;")
+        self.delete_btn.clicked.connect(self._delete_current_report)
+        self.delete_btn.setEnabled(False)
+        hero_actions.addWidget(self.delete_btn)
+        hero_actions.setAlignment(Qt.AlignmentFlag.AlignTop)
+        hero_top.addLayout(hero_actions)
         hero_l.addLayout(hero_top)
 
         # TL;DR 横幅
@@ -706,6 +718,11 @@ class AfterHoursReportPage(QWidget):
             self.report_list.setCurrentRow(select_row)
         else:
             self._current_report = None
+            self.copy_btn.setEnabled(False)
+            self.delete_btn.setEnabled(False)
+            self.session_badge.hide()
+            self.regime_badge.hide()
+            self.sync_badge.hide()
             self.detail_title.setText("暂无盘后复盘日报")
             self.detail_meta.setText("点击右上角「生成 / 重算日报」可立即生成")
             self.tldr_frame.hide()
@@ -725,6 +742,8 @@ class AfterHoursReportPage(QWidget):
         self._render_report(full)
 
     def _render_report(self, rep: dict):
+        self.copy_btn.setEnabled(True)
+        self.delete_btn.setEnabled(True)
         snap = rep.get("snapshot") or {}
         summary = snap.get("summary") or {}
         benchmarks = snap.get("market_benchmarks") or {}
@@ -960,7 +979,7 @@ class AfterHoursReportPage(QWidget):
                 lev_tag = f"  [{lf:g}x 杠杆]" if lf is not None else "  [杠杆]"
             else:
                 lev_tag = ""
-            anom_tag = "  [⚠ 疑似未复权]" if h.get("cost_anomaly") else ""
+            anom_tag = "  [⚠ 成本偏离核对]" if h.get("cost_anomaly") else ""
             news_tag = f"  [新闻 {len(h_news)}]" if h_news else ""
             top_lbl = _make_wrap_label(
                 f"{sym}{tags}{lev_tag}{anom_tag}{news_tag}",
@@ -1305,3 +1324,22 @@ class AfterHoursReportPage(QWidget):
     def _copy_markdown(self):
         if self._current_report and self._current_report.get("markdown"):
             QGuiApplication.clipboard().setText(str(self._current_report["markdown"]))
+
+    def _delete_current_report(self, _checked: bool = False, *, confirm: bool = True):
+        if not self._current_report:
+            return
+        rid = str(self._current_report.get("id") or "")
+        if not rid:
+            return
+        if confirm:
+            ans = QMessageBox.question(
+                self,
+                "删除盘后复盘日报",
+                f"确认删除 {self._current_report.get('trade_date')}（{self._current_report.get('person_name')}）的盘后复盘日报存档吗？此操作不可撤销。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        if self.store.delete_report(rid):
+            self.status_lbl.setText(f"已删除存档：{rid}")
+            self.reload()

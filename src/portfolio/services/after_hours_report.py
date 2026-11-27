@@ -839,14 +839,14 @@ def build_after_hours_snapshot(
         cost_anomaly = False
         cost_anomaly_reason: Optional[str] = None
         if avg_d is not None and avg_d > 0 and ref_price is not None and ref_price > 0:
-            deviation = abs(ref_price - avg_d) / avg_d
             ratio = max(avg_d / ref_price, ref_price / avg_d)
             reg_chg_abs = abs(_to_dec(q.get("regular_change_pct")) or Decimal("0"))
-            if deviation > Decimal("0.50") and ratio >= Decimal("2.0") and reg_chg_abs < Decimal("0.35"):
+            min_ratio = Decimal("8.0") if is_lev else Decimal("5.0")
+            if ratio >= min_ratio and reg_chg_abs < Decimal("0.35"):
                 cost_anomaly = True
                 cost_anomaly_reason = (
-                    f"现价 (${ref_price:.2f}) 与摊薄均价 (${avg_d:.2f}) 偏离超过 50%"
-                    f"（{ratio:.1f}x），疑似未复权或历史成交录入价异常，请核对拆股记录与原始流水"
+                    f"现价 (${ref_price:.2f}) 与摊薄均价 (${avg_d:.2f}) 偏离达 {ratio:.1f}x，"
+                    f"请核对是否存在未同步拆并股或历史成交录入价异常"
                 )
                 cost_anomaly_symbols.append(sym)
                 anomaly_unrealized_sum += item["unrealized_pnl"]
@@ -1080,7 +1080,7 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
             lev_tag = f" [{f_txt}杠杆]"
         else:
             lev_tag = ""
-        anom_tag = " [⚠ 疑似未复权/成本异常]" if h.get("cost_anomaly") else ""
+        anom_tag = " [⚠ 成本大幅偏离/待核对]" if h.get("cost_anomaly") else ""
         avg_val = _to_dec(h.get("avg_cost"))
         avg_txt = f"${_fmt_dec(avg_val)}"
         if h.get("is_zero_cost") or (avg_val is not None and avg_val <= 0):

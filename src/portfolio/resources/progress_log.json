@@ -1,5 +1,18 @@
 [
   {
+    "title": "盘后复盘补完：双端接入「删除存档」按钮、修正成本偏离熔断阈值并清理休市日误生成存档",
+    "time": "2026-11-27 22:09",
+    "author": "Antigravity",
+    "tag": "删除存档 + 误报修正",
+    "details": [
+      "修改者：Antigravity（代码修改与收尾补完）",
+      "补齐双端「删除存档」交互（`frontend/src/views/AfterHoursReportView.tsx`、`src/portfolio/ui/after_hours_report_page.py`）：在 Web 端与 Mac 桌面端 Hero 卡片右上角新增红色「删除存档」按钮及二次确认弹窗，联动 `DELETE /api/v1/ai/after-hours/report/<id>` 与 `AfterHoursReportStore.delete_report()`，无存档时自动禁用按钮并隐藏状态徽标。",
+      "修正异常成本偏离阈值（`src/portfolio/services/after_hours_report.py`、前后端标签）：将偏离告警阈值从 2.0x 调整为普通 1x 标的 `>= 5.0x`、杠杆标的 `>= 8.0x`，并将标签文案统一为「成本偏离核对」，消除 `SNDK`/`MRVL`/`SPAL` 等正常深套或杠杆波动被误报为未复权的问题。",
+      "清理本地休市日误生成存档：移除感恩节休市日自动任务误生成的 `2026-11-26::个人` 存档，保留其余 4 份正常交易日存档。",
+      "验证范围：`frontend npm run build` 0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_us_market_calendar.py`、`tests/test_after_hours_report.py` 与 `tests/test_corporate_actions_sync.py` 共 19 项测试全部通过；真实库 `2026-11-25`（个人）只读快照验算 `cost_anomaly_symbols=[]`、`total_assets=45587.64`、`effective_leverage=1.9006`；8888 服务已平滑重载并接口验证通过。"
+    ]
+  },
+  {
     "title": "接入美股官方交易日历与半日市规则，升级总资产净值、组合等效敞口与异常成本熔断校验",
     "time": "2026-11-27 21:55",
     "author": "Antigravity",

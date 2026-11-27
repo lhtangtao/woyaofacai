@@ -652,6 +652,8 @@ def test_after_hours_leverage_profile_cost_anomaly_and_total_assets(demo_path, m
                     [
                         _FakeRow(["IBKR", "股票", "AAPL", "10", "100.00", "10.00", "2000.00", "1900.00"]),
                         _FakeRow(["IBKR", "杠杆", "TQQQ", "10", "500.00", "50.00", "600.00", "100.00"]),
+                        _FakeRow(["IBKR", "股票", "MRVL", "10", "2500.00", "250.00", "1000.00", "-1500.00"]),
+                        _FakeRow(["IBKR", "杠杆", "SPAL", "10", "600.00", "60.00", "100.00", "-500.00"]),
                     ],
                 ),
                 "每日持仓收益": _FakeTable([], []),
@@ -676,6 +678,20 @@ def test_after_hours_leverage_profile_cost_anomaly_and_total_assets(demo_path, m
                 "after_hours_change_pct": None,
                 "source": "mock",
             },
+            "MRVL": {
+                "regular_close": Decimal("100.00"),
+                "regular_change_pct": Decimal("-0.01"),
+                "after_hours_price": None,
+                "after_hours_change_pct": None,
+                "source": "mock",
+            },
+            "SPAL": {
+                "regular_close": Decimal("10.00"),
+                "regular_change_pct": Decimal("-0.02"),
+                "after_hours_price": None,
+                "after_hours_change_pct": None,
+                "source": "mock",
+            },
             "QQQ": {"regular_close": Decimal("500.00"), "regular_change_pct": Decimal("0.01"), "source": "mock"},
             "SPY": {"regular_close": Decimal("600.00"), "regular_change_pct": Decimal("0.005"), "source": "mock"},
         },
@@ -688,14 +704,15 @@ def test_after_hours_leverage_profile_cost_anomaly_and_total_assets(demo_path, m
 
     snap = build_after_hours_snapshot(demo_path, date(2026, 11, 25), person_key="个人", person_id=1, person_name="个人")
     summary = snap["summary"]
+    # MRVL (2.5x < 5x) 与 SPAL (6x < 8x 杠杆阈值) 不误报，仅 AAPL (20x >= 5x) 触发异常提示
     assert summary["cost_anomaly_symbols"] == ["AAPL"]
-    assert summary["unrealized_pnl_ex_anomaly"] == 100.0
-    assert summary["total_market_value"] == 2600.0
+    assert summary["unrealized_pnl_ex_anomaly"] == -1900.0
+    assert summary["total_market_value"] == 3700.0
     assert summary["cash_balance"] == 400.0
-    assert summary["total_assets"] == 3000.0
-    # 组合等效敞口：(2000*1 + 600*3) / 2600 = 3800 / 2600 ≈ 1.4615
-    assert round(summary["effective_leverage"], 4) == round(3800 / 2600, 4)
-    assert round(summary["effective_leverage_total_assets"], 4) == round(3800 / 3000, 4)
+    assert summary["total_assets"] == 4100.0
+    # 组合等效敞口：(2000*1 + 600*3 + 1000*1 + 100*2) / 3700 = 5000 / 3700
+    assert round(summary["effective_leverage"], 4) == round(5000 / 3700, 4)
+    assert round(summary["effective_leverage_total_assets"], 4) == round(5000 / 4100, 4)
 
 
 def test_after_hours_delete_api_and_market_closed_guard(tmp_path, monkeypatch):
@@ -748,3 +765,76 @@ def test_after_hours_delete_api_and_market_closed_guard(tmp_path, monkeypatch):
     res_del = admin_client.delete("/api/v1/ai/after-hours/report/2026-11-26::个人")
     assert res_del.status_code == 200
     assert store.get_report("2026-11-26::个人") is None
+
+
+def test_desktop_after_hours_session_badges_closed_guard_and_delete(demo_path, tmp_path, qtbot):
+    """验证桌面端半日市徽标、总资产显示、休市日生成拦截及删除存档交互。"""
+    from PySide6.QtCore import QDate
+
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    store.save_report({
+        "id": "2026-11-27::个人",
+        "trade_date": "2026-11-27",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-28T06:15:00+08:00",
+        "trigger": "auto",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {
+            "market_session": {
+                "trade_date": "2026-11-27",
+                "is_trading_day": True,
+                "is_early_close": True,
+                "holiday_name": "感恩节次日半日市 (Black Friday)",
+            },
+            "summary": {
+                "day_pnl": 320.0,
+                "day_pnl_pct": 0.032,
+                "day_pnl_pct_total_assets": 0.0267,
+                "total_market_value": 10000.0,
+                "cash_balance": 2000.0,
+                "total_assets": 12000.0,
+                "effective_leverage": 1.5,
+                "effective_leverage_total_assets": 1.25,
+                "trade_count": 1,
+                "holding_count": 2,
+            },
+        },
+        "markdown": "## 一、今日总览\n\n黑五半日市",
+    })
+    store.save_report({
+        "id": "2026-11-25::个人",
+        "trade_date": "2026-11-25",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-26T09:15:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {"summary": {"day_pnl": -100.0, "total_market_value": 9500.0, "trade_count": 0, "holding_count": 2}},
+        "markdown": "## 一、今日总览\n\n周三",
+    })
+
+    page = AfterHoursReportPage(store=store, db_path=demo_path)
+    qtbot.addWidget(page)
+
+    assert not page.session_badge.isHidden()
+    assert "半日市" in page.session_badge.text()
+    assert "$12,000.00" in page.kpi_mv_val.text()
+    assert page.delete_btn.isEnabled()
+
+    # 感恩节休市日拦截生成
+    page.date_edit.setDate(QDate(2026, 11, 26))
+    page._start_generate()
+    assert page._worker is None
+    assert "休市" in page.status_lbl.text()
+
+    # 删除当前选中存档
+    page._delete_current_report(confirm=False)
+    assert store.get_report("2026-11-27::个人") is None
+    assert len(store.list_reports()) == 1

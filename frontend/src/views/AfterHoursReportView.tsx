@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Trash2,
   User,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -128,6 +129,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   const [elapsedSec, setElapsedSec] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [copied, setCopied] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // 2.0 交互状态
   const [activeTab, setActiveTab] = useState<"overview" | "trades" | "news" | "markdown">("overview");
@@ -325,6 +327,26 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     });
+  };
+
+  const handleDeleteReport = async () => {
+    if (!detail?.id || deleting) return;
+    const ok = window.confirm(
+      `确认删除「${detail.trade_date} · ${detail.person_name}」的盘后复盘日报存档吗？此操作不可撤销。`
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setErrorMsg("");
+    try {
+      await api.aiAfterHoursDelete(detail.id);
+      setDetail(null);
+      setSelectedId("");
+      await loadList(filterPerson);
+    } catch (err: any) {
+      setErrorMsg(err.message || "删除日报失败");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleToggleChecklist = (cid: string) => {
@@ -792,14 +814,33 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                             : "账本流水"}
                     </div>
                   </div>
-                  <button
-                    className="btn"
-                    onClick={handleCopy}
-                    style={{ fontSize: "12px", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}
-                  >
-                    {copied ? <Check size={13} color="#16A34A" /> : <Copy size={13} />}
-                    {copied ? "已复制" : "复制 Markdown"}
-                  </button>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <button
+                      className="btn"
+                      onClick={handleCopy}
+                      style={{ fontSize: "12px", padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: "5px" }}
+                    >
+                      {copied ? <Check size={13} color="#16A34A" /> : <Copy size={13} />}
+                      {copied ? "已复制" : "复制 Markdown"}
+                    </button>
+                    <button
+                      className="btn"
+                      onClick={handleDeleteReport}
+                      disabled={deleting || generating}
+                      style={{
+                        fontSize: "12px",
+                        padding: "5px 10px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "5px",
+                        color: "#DC2626",
+                        borderColor: "rgba(220,38,38,0.35)",
+                      }}
+                    >
+                      <Trash2 size={13} />
+                      {deleting ? "删除中..." : "删除存档"}
+                    </button>
+                  </div>
                 </div>
 
                 {/* AI 一句话核心定性横幅 (TL;DR) */}
@@ -1154,9 +1195,9 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                           {h.cost_anomaly && (
                                             <span
                                               style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "#FEF3C7", color: "#B45309", border: "1px solid #F59E0B", fontWeight: 600 }}
-                                              title={h.cost_anomaly_reason || "现价与均价偏离过大，疑似未复权或历史录入价异常"}
+                                              title={h.cost_anomaly_reason || "现价与摊薄均价偏离过大，请核对拆股或历史成交录入价"}
                                             >
-                                              ⚠ 疑似未复权
+                                              ⚠ 成本偏离核对
                                             </span>
                                           )}
                                           {hNews.length > 0 && (

@@ -1,3 +1,10 @@
+## 2026-11-27 22:09 盘后复盘补完：双端接入「删除存档」按钮、修正成本偏离熔断阈值并清理休市日误生成存档
+
+- 修改者：Antigravity（代码修改与收尾补完）
+- 在 `frontend/src/views/AfterHoursReportView.tsx` 与 `src/portfolio/ui/after_hours_report_page.py` 补齐「删除存档」按钮与二次确认交互，无存档时自动禁用按钮。
+- 在 `src/portfolio/services/after_hours_report.py` 将 `cost_anomaly` 阈值调整为普通 1x 标的 `>= 5.0x`、杠杆标的 `>= 8.0x`，文案统一为「成本偏离核对」，消除 `SNDK`/`MRVL`/`SPAL` 误报；清理本地 `2026-11-26::个人` 休市日误生成存档。
+- 补充桌面端半日市徽标/休市拦截/删除存档及 `scripts/sync_data.py` 拆并股集成单测，19 项测试、`ruff check` 与 `frontend npm run build` 全部通过。
+
 ## 2026-11-27 21:55 接入美股官方交易日历与半日市规则，升级总资产净值、组合等效敞口与异常成本熔断校验
 
 - 修改者：Antigravity（代码修改与收尾验算）

@@ -1,8 +1,8 @@
 """测试启动自动检查并同步美股拆/并股公司行动模块。"""
 
+import sqlite3
 from datetime import date
 from pathlib import Path
-import sqlite3
 
 from portfolio.sync.corporate_actions_sync import (
     SplitEvent,
@@ -122,3 +122,78 @@ def test_sync_missing_corporate_actions_inserts_new_and_is_idempotent(tmp_path):
     res2 = sync_missing_corporate_actions(db_path, fetcher=_fake_fetcher, today=date(2026, 11, 25))
     assert len(res2.inserted) == 0
     assert res2.skipped_existing == 2
+
+
+def test_sync_data_calls_corporate_actions_sync(monkeypatch):
+    """验证 scripts/sync_data.main 在非 --no-api 模式下调用拆并股同步，且异常不阻断主流程。"""
+    import importlib.util
+    import sys
+    from types import SimpleNamespace
+
+    from portfolio.paths import PROJECT_DIR
+
+    script_path = PROJECT_DIR / "scripts" / "sync_data.py"
+    spec = importlib.util.spec_from_file_location("sync_data_script_test", script_path)
+    sync_mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(sync_mod)
+
+    class _DummyWorkbook:
+        sheet_names = {"交易流水", "长桥", "嘉信", "第一证券", "BBAE", "内部划转"}
+
+        def __init__(self, base):
+            pass
+
+    class _DummyCtx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr("portfolio.sync.database_store.validate_database", lambda path: None)
+    monkeypatch.setattr("portfolio.sync.database_store.connect_database", lambda path, readonly=False: _DummyCtx())
+    monkeypatch.setattr("portfolio.sync.database_sync.TRADE_SHEETS", {
+        "长桥": "长桥",
+        "嘉信": "嘉信",
+        "第一证券": "第一证券",
+        "BBAE": "BBAE",
+    })
+    monkeypatch.setattr("portfolio.sync.database_sync.TradeFlowWorkbook", _DummyWorkbook)
+    monkeypatch.setattr("portfolio.sync.database_sync.sync_database_orders", lambda **kw: None)
+    monkeypatch.setattr("portfolio.services.derived_maintenance.clean_stale_staging_files", lambda db: None)
+    monkeypatch.setattr("portfolio.sync.fee_api.fetch_missing", lambda *a, **kw: (None, []))
+    monkeypatch.setattr("portfolio.sync.trade_fees.load_evidence", lambda r: {})
+    monkeypatch.setattr("portfolio.sync.trade_fees.store_evidence", lambda w, e: None)
+    monkeypatch.setattr("portfolio.sync.trade_fees.refresh_fees", lambda w: {"known_trades": 0, "unknown_trades": 0})
+    monkeypatch.setattr(
+        "portfolio.sync.trade_fees.audit_recent_fees",
+        lambda w, days=7: {
+            "total_trades": 0,
+            "multi_person_orders": 0,
+            "known_trades": 0,
+            "pending_settlement_trades": 0,
+            "allocation_mismatches": 0,
+            "mismatch_details": [],
+        },
+    )
+
+    called: list[str] = []
+
+    def _fake_ca_ok(db):
+        called.append(str(db))
+        return SimpleNamespace(inserted=(), summary_text="", errors=())
+
+    monkeypatch.setattr("portfolio.sync.corporate_actions_sync.sync_missing_corporate_actions", _fake_ca_ok)
+    monkeypatch.setattr(sys, "argv", ["sync_data.py"])
+    assert sync_mod.main() == 0
+    assert len(called) == 1
+
+    # 拆并股检查抛异常时也不应阻断主同步返回 0
+    def _fake_ca_fail(db):
+        called.append("fail")
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("portfolio.sync.corporate_actions_sync.sync_missing_corporate_actions", _fake_ca_fail)
+    assert sync_mod.main() == 0
+    assert len(called) == 2
