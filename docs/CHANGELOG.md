@@ -1,3 +1,10 @@
+## 2026-11-27 23:19 盘后复盘日报 UI 布局与交互体验全面优化
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/ui/after_hours_report_page.py`（并同步对齐 `frontend/src/views/AfterHoursReportView.tsx`）将「风险雷达 + 次日关注清单」双栏置顶至结构化总览首屏；重构「重点持仓异动与归因」支持盈亏/权重/涨跌幅排序、核心仓位分级默认折叠与单行摘要条、左右分层卡片（取消整行染色、独立涨跌胶囊与紧凑新闻行）。
+- 优化 KPI 卡片（动态浮盈/浮亏文案、SPY/QQQ 独立红绿着色、杠杆等效倍数胶囊）、Hero 标题两行分层 + 「追问 Gemini」平滑滚动直达按钮、刷新按钮收拢及左侧「历史复盘存档」折叠/展开交互。
+- 补充桌面端 UI 布局/排序/折叠/KPI/侧栏测试，`tests/test_after_hours_report.py` 与 `tests/test_us_market_calendar.py` 18 项测试、`ruff check` 与 `frontend npm run build` 全部通过。
+
 ## 2026-11-27 22:13 修复桌面端盘后复盘日期选择器无法点选日历及滚轮误触问题
 
 - 修改者：Antigravity（代码修改）

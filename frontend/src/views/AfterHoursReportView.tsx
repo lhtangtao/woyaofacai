@@ -134,6 +134,8 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   // 2.0 交互状态
   const [activeTab, setActiveTab] = useState<"overview" | "trades" | "news" | "markdown">("overview");
   const [moverFilter, setMoverFilter] = useState<"all" | "up" | "down" | "after" | "news">("all");
+  const [moverSort, setMoverSort] = useState<"day_pnl" | "weight" | "change">("day_pnl");
+  const [expandedSyms, setExpandedSyms] = useState<string[]>([]);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [followupInput, setFollowupInput] = useState("");
   const [followupLoading, setFollowupLoading] = useState(false);
@@ -210,9 +212,20 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
       .catch(() => {});
   }, []);
 
+  const defaultExpandedForHoldings = (list: any[]): string[] => {
+    const ranked = [...(list || [])]
+      .filter((h) => h?.symbol)
+      .sort((a, b) => Number(b.weight_pct || 0) - Number(a.weight_pct || 0));
+    let core = ranked.filter((h) => Number(h.weight_pct || 0) >= 0.05);
+    if (core.length < 3) core = ranked.slice(0, 3);
+    else if (core.length > 5) core = core.slice(0, 5);
+    return core.map((h) => String(h.symbol));
+  };
+
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setExpandedSyms([]);
       return;
     }
     setLoadingDetail(true);
@@ -222,6 +235,8 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
         if (res.status === "ok" && res.report) {
           setDetail(res.report);
           setCheckedIds(Array.isArray(res.report.checked_ids) ? res.report.checked_ids : []);
+          const hs = res.report?.snapshot?.holdings || [];
+          setExpandedSyms(defaultExpandedForHoldings(hs));
         }
       })
       .catch((err) => setErrorMsg(err.message || "加载日报详情失败"))
@@ -439,7 +454,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   };
 
   const filteredHoldings = useMemo(() => {
-    return holdings.filter((h) => {
+    const base = holdings.filter((h) => {
       if (moverFilter === "up") return (h.regular_change_pct || 0) > 0;
       if (moverFilter === "down") return (h.regular_change_pct || 0) < 0;
       if (moverFilter === "after") {
@@ -448,7 +463,14 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
       if (moverFilter === "news") return getNewsForHolding(h).length > 0;
       return true;
     });
-  }, [holdings, moverFilter, newsMap, newsDigest]);
+    return [...base].sort((a, b) => {
+      if (moverSort === "weight") return Number(b.weight_pct || 0) - Number(a.weight_pct || 0);
+      if (moverSort === "change") {
+        return Math.abs(Number(b.regular_change_pct || 0)) - Math.abs(Number(a.regular_change_pct || 0));
+      }
+      return Math.abs(Number(b.day_pnl || 0)) - Math.abs(Number(a.day_pnl || 0));
+    });
+  }, [holdings, moverFilter, moverSort, newsMap, newsDigest]);
 
   const allNewsFeed = useMemo(() => {
     if (newsDigest.length > 0) {
@@ -981,7 +1003,8 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                               : undefined
                           }
                         >
-                          累计浮盈 {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
+                          {Number(summary.total_unrealized_pnl) < 0 ? "累计浮亏" : "累计浮盈"}{" "}
+                          {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
                           {anomalySyms.length > 0 && (
                             <span style={{ marginLeft: "5px", fontSize: "10.5px", color: "#D97706", fontWeight: 600 }}>
                               ⚠ 含异常成本({anomalySyms.join(",")})
@@ -1010,9 +1033,29 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                   </div>
 
                   <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", color: "var(--text-muted)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11.5px", color: "var(--text-muted)" }}>
                       <span>杠杆仓位暴露</span>
-                      <span className="font-mono">{summary.trade_count || 0} 笔成交</span>
+                      {summary.effective_leverage != null && (
+                        <span
+                          className="font-mono"
+                          style={{
+                            fontSize: "10.5px",
+                            fontWeight: 600,
+                            padding: "1px 7px",
+                            borderRadius: "999px",
+                            background: "var(--bg-panel)",
+                            border: "1px solid var(--border-color)",
+                            color: "var(--text-heading)",
+                          }}
+                          title={
+                            summary.effective_leverage_total_assets != null
+                              ? `持仓净名义敞口 ${Number(summary.effective_leverage).toFixed(2)}x | 含现金总资产净敞口 ${Number(summary.effective_leverage_total_assets).toFixed(2)}x`
+                              : "持仓加权净名义敞口倍数"
+                          }
+                        >
+                          等效 {Number(summary.effective_leverage).toFixed(2)}x
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "3px", flexWrap: "wrap" }}>
                       <span className="font-mono" style={{ fontSize: "19px", fontWeight: 700, color: "var(--text-heading)" }}>
@@ -1027,19 +1070,6 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                       >
                         {levPctNum >= 50 ? "高杠杆警戒" : levPctNum >= 35 ? "中高暴露" : "稳健可控"}
                       </span>
-                      {summary.effective_leverage != null && (
-                        <span
-                          className="font-mono"
-                          style={{ fontSize: "11px", color: "var(--text-muted)" }}
-                          title={
-                            summary.effective_leverage_total_assets != null
-                              ? `持仓净名义敞口 ${Number(summary.effective_leverage).toFixed(2)}x | 含现金总资产净敞口 ${Number(summary.effective_leverage_total_assets).toFixed(2)}x`
-                              : "持仓加权净名义敞口倍数"
-                          }
-                        >
-                          等效 {Number(summary.effective_leverage).toFixed(2)}x
-                        </span>
-                      )}
                     </div>
                     <div style={{ height: "6px", borderRadius: "999px", background: "var(--border-color)", overflow: "hidden", marginTop: "6px" }}>
                       <div
@@ -1096,224 +1126,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                   {/* TAB 1: 结构化复盘总览 */}
                   {activeTab === "overview" && (
                     <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
-                      {/* 模块 A: 重点持仓异动与归因 */}
-                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
-                          <div>
-                            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-heading)" }}>重点持仓异动与归因</span>
-                            <span style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "8px" }}>
-                              杠杆 ETF 自动关联正股新闻
-                            </span>
-                          </div>
-                          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                            {[
-                              { id: "all", label: "全部" },
-                              { id: "up", label: "领涨" },
-                              { id: "down", label: "领跌" },
-                              { id: "after", label: "盘后波动" },
-                              { id: "news", label: "有突发新闻" },
-                            ].map((f) => {
-                              const active = moverFilter === f.id;
-                              return (
-                                <button
-                                  key={f.id}
-                                  type="button"
-                                  onClick={() => setMoverFilter(f.id as any)}
-                                  style={{
-                                    fontSize: "12px",
-                                    padding: "4px 10px",
-                                    borderRadius: "8px",
-                                    border: active ? "1px solid var(--brand)" : "1px solid var(--border-color)",
-                                    background: active ? "var(--brand-selected)" : "var(--bg-app)",
-                                    color: active ? "var(--brand)" : "var(--text-muted)",
-                                    fontWeight: active ? 600 : 500,
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  {f.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {filteredHoldings.length === 0 ? (
-                          <div style={{ padding: "20px", textAlign: "center", fontSize: "12.5px", color: "var(--text-muted)", border: "1px dashed var(--border-color)", borderRadius: "10px" }}>
-                            当前筛选条件下无匹配持仓标的
-                          </div>
-                        ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                            {filteredHoldings.map((h) => {
-                              const hNews = getNewsForHolding(h);
-                              const reason = moverReasons[h.symbol];
-                              const pnlNum = h.day_pnl ?? h.unrealized_pnl ?? 0;
-                              return (
-                                <div
-                                  key={h.symbol}
-                                  style={{
-                                    borderRadius: "10px",
-                                    border: "1px solid var(--border-color)",
-                                    background: "var(--bg-app)",
-                                    overflow: "hidden",
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      padding: "11px 14px",
-                                      display: "flex",
-                                      flexWrap: "wrap",
-                                      alignItems: "center",
-                                      justifyContent: "space-between",
-                                      gap: "10px",
-                                    }}
-                                  >
-                                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "200px" }}>
-                                      <div
-                                        style={{
-                                          width: "4px",
-                                          height: "36px",
-                                          borderRadius: "999px",
-                                          background: pnlNum >= 0 ? "#16A34A" : "#DC2626",
-                                          flexShrink: 0,
-                                        }}
-                                      />
-                                      <div>
-                                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                                          <span className="font-mono" style={{ fontWeight: 700, fontSize: "14px", color: "var(--text-heading)" }}>
-                                            {h.symbol}
-                                          </span>
-                                          {h.underlying && (
-                                            <span className="font-mono" style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)", fontWeight: 600 }}>
-                                              → {h.underlying}
-                                            </span>
-                                          )}
-                                          {h.is_leveraged && (
-                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "rgba(217,119,6,0.14)", color: "#D97706", fontWeight: 600 }}>
-                                              {h.leverage_factor != null ? `${Number(h.leverage_factor)}x 杠杆` : "杠杆"}
-                                            </span>
-                                          )}
-                                          {h.cost_anomaly && (
-                                            <span
-                                              style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "#FEF3C7", color: "#B45309", border: "1px solid #F59E0B", fontWeight: 600 }}
-                                              title={h.cost_anomaly_reason || "现价与摊薄均价偏离过大，请核对拆股或历史成交录入价"}
-                                            >
-                                              ⚠ 成本偏离核对
-                                            </span>
-                                          )}
-                                          {hNews.length > 0 && (
-                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--bg-panel)", border: "1px solid var(--border-color)", color: "var(--text-muted)" }}>
-                                              新闻 {hNews.length}
-                                            </span>
-                                          )}
-                                        </div>
-                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
-                                          {(h.channels || []).join(" / ")} · 仓位 {h.weight_pct != null ? `${(h.weight_pct * 100).toFixed(1)}%` : "—"} · 摊薄均价 {fmtMoney(h.avg_cost)}
-                                          {(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
-                                            <span style={{ color: "#16A34A", fontWeight: 600 }}>（已零成本/利润仓）</span>
-                                          )}
-                                          {h.need_breakeven_pct != null && !(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
-                                            <span style={{ color: "#D97706" }}>
-                                              {" "}· 回本需 +{(h.need_breakeven_pct * 100).toFixed(1)}%{h.cost_anomaly ? " ⚠" : ""}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="font-mono" style={{ display: "flex", alignItems: "center", gap: "18px", fontSize: "12px", flexWrap: "wrap" }}>
-                                      <div style={{ textAlign: "right" }}>
-                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>常规收盘</div>
-                                        <div>
-                                          <strong>{fmtMoney(h.regular_close)}</strong>{" "}
-                                          <span style={{ color: toneColor(h.regular_change_pct) }}>{fmtPct(h.regular_change_pct)}</span>
-                                        </div>
-                                      </div>
-                                      <div style={{ textAlign: "right" }}>
-                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>盘后最新</div>
-                                        <div>
-                                          <strong>{fmtMoney(h.after_hours_price)}</strong>{" "}
-                                          <span style={{ color: toneColor(h.after_hours_change_pct) }}>{fmtPct(h.after_hours_change_pct)}</span>
-                                        </div>
-                                      </div>
-                                      <div style={{ textAlign: "right", minWidth: "84px" }}>
-                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当日盈亏</div>
-                                        <div style={{ fontSize: "13.5px", fontWeight: 700, color: toneColor(h.day_pnl) }}>
-                                          {fmtMoney(h.day_pnl, true)}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div style={{ padding: "10px 14px 12px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", background: "var(--bg-panel)" }}>
-                                      <div style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
-                                        <strong style={{ color: "var(--brand)" }}>AI 异动归因：</strong>
-                                        {reason || `当前持仓 ${h.quantity} 股，浮盈 ${fmtMoney(h.unrealized_pnl, true)}；可切换至「完整长文」查看全文点评。`}
-                                      </div>
-                                      {hNews.length > 0 ? (
-                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                          {hNews.map((n, nIdx) => {
-                                            const sent = n.sentiment || newsSentiments[n.title] || "中性";
-                                            const st = sentimentStyle(sent);
-                                            const displayTitle = n.zh_title || n.title;
-                                            const hasLink = typeof n.url === "string" && /^https?:\/\//i.test(n.url);
-                                            return (
-                                              <div
-                                                key={nIdx}
-                                                style={{
-                                                  display: "flex",
-                                                  flexDirection: "column",
-                                                  gap: "4px",
-                                                  padding: "8px 10px",
-                                                  borderRadius: "8px",
-                                                  border: "1px solid var(--border-color)",
-                                                  background: "var(--bg-app)",
-                                                  fontSize: "12px",
-                                                }}
-                                                title={n.title && n.title !== displayTitle ? `原文：${n.title}` : undefined}
-                                              >
-                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
-                                                  <div style={{ display: "flex", alignItems: "flex-start", gap: "7px", minWidth: 0, flex: 1 }}>
-                                                    <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0, marginTop: "1px" }}>
-                                                      {sent}
-                                                    </span>
-                                                    {hasLink ? (
-                                                      <a
-                                                        href={n.url}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        style={{ fontWeight: 600, color: "var(--brand)", lineHeight: 1.45, textDecoration: "none" }}
-                                                      >
-                                                        {displayTitle} ↗
-                                                      </a>
-                                                    ) : (
-                                                      <span style={{ fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.45 }}>{displayTitle}</span>
-                                                    )}
-                                                  </div>
-                                                  <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
-                                                    {n.publisher} · {n.published_bj}
-                                                  </span>
-                                                </div>
-                                                {n.summary && (
-                                                  <div style={{ fontSize: "11.5px", color: "var(--text-muted)", lineHeight: 1.5, paddingLeft: "4px" }}>
-                                                    摘要：{n.summary}
-                                                  </div>
-                                                )}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      ) : (
-                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>近 36 小时无显著突发新闻。</div>
-                                      )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 模块 B + C: 风险雷达 & 可勾选次日关注清单 */}
+                      {/* 模块 B + C: 风险雷达 & 可勾选次日关注清单（首屏置顶） */}
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px" }}>
                         {/* 风险雷达 */}
                         <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -1407,6 +1220,258 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                             })
                           )}
                         </div>
+                      </div>
+
+                      {/* 模块 A: 重点持仓异动与归因 */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                          <div>
+                            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-heading)" }}>重点持仓异动与归因</span>
+                            <span style={{ fontSize: "12px", color: "var(--text-muted)", marginLeft: "8px" }}>
+                              杠杆 ETF 自动关联正股新闻
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                            {[
+                              { id: "all", label: "全部" },
+                              { id: "up", label: "领涨" },
+                              { id: "down", label: "领跌" },
+                              { id: "after", label: "盘后波动" },
+                              { id: "news", label: "有突发新闻" },
+                            ].map((f) => {
+                              const active = moverFilter === f.id;
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  onClick={() => setMoverFilter(f.id as any)}
+                                  style={{
+                                    fontSize: "12px",
+                                    padding: "4px 10px",
+                                    borderRadius: "8px",
+                                    border: active ? "1px solid var(--brand)" : "1px solid var(--border-color)",
+                                    background: active ? "var(--brand-selected)" : "var(--bg-app)",
+                                    color: active ? "var(--brand)" : "var(--text-muted)",
+                                    fontWeight: active ? 600 : 500,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {f.label}
+                                </button>
+                              );
+                            })}
+                            <select
+                              className="input-control"
+                              value={moverSort}
+                              onChange={(e) => setMoverSort(e.target.value as any)}
+                              style={{ fontSize: "12px", padding: "4px 8px" }}
+                            >
+                              <option value="day_pnl">按当日盈亏贡献</option>
+                              <option value="weight">按仓位权重</option>
+                              <option value="change">按涨跌幅</option>
+                            </select>
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => {
+                                const allSyms = holdings.map((x) => String(x.symbol || "")).filter(Boolean);
+                                const isAll = allSyms.length > 0 && allSyms.every((s) => expandedSyms.includes(s));
+                                setExpandedSyms(isAll ? defaultExpandedForHoldings(holdings) : allSyms);
+                              }}
+                              style={{ fontSize: "12px", padding: "4px 10px" }}
+                            >
+                              {filteredHoldings.length > 0 && filteredHoldings.every((x) => expandedSyms.includes(String(x.symbol || "")))
+                                ? "收起小仓位"
+                                : "全部展开"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {filteredHoldings.length === 0 ? (
+                          <div style={{ padding: "20px", textAlign: "center", fontSize: "12.5px", color: "var(--text-muted)", border: "1px dashed var(--border-color)", borderRadius: "10px" }}>
+                            当前筛选条件下无匹配持仓标的
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {filteredHoldings.map((h) => {
+                              const hNews = getNewsForHolding(h);
+                              const reason = moverReasons[h.symbol];
+                              const pnlNum = h.day_pnl ?? h.unrealized_pnl ?? 0;
+                              const symKey = String(h.symbol || "");
+                              const isExpanded = expandedSyms.includes(symKey);
+                              return (
+                                <div
+                                  key={h.symbol}
+                                  style={{
+                                    borderRadius: "10px",
+                                    border: "1px solid var(--border-color)",
+                                    background: "var(--bg-app)",
+                                    overflow: "hidden",
+                                  }}
+                                >
+                                  <div
+                                    onClick={() =>
+                                      setExpandedSyms((prev) =>
+                                        prev.includes(symKey) ? prev.filter((x) => x !== symKey) : [...prev, symKey]
+                                      )
+                                    }
+                                    style={{
+                                      padding: "11px 14px",
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: "10px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "200px" }}>
+                                      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{isExpanded ? "▾" : "▸"}</span>
+                                      <div
+                                        style={{
+                                          width: "4px",
+                                          height: "36px",
+                                          borderRadius: "999px",
+                                          background: pnlNum >= 0 ? "#16A34A" : "#DC2626",
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      <div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                          <span className="font-mono" style={{ fontWeight: 700, fontSize: "14px", color: "var(--text-heading)" }}>
+                                            {h.symbol}
+                                          </span>
+                                          {h.underlying && (
+                                            <span className="font-mono" style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--brand-selected)", color: "var(--brand)", fontWeight: 600 }}>
+                                              → {h.underlying}
+                                            </span>
+                                          )}
+                                          {h.is_leveraged && (
+                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "rgba(217,119,6,0.14)", color: "#D97706", fontWeight: 600 }}>
+                                              {h.leverage_factor != null ? `${Number(h.leverage_factor)}x 杠杆` : "杠杆"}
+                                            </span>
+                                          )}
+                                          {h.cost_anomaly && (
+                                            <span
+                                              style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "#FEF3C7", color: "#B45309", border: "1px solid #F59E0B", fontWeight: 600 }}
+                                              title={h.cost_anomaly_reason || "现价与摊薄均价偏离过大，请核对拆股或历史成交录入价"}
+                                            >
+                                              ⚠ 成本偏离核对
+                                            </span>
+                                          )}
+                                          {hNews.length > 0 && (
+                                            <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "var(--bg-panel)", border: "1px solid var(--border-color)", color: "var(--text-muted)" }}>
+                                              新闻 {hNews.length}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
+                                          {(h.channels || []).join(" / ")} · 仓位 {h.weight_pct != null ? `${(h.weight_pct * 100).toFixed(1)}%` : "—"} · 摊薄均价 {fmtMoney(h.avg_cost)}
+                                          {(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
+                                            <span style={{ color: "#16A34A", fontWeight: 600 }}>（已零成本/利润仓）</span>
+                                          )}
+                                          {h.need_breakeven_pct != null && !(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
+                                            <span style={{ color: "#D97706" }}>
+                                              {" "}· 回本需 +{(h.need_breakeven_pct * 100).toFixed(1)}%{h.cost_anomaly ? " ⚠" : ""}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="font-mono" style={{ display: "flex", alignItems: "center", gap: "18px", fontSize: "12px", flexWrap: "wrap" }}>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>常规收盘</div>
+                                        <div>
+                                          <strong>{fmtMoney(h.regular_close)}</strong>{" "}
+                                          <span style={{ color: toneColor(h.regular_change_pct) }}>{fmtPct(h.regular_change_pct)}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>盘后最新</div>
+                                        <div>
+                                          <strong>{fmtMoney(h.after_hours_price)}</strong>{" "}
+                                          <span style={{ color: toneColor(h.after_hours_change_pct) }}>{fmtPct(h.after_hours_change_pct)}</span>
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right", minWidth: "84px" }}>
+                                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>当日盈亏</div>
+                                        <div style={{ fontSize: "13.5px", fontWeight: 700, color: toneColor(h.day_pnl) }}>
+                                          {fmtMoney(h.day_pnl, true)}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {isExpanded && (
+                                  <div style={{ padding: "10px 14px 12px", borderTop: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "8px", background: "var(--bg-panel)" }}>
+                                      <div style={{ fontSize: "12.5px", lineHeight: 1.6 }}>
+                                        <strong style={{ color: "var(--brand)" }}>AI 异动归因：</strong>
+                                        {reason || `当前持仓 ${h.quantity} 股，${Number(h.unrealized_pnl) < 0 ? "浮亏" : "浮盈"} ${fmtMoney(h.unrealized_pnl, true)}；可切换至「完整长文」查看全文点评。`}
+                                      </div>
+                                      {hNews.length > 0 ? (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                          {hNews.map((n, nIdx) => {
+                                            const sent = n.sentiment || newsSentiments[n.title] || "中性";
+                                            const st = sentimentStyle(sent);
+                                            const displayTitle = n.zh_title || n.title;
+                                            const hasLink = typeof n.url === "string" && /^https?:\/\//i.test(n.url);
+                                            return (
+                                              <div
+                                                key={nIdx}
+                                                style={{
+                                                  display: "flex",
+                                                  flexDirection: "column",
+                                                  gap: "4px",
+                                                  padding: "8px 10px",
+                                                  borderRadius: "8px",
+                                                  border: "1px solid var(--border-color)",
+                                                  background: "var(--bg-app)",
+                                                  fontSize: "12px",
+                                                }}
+                                                title={n.title && n.title !== displayTitle ? `原文：${n.title}` : undefined}
+                                              >
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                                                  <div style={{ display: "flex", alignItems: "flex-start", gap: "7px", minWidth: 0, flex: 1 }}>
+                                                    <span style={{ fontSize: "11px", fontWeight: 600, padding: "1px 6px", borderRadius: "6px", background: st.bg, color: st.fg, flexShrink: 0, marginTop: "1px" }}>
+                                                      {sent}
+                                                    </span>
+                                                    {hasLink ? (
+                                                      <a
+                                                        href={n.url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{ fontWeight: 600, color: "var(--brand)", lineHeight: 1.45, textDecoration: "none" }}
+                                                      >
+                                                        {displayTitle} ↗
+                                                      </a>
+                                                    ) : (
+                                                      <span style={{ fontWeight: 600, color: "var(--text-heading)", lineHeight: 1.45 }}>{displayTitle}</span>
+                                                    )}
+                                                  </div>
+                                                  <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)", flexShrink: 0 }}>
+                                                    {n.publisher} · {n.published_bj}
+                                                  </span>
+                                                </div>
+                                                {n.summary && (
+                                                  <div style={{ fontSize: "11.5px", color: "var(--text-muted)", lineHeight: 1.5, paddingLeft: "4px" }}>
+                                                    摘要：{n.summary}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>近 36 小时无显著突发新闻。</div>
+                                      )}
+                                  </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

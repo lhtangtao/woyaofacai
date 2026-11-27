@@ -860,3 +860,118 @@ def test_desktop_after_hours_session_badges_closed_guard_and_delete(demo_path, t
     page._delete_current_report(confirm=False)
     assert store.get_report("2026-11-27::个人") is None
     assert len(store.list_reports()) == 1
+
+
+def test_desktop_after_hours_ui_layout_sorting_folding_kpis_and_sidebar(demo_path, tmp_path, qtbot):
+    """验证桌面端首屏信息层级、持仓分级折叠与排序、KPI 优化、追问直达与左侧存档折叠。"""
+    from PySide6.QtCore import Qt
+
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    # 6 只不同权重持仓：前 4 只权重 >= 5%，后 2 只为小仓位 (< 5%)
+    holdings = [
+        {"symbol": "NVDA", "channels": ["IBKR"], "quantity": 10, "avg_cost": 100.0, "market_value": 4000, "weight_pct": 0.40, "regular_close": 140.0, "regular_change_pct": 0.03, "after_hours_price": 141.0, "after_hours_change_pct": 0.007, "day_pnl": 120.0, "unrealized_pnl": 400.0},
+        {"symbol": "TQQQ", "channels": ["IBKR"], "quantity": 20, "avg_cost": 60.0, "market_value": 2500, "weight_pct": 0.25, "regular_close": 70.0, "regular_change_pct": -0.05, "after_hours_price": 69.0, "after_hours_change_pct": -0.014, "day_pnl": -350.0, "unrealized_pnl": -200.0, "is_leveraged": True, "leverage_factor": 3},
+        {"symbol": "MSFT", "channels": ["IBKR"], "quantity": 5, "avg_cost": 400.0, "market_value": 2000, "weight_pct": 0.20, "regular_close": 410.0, "regular_change_pct": 0.01, "day_pnl": 20.0, "unrealized_pnl": 50.0},
+        {"symbol": "AAPL", "channels": ["IBKR"], "quantity": 4, "avg_cost": 200.0, "market_value": 900, "weight_pct": 0.09, "regular_close": 225.0, "regular_change_pct": 0.02, "day_pnl": 18.0, "unrealized_pnl": 100.0},
+        {"symbol": "AMD", "channels": ["IBKR"], "quantity": 2, "avg_cost": 180.0, "market_value": 400, "weight_pct": 0.04, "regular_close": 150.0, "regular_change_pct": -0.06, "day_pnl": -25.0, "unrealized_pnl": -60.0},
+        {"symbol": "PLTR", "channels": ["IBKR"], "quantity": 3, "avg_cost": 50.0, "market_value": 200, "weight_pct": 0.02, "regular_close": 65.0, "regular_change_pct": 0.08, "day_pnl": 15.0, "unrealized_pnl": 45.0},
+    ]
+    store.save_report({
+        "id": "2026-11-27::个人",
+        "trade_date": "2026-11-27",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-27T21:00:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {
+            "holdings": holdings,
+            "market_benchmarks": {
+                "SPY": {"regular_change_pct": -0.004, "after_hours_change_pct": 0.002},
+                "QQQ": {"regular_change_pct": 0.008, "after_hours_change_pct": -0.001},
+            },
+            "summary": {
+                "day_pnl": -202.0,
+                "day_pnl_pct": -0.02,
+                "total_market_value": 10000.0,
+                "cash_balance": 2000.0,
+                "total_assets": 12000.0,
+                "total_unrealized_pnl": -150.0,
+                "unrealized_pct": -0.015,
+                "leverage_pct": 0.25,
+                "effective_leverage": 1.50,
+                "effective_leverage_total_assets": 1.25,
+                "trade_count": 0,
+                "holding_count": 6,
+            },
+        },
+        "structured": {
+            "tldr": "核心仓位分化",
+            "risks": [{"level": "提示", "title": "集中度", "detail": "观察"}],
+            "checklist": [{"id": "c1", "ticker": "TQQQ", "level": "$68", "text": "关注支撑"}],
+        },
+        "markdown": "## 一、今日总览\n\n测试",
+    })
+
+    page = AfterHoursReportPage(store=store, db_path=demo_path)
+    qtbot.addWidget(page)
+    page.resize(1280, 800)
+    page.show()
+    qtbot.wait(50)
+
+    # 1. 首屏顺序：风控雷达+关注清单双栏位于持仓异动区域上方
+    tab_ov = page.tabs.widget(0)
+    ov_layout = tab_ov.layout()
+    assert ov_layout.indexOf(page.rc_container) < ov_layout.indexOf(page.movers_section)
+
+    # 2. 分级默认折叠：权重 >= 5% 的前 4 只展开，尾部小仓位 AMD/PLTR 默认折叠
+    assert page._expanded_syms == {"NVDA", "TQQQ", "MSFT", "AAPL"}
+    assert page.toggle_expand_all_btn.text() == "全部展开"
+
+    # 单击切换单个标的展开，以及「全部展开 / 收起小仓位」切换
+    page._toggle_symbol_expand("AMD")
+    assert "AMD" in page._expanded_syms
+    page._toggle_expand_all_movers()
+    assert {"NVDA", "TQQQ", "MSFT", "AAPL", "AMD", "PLTR"}.issubset(page._expanded_syms)
+    assert page.toggle_expand_all_btn.text() == "收起小仓位"
+    page._toggle_expand_all_movers()
+    assert page._expanded_syms == {"NVDA", "TQQQ", "MSFT", "AAPL"}
+
+    # 3. 排序下拉（按当日盈亏贡献 / 按仓位权重 / 按涨跌幅）
+    def _first_card_symbol() -> str:
+        first_card = page.movers_box.itemAt(0).widget()
+        for lbl in first_card.findChildren(type(page.count_lbl)):
+            txt = lbl.text().strip()
+            if txt in {"NVDA", "TQQQ", "MSFT", "AAPL", "AMD", "PLTR"}:
+                return txt
+        return ""
+
+    assert _first_card_symbol() == "TQQQ"  # |day_pnl|=350 最大
+    page.mover_sort_combo.setCurrentIndex(page.mover_sort_combo.findData("weight"))
+    assert _first_card_symbol() == "NVDA"  # weight=40% 最大
+    page.mover_sort_combo.setCurrentIndex(page.mover_sort_combo.findData("change"))
+    assert _first_card_symbol() == "PLTR"  # |change|=8% 最大
+
+    # 4. KPI 细节：浮亏动态文案、大盘基准双行着色、杠杆等效胶囊（无 0 笔）
+    assert "浮亏" in page.kpi_un_sub.text()
+    assert page.kpi_bench_val.isHidden()
+    assert "SPY" in page.kpi_bench_sub.text() and "QQQ" in page.kpi_bench_sub.text()
+    assert "#DC2626" in page.kpi_bench_sub.text() and "#16A34A" in page.kpi_bench_sub.text()
+    assert page.kpi_eff_lev_badge.text() == "等效 1.50x"
+    assert "笔" not in page.kpi_eff_lev_badge.text()
+
+    # 5. Hero 「追问 Gemini」直达聚焦 & 左侧存档栏折叠/展开 & 零横向溢出
+    page.jump_followup_btn.click()
+    assert page.followup_input.hasFocus() or page.isVisible()
+    assert not page.left_card.isHidden()
+    assert page.expand_sidebar_btn.isHidden()
+    page.collapse_sidebar_btn.click()
+    assert page.left_card.isHidden()
+    assert not page.expand_sidebar_btn.isHidden()
+    page.expand_sidebar_btn.click()
+    assert not page.left_card.isHidden()
+    assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert page.right_container.width() <= page.right_scroll.viewport().width() + 2

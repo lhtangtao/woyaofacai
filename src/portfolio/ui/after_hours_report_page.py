@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDate, Qt, QThread, Signal
+from PySide6.QtCore import QDate, QEasingCurve, QPropertyAnimation, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -115,6 +115,39 @@ def _format_news_title_html(title: str, url: str) -> str:
     return esc_t
 
 
+def _pnl_prefix(v) -> str:
+    """根据盈亏正负动态返回「浮亏」或「浮盈」。"""
+    try:
+        return "浮亏" if float(v) < 0 else "浮盈"
+    except Exception:
+        return "浮盈"
+
+
+def _tone_pill_colors(v) -> tuple[str, str]:
+    """根据数值正负返回胶囊背景色与前景色。"""
+    try:
+        num = float(v)
+    except Exception:
+        return "#F1F5F9", "#64748B"
+    if num > 0:
+        return "#DCFCE7", "#15803D"
+    if num < 0:
+        return "#FEE2E2", "#B91C1C"
+    return "#F1F5F9", "#64748B"
+
+
+def _make_pill_label(text: str, bg: str, fg: str, border: str = "") -> QLabel:
+    """创建紧凑圆角胶囊标签。"""
+    lbl = QLabel(text)
+    lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    b_css = f"border: 1px solid {border};" if border else "border: none;"
+    lbl.setStyleSheet(
+        f"font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 9px; "
+        f"background: {bg}; color: {fg}; {b_css}"
+    )
+    return lbl
+
+
 class _FitWidthScrollArea(QScrollArea):
     """锁定内容最大宽度等于视口宽度，禁止横向拖动并确保内部文本自然折行。"""
 
@@ -217,7 +250,11 @@ class AfterHoursReportPage(QWidget):
         self._person_id_by_key: dict[str, Optional[int]] = {"个人": 1, "ALL": None}
         self._syncing_person: bool = False
         self._mover_filter: str = "all"
+        self._mover_sort: str = "day_pnl"
+        self._expand_all_movers: bool = False
         self._expanded_syms: set[str] = set()
+        self._sidebar_collapsed: bool = False
+        self._scroll_anim: Optional[QPropertyAnimation] = None
         self._worker: Optional[_AfterHoursWorker] = None
         self._followup_worker: Optional[_FollowupWorker] = None
         self._build_ui()
@@ -234,6 +271,15 @@ class AfterHoursReportPage(QWidget):
         top = QHBoxLayout(top_card)
         top.setContentsMargins(12, 9, 12, 9)
         top.setSpacing(8)
+
+        self.expand_sidebar_btn = QPushButton("» 存档")
+        self.expand_sidebar_btn.setStyleSheet(
+            "font-size: 11.5px; padding: 4px 8px; color: #2563EB; border: 1px solid #BFDBFE; background: #EFF6FF;"
+        )
+        self.expand_sidebar_btn.setToolTip("展开左侧历史复盘存档栏")
+        self.expand_sidebar_btn.clicked.connect(lambda: self._set_sidebar_collapsed(False))
+        self.expand_sidebar_btn.hide()
+        top.addWidget(self.expand_sidebar_btn)
 
         top.addWidget(QLabel("交易日："))
         default_d = resolve_default_trade_date()
@@ -267,10 +313,6 @@ class AfterHoursReportPage(QWidget):
         )
         top.addWidget(self.status_lbl)
 
-        self.refresh_btn = QPushButton("刷新列表")
-        self.refresh_btn.clicked.connect(lambda: self.reload())
-        top.addWidget(self.refresh_btn)
-
         self.generate_btn = QPushButton("生成 / 重算日报")
         self.generate_btn.setObjectName("primary")
         self.generate_btn.clicked.connect(self._start_generate)
@@ -279,19 +321,20 @@ class AfterHoursReportPage(QWidget):
         root.addWidget(top_card)
 
         # 主体左右分栏
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
 
-        # 左侧：历史存档时间轴（定宽区间，把最大空间让给右侧复盘内容）
-        left_card = QFrame()
-        left_card.setObjectName("card")
-        left_card.setMinimumWidth(205)
-        left_card.setMaximumWidth(248)
-        left_layout = QVBoxLayout(left_card)
+        # 左侧：历史存档时间轴（定宽区间，可折叠以释放右侧复盘空间）
+        self.left_card = QFrame()
+        self.left_card.setObjectName("card")
+        self.left_card.setMinimumWidth(205)
+        self.left_card.setMaximumWidth(248)
+        left_layout = QVBoxLayout(self.left_card)
         left_layout.setContentsMargins(10, 10, 10, 10)
         left_layout.setSpacing(8)
 
         hdr_l = QHBoxLayout()
+        hdr_l.setSpacing(4)
         title_l = QLabel("历史复盘存档")
         title_l.setStyleSheet("font-size: 12.5px; font-weight: 700; color: #0F172A;")
         hdr_l.addWidget(title_l)
@@ -299,6 +342,26 @@ class AfterHoursReportPage(QWidget):
         self.count_lbl = QLabel("0 份")
         self.count_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
         hdr_l.addWidget(self.count_lbl)
+
+        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setFixedSize(24, 24)
+        self.refresh_btn.setToolTip("刷新历史复盘存档列表")
+        self.refresh_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; padding: 0; border-radius: 6px; border: 1px solid #E2E8F0; background: #F8FAFC; color: #475569; }"
+            "QPushButton:hover { border-color: #2563EB; color: #2563EB; background: #EFF6FF; }"
+        )
+        self.refresh_btn.clicked.connect(lambda: self.reload())
+        hdr_l.addWidget(self.refresh_btn)
+
+        self.collapse_sidebar_btn = QPushButton("«")
+        self.collapse_sidebar_btn.setFixedSize(24, 24)
+        self.collapse_sidebar_btn.setToolTip("收起历史复盘存档栏")
+        self.collapse_sidebar_btn.setStyleSheet(
+            "QPushButton { font-size: 13px; padding: 0; border-radius: 6px; border: 1px solid #E2E8F0; background: #F8FAFC; color: #475569; }"
+            "QPushButton:hover { border-color: #2563EB; color: #2563EB; background: #EFF6FF; }"
+        )
+        self.collapse_sidebar_btn.clicked.connect(lambda: self._set_sidebar_collapsed(True))
+        hdr_l.addWidget(self.collapse_sidebar_btn)
         left_layout.addLayout(hdr_l)
 
         pill_row = QHBoxLayout()
@@ -338,7 +401,7 @@ class AfterHoursReportPage(QWidget):
         right_layout.setContentsMargins(2, 0, 4, 4)
         right_layout.setSpacing(10)
 
-        # 1. Hero 驾驶舱卡片
+        # 1. Hero 驾驶舱卡片（两行分层：标题+按钮 / 状态胶囊+元信息）
         self.hero_card = QFrame()
         self.hero_card.setObjectName("card")
         self.hero_card.setMinimumWidth(0)
@@ -346,34 +409,28 @@ class AfterHoursReportPage(QWidget):
         hero_l.setContentsMargins(14, 14, 14, 14)
         hero_l.setSpacing(10)
 
-        hero_top = QHBoxLayout()
-        hero_top.setSpacing(8)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(4)
-        title_badges = QHBoxLayout()
-        title_badges.setSpacing(6)
+        hero_hdr = QVBoxLayout()
+        hero_hdr.setSpacing(5)
+
+        hero_row1 = QHBoxLayout()
+        hero_row1.setSpacing(8)
         self.detail_title = _make_wrap_label(
             "请选择左侧日报或点击右上角立即生成",
             "font-size: 15px; font-weight: 700; color: #0F172A;",
         )
-        title_badges.addWidget(self.detail_title, 1)
-        self.regime_badge = QLabel("")
-        self.regime_badge.hide()
-        title_badges.addWidget(self.regime_badge)
-        self.session_badge = QLabel("")
-        self.session_badge.hide()
-        title_badges.addWidget(self.session_badge)
-        self.sync_badge = QLabel("")
-        self.sync_badge.hide()
-        title_badges.addWidget(self.sync_badge)
-        title_col.addLayout(title_badges)
-
-        self.detail_meta = _make_wrap_label("", "font-size: 11.5px; color: #64748B;")
-        title_col.addWidget(self.detail_meta)
-        hero_top.addLayout(title_col, 1)
+        hero_row1.addWidget(self.detail_title, 1)
 
         hero_actions = QHBoxLayout()
         hero_actions.setSpacing(6)
+        self.jump_followup_btn = QPushButton("追问 Gemini")
+        self.jump_followup_btn.setStyleSheet(
+            "color: #2563EB; border: 1px solid #BFDBFE; background: #EFF6FF; font-weight: 600;"
+        )
+        self.jump_followup_btn.setToolTip("平滑滚动到底部并聚焦追问输入框")
+        self.jump_followup_btn.clicked.connect(self._scroll_to_followup)
+        self.jump_followup_btn.setEnabled(False)
+        hero_actions.addWidget(self.jump_followup_btn)
+
         self.copy_btn = QPushButton("复制 Markdown")
         self.copy_btn.clicked.connect(self._copy_markdown)
         self.copy_btn.setEnabled(False)
@@ -385,8 +442,25 @@ class AfterHoursReportPage(QWidget):
         self.delete_btn.setEnabled(False)
         hero_actions.addWidget(self.delete_btn)
         hero_actions.setAlignment(Qt.AlignmentFlag.AlignTop)
-        hero_top.addLayout(hero_actions)
-        hero_l.addLayout(hero_top)
+        hero_row1.addLayout(hero_actions)
+        hero_hdr.addLayout(hero_row1)
+
+        hero_row2 = QHBoxLayout()
+        hero_row2.setSpacing(6)
+        self.regime_badge = QLabel("")
+        self.regime_badge.hide()
+        hero_row2.addWidget(self.regime_badge)
+        self.session_badge = QLabel("")
+        self.session_badge.hide()
+        hero_row2.addWidget(self.session_badge)
+        self.sync_badge = QLabel("")
+        self.sync_badge.hide()
+        hero_row2.addWidget(self.sync_badge)
+        self.detail_meta = _make_wrap_label("", "font-size: 11.5px; color: #64748B;")
+        hero_row2.addWidget(self.detail_meta, 1)
+        hero_hdr.addLayout(hero_row2)
+
+        hero_l.addLayout(hero_hdr)
 
         # TL;DR 横幅
         self.tldr_frame = QFrame()
@@ -411,7 +485,11 @@ class AfterHoursReportPage(QWidget):
         self.kpi_cash_sub = _make_wrap_label("", "font-size: 11px; color: #64748B; border: none;")
         self.kpi_card_2.layout().addWidget(self.kpi_cash_sub)
         self.kpi_bench_val, self.kpi_bench_sub, _, self.kpi_card_3 = self._make_kpi_card("大盘基准")
-        self.kpi_lev_val, self.kpi_lev_sub, self.kpi_trades_lbl, self.kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
+        self.kpi_bench_val.hide()
+        self.kpi_bench_sub.setTextFormat(Qt.TextFormat.RichText)
+        self.kpi_lev_val, self.kpi_lev_sub, self.kpi_eff_lev_badge, self.kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
+        self.kpi_trades_lbl = self.kpi_eff_lev_badge
+        self.kpi_eff_lev_badge.hide()
         self.lev_bar = QProgressBar()
         self.lev_bar.setRange(0, 100)
         self.lev_bar.setTextVisible(False)
@@ -430,46 +508,18 @@ class AfterHoursReportPage(QWidget):
         self.tabs.setDocumentMode(True)
         self.tabs.setMinimumWidth(0)
 
-        # Tab 1: 结构化复盘总览
+        # Tab 1: 结构化复盘总览（首屏先展示风控雷达 + 次日清单，下方为重点持仓异动）
         tab_overview = QWidget()
         tab_overview.setMinimumWidth(0)
         ov_l = QVBoxLayout(tab_overview)
         ov_l.setContentsMargins(8, 10, 8, 10)
         ov_l.setSpacing(12)
 
-        mf_row = QHBoxLayout()
-        mf_row.setSpacing(6)
-        mf_title = QLabel("重点持仓异动与归因")
-        mf_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
-        mf_row.addWidget(mf_title)
-        mf_row.addStretch()
-        self._mf_group = QButtonGroup(self)
-        for idx, (lbl, mkey) in enumerate((
-            ("全部", "all"),
-            ("领涨", "up"),
-            ("领跌", "down"),
-            ("盘后波动", "after"),
-            ("有突发新闻", "news"),
-        )):
-            b = QPushButton(lbl)
-            b.setCheckable(True)
-            b.setChecked(idx == 0)
-            b.setMinimumWidth(0)
-            b.setStyleSheet(
-                "QPushButton { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
-                "QPushButton:checked { border-color: #2563EB; background: #EFF6FF; color: #2563EB; font-weight: 600; }"
-            )
-            b.clicked.connect(lambda _=False, k=mkey: self._set_mover_filter(k))
-            self._mf_group.addButton(b)
-            mf_row.addWidget(b)
-        ov_l.addLayout(mf_row)
-
-        self.movers_box = QVBoxLayout()
-        self.movers_box.setSpacing(8)
-        ov_l.addLayout(self.movers_box)
-
-        # 风险雷达 & 可勾选清单双栏
-        rc_row = QHBoxLayout()
+        # 1) 风险雷达 & 可勾选清单双栏（首屏置顶）
+        self.rc_container = QWidget()
+        self.rc_container.setMinimumWidth(0)
+        rc_row = QHBoxLayout(self.rc_container)
+        rc_row.setContentsMargins(0, 0, 0, 0)
         rc_row.setSpacing(10)
 
         risk_card = QFrame()
@@ -513,7 +563,69 @@ class AfterHoursReportPage(QWidget):
 
         rc_row.addWidget(risk_card, 1)
         rc_row.addWidget(cl_card, 1)
-        ov_l.addLayout(rc_row)
+        ov_l.addWidget(self.rc_container)
+
+        # 2) 重点持仓异动与归因（支持排序、筛选、分级默认折叠）
+        self.movers_section = QWidget()
+        self.movers_section.setMinimumWidth(0)
+        mv_outer = QVBoxLayout(self.movers_section)
+        mv_outer.setContentsMargins(0, 0, 0, 0)
+        mv_outer.setSpacing(8)
+
+        mf_hdr = QHBoxLayout()
+        mf_hdr.setSpacing(6)
+        mf_title = QLabel("重点持仓异动与归因")
+        mf_title.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A;")
+        mf_hdr.addWidget(mf_title)
+        mf_hdr.addStretch()
+
+        sort_lbl = QLabel("排序：")
+        sort_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        mf_hdr.addWidget(sort_lbl)
+        self.mover_sort_combo = QComboBox()
+        self.mover_sort_combo.setMinimumWidth(132)
+        self.mover_sort_combo.addItem("按当日盈亏贡献", "day_pnl")
+        self.mover_sort_combo.addItem("按仓位权重", "weight")
+        self.mover_sort_combo.addItem("按涨跌幅", "change")
+        self.mover_sort_combo.currentIndexChanged.connect(self._on_mover_sort_changed)
+        mf_hdr.addWidget(self.mover_sort_combo)
+
+        self.toggle_expand_all_btn = QPushButton("全部展开")
+        self.toggle_expand_all_btn.setStyleSheet(
+            "font-size: 11.5px; padding: 4px 9px; border-radius: 6px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #334155;"
+        )
+        self.toggle_expand_all_btn.clicked.connect(self._toggle_expand_all_movers)
+        mf_hdr.addWidget(self.toggle_expand_all_btn)
+        mv_outer.addLayout(mf_hdr)
+
+        mf_row = QHBoxLayout()
+        mf_row.setSpacing(6)
+        self._mf_group = QButtonGroup(self)
+        for idx, (lbl, mkey) in enumerate((
+            ("全部", "all"),
+            ("领涨", "up"),
+            ("领跌", "down"),
+            ("盘后波动", "after"),
+            ("有突发新闻", "news"),
+        )):
+            b = QPushButton(lbl)
+            b.setCheckable(True)
+            b.setChecked(idx == 0)
+            b.setMinimumWidth(0)
+            b.setStyleSheet(
+                "QPushButton { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid #CBD5E1; background: #F8FAFC; color: #475569; }"
+                "QPushButton:checked { border-color: #2563EB; background: #EFF6FF; color: #2563EB; font-weight: 600; }"
+            )
+            b.clicked.connect(lambda _=False, k=mkey: self._set_mover_filter(k))
+            self._mf_group.addButton(b)
+            mf_row.addWidget(b)
+        mf_row.addStretch()
+        mv_outer.addLayout(mf_row)
+
+        self.movers_box = QVBoxLayout()
+        self.movers_box.setSpacing(8)
+        mv_outer.addLayout(self.movers_box)
+        ov_l.addWidget(self.movers_section)
 
         # Tab 2: 今日操作复盘
         tab_trades = QWidget()
@@ -598,11 +710,11 @@ class AfterHoursReportPage(QWidget):
 
         self.right_scroll.setWidget(self.right_container)
 
-        splitter.addWidget(left_card)
-        splitter.addWidget(self.right_scroll)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        root.addWidget(splitter, 1)
+        self.splitter.addWidget(self.left_card)
+        self.splitter.addWidget(self.right_scroll)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        root.addWidget(self.splitter, 1)
 
     @staticmethod
     def _make_kpi_card(title: str):
@@ -719,6 +831,7 @@ class AfterHoursReportPage(QWidget):
             self.report_list.setCurrentRow(select_row)
         else:
             self._current_report = None
+            self.jump_followup_btn.setEnabled(False)
             self.copy_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
             self.session_badge.hide()
@@ -728,6 +841,59 @@ class AfterHoursReportPage(QWidget):
             self.detail_meta.setText("点击右上角「生成 / 重算日报」可立即生成")
             self.tldr_frame.hide()
             self.viewer.setHtml("<p style='color:#64748B;'>暂无历史盘后复盘日报。</p>")
+
+    def _default_expanded_symbols(self, holdings: list[dict]) -> set[str]:
+        """默认仅展开仓位权重 >= 5% 的前 3~5 只核心仓位，其余尾部小仓位折叠为摘要条。"""
+        ranked = sorted(
+            [h for h in holdings if h.get("symbol")],
+            key=lambda x: float(x.get("weight_pct") or 0.0),
+            reverse=True,
+        )
+        if not ranked:
+            return set()
+        core = [h for h in ranked if float(h.get("weight_pct") or 0.0) >= 0.05]
+        if len(core) < 3:
+            core = ranked[:3]
+        elif len(core) > 5:
+            core = core[:5]
+        return {str(h.get("symbol")) for h in core if h.get("symbol")}
+
+    def _set_sidebar_collapsed(self, collapsed: bool):
+        self._sidebar_collapsed = bool(collapsed)
+        self.left_card.setVisible(not self._sidebar_collapsed)
+        self.expand_sidebar_btn.setVisible(self._sidebar_collapsed)
+        self.right_scroll._sync_widget_width()
+        QTimer.singleShot(0, self.right_scroll._sync_widget_width)
+
+    def _scroll_to_followup(self):
+        sb = self.right_scroll.verticalScrollBar()
+        if sb is not None:
+            anim = QPropertyAnimation(sb, b"value", self)
+            anim.setDuration(180)
+            anim.setStartValue(sb.value())
+            anim.setEndValue(sb.maximum())
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._scroll_anim = anim
+            anim.start()
+        self.followup_input.setFocus()
+
+    def _on_mover_sort_changed(self):
+        self._mover_sort = str(self.mover_sort_combo.currentData() or "day_pnl")
+        if self._current_report:
+            self._render_movers(self._current_report)
+
+    def _toggle_expand_all_movers(self):
+        if not self._current_report:
+            return
+        holdings = (self._current_report.get("snapshot") or {}).get("holdings") or []
+        all_syms = {str(h.get("symbol")) for h in holdings if h.get("symbol")}
+        if self._expand_all_movers or (all_syms and all_syms.issubset(self._expanded_syms)):
+            self._expand_all_movers = False
+            self._expanded_syms = self._default_expanded_symbols(holdings)
+        else:
+            self._expand_all_movers = True
+            self._expanded_syms = all_syms
+        self._render_movers(self._current_report)
 
     def _on_report_selected(self, row: int):
         if row < 0 or row >= len(self._reports):
@@ -739,10 +905,12 @@ class AfterHoursReportPage(QWidget):
         full = ensure_structured(full)
         self._current_report = full
         holdings = (full.get("snapshot") or {}).get("holdings") or []
-        self._expanded_syms = {h.get("symbol") for h in holdings[:2] if h.get("symbol")}
+        self._expand_all_movers = False
+        self._expanded_syms = self._default_expanded_symbols(holdings)
         self._render_report(full)
 
     def _render_report(self, rep: dict):
+        self.jump_followup_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
         self.delete_btn.setEnabled(True)
         snap = rep.get("snapshot") or {}
@@ -838,43 +1006,61 @@ class AfterHoursReportPage(QWidget):
             self.kpi_cash_sub.setText("可用现金 —（无独立现金账本）")
 
         anom_syms = summary.get("cost_anomaly_symbols") or []
-        un_txt = f"浮盈 {_fmt_money(summary.get('total_unrealized_pnl'), signed=True)} ({_fmt_pct(summary.get('unrealized_pct'))})"
+        un_val = summary.get("total_unrealized_pnl")
+        un_txt = f"{_pnl_prefix(un_val)} {_fmt_money(un_val, signed=True)} ({_fmt_pct(summary.get('unrealized_pct'))})"
         if anom_syms:
             un_txt += f" ⚠异常({','.join(anom_syms)})"
             if summary.get("unrealized_pnl_ex_anomaly") is not None:
                 self.kpi_un_sub.setToolTip(
-                    f"含成本异常标的 ({', '.join(anom_syms)})；剔除异常标的后参考累计浮盈：{_fmt_money(summary.get('unrealized_pnl_ex_anomaly'), signed=True)}"
+                    f"含成本异常标的 ({', '.join(anom_syms)})；剔除异常标的后参考累计盈亏：{_fmt_money(summary.get('unrealized_pnl_ex_anomaly'), signed=True)}"
                 )
         else:
             self.kpi_un_sub.setToolTip("")
         self.kpi_un_sub.setText(un_txt)
-        self.kpi_un_sub.setStyleSheet(f"font-size: 11px; border: none; color: {_tone_color(summary.get('total_unrealized_pnl'))};")
+        self.kpi_un_sub.setStyleSheet(f"font-size: 11px; border: none; color: {_tone_color(un_val)};")
 
-        b_lines = []
+        b_rows = []
         for k in ("SPY", "QQQ"):
             b = benchmarks.get(k)
             if b:
-                b_lines.append(f"{k}: 收 {_fmt_pct(b.get('regular_change_pct'))} | 盘后 {_fmt_pct(b.get('after_hours_change_pct'))}")
-        self.kpi_bench_val.setText(" / ".join(k for k in ("SPY", "QQQ") if k in benchmarks) or "—")
-        self.kpi_bench_val.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A; border: none;")
-        self.kpi_bench_sub.setText("\n".join(b_lines) if b_lines else "暂无大盘基准行情")
+                reg_v = b.get("regular_change_pct")
+                ah_v = b.get("after_hours_change_pct")
+                b_rows.append(
+                    f"<tr>"
+                    f"<td style='padding:1px 6px 1px 0; font-weight:700; color:#0F172A;'>{k}</td>"
+                    f"<td style='padding:1px 6px 1px 0; color:#64748B;'>收 <span style='color:{_tone_color(reg_v)}; font-weight:600;'>{_fmt_pct(reg_v)}</span></td>"
+                    f"<td style='padding:1px 0; color:#64748B;'>盘后 <span style='color:{_tone_color(ah_v)}; font-weight:600;'>{_fmt_pct(ah_v)}</span></td>"
+                    f"</tr>"
+                )
+        if b_rows:
+            self.kpi_bench_sub.setText(f"<table cellspacing='0' cellpadding='0' style='font-size:11.5px;'>{''.join(b_rows)}</table>")
+        else:
+            self.kpi_bench_sub.setText("<span style='color:#64748B;'>暂无大盘基准行情</span>")
 
         lev_pct = float(summary.get("leverage_pct") or 0) * 100.0
         eff_lev = summary.get("effective_leverage")
         self.kpi_lev_val.setText(f"{lev_pct:.1f}%")
         lev_hint = "高杠杆警戒" if lev_pct >= 50 else ("中高暴露" if lev_pct >= 35 else "稳健可控")
-        if eff_lev is not None:
-            lev_hint += f" · 等效 {float(eff_lev):.2f}x"
         self.kpi_lev_sub.setText(lev_hint)
-        if summary.get("effective_leverage_total_assets") is not None and eff_lev is not None:
-            self.kpi_lev_sub.setToolTip(
-                f"持仓净名义敞口 {float(eff_lev):.2f}x | 含现金总资产净敞口 {float(summary['effective_leverage_total_assets']):.2f}x"
+        if eff_lev is not None:
+            self.kpi_eff_lev_badge.setText(f"等效 {float(eff_lev):.2f}x")
+            self.kpi_eff_lev_badge.setStyleSheet(
+                "font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 9px; "
+                "background: #F1F5F9; color: #334155; border: 1px solid #CBD5E1;"
             )
+            self.kpi_eff_lev_badge.show()
+        else:
+            self.kpi_eff_lev_badge.setText("")
+            self.kpi_eff_lev_badge.hide()
+        if summary.get("effective_leverage_total_assets") is not None and eff_lev is not None:
+            eff_tip = f"持仓净名义敞口 {float(eff_lev):.2f}x | 含现金总资产净敞口 {float(summary['effective_leverage_total_assets']):.2f}x"
+            self.kpi_lev_sub.setToolTip(eff_tip)
+            self.kpi_eff_lev_badge.setToolTip(eff_tip)
         else:
             self.kpi_lev_sub.setToolTip("")
+            self.kpi_eff_lev_badge.setToolTip("")
         bar_col = "#DC2626" if lev_pct >= 50 else ("#D97706" if lev_pct >= 35 else "#16A34A")
         self.kpi_lev_sub.setStyleSheet(f"font-size: 11px; font-weight: 600; border: none; color: {bar_col};")
-        self.kpi_trades_lbl.setText(f"{summary.get('trade_count', 0)} 笔")
         self.lev_bar.setValue(min(100, int(round(lev_pct))))
         self.lev_bar.setStyleSheet(f"QProgressBar {{ background: #E2E8F0; border-radius: 3px; }} QProgressBar::chunk {{ background: {bar_col}; border-radius: 3px; }}")
 
@@ -959,9 +1145,22 @@ class AfterHoursReportPage(QWidget):
             self.movers_box.addWidget(empty)
             return
 
+        if self._mover_sort == "weight":
+            filtered.sort(key=lambda x: float(x.get("weight_pct") or 0.0), reverse=True)
+        elif self._mover_sort == "change":
+            filtered.sort(key=lambda x: abs(float(x.get("regular_change_pct") or 0.0)), reverse=True)
+        else:
+            filtered.sort(key=lambda x: abs(float(x.get("day_pnl") or 0.0)), reverse=True)
+
+        filtered_syms = {str(h.get("symbol") or "") for h in filtered if h.get("symbol")}
+        all_expanded = bool(filtered_syms) and filtered_syms.issubset(self._expanded_syms)
+        self.toggle_expand_all_btn.setText("收起小仓位" if all_expanded else "全部展开")
+
         for h in filtered:
             sym = str(h.get("symbol") or "")
             h_news = self._get_holding_news(snap, h, structured)
+            is_expanded = sym in self._expanded_syms
+            w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
 
             card = QFrame()
             card.setMinimumWidth(0)
@@ -970,28 +1169,82 @@ class AfterHoursReportPage(QWidget):
             else:
                 card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; }")
             cl = QVBoxLayout(card)
-            cl.setContentsMargins(10, 8, 10, 8)
-            cl.setSpacing(5)
+            cl.setContentsMargins(10, 7 if not is_expanded else 9, 10, 7 if not is_expanded else 9)
+            cl.setSpacing(6)
 
-            # 第一行：标题与标签（默认全部展开，不再折叠收起）
-            tags = f"  [→ {h['underlying']}]" if h.get("underlying") else ""
-            if h.get("is_leveraged"):
-                lf = h.get("leverage_factor")
-                lev_tag = f"  [{lf:g}x 杠杆]" if lf is not None else "  [杠杆]"
-            else:
-                lev_tag = ""
-            anom_tag = "  [⚠ 成本偏离核对]" if h.get("cost_anomaly") else ""
-            news_tag = f"  [新闻 {len(h_news)}]" if h_news else ""
-            top_lbl = _make_wrap_label(
-                f"{sym}{tags}{lev_tag}{anom_tag}{news_tag}",
-                "font-size: 13px; font-weight: 700; color: #0F172A; border: none;",
-            )
-            if h.get("cost_anomaly_reason"):
-                top_lbl.setToolTip(str(h["cost_anomaly_reason"]))
-            cl.addWidget(top_lbl)
+            def _add_holding_pills(row_layout):
+                if h.get("underlying"):
+                    row_layout.addWidget(_make_pill_label(f"→ {h['underlying']}", "#EFF6FF", "#2563EB", "#BFDBFE"))
+                if h.get("is_leveraged"):
+                    lf = h.get("leverage_factor")
+                    lev_txt = f"{lf:g}x 杠杆" if lf is not None else "杠杆"
+                    row_layout.addWidget(_make_pill_label(lev_txt, "#FEF3C7", "#B45309", "#FDE68A"))
+                if h.get("cost_anomaly"):
+                    anom_pill = _make_pill_label("⚠ 成本偏离核对", "#FEF3C7", "#B45309", "#F59E0B")
+                    if h.get("cost_anomaly_reason"):
+                        anom_pill.setToolTip(str(h["cost_anomaly_reason"]))
+                    row_layout.addWidget(anom_pill)
+                if h_news:
+                    row_layout.addWidget(_make_pill_label(f"新闻 {len(h_news)}", "#FFFFFF", "#475569", "#CBD5E1"))
 
-            # 第二行：基础仓位数据 + 盘后价与当日盈亏（自动折行绝不截断）
-            w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
+            reg_chg = h.get("regular_change_pct")
+            ah_chg = h.get("after_hours_change_pct")
+            reg_bg, reg_fg = _tone_pill_colors(reg_chg)
+            ah_bg, ah_fg = _tone_pill_colors(ah_chg)
+
+            if not is_expanded:
+                # 折叠态：紧凑单行摘要条，点击整行可展开
+                card.setCursor(Qt.CursorShape.PointingHandCursor)
+                card.mousePressEvent = lambda _e, s=sym: self._toggle_symbol_expand(s)
+                compact = QHBoxLayout()
+                compact.setSpacing(6)
+                arrow = QLabel("▸")
+                arrow.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
+                compact.addWidget(arrow)
+                sym_lbl = QLabel(sym)
+                sym_lbl.setStyleSheet("font-size: 13px; font-weight: 700; color: #0F172A; border: none;")
+                compact.addWidget(sym_lbl)
+                _add_holding_pills(compact)
+                wt_lbl = QLabel(f"仓位 {w_pct}")
+                wt_lbl.setStyleSheet("font-size: 11.5px; color: #64748B; border: none;")
+                compact.addWidget(wt_lbl)
+                compact.addStretch()
+                compact.addWidget(_make_pill_label(f"收 {_fmt_pct(reg_chg)}", reg_bg, reg_fg))
+                if ah_chg is not None:
+                    compact.addWidget(_make_pill_label(f"后 {_fmt_pct(ah_chg)}", ah_bg, ah_fg))
+                pnl_lbl = QLabel(_fmt_money(h.get("day_pnl"), signed=True))
+                pnl_lbl.setMinimumWidth(78)
+                pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                pnl_lbl.setStyleSheet(f"font-size: 13px; font-weight: 700; color: {_tone_color(h.get('day_pnl'))}; border: none;")
+                compact.addWidget(pnl_lbl)
+                cl.addLayout(compact)
+                self.movers_box.addWidget(card)
+                continue
+
+            # 展开态：左右分层头部（点击头部可折叠）+ 中性灰元数据 + 右侧放大盈亏与独立涨跌胶囊
+            hdr_widget = QWidget()
+            hdr_widget.setMinimumWidth(0)
+            hdr_widget.setStyleSheet("background: transparent; border: none;")
+            hdr_widget.setCursor(Qt.CursorShape.PointingHandCursor)
+            hdr_widget.mousePressEvent = lambda _e, s=sym: self._toggle_symbol_expand(s)
+            hdr_row = QHBoxLayout(hdr_widget)
+            hdr_row.setContentsMargins(0, 0, 0, 0)
+            hdr_row.setSpacing(10)
+
+            left_col = QVBoxLayout()
+            left_col.setSpacing(3)
+            title_row = QHBoxLayout()
+            title_row.setSpacing(6)
+            arrow_lbl = QLabel("▾")
+            arrow_lbl.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
+            title_row.addWidget(arrow_lbl)
+            sym_lbl = QLabel(sym)
+            sym_lbl.setStyleSheet("font-size: 13.5px; font-weight: 700; color: #0F172A; border: none;")
+            title_row.addWidget(sym_lbl)
+            _add_holding_pills(title_row)
+            title_row.addStretch()
+            left_col.addLayout(title_row)
+
             avg_val = h.get("avg_cost")
             is_zero = bool(h.get("is_zero_cost")) or (avg_val is not None and float(avg_val) <= 0)
             avg_txt = f"{_fmt_money(avg_val)}（已零成本/利润仓）" if is_zero else _fmt_money(avg_val)
@@ -1000,37 +1253,57 @@ class AfterHoursReportPage(QWidget):
                 if (h.get("need_breakeven_pct") is not None and not is_zero)
                 else ""
             )
-            row2 = _make_wrap_label(
-                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 摊薄均价 {avg_txt}{be_txt}   |   "
-                f"常规收 {_fmt_money(h.get('regular_close'))} ({_fmt_pct(h.get('regular_change_pct'))}) · "
-                f"盘后 {_fmt_money(h.get('after_hours_price'))} ({_fmt_pct(h.get('after_hours_change_pct'))}) · "
-                f"当日盈亏 {_fmt_money(h.get('day_pnl'), signed=True)}",
-                f"font-size: 11.5px; color: {_tone_color(h.get('day_pnl'))}; border: none;",
+            meta_lbl = _make_wrap_label(
+                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 摊薄均价 {avg_txt}{be_txt} · 常规收 {_fmt_money(h.get('regular_close'))}",
+                "font-size: 11.5px; color: #64748B; border: none;",
             )
-            cl.addWidget(row2)
+            left_col.addWidget(meta_lbl)
+            hdr_row.addLayout(left_col, 1)
 
-            reason = reasons.get(sym) or f"当前持仓 {h.get('quantity')} 股，浮盈 {_fmt_money(h.get('unrealized_pnl'), signed=True)}。"
+            right_col = QVBoxLayout()
+            right_col.setSpacing(4)
+            right_col.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            day_pnl_lbl = QLabel(_fmt_money(h.get("day_pnl"), signed=True))
+            day_pnl_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+            day_pnl_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {_tone_color(h.get('day_pnl'))}; border: none;")
+            right_col.addWidget(day_pnl_lbl)
+
+            pills_r = QHBoxLayout()
+            pills_r.setSpacing(4)
+            pills_r.addStretch()
+            pills_r.addWidget(_make_pill_label(f"常规 {_fmt_pct(reg_chg)}", reg_bg, reg_fg))
+            if ah_chg is not None:
+                pills_r.addWidget(_make_pill_label(f"盘后 {_fmt_pct(ah_chg)}", ah_bg, ah_fg))
+            right_col.addLayout(pills_r)
+            hdr_row.addLayout(right_col)
+
+            cl.addWidget(hdr_widget)
+
+            sep = QFrame()
+            sep.setFixedHeight(1)
+            sep.setStyleSheet("background: #E2E8F0; border: none;")
+            cl.addWidget(sep)
+
+            un_h = h.get("unrealized_pnl")
+            reason = reasons.get(sym) or f"当前持仓 {h.get('quantity')} 股，{_pnl_prefix(un_h)} {_fmt_money(un_h, signed=True)}。"
             r_lbl = _make_wrap_label(
-                f"AI 异动归因：{reason}",
-                "font-size: 12px; color: #1E293B; border: none; padding-top: 4px;",
+                f"<b>AI 异动归因：</b>{html.escape(str(reason))}",
+                "font-size: 12px; color: #1E293B; border: none;",
             )
             cl.addWidget(r_lbl)
             for n in h_news:
                 sent = n.get("sentiment") or sentiments.get(n.get("title"), "中性")
+                s_col = "#15803D" if sent == "利好" else ("#B91C1C" if sent == "利空" else "#64748B")
                 disp_title = str(n.get("zh_title") or n.get("title") or "")
                 news_url = str(n.get("url") or n.get("link") or "")
-                summary_txt = n.get("summary") or ""
-                sum_html = (
-                    f"<br><span style='color:#64748B; font-size:11px;'>摘要：{html.escape(str(summary_txt))}</span>"
-                    if summary_txt
-                    else ""
-                )
+                summary_txt = str(n.get("summary") or "").strip()
                 n_lbl = _make_wrap_label(
-                    f"• <b>[{html.escape(str(sent))}]</b> {_format_news_title_html(disp_title, news_url)} "
-                    f"<span style='color:#64748B;'>({html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))})</span>"
-                    f"{sum_html}",
-                    "font-size: 11.5px; color: #334155; border: none; padding-left: 6px;",
+                    f"• <b style='color:{s_col};'>[{html.escape(str(sent))}]</b> {_format_news_title_html(disp_title, news_url)} "
+                    f"<span style='color:#64748B; font-size:11px;'>({html.escape(str(n.get('publisher') or ''))} · {html.escape(str(n.get('published_bj') or ''))})</span>",
+                    "font-size: 11.5px; color: #334155; border: none; padding-left: 4px;",
                 )
+                if summary_txt:
+                    n_lbl.setToolTip(f"摘要：{summary_txt}")
                 n_lbl.setOpenExternalLinks(True)
                 n_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
                 cl.addWidget(n_lbl)
