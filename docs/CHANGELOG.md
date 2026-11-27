@@ -1,3 +1,10 @@
+## 2026-11-27 23:39 盘后复盘日报细节打磨：统一筛选折叠口径、补回盘后具体价、平滑滚动聚焦与重算重置
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/ui/after_hours_report_page.py` 与 `frontend/src/views/AfterHoursReportView.tsx` 统一「全部展开 / 收起小仓位」基于当前筛选集合的判断口径，并在 Web 端 `applyGeneratedReport` 重算同日日报时重置折叠状态。
+- 桌面端展开态持仓卡片补回 `· 盘后 $xxx` 具体价格，并将「追问 Gemini」输入框聚焦延后至平滑滚动 `anim.finished` 后执行。
+- `tests/test_after_hours_report.py` 15 项测试、`ruff check` 与 `frontend npm run build` 全部通过。
+
 ## 2026-11-27 23:19 盘后复盘日报 UI 布局与交互体验全面优化
 
 - 修改者：Antigravity（代码修改）

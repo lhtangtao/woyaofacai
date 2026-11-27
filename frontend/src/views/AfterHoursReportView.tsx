@@ -266,6 +266,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   const applyGeneratedReport = (report: any) => {
     setDetail(report);
     setCheckedIds(Array.isArray(report.checked_ids) ? report.checked_ids : []);
+    setExpandedSyms(defaultExpandedForHoldings(report?.snapshot?.holdings || []));
     setSelectedId(report.id);
     loadList(filterPerson, report.id);
   };
@@ -1274,9 +1275,25 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                               type="button"
                               className="btn"
                               onClick={() => {
-                                const allSyms = holdings.map((x) => String(x.symbol || "")).filter(Boolean);
-                                const isAll = allSyms.length > 0 && allSyms.every((s) => expandedSyms.includes(s));
-                                setExpandedSyms(isAll ? defaultExpandedForHoldings(holdings) : allSyms);
+                                const filteredSyms = filteredHoldings
+                                  .map((x) => String(x.symbol || ""))
+                                  .filter(Boolean);
+                                if (filteredSyms.length === 0) return;
+                                const allFilteredExpanded = filteredSyms.every((s) =>
+                                  expandedSyms.includes(s)
+                                );
+                                if (allFilteredExpanded) {
+                                  const defaultCore = new Set(defaultExpandedForHoldings(holdings));
+                                  const smallInFiltered = filteredSyms.filter((s) => !defaultCore.has(s));
+                                  const toCollapse = new Set(
+                                    smallInFiltered.length > 0 ? smallInFiltered : filteredSyms
+                                  );
+                                  setExpandedSyms((prev) => prev.filter((s) => !toCollapse.has(s)));
+                                } else {
+                                  setExpandedSyms((prev) =>
+                                    Array.from(new Set([...prev, ...filteredSyms]))
+                                  );
+                                }
                               }}
                               style={{ fontSize: "12px", padding: "4px 10px" }}
                             >

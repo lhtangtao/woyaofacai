@@ -963,8 +963,26 @@ def test_desktop_after_hours_ui_layout_sorting_folding_kpis_and_sidebar(demo_pat
     assert page.kpi_eff_lev_badge.text() == "等效 1.50x"
     assert "笔" not in page.kpi_eff_lev_badge.text()
 
-    # 5. Hero 「追问 Gemini」直达聚焦 & 左侧存档栏折叠/展开 & 零横向溢出
+    # 5. 展开态显示盘后具体价格 & 筛选状态下「全部展开 / 收起小仓位」口径一致
+    all_movers_text = " ".join(lbl.text() for lbl in page.movers_section.findChildren(type(page.count_lbl)))
+    assert "盘后 $141.00" in all_movers_text
+    assert "盘后 $69.00" in all_movers_text
+
+    page._set_mover_filter("down")
+    assert page.toggle_expand_all_btn.text() == "全部展开"
+    page._toggle_expand_all_movers()
+    assert "AMD" in page._expanded_syms
+    assert page.toggle_expand_all_btn.text() == "收起小仓位"
+    page._toggle_expand_all_movers()
+    assert "AMD" not in page._expanded_syms
+    assert "TQQQ" in page._expanded_syms
+    assert page.toggle_expand_all_btn.text() == "全部展开"
+    page._set_mover_filter("all")
+
+    # 6. Hero 「追问 Gemini」直达聚焦（含重复点击不报错） & 左侧存档栏折叠/展开 & 零横向溢出
     page.jump_followup_btn.click()
+    page.jump_followup_btn.click()
+    qtbot.wait(240)
     assert page.followup_input.hasFocus() or page.isVisible()
     assert not page.left_card.isHidden()
     assert page.expand_sidebar_btn.isHidden()

@@ -1,5 +1,19 @@
 [
   {
+    "title": "盘后复盘日报细节打磨：统一筛选折叠口径、补回盘后具体价、平滑滚动聚焦与重算重置",
+    "time": "2026-11-27 23:40",
+    "author": "Antigravity",
+    "tag": "UI 细节打磨",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "统一「全部展开 / 收起小仓位」口径（`src/portfolio/ui/after_hours_report_page.py`、`frontend/src/views/AfterHoursReportView.tsx`）：桌面端抽离 `_get_filtered_holdings()`，Web 端同步基于 `filteredHoldings` 计算按钮文案与点击展开/收起范围，消除开启领涨/领跌筛选时按钮状态与点击行为不一致的问题。",
+      "桌面端展开态补回盘后具体价：当 `after_hours_price` 非空时，在元数据行 `常规收 $xxx` 后追加 `· 盘后 $xxx`。",
+      "优化桌面端「追问 Gemini」滚动动画：启动新动画前先停止未结束的旧动画，并将 `followup_input.setFocus` 连接到 `anim.finished`，避免同步聚焦打断平滑滚动。",
+      "Web 端重算同日日报重置折叠态：在 `applyGeneratedReport` 中重置 `expandedSyms` 为默认核心仓位集合。",
+      "验证范围：`frontend npm run build` 0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_after_hours_report.py` 15 项测试全部通过；8888 服务已重启验证。"
+    ]
+  },
+  {
     "title": "盘后复盘日报 UI 布局与交互体验全面优化（首屏层级、分级折叠排序、KPI 细节、追问直达与存档栏折叠）",
     "time": "2026-11-27 23:19",
     "author": "Antigravity",

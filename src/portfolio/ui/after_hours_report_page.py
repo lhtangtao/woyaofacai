@@ -866,33 +866,64 @@ class AfterHoursReportPage(QWidget):
         QTimer.singleShot(0, self.right_scroll._sync_widget_width)
 
     def _scroll_to_followup(self):
+        if self._scroll_anim is not None and self._scroll_anim.state() == QPropertyAnimation.State.Running:
+            self._scroll_anim.stop()
         sb = self.right_scroll.verticalScrollBar()
-        if sb is not None:
-            anim = QPropertyAnimation(sb, b"value", self)
-            anim.setDuration(180)
-            anim.setStartValue(sb.value())
-            anim.setEndValue(sb.maximum())
-            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            self._scroll_anim = anim
-            anim.start()
-        self.followup_input.setFocus()
+        if sb is None or sb.value() == sb.maximum():
+            self.followup_input.setFocus()
+            return
+        anim = QPropertyAnimation(sb, b"value", self)
+        anim.setDuration(180)
+        anim.setStartValue(sb.value())
+        anim.setEndValue(sb.maximum())
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(self.followup_input.setFocus)
+        self._scroll_anim = anim
+        anim.start()
 
     def _on_mover_sort_changed(self):
         self._mover_sort = str(self.mover_sort_combo.currentData() or "day_pnl")
         if self._current_report:
             self._render_movers(self._current_report)
 
+    def _get_filtered_holdings(self, rep: dict) -> list[dict]:
+        snap = rep.get("snapshot") or {}
+        holdings = snap.get("holdings") or []
+        structured = rep.get("structured") or {}
+        filtered = []
+        for h in holdings:
+            if self._mover_filter == "up" and (h.get("regular_change_pct") or 0) <= 0:
+                continue
+            if self._mover_filter == "down" and (h.get("regular_change_pct") or 0) >= 0:
+                continue
+            if self._mover_filter == "after" and (
+                h.get("after_hours_change_pct") is None or abs(float(h.get("after_hours_change_pct"))) < 0.005
+            ):
+                continue
+            if self._mover_filter == "news" and not self._get_holding_news(snap, h, structured):
+                continue
+            filtered.append(h)
+        return filtered
+
     def _toggle_expand_all_movers(self):
         if not self._current_report:
             return
         holdings = (self._current_report.get("snapshot") or {}).get("holdings") or []
-        all_syms = {str(h.get("symbol")) for h in holdings if h.get("symbol")}
-        if self._expand_all_movers or (all_syms and all_syms.issubset(self._expanded_syms)):
+        filtered = self._get_filtered_holdings(self._current_report)
+        filtered_syms = {str(h.get("symbol")) for h in filtered if h.get("symbol")}
+        if not filtered_syms:
+            return
+        if filtered_syms.issubset(self._expanded_syms):
+            default_core = self._default_expanded_symbols(holdings)
+            small_in_filtered = filtered_syms - default_core
+            if small_in_filtered:
+                self._expanded_syms -= small_in_filtered
+            else:
+                self._expanded_syms -= filtered_syms
             self._expand_all_movers = False
-            self._expanded_syms = self._default_expanded_symbols(holdings)
         else:
+            self._expanded_syms |= filtered_syms
             self._expand_all_movers = True
-            self._expanded_syms = all_syms
         self._render_movers(self._current_report)
 
     def _on_report_selected(self, row: int):
@@ -1121,26 +1152,14 @@ class AfterHoursReportPage(QWidget):
     def _render_movers(self, rep: dict):
         _clear_layout(self.movers_box)
         snap = rep.get("snapshot") or {}
-        holdings = snap.get("holdings") or []
         structured = rep.get("structured") or {}
         reasons = structured.get("mover_reasons") or {}
         sentiments = structured.get("news_sentiments") or {}
 
-        filtered = []
-        for h in holdings:
-            if self._mover_filter == "up" and (h.get("regular_change_pct") or 0) <= 0:
-                continue
-            if self._mover_filter == "down" and (h.get("regular_change_pct") or 0) >= 0:
-                continue
-            if self._mover_filter == "after" and (
-                h.get("after_hours_change_pct") is None or abs(float(h.get("after_hours_change_pct"))) < 0.005
-            ):
-                continue
-            if self._mover_filter == "news" and not self._get_holding_news(snap, h, structured):
-                continue
-            filtered.append(h)
+        filtered = self._get_filtered_holdings(rep)
 
         if not filtered:
+            self.toggle_expand_all_btn.setText("全部展开")
             empty = _make_wrap_label("当前筛选条件下无匹配持仓标的", "padding: 14px; color: #64748B; font-size: 12px;")
             self.movers_box.addWidget(empty)
             return
@@ -1253,8 +1272,13 @@ class AfterHoursReportPage(QWidget):
                 if (h.get("need_breakeven_pct") is not None and not is_zero)
                 else ""
             )
+            ah_price_txt = (
+                f" · 盘后 {_fmt_money(h.get('after_hours_price'))}"
+                if h.get("after_hours_price") is not None
+                else ""
+            )
             meta_lbl = _make_wrap_label(
-                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 摊薄均价 {avg_txt}{be_txt} · 常规收 {_fmt_money(h.get('regular_close'))}",
+                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 摊薄均价 {avg_txt}{be_txt} · 常规收 {_fmt_money(h.get('regular_close'))}{ah_price_txt}",
                 "font-size: 11.5px; color: #64748B; border: none;",
             )
             left_col.addWidget(meta_lbl)
