@@ -1,3 +1,10 @@
+## 2026-11-27 21:55 接入美股官方交易日历与半日市规则，升级总资产净值、组合等效敞口与异常成本熔断校验
+
+- 修改者：Antigravity（代码修改与收尾验算）
+- 新增 `src/portfolio/domain/us_market_calendar.py`，内置 NYSE/Nasdaq 法定休市日、补休规则与半日市（黑五、平安夜、独立日前一日 13:00 ET 收盘 / 17:10 ET 触发），并接入 `after_hours_report.py`、`api_v1.py`（含 `MARKET_CLOSED` 拦截与 `DELETE /api/v1/ai/after-hours/report/<id>`）、桌面端 `after_hours_report_page.py` 及 Web 端 `AfterHoursReportView.tsx`。
+- 在 `src/portfolio/services/after_hours_report.py` 新增 `resolve_leverage_profile`（1x 现货白名单与杠杆/反向 ETF 精确倍数）、`total_assets`（总资产净值）、`day_pnl_pct_total_assets`、组合等效敞口 `effective_leverage` 及疑似未复权 `cost_anomaly` 熔断告警；在 `scripts/sync_data.py` 接入 `sync_missing_corporate_actions`。
+- 补充 `tests/test_us_market_calendar.py` 与 `tests/test_after_hours_report.py` 单测，16 项测试、`ruff check` 与 `frontend npm run build` 全部通过，本地真实库 `2026-11-25`（个人）快照及黑五半日市状态验算通过。
+
 ## 2026-11-26 22:34 盘后复盘日报：新闻标题支持点击跳转原文外链，重点持仓默认全部展开
 
 - 修改者：Antigravity（代码修改）

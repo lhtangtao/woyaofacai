@@ -439,6 +439,10 @@ export const api = {
     ),
   aiAfterHoursDetail: (reportId: string) =>
     requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}`),
+  aiAfterHoursDelete: (reportId: string) =>
+    requestApi(`/api/v1/ai/after-hours/report/${encodeURIComponent(reportId)}`, {
+      method: "DELETE",
+    }),
   aiAfterHoursGenerate: (payload: {
     trade_date?: string;
     person?: string;

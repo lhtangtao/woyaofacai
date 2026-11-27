@@ -21,18 +21,24 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
+from datetime import time as dt_time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from portfolio.domain.models import QueryScope
+from portfolio.domain.us_market_calendar import (
+    get_us_market_session,
+    previous_us_trading_day,
+)
 from portfolio.paths import DATABASE_PATH, PROJECT_DIR
 from portfolio.services.ai_service import CodexAIService, normalize_ai_provider
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.channel_cash import resolve_channel_cash_details
 from portfolio.services.earnings_links import DEFAULT_LINKS
+from portfolio.services.monitor_mapping import resolve as resolve_monitor_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +47,82 @@ BJ_TZ = ZoneInfo("Asia/Shanghai")
 
 AFTER_HOURS_FILENAME = "after_hours_reports.json"
 DEFAULT_AFTER_HOURS_MODEL = "gemini-4-neon-high"
-LEVERAGED_ETF_SYMBOLS = frozenset({
-    "TQQQ", "SQQQ", "SOXL", "SOXS", "KORU", "NVDL", "NVDS",
-    "TSLL", "TSLS", "CONL", "MSTU", "MSTX", "UPRO", "SPXL",
-    "AAOX", "AVGX", "GGLL", "INTW", "LITX", "MUU", "ORCX",
-    "SNXX", "SPAL", "STXL", "WDCX",
+# 明确为 1x 现货指数/商品/债券 ETF 的白名单，避免被 DEFAULT_LINKS 误判为杠杆
+NON_LEVERAGED_ETF_SYMBOLS = frozenset({
+    "QQQ", "QQQM", "SPY", "DIA", "IWM", "VOO", "VTI", "IVV",
+    "SCHD", "SGOV", "TLT", "GLD", "SLV", "EWY", "DXJ",
 })
+# 常见杠杆/反向 ETF 精确倍数表（多头为正，空头/反向为负）
+LEVERAGED_ETF_MULTIPLES: Dict[str, Decimal] = {
+    "TQQQ": Decimal("3"),
+    "SQQQ": Decimal("-3"),
+    "SOXL": Decimal("3"),
+    "SOXS": Decimal("-3"),
+    "KORU": Decimal("3"),
+    "UPRO": Decimal("3"),
+    "SPXL": Decimal("3"),
+    "TNA": Decimal("3"),
+    "LABU": Decimal("3"),
+    "QLD": Decimal("2"),
+    "SSO": Decimal("2"),
+    "NVDL": Decimal("2"),
+    "NVDS": Decimal("-1.5"),
+    "TSLL": Decimal("2"),
+    "TSLS": Decimal("-1"),
+    "CONL": Decimal("2"),
+    "MSTU": Decimal("2"),
+    "MSTX": Decimal("2"),
+    "AAOX": Decimal("2"),
+    "AVGX": Decimal("2"),
+    "GGLL": Decimal("2"),
+    "INTW": Decimal("2"),
+    "LITX": Decimal("2"),
+    "MUU": Decimal("2"),
+    "ORCX": Decimal("2"),
+    "SNXX": Decimal("2"),
+    "SPAL": Decimal("2"),
+    "STXL": Decimal("2"),
+    "WDCX": Decimal("2"),
+}
+LEVERAGED_ETF_SYMBOLS = frozenset(LEVERAGED_ETF_MULTIPLES.keys())
 _STORE_LOCK = threading.RLock()
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
+
+
+def resolve_leverage_profile(symbol: str, category: str = "") -> tuple[bool, Decimal]:
+    """解析标的杠杆属性与精确倍数（如 1x / 2x / 3x / -1x / -3x）。
+
+    优先级：
+    1. 非杠杆现货 ETF 白名单（如 QQQM/QQQ/SPY）强制返回 (False, 1x)；
+    2. `monitor_mapping.resolve()` 中已核验的精确杠杆倍数与方向；
+    3. 内置 `LEVERAGED_ETF_MULTIPLES` 常见杠杆/反向 ETF 倍数表；
+    4. 账本分类显式标注为「杠杆」时默认按 2x 计；
+    5. 其余标的按 1x 普通仓位处理。
+    """
+    clean = str(symbol or "").strip().upper().removesuffix(".US")
+    if not clean or clean in NON_LEVERAGED_ETF_SYMBOLS:
+        return False, Decimal("1")
+
+    try:
+        mapping = resolve_monitor_mapping(f"{clean}.US", category=category or "")
+        if mapping.status == "VERIFIED" and mapping.leverage_multiple:
+            mult = _to_dec(mapping.leverage_multiple)
+            if mult is not None and mult > 0:
+                signed_mult = -mult if mapping.direction == "空" else mult
+                is_lev = (abs(signed_mult) > Decimal("1")) or (signed_mult < Decimal("0"))
+                return is_lev, signed_mult
+    except Exception:
+        pass
+
+    if clean in LEVERAGED_ETF_MULTIPLES:
+        factor = LEVERAGED_ETF_MULTIPLES[clean]
+        return (abs(factor) > Decimal("1") or factor < Decimal("0")), factor
+
+    if str(category or "").strip() == "杠杆":
+        return True, Decimal("2")
+
+    return False, Decimal("1")
 
 
 def default_after_hours_path() -> Path:
@@ -95,39 +168,38 @@ def current_ny_now() -> datetime:
 
 
 def resolve_default_trade_date(now_ny: Optional[datetime] = None) -> date:
-    """返回默认应复盘的美股交易日（盘后 20:00 后为当日，否则回退至上一个工作日）。"""
+    """返回默认应复盘的美股交易日（自动跳过周末与美股法定休市日，兼容半日市 13:00 ET 收盘）。"""
     now = now_ny or current_ny_now()
     d = now.date()
-    if d.weekday() >= 5:
-        while d.weekday() >= 5:
-            d -= timedelta(days=1)
-        return d
-    if now.hour < 16:
-        d -= timedelta(days=1)
-        while d.weekday() >= 5:
-            d -= timedelta(days=1)
+    session = get_us_market_session(d)
+    if not session.is_trading_day:
+        return previous_us_trading_day(d)
+    close_et = session.regular_close_et or dt_time(16, 0)
+    if now.time().replace(tzinfo=None) < close_et:
+        return previous_us_trading_day(d)
     return d
 
 
-def is_after_hours_ready(now_ny: Optional[datetime] = None, trigger_hour: int = 20, trigger_minute: int = 10) -> tuple[bool, date]:
-    """判断当前美东时间是否已到达交易日盘后自动生成窗口（默认美东 20:10 后）。"""
+def is_after_hours_ready(
+    now_ny: Optional[datetime] = None,
+    trigger_hour: Optional[int] = None,
+    trigger_minute: Optional[int] = None,
+) -> tuple[bool, date]:
+    """判断当前美东时间是否已到达交易日盘后自动生成窗口。
+
+    - 周末与美股法定休市日（如感恩节、圣诞节等）直接返回 False；
+    - 常规交易日默认美东 20:10 触发，半日市（如黑五、平安夜）盘后 17:00 结束，默认美东 17:10 触发。
+    """
     now = now_ny or current_ny_now()
     d = now.date()
-    if d.weekday() >= 5:
+    session = get_us_market_session(d)
+    if not session.is_trading_day:
         return False, resolve_default_trade_date(now)
-    # 若本地交易日历明确标记今天休市则跳过
-    try:
-        from portfolio.services.quote_store import QuoteStore
-        store = QuoteStore()
-        cal = store.trading_days(d, d)
-        if cal is not None and len(cal) == 0:
-            # 确认日历已覆盖该日期（避免空白日历误判）
-            covered = store.trading_days(d - timedelta(days=7), d + timedelta(days=7))
-            if covered and d not in covered:
-                return False, resolve_default_trade_date(now)
-    except Exception:
-        pass
-    ready = (now.hour > trigger_hour) or (now.hour == trigger_hour and now.minute >= trigger_minute)
+
+    default_trig = session.recommended_trigger_et or dt_time(20, 10)
+    t_hour = default_trig.hour if trigger_hour is None else trigger_hour
+    t_min = default_trig.minute if trigger_minute is None else trigger_minute
+    ready = (now.hour > t_hour) or (now.hour == t_hour and now.minute >= t_min)
     return ready, d
 
 
@@ -176,6 +248,16 @@ class AfterHoursReportStore:
             data["reports"][rid] = report
             self._save_raw(data)
             return report
+
+    def delete_report(self, report_id: str) -> bool:
+        """删除指定 ID 的历史盘后日报存档（用于清理误生成的休市日日报等）。"""
+        with _STORE_LOCK:
+            data = self._load_raw()
+            if report_id not in data["reports"]:
+                return False
+            del data["reports"][report_id]
+            self._save_raw(data)
+            return True
 
     def update_checklist_state(self, report_id: str, checked_ids: List[str]) -> Optional[Dict[str, Any]]:
         """持久化次日盘前关注清单的勾选状态。"""
@@ -718,7 +800,17 @@ def build_after_hours_snapshot(
             }
             day_pnl_basis = "quote_after_hours" if ah_count > 0 else "quote_regular"
 
+    market_session = get_us_market_session(trade_date)
+    if market_session.is_early_close:
+        warnings.append(
+            f"今日为美股半日市（{market_session.holiday_name}，常规盘 13:00 ET 收盘、盘后 17:00 ET 结束）。"
+        )
+
     leverage_mv = Decimal("0")
+    notional_exposure = Decimal("0")
+    gross_notional_exposure = Decimal("0")
+    cost_anomaly_symbols: List[str] = []
+    anomaly_unrealized_sum = Decimal("0")
     holdings_list: List[Dict[str, Any]] = []
     for sym, item in sorted(holdings_map.items(), key=lambda kv: -kv[1]["market_value"]):
         q = quotes.get(sym) or {}
@@ -727,28 +819,52 @@ def build_after_hours_snapshot(
         cost_d = item["cost"]
         avg_d = (cost_d / qty_d) if qty_d > 0 else item["avg_cost"]
         weight = (mv_d / total_mv) if total_mv > 0 else None
-        is_lev = (
-            item.get("category") == "杠杆"
-            or (f"{sym}.US" in DEFAULT_LINKS)
-            or (sym in LEVERAGED_ETF_SYMBOLS)
-        )
+        is_lev, lev_factor = resolve_leverage_profile(sym, item.get("category") or "")
         if is_lev and mv_d > 0:
             leverage_mv += mv_d
+        if mv_d > 0:
+            notional_exposure += mv_d * lev_factor
+            gross_notional_exposure += mv_d * abs(lev_factor)
+
         ref_price = _to_dec(q.get("regular_close"))
         if ref_price is None and qty_d > 0 and mv_d > 0:
             ref_price = mv_d / qty_d
+
+        is_zero_cost = bool(avg_d is not None and avg_d <= 0)
         need_breakeven = None
-        if avg_d is not None and ref_price is not None and ref_price > 0 and ref_price < avg_d:
+        if avg_d is not None and avg_d > 0 and ref_price is not None and ref_price > 0 and ref_price < avg_d:
             need_breakeven = (avg_d - ref_price) / ref_price
+
+        # 异常成本 / 疑似未复权熔断校验（仅标注告警，绝不篡改账本原值）
+        cost_anomaly = False
+        cost_anomaly_reason: Optional[str] = None
+        if avg_d is not None and avg_d > 0 and ref_price is not None and ref_price > 0:
+            deviation = abs(ref_price - avg_d) / avg_d
+            ratio = max(avg_d / ref_price, ref_price / avg_d)
+            reg_chg_abs = abs(_to_dec(q.get("regular_change_pct")) or Decimal("0"))
+            if deviation > Decimal("0.50") and ratio >= Decimal("2.0") and reg_chg_abs < Decimal("0.35"):
+                cost_anomaly = True
+                cost_anomaly_reason = (
+                    f"现价 (${ref_price:.2f}) 与摊薄均价 (${avg_d:.2f}) 偏离超过 50%"
+                    f"（{ratio:.1f}x），疑似未复权或历史成交录入价异常，请核对拆股记录与原始流水"
+                )
+                cost_anomaly_symbols.append(sym)
+                anomaly_unrealized_sum += item["unrealized_pnl"]
+                warnings.append(f"⚠️ {sym} {cost_anomaly_reason}。")
 
         holdings_list.append({
             "symbol": sym,
             "underlying": item["underlying"],
             "category": item["category"],
             "is_leveraged": is_lev,
+            "leverage_factor": _serialize_dec(lev_factor),
             "channels": item["channels"],
             "quantity": _serialize_dec(qty_d),
             "avg_cost": _serialize_dec(avg_d),
+            "avg_cost_basis": "diluted",
+            "is_zero_cost": is_zero_cost,
+            "cost_anomaly": cost_anomaly,
+            "cost_anomaly_reason": cost_anomaly_reason,
             "market_value": _serialize_dec(mv_d),
             "weight_pct": _serialize_dec(weight),
             "need_breakeven_pct": _serialize_dec(need_breakeven),
@@ -764,23 +880,32 @@ def build_after_hours_snapshot(
             "quote_source": q.get("source"),
         })
 
-    # 汇总衍生指标：当日收益率、累计浮盈率、杠杆暴露率、相对 QQQ Alpha
+    # 汇总衍生指标：当日收益率、分母透明化、累计浮盈率、杠杆暴露率、组合等效敞口、相对 QQQ Alpha
     day_pnl_pct: Optional[Decimal] = None
+    day_pnl_denominator: Optional[Decimal] = None
+    day_pnl_denominator_label = "前日持仓市值"
     if total_day_pnl is not None:
         if day_pnl_basis in ("ledger", "ledger_plus_after_hours") and ledger_prev_mv > 0:
+            day_pnl_denominator = ledger_prev_mv
             day_pnl_pct = total_day_pnl / ledger_prev_mv
         elif day_pnl_basis in ("quote_after_hours", "quote_regular") and est_prev_mv > 0:
+            day_pnl_denominator = est_prev_mv
             day_pnl_pct = total_day_pnl / est_prev_mv
         elif total_mv > 0:
             prev_mv = total_mv - total_day_pnl
             if prev_mv > 0:
+                day_pnl_denominator = prev_mv
                 day_pnl_pct = total_day_pnl / prev_mv
 
     unrealized_pct: Optional[Decimal] = None
     if total_cost > 0:
         unrealized_pct = total_unrealized / total_cost
+    unrealized_pnl_ex_anomaly: Optional[Decimal] = (
+        total_unrealized - anomaly_unrealized_sum if cost_anomaly_symbols else None
+    )
 
     leverage_pct = (leverage_mv / total_mv) if total_mv > 0 else Decimal("0")
+    effective_leverage = (notional_exposure / total_mv) if total_mv > 0 else Decimal("0")
     qqq_bench = benchmarks.get("QQQ") or {}
     qqq_cmp_pct = (
         _to_dec(qqq_bench.get("total_change_pct"))
@@ -789,9 +914,12 @@ def build_after_hours_snapshot(
     )
     alpha_vs_qqq = (day_pnl_pct - qqq_cmp_pct) if (day_pnl_pct is not None and qqq_cmp_pct is not None) else None
 
-    # 4.5 采集可用现金余额（仅当当前范围具备真实分渠道现金账本时返回，无独立账本保持 None 绝不伪造 0）
+    # 4.5 采集可用现金余额与总资产（净值）（仅当当前范围具备真实分渠道现金账本时返回，无独立账本保持 None 绝不伪造 0）
     cash_total: Optional[Decimal] = None
     cash_pct: Optional[Decimal] = None
+    total_assets: Optional[Decimal] = None
+    day_pnl_pct_total_assets: Optional[Decimal] = None
+    effective_leverage_total_assets: Optional[Decimal] = None
     cash_breakdown: List[Dict[str, Any]] = []
     try:
         cash_details = resolve_channel_cash_details(res)
@@ -814,6 +942,11 @@ def build_after_hours_snapshot(
             total_assets = total_mv + cash_total
             if total_assets > 0:
                 cash_pct = cash_total / total_assets
+                effective_leverage_total_assets = notional_exposure / total_assets
+            if total_day_pnl is not None and day_pnl_denominator is not None:
+                prev_total_assets = day_pnl_denominator + cash_total
+                if prev_total_assets > 0:
+                    day_pnl_pct_total_assets = total_day_pnl / prev_total_assets
 
     # 5. 采集近期突发新闻
     news_map = news_fetcher(sorted(all_symbols)) if all_symbols else {}
@@ -823,20 +956,30 @@ def build_after_hours_snapshot(
         "person_key": person_key,
         "person_id": person_id,
         "person_name": person_name,
+        "market_session": market_session.to_dict(),
         "summary": {
             "holding_count": len(holdings_list),
             "trade_count": len(trades),
             "total_market_value": _serialize_dec(total_mv),
+            "total_assets": _serialize_dec(total_assets),
             "total_cost": _serialize_dec(total_cost),
             "total_unrealized_pnl": _serialize_dec(total_unrealized),
             "unrealized_pct": _serialize_dec(unrealized_pct),
+            "unrealized_pnl_ex_anomaly": _serialize_dec(unrealized_pnl_ex_anomaly),
+            "cost_anomaly_symbols": cost_anomaly_symbols,
             "day_pnl": _serialize_dec(total_day_pnl),
             "regular_day_pnl": _serialize_dec(est_reg_total),
             "after_hours_day_pnl": _serialize_dec(est_ah_total),
             "ledger_day_pnl": _serialize_dec(ledger_day_pnl),
             "day_pnl_pct": _serialize_dec(day_pnl_pct),
+            "day_pnl_denominator": _serialize_dec(day_pnl_denominator),
+            "day_pnl_denominator_label": day_pnl_denominator_label,
+            "day_pnl_pct_total_assets": _serialize_dec(day_pnl_pct_total_assets),
             "day_pnl_basis": day_pnl_basis,
             "leverage_pct": _serialize_dec(leverage_pct),
+            "effective_leverage": _serialize_dec(effective_leverage),
+            "effective_leverage_total_assets": _serialize_dec(effective_leverage_total_assets),
+            "gross_notional_exposure": _serialize_dec(gross_notional_exposure),
             "alpha_vs_qqq": _serialize_dec(alpha_vs_qqq),
             "cash_balance": _serialize_dec(cash_total),
             "cash_pct": _serialize_dec(cash_pct),
@@ -931,10 +1074,20 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
     holding_lines = []
     for h in holdings[:30]:
         u_tag = f"（关联正股 {h['underlying']}）" if h.get("underlying") else ""
-        lev_tag = " [杠杆]" if h.get("is_leveraged") else ""
+        lev_factor = _to_dec(h.get("leverage_factor"))
+        if h.get("is_leveraged"):
+            f_txt = f"{lev_factor:g}x " if lev_factor is not None else ""
+            lev_tag = f" [{f_txt}杠杆]"
+        else:
+            lev_tag = ""
+        anom_tag = " [⚠ 疑似未复权/成本异常]" if h.get("cost_anomaly") else ""
+        avg_val = _to_dec(h.get("avg_cost"))
+        avg_txt = f"${_fmt_dec(avg_val)}"
+        if h.get("is_zero_cost") or (avg_val is not None and avg_val <= 0):
+            avg_txt += "（已零成本/利润仓）"
         holding_lines.append(
-            f"- {h['symbol']}{u_tag}{lev_tag} [{','.join(h.get('channels') or [])}]: "
-            f"持股 {_fmt_dec(_to_dec(h.get('quantity')))} | 均价 ${_fmt_dec(_to_dec(h.get('avg_cost')))} | "
+            f"- {h['symbol']}{u_tag}{lev_tag}{anom_tag} [{','.join(h.get('channels') or [])}]: "
+            f"持股 {_fmt_dec(_to_dec(h.get('quantity')))} | 摊薄均价 {avg_txt} | "
             f"市值 ${_fmt_dec(_to_dec(h.get('market_value')))} (占比 {_fmt_dec(_to_dec(h.get('weight_pct')), pct=True)}) | "
             f"常规收盘 ${_fmt_dec(_to_dec(h.get('regular_close')))} ({_fmt_dec(_to_dec(h.get('regular_change_pct')), signed=True, pct=True)}) | "
             f"盘后 ${_fmt_dec(_to_dec(h.get('after_hours_price')))} ({_fmt_dec(_to_dec(h.get('after_hours_change_pct')), signed=True, pct=True)}) | "
@@ -962,6 +1115,7 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
 
     cash_bal = _to_dec(summary.get("cash_balance"))
     cash_pct = _to_dec(summary.get("cash_pct"))
+    total_assets_val = _to_dec(summary.get("total_assets"))
     cash_bd = summary.get("cash_breakdown") or []
     if cash_bal is not None:
         ch_txt = "、".join(
@@ -969,27 +1123,43 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
             for c in cash_bd
             if c.get("amount") is not None
         )
+        ta_part = f"总资产（净值）${_fmt_dec(total_assets_val)} | " if total_assets_val is not None else ""
         cash_line = (
-            f"- 可用现金余额：${_fmt_dec(cash_bal)}（占总资产 {_fmt_dec(cash_pct, pct=True)}）"
+            f"- {ta_part}可用现金余额：${_fmt_dec(cash_bal)}（占总资产 {_fmt_dec(cash_pct, pct=True)}）"
             + (f" [{ch_txt}]" if ch_txt else "")
             + "\n"
         )
     else:
         cash_line = "- 可用现金余额：当前人员范围无独立现金账本（以「—」展示，勿编造金额）\n"
 
+    eff_lev = _to_dec(summary.get("effective_leverage"))
+    eff_lev_txt = f" | 组合等效敞口：{eff_lev:.2f}x" if eff_lev is not None else ""
+    denom_val = _to_dec(summary.get("day_pnl_denominator"))
+    denom_label = summary.get("day_pnl_denominator_label") or "前日持仓市值"
+    denom_txt = f"（分母：{denom_label} ${_fmt_dec(denom_val)}）" if denom_val is not None else ""
+    ta_day_pct = _to_dec(summary.get("day_pnl_pct_total_assets"))
+    ta_day_txt = f" / 总资产日收益率 {_fmt_dec(ta_day_pct, signed=True, pct=True)}" if ta_day_pct is not None else ""
+    ms = snapshot.get("market_session") or {}
+    session_line = (
+        f"- 交易时段：半日市（{ms.get('holiday_name') or '提前收盘'}，13:00 ET 收盘 / 17:00 ET 盘后结束）\n"
+        if ms.get("is_early_close")
+        else ""
+    )
+
     return (
         f"你是一位资深美股投资组合经理与盘后复盘分析师。请严格基于以下真实账本、盘后行情与抓取到的新闻事实，"
         f"为【{snapshot.get('person_name')}】撰写一份 {snapshot.get('trade_date')} 的《美股盘后复盘日报》。\n\n"
         f"【同步与数据状态】\n"
         f"- 券商同步：{sync_note}\n"
-        f"- 当日盈亏口径：{summary.get('day_pnl_basis', 'ledger')}\n"
+        f"{session_line}"
+        f"- 当日盈亏口径：{summary.get('day_pnl_basis', 'ledger')}{denom_txt}\n"
         f"- 告警提示：{warn_text}\n\n"
         f"【组合总览】\n"
-        f"- 持仓标的数：{summary.get('holding_count', 0)} | 当日成交笔数：{summary.get('trade_count', 0)} | 杠杆仓位占比：{_fmt_dec(_to_dec(summary.get('leverage_pct')), pct=True)}\n"
+        f"- 持仓标的数：{summary.get('holding_count', 0)} | 当日成交笔数：{summary.get('trade_count', 0)} | 杠杆仓位占比：{_fmt_dec(_to_dec(summary.get('leverage_pct')), pct=True)}{eff_lev_txt}\n"
         f"- 当前总市值：${_fmt_dec(_to_dec(summary.get('total_market_value')))} | "
         f"总持仓成本：${_fmt_dec(_to_dec(summary.get('total_cost')))} | "
         f"累计浮盈：${_fmt_dec(_to_dec(summary.get('total_unrealized_pnl')), signed=True)} | "
-        f"当日真实盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} ({_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)}){pnl_split}\n"
+        f"当日真实盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} (持仓日收益率 {_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)}{ta_day_txt}){pnl_split}\n"
         f"{cash_line}\n"
         f"【大盘基准 (盘中 + 盘后)】\n{bench_text}\n\n"
         f"【当日真实交易记录】\n{trade_text}\n\n"
@@ -1365,9 +1535,15 @@ def generate_after_hours_report(
     quote_fetcher: Callable[[List[str]], Dict[str, Dict[str, Any]]] = fetch_after_hours_quotes,
     news_fetcher: Callable[[List[str]], Dict[str, List[Dict[str, Any]]]] = fetch_ticker_news,
     ai_asker: Optional[Callable[[str, str, Optional[str]], str]] = None,
+    allow_non_trading_day: bool = False,
 ) -> Dict[str, Any]:
-    """执行完整盘后复盘生成流程：可选同步券商流水 -> 采集行情与新闻 -> Gemini 双轨总结 -> 落盘保存。"""
+    """执行完整盘后复盘生成流程：交易日历校验 -> 可选同步券商流水 -> 采集行情与新闻 -> Gemini 双轨总结 -> 落盘保存。"""
     target_date = trade_date or resolve_default_trade_date()
+    session = get_us_market_session(target_date)
+    if not session.is_trading_day and not allow_non_trading_day:
+        raise ValueError(
+            f"{target_date.isoformat()} 美股休市（{session.holiday_name}），今日美股休市，已跳过生成盘后复盘日报。"
+        )
     target_store = store or AfterHoursReportStore()
     prov = normalize_ai_provider(provider)
 

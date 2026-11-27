@@ -1,5 +1,19 @@
 [
   {
+    "title": "接入美股官方交易日历与半日市规则，升级总资产净值、组合等效敞口与异常成本熔断校验",
+    "time": "2026-11-27 21:55",
+    "author": "Antigravity",
+    "tag": "美股日历 + 净值与敞口口径",
+    "details": [
+      "修改者：Antigravity（代码修改与收尾验算）",
+      "新增美股官方交易日历与半日市模块（`src/portfolio/domain/us_market_calendar.py`）：覆盖周末、10 个法定休市日（含补休规则）、特殊历史休市（如 2025-01-09 卡特国葬）及半日市（感恩节次日黑五、平安夜、独立日前一日，13:00 ET 收盘 / 17:00 ET 盘后结束 / 17:10 ET 自动触发）。",
+      "盘后复盘调度与前后端集成（`src/portfolio/services/after_hours_report.py`、`src/portfolio/web/api_v1.py`、`src/portfolio/ui/after_hours_report_page.py`、`frontend/src/views/AfterHoursReportView.tsx`、`frontend/src/api/client.ts`）：自动跳过休市日（手动生成休市日返回 400 `MARKET_CLOSED`），新增 `DELETE /api/v1/ai/after-hours/report/<id>` 删除存档接口与前端删除能力，桌面端与 Web 端展示休市/半日市状态横幅与徽标。",
+      "净值、等效敞口与异常成本熔断（`src/portfolio/services/after_hours_report.py`）：新增 `resolve_leverage_profile`（识别 `QQQM`/`QQQ` 等 1x 现货 ETF 白名单与杠杆/反向 ETF 精确倍数），输出 `total_assets`（总资产净值）、`day_pnl_pct_total_assets`（总资产日收益率）、`effective_leverage`（组合等效敞口）、`day_pnl_denominator`（分母透明化）以及 `cost_anomaly` 疑似未复权成本熔断告警（仅告警标注不篡改账本原值）。",
+      "日常同步自动检查拆并股（`scripts/sync_data.py`）：在主同步完成后自动调用 `sync_missing_corporate_actions(database)` 检查并补齐缺失公司行动。",
+      "验证范围：`frontend npm run build`（`tsc && vite build`）0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_us_market_calendar.py` 与 `tests/test_after_hours_report.py` 共 16 项测试全部通过；本地真实库 `2026-11-25`（个人）只读快照验算 `total_assets=45587.64`、`day_pnl=-1362.87`、`effective_leverage=1.90x` 与休市/黑五半日市状态提示均准确无误。"
+    ]
+  },
+  {
     "title": "盘后复盘日报：新闻标题支持点击跳转原文外链，重点持仓默认全部展开",
     "time": "2026-11-26 22:34",
     "author": "Antigravity",

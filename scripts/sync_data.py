@@ -2,8 +2,8 @@
 """Money3本地同步：券商→本目录交易流水→本目录数据库；不镜像其他项目。"""
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR / "src"))
@@ -20,8 +20,8 @@ def main():
         "--check", action="store_true", help="只读检查数据库及五个核心sheet，不入库、不请求API"
     )
     args = parser.parse_args()
-    from portfolio.sync.database_sync import TradeFlowWorkbook, TRADE_SHEETS, sync_database_orders
     from portfolio.sync.database_store import validate_database
+    from portfolio.sync.database_sync import TRADE_SHEETS, TradeFlowWorkbook, sync_database_orders
 
     base, database = args.base.expanduser().resolve(), args.db.expanduser().resolve()
     if not base.is_relative_to(PROJECT_DIR) or not database.is_relative_to(PROJECT_DIR):
@@ -40,9 +40,9 @@ def main():
     from portfolio.services.derived_maintenance import clean_stale_staging_files
     clean_stale_staging_files(database)
     if not args.no_api:
-        from portfolio.sync.fee_api import fetch_missing
-        from portfolio.sync.trade_fees import audit_recent_fees, load_evidence, store_evidence, refresh_fees
         from portfolio.sync.database_store import connect_database
+        from portfolio.sync.fee_api import fetch_missing
+        from portfolio.sync.trade_fees import audit_recent_fees, load_evidence, refresh_fees, store_evidence
         def persist(evidence):
             with connect_database(database) as writer:
                 store_evidence(writer, evidence)
@@ -64,6 +64,16 @@ def main():
         )
         if recent["allocation_mismatches"]:
             print(f"[FEES WARNING] 近7天存在多人分摊不一致订单：{recent['mismatch_details']}")
+        try:
+            from portfolio.sync.corporate_actions_sync import sync_missing_corporate_actions
+
+            ca_res = sync_missing_corporate_actions(database)
+            if ca_res.inserted:
+                print(f"[CORP ACTIONS] {ca_res.summary_text}")
+            if ca_res.errors:
+                print(f"[CORP ACTIONS WARNING] 检查拆并股存在 {len(ca_res.errors)} 条提示：{ca_res.errors[:3]}")
+        except Exception as exc:
+            print(f"[CORP ACTIONS WARNING] 自动同步公司行动异常（已忽略不阻断主同步）：{exc}")
     print("[DONE] Money3本地同步完成。")
     return 0
 

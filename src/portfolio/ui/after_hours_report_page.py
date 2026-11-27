@@ -32,11 +32,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from portfolio.domain.us_market_calendar import (
+    format_session_hint,
+    get_us_market_session,
+)
 from portfolio.paths import DATABASE_PATH
 from portfolio.services.after_hours_report import (
     DEFAULT_AFTER_HOURS_MODEL,
     AfterHoursReportStore,
     ask_after_hours_followup,
+    current_ny_now,
     ensure_structured,
     generate_after_hours_report,
     resolve_default_trade_date,
@@ -251,8 +256,13 @@ class AfterHoursReportPage(QWidget):
 
         top.addStretch()
 
-        self.status_lbl = QLabel("美东 20:10 自动同步并生成「个人」日报")
-        self.status_lbl.setStyleSheet("font-size: 11.5px; color: #64748B;")
+        today_session = get_us_market_session(current_ny_now().date())
+        self.status_lbl = QLabel(format_session_hint(today_session))
+        self.status_lbl.setStyleSheet(
+            "font-size: 11.5px; color: #B45309; font-weight: 600;"
+            if not today_session.is_trading_day
+            else ("font-size: 11.5px; color: #1D4ED8;" if today_session.is_early_close else "font-size: 11.5px; color: #64748B;")
+        )
         top.addWidget(self.status_lbl)
 
         self.refresh_btn = QPushButton("刷新列表")
@@ -348,6 +358,9 @@ class AfterHoursReportPage(QWidget):
         self.regime_badge = QLabel("")
         self.regime_badge.hide()
         title_badges.addWidget(self.regime_badge)
+        self.session_badge = QLabel("")
+        self.session_badge.hide()
+        title_badges.addWidget(self.session_badge)
         self.sync_badge = QLabel("")
         self.sync_badge.hide()
         title_badges.addWidget(self.sync_badge)
@@ -381,7 +394,7 @@ class AfterHoursReportPage(QWidget):
         kpi_grid = QGridLayout()
         kpi_grid.setSpacing(8)
         self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, self.kpi_card_1 = self._make_kpi_card("当日真实盈亏")
-        self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总持仓市值 / 可用现金")
+        self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总资产（净值）/ 持仓")
         self.kpi_cash_sub = _make_wrap_label("", "font-size: 11px; color: #64748B; border: none;")
         self.kpi_card_2.layout().addWidget(self.kpi_cash_sub)
         self.kpi_bench_val, self.kpi_bench_sub, _, self.kpi_card_3 = self._make_kpi_card("大盘基准")
@@ -741,6 +754,14 @@ class AfterHoursReportPage(QWidget):
         else:
             self.regime_badge.hide()
 
+        ms = snap.get("market_session") or {}
+        if ms.get("is_early_close"):
+            self.session_badge.setText("半日市 · 13:00 ET 收盘")
+            self.session_badge.setStyleSheet("font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #DBEAFE; color: #1D4ED8;")
+            self.session_badge.show()
+        else:
+            self.session_badge.hide()
+
         s_bg = "#FEE2E2" if sync_info.get("ok") is False else "#DCFCE7"
         s_fg = "#991B1B" if sync_info.get("ok") is False else "#166534"
         self.sync_badge.setText(sync_tag)
@@ -757,13 +778,25 @@ class AfterHoursReportPage(QWidget):
         # KPI 1-4
         self.kpi_pnl_val.setText(_fmt_money(summary.get("day_pnl"), signed=True))
         self.kpi_pnl_val.setStyleSheet(f"font-size: 15.5px; font-weight: 700; border: none; color: {_tone_color(summary.get('day_pnl'))};")
-        pnl_sub_txt = f"日收益率 {_fmt_pct(summary.get('day_pnl_pct'))}"
+        pnl_sub_txt = f"持仓日收益 {_fmt_pct(summary.get('day_pnl_pct'))}"
+        if summary.get("day_pnl_pct_total_assets") is not None:
+            pnl_sub_txt += f" (总资产 {_fmt_pct(summary.get('day_pnl_pct_total_assets'))})"
         if summary.get("after_hours_day_pnl") is not None:
             pnl_sub_txt += (
                 f"\n常规 {_fmt_money(summary.get('regular_day_pnl'), signed=True)} · "
                 f"盘后 {_fmt_money(summary.get('after_hours_day_pnl'), signed=True)}"
             )
         self.kpi_pnl_sub.setText(pnl_sub_txt)
+        denom_val = summary.get("day_pnl_denominator")
+        if denom_val is not None:
+            denom_lbl = summary.get("day_pnl_denominator_label") or "前日持仓市值"
+            tip = f"持仓日收益率分母：{denom_lbl} {_fmt_money(denom_val)}"
+            if summary.get("cash_balance") is not None:
+                tip += f" | 总资产分母：{_fmt_money(float(denom_val) + float(summary['cash_balance']))}"
+            self.kpi_pnl_sub.setToolTip(tip)
+        else:
+            self.kpi_pnl_sub.setToolTip("日收益率分母：前日持仓市值")
+
         alpha = summary.get("alpha_vs_qqq")
         if alpha is not None:
             self.kpi_alpha_lbl.setText(f"vs QQQ {_fmt_pct(alpha)}")
@@ -771,18 +804,31 @@ class AfterHoursReportPage(QWidget):
         else:
             self.kpi_alpha_lbl.setText("")
 
-        self.kpi_mv_val.setText(_fmt_money(summary.get("total_market_value")))
-        self.kpi_un_sub.setText(
-            f"浮盈 {_fmt_money(summary.get('total_unrealized_pnl'), signed=True)} ({_fmt_pct(summary.get('unrealized_pct'))})"
-        )
-        self.kpi_un_sub.setStyleSheet(f"font-size: 11px; border: none; color: {_tone_color(summary.get('total_unrealized_pnl'))};")
         cash_bal = summary.get("cash_balance")
-        if cash_bal is not None:
+        total_assets = summary.get("total_assets")
+        if total_assets is None and cash_bal is not None and summary.get("total_market_value") is not None:
+            total_assets = float(summary["total_market_value"]) + float(cash_bal)
+        if total_assets is not None:
+            self.kpi_mv_val.setText(_fmt_money(total_assets))
             cash_pct = summary.get("cash_pct")
             pct_str = f" ({float(cash_pct) * 100:.1f}%)" if cash_pct is not None else ""
-            self.kpi_cash_sub.setText(f"可用现金 {_fmt_money(cash_bal)}{pct_str}")
+            self.kpi_cash_sub.setText(f"持仓 {_fmt_money(summary.get('total_market_value'))} · 现金 {_fmt_money(cash_bal)}{pct_str}")
         else:
+            self.kpi_mv_val.setText(_fmt_money(summary.get("total_market_value")))
             self.kpi_cash_sub.setText("可用现金 —（无独立现金账本）")
+
+        anom_syms = summary.get("cost_anomaly_symbols") or []
+        un_txt = f"浮盈 {_fmt_money(summary.get('total_unrealized_pnl'), signed=True)} ({_fmt_pct(summary.get('unrealized_pct'))})"
+        if anom_syms:
+            un_txt += f" ⚠异常({','.join(anom_syms)})"
+            if summary.get("unrealized_pnl_ex_anomaly") is not None:
+                self.kpi_un_sub.setToolTip(
+                    f"含成本异常标的 ({', '.join(anom_syms)})；剔除异常标的后参考累计浮盈：{_fmt_money(summary.get('unrealized_pnl_ex_anomaly'), signed=True)}"
+                )
+        else:
+            self.kpi_un_sub.setToolTip("")
+        self.kpi_un_sub.setText(un_txt)
+        self.kpi_un_sub.setStyleSheet(f"font-size: 11px; border: none; color: {_tone_color(summary.get('total_unrealized_pnl'))};")
 
         b_lines = []
         for k in ("SPY", "QQQ"):
@@ -794,8 +840,18 @@ class AfterHoursReportPage(QWidget):
         self.kpi_bench_sub.setText("\n".join(b_lines) if b_lines else "暂无大盘基准行情")
 
         lev_pct = float(summary.get("leverage_pct") or 0) * 100.0
+        eff_lev = summary.get("effective_leverage")
         self.kpi_lev_val.setText(f"{lev_pct:.1f}%")
-        self.kpi_lev_sub.setText("高杠杆警戒" if lev_pct >= 50 else ("中高暴露" if lev_pct >= 35 else "稳健可控"))
+        lev_hint = "高杠杆警戒" if lev_pct >= 50 else ("中高暴露" if lev_pct >= 35 else "稳健可控")
+        if eff_lev is not None:
+            lev_hint += f" · 等效 {float(eff_lev):.2f}x"
+        self.kpi_lev_sub.setText(lev_hint)
+        if summary.get("effective_leverage_total_assets") is not None and eff_lev is not None:
+            self.kpi_lev_sub.setToolTip(
+                f"持仓净名义敞口 {float(eff_lev):.2f}x | 含现金总资产净敞口 {float(summary['effective_leverage_total_assets']):.2f}x"
+            )
+        else:
+            self.kpi_lev_sub.setToolTip("")
         bar_col = "#DC2626" if lev_pct >= 50 else ("#D97706" if lev_pct >= 35 else "#16A34A")
         self.kpi_lev_sub.setStyleSheet(f"font-size: 11px; font-weight: 600; border: none; color: {bar_col};")
         self.kpi_trades_lbl.setText(f"{summary.get('trade_count', 0)} 笔")
@@ -889,26 +945,43 @@ class AfterHoursReportPage(QWidget):
 
             card = QFrame()
             card.setMinimumWidth(0)
-            card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; }")
+            if h.get("cost_anomaly"):
+                card.setStyleSheet("QFrame { border: 1px solid #F59E0B; border-radius: 8px; background: #FFFBEB; }")
+            else:
+                card.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 8px; background: #F8FAFC; }")
             cl = QVBoxLayout(card)
             cl.setContentsMargins(10, 8, 10, 8)
             cl.setSpacing(5)
 
             # 第一行：标题与标签（默认全部展开，不再折叠收起）
             tags = f"  [→ {h['underlying']}]" if h.get("underlying") else ""
-            lev_tag = "  [杠杆]" if h.get("is_leveraged") else ""
+            if h.get("is_leveraged"):
+                lf = h.get("leverage_factor")
+                lev_tag = f"  [{lf:g}x 杠杆]" if lf is not None else "  [杠杆]"
+            else:
+                lev_tag = ""
+            anom_tag = "  [⚠ 疑似未复权]" if h.get("cost_anomaly") else ""
             news_tag = f"  [新闻 {len(h_news)}]" if h_news else ""
             top_lbl = _make_wrap_label(
-                f"{sym}{tags}{lev_tag}{news_tag}",
+                f"{sym}{tags}{lev_tag}{anom_tag}{news_tag}",
                 "font-size: 13px; font-weight: 700; color: #0F172A; border: none;",
             )
+            if h.get("cost_anomaly_reason"):
+                top_lbl.setToolTip(str(h["cost_anomaly_reason"]))
             cl.addWidget(top_lbl)
 
             # 第二行：基础仓位数据 + 盘后价与当日盈亏（自动折行绝不截断）
             w_pct = f"{float(h['weight_pct']) * 100:.1f}%" if h.get("weight_pct") is not None else "—"
-            be_txt = f" · 回本需 +{float(h['need_breakeven_pct']) * 100:.1f}%" if h.get("need_breakeven_pct") is not None else ""
+            avg_val = h.get("avg_cost")
+            is_zero = bool(h.get("is_zero_cost")) or (avg_val is not None and float(avg_val) <= 0)
+            avg_txt = f"{_fmt_money(avg_val)}（已零成本/利润仓）" if is_zero else _fmt_money(avg_val)
+            be_txt = (
+                f" · 回本需 +{float(h['need_breakeven_pct']) * 100:.1f}%{' ⚠' if h.get('cost_anomaly') else ''}"
+                if (h.get("need_breakeven_pct") is not None and not is_zero)
+                else ""
+            )
             row2 = _make_wrap_label(
-                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 均价 {_fmt_money(h.get('avg_cost'))}{be_txt}   |   "
+                f"{' / '.join(h.get('channels') or [])} · 仓位 {w_pct} · 摊薄均价 {avg_txt}{be_txt}   |   "
                 f"常规收 {_fmt_money(h.get('regular_close'))} ({_fmt_pct(h.get('regular_change_pct'))}) · "
                 f"盘后 {_fmt_money(h.get('after_hours_price'))} ({_fmt_pct(h.get('after_hours_change_pct'))}) · "
                 f"当日盈亏 {_fmt_money(h.get('day_pnl'), signed=True)}",
@@ -1151,6 +1224,10 @@ class AfterHoursReportPage(QWidget):
             return
         qd = self.date_edit.date()
         target_date = date(qd.year(), qd.month(), qd.day())
+        session = get_us_market_session(target_date)
+        if not session.is_trading_day:
+            self.status_lbl.setText(f"⚠️ {target_date.isoformat()} 美股休市（{session.holiday_name}），已跳过生成")
+            return
         person_key = str(self.person_combo.currentData() or "个人")
         run_sync = self.sync_check.isChecked()
         model = DEFAULT_AFTER_HOURS_MODEL

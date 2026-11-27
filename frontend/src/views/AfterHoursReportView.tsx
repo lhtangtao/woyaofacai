@@ -111,6 +111,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   ]);
   const [isIsolated, setIsIsolated] = useState(false);
   const [canSync, setCanSync] = useState(false);
+  const [marketSession, setMarketSession] = useState<any>(null);
 
   const [filterPerson, setFilterPerson] = useState<string>("");
   const [genPerson, setGenPerson] = useState<string>("个人");
@@ -150,6 +151,9 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
           }
           setIsIsolated(Boolean(res.is_isolated));
           setCanSync(Boolean(res.can_sync));
+          if (res.market_session) {
+            setMarketSession(res.market_session);
+          }
           if (!genDate && res.default_trade_date) {
             setGenDate(res.default_trade_date);
           }
@@ -563,6 +567,22 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
         </div>
       </div>
 
+      {marketSession && (!marketSession.is_trading_day || marketSession.is_early_close) && (
+        <div
+          style={{
+            padding: "7px 12px",
+            borderRadius: "8px",
+            background: !marketSession.is_trading_day ? "rgba(217,119,6,0.12)" : "rgba(37,99,235,0.1)",
+            color: !marketSession.is_trading_day ? "#B45309" : "#1D4ED8",
+            fontSize: "12px",
+            fontWeight: 500,
+          }}
+        >
+          {!marketSession.is_trading_day ? "🗓️ " : "⏱️ "}
+          {marketSession.hint || (marketSession.is_early_close ? "今日美股半日市（13:00 ET 收盘 / 17:00 ET 盘后结束）" : "今日美股休市")}
+        </div>
+      )}
+
       {errorMsg && (
         <div style={{ padding: "8px 12px", borderRadius: "8px", background: "#FEE2E2", color: "#991B1B", fontSize: "12.5px" }}>
           ⚠️ {errorMsg}
@@ -733,6 +753,20 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                           {structured.regime.label}
                         </span>
                       )}
+                      {snap?.market_session?.is_early_close && (
+                        <span
+                          style={{
+                            fontSize: "11.5px",
+                            fontWeight: 600,
+                            padding: "2px 9px",
+                            borderRadius: "999px",
+                            background: "rgba(37,99,235,0.12)",
+                            color: "#1D4ED8",
+                          }}
+                        >
+                          半日市 · 13:00 ET 收盘
+                        </span>
+                      )}
                       <span
                         style={{
                           fontSize: "11.5px",
@@ -749,7 +783,13 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                     <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "4px" }}>
                       生成时间：{(detail.generated_at || "").replace("T", " ")} · 引擎：{detail.provider}
                       {detail.model ? ` (${detail.model})` : ""} · 盈亏口径：
-                      {summary.day_pnl_basis === "quote_estimated" ? "收盘行情估算" : "账本流水"}
+                      {summary.day_pnl_basis === "ledger_plus_after_hours"
+                        ? "账本精确 + 盘后"
+                        : summary.day_pnl_basis === "quote_after_hours"
+                          ? "收盘 + 盘后估算"
+                          : summary.day_pnl_basis === "quote_regular" || summary.day_pnl_basis === "quote_estimated"
+                            ? "收盘行情估算"
+                            : "账本流水"}
                     </div>
                   </div>
                   <button
@@ -829,8 +869,27 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                     <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: toneColor(summary.day_pnl) }}>
                       {fmtMoney(summary.day_pnl, true)}
                     </div>
-                    <div className="font-mono" style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px", lineHeight: 1.45 }}>
-                      <span>日收益率 {fmtPct(summary.day_pnl_pct)}</span>
+                    <div
+                      className="font-mono"
+                      style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px", lineHeight: 1.45 }}
+                      title={
+                        summary.day_pnl_denominator != null
+                          ? `持仓日收益率分母：${summary.day_pnl_denominator_label || "前日持仓市值"} ${fmtMoney(summary.day_pnl_denominator)}${
+                              summary.day_pnl_pct_total_assets != null && summary.cash_balance != null
+                                ? ` | 总资产日收益率分母：前日总资产 ${fmtMoney(Number(summary.day_pnl_denominator) + Number(summary.cash_balance))}`
+                                : ""
+                            }`
+                          : "日收益率分母：前日持仓市值"
+                      }
+                    >
+                      <span>
+                        持仓日收益 {fmtPct(summary.day_pnl_pct)}
+                        {summary.day_pnl_pct_total_assets != null && (
+                          <span style={{ marginLeft: "6px", color: "var(--text-muted)" }}>
+                            (总资产 {fmtPct(summary.day_pnl_pct_total_assets)})
+                          </span>
+                        )}
+                      </span>
                       {summary.after_hours_day_pnl != null && (
                         <span style={{ display: "block", fontSize: "11px" }}>
                           常规 {fmtMoney(summary.regular_day_pnl, true)} · 盘后 {fmtMoney(summary.after_hours_day_pnl, true)}
@@ -839,28 +898,58 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                     </div>
                   </div>
 
-                  <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
-                    <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>总持仓市值 / 可用现金</div>
-                    <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: "var(--text-heading)" }}>
-                      {fmtMoney(summary.total_market_value)}
-                    </div>
-                    <div className="font-mono" style={{ fontSize: "11.5px", color: toneColor(summary.total_unrealized_pnl), marginTop: "2px" }}>
-                      累计浮盈 {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
-                    </div>
-                    <div
-                      className="font-mono"
-                      style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "3px" }}
-                      title={
-                        Array.isArray(summary.cash_breakdown) && summary.cash_breakdown.length > 0
-                          ? summary.cash_breakdown.map((c: any) => `${c.channel}: ${fmtMoney(c.amount)}`).join(" | ")
-                          : undefined
-                      }
-                    >
-                      {summary.cash_balance != null
-                        ? `可用现金 ${fmtMoney(summary.cash_balance)}${summary.cash_pct != null ? ` (${(Number(summary.cash_pct) * 100).toFixed(1)}%)` : ""}`
-                        : "可用现金 —（无独立现金账本）"}
-                    </div>
-                  </div>
+                  {(() => {
+                    const totalAssetsVal =
+                      summary.total_assets != null
+                        ? Number(summary.total_assets)
+                        : summary.cash_balance != null && summary.total_market_value != null
+                          ? Number(summary.total_market_value) + Number(summary.cash_balance)
+                          : null;
+                    const anomalySyms: string[] = Array.isArray(summary.cost_anomaly_symbols)
+                      ? summary.cost_anomaly_symbols
+                      : [];
+                    return (
+                      <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
+                        <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>
+                          {totalAssetsVal != null ? "总资产（净值）/ 持仓与现金" : "总持仓市值 / 可用现金"}
+                        </div>
+                        <div className="font-mono" style={{ fontSize: "19px", fontWeight: 700, marginTop: "3px", color: "var(--text-heading)" }}>
+                          {fmtMoney(totalAssetsVal != null ? totalAssetsVal : summary.total_market_value)}
+                        </div>
+                        <div
+                          className="font-mono"
+                          style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}
+                          title={
+                            Array.isArray(summary.cash_breakdown) && summary.cash_breakdown.length > 0
+                              ? summary.cash_breakdown.map((c: any) => `${c.channel}: ${fmtMoney(c.amount)}`).join(" | ")
+                              : undefined
+                          }
+                        >
+                          {totalAssetsVal != null
+                            ? `持仓 ${fmtMoney(summary.total_market_value)} · 现金 ${fmtMoney(summary.cash_balance)}${
+                                summary.cash_pct != null ? ` (${(Number(summary.cash_pct) * 100).toFixed(1)}%)` : ""
+                              }`
+                            : "可用现金 —（无独立现金账本）"}
+                        </div>
+                        <div
+                          className="font-mono"
+                          style={{ fontSize: "11.5px", color: toneColor(summary.total_unrealized_pnl), marginTop: "2px" }}
+                          title={
+                            anomalySyms.length > 0 && summary.unrealized_pnl_ex_anomaly != null
+                              ? `含成本异常标的 (${anomalySyms.join(", ")})；剔除异常标的后参考累计浮盈：${fmtMoney(summary.unrealized_pnl_ex_anomaly, true)}`
+                              : undefined
+                          }
+                        >
+                          累计浮盈 {fmtMoney(summary.total_unrealized_pnl, true)} ({fmtPct(summary.unrealized_pct)})
+                          {anomalySyms.length > 0 && (
+                            <span style={{ marginLeft: "5px", fontSize: "10.5px", color: "#D97706", fontWeight: 600 }}>
+                              ⚠ 含异常成本({anomalySyms.join(",")})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div style={{ borderRadius: "10px", border: "1px solid var(--border-color)", background: "var(--bg-app)", padding: "11px 12px" }}>
                     <div style={{ fontSize: "11.5px", color: "var(--text-muted)" }}>大盘基准（常规 / 盘后）</div>
@@ -884,7 +973,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                       <span>杠杆仓位暴露</span>
                       <span className="font-mono">{summary.trade_count || 0} 笔成交</span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "3px" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "8px", marginTop: "3px", flexWrap: "wrap" }}>
                       <span className="font-mono" style={{ fontSize: "19px", fontWeight: 700, color: "var(--text-heading)" }}>
                         {levPctNum.toFixed(1)}%
                       </span>
@@ -897,6 +986,19 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                       >
                         {levPctNum >= 50 ? "高杠杆警戒" : levPctNum >= 35 ? "中高暴露" : "稳健可控"}
                       </span>
+                      {summary.effective_leverage != null && (
+                        <span
+                          className="font-mono"
+                          style={{ fontSize: "11px", color: "var(--text-muted)" }}
+                          title={
+                            summary.effective_leverage_total_assets != null
+                              ? `持仓净名义敞口 ${Number(summary.effective_leverage).toFixed(2)}x | 含现金总资产净敞口 ${Number(summary.effective_leverage_total_assets).toFixed(2)}x`
+                              : "持仓加权净名义敞口倍数"
+                          }
+                        >
+                          等效 {Number(summary.effective_leverage).toFixed(2)}x
+                        </span>
+                      )}
                     </div>
                     <div style={{ height: "6px", borderRadius: "999px", background: "var(--border-color)", overflow: "hidden", marginTop: "6px" }}>
                       <div
@@ -1046,7 +1148,15 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                           )}
                                           {h.is_leveraged && (
                                             <span style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "rgba(217,119,6,0.14)", color: "#D97706", fontWeight: 600 }}>
-                                              杠杆
+                                              {h.leverage_factor != null ? `${Number(h.leverage_factor)}x 杠杆` : "杠杆"}
+                                            </span>
+                                          )}
+                                          {h.cost_anomaly && (
+                                            <span
+                                              style={{ fontSize: "11px", padding: "1px 6px", borderRadius: "6px", background: "#FEF3C7", color: "#B45309", border: "1px solid #F59E0B", fontWeight: 600 }}
+                                              title={h.cost_anomaly_reason || "现价与均价偏离过大，疑似未复权或历史录入价异常"}
+                                            >
+                                              ⚠ 疑似未复权
                                             </span>
                                           )}
                                           {hNews.length > 0 && (
@@ -1056,9 +1166,14 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                           )}
                                         </div>
                                         <div style={{ fontSize: "11.5px", color: "var(--text-muted)", marginTop: "2px" }}>
-                                          {(h.channels || []).join(" / ")} · 仓位 {h.weight_pct != null ? `${(h.weight_pct * 100).toFixed(1)}%` : "—"} · 均价 {fmtMoney(h.avg_cost)}
-                                          {h.need_breakeven_pct != null && (
-                                            <span style={{ color: "#D97706" }}> · 回本需 +{(h.need_breakeven_pct * 100).toFixed(1)}%</span>
+                                          {(h.channels || []).join(" / ")} · 仓位 {h.weight_pct != null ? `${(h.weight_pct * 100).toFixed(1)}%` : "—"} · 摊薄均价 {fmtMoney(h.avg_cost)}
+                                          {(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
+                                            <span style={{ color: "#16A34A", fontWeight: 600 }}>（已零成本/利润仓）</span>
+                                          )}
+                                          {h.need_breakeven_pct != null && !(h.is_zero_cost || (h.avg_cost != null && Number(h.avg_cost) <= 0)) && (
+                                            <span style={{ color: "#D97706" }}>
+                                              {" "}· 回本需 +{(h.need_breakeven_pct * 100).toFixed(1)}%{h.cost_anomaly ? " ⚠" : ""}
+                                            </span>
                                           )}
                                         </div>
                                       </div>

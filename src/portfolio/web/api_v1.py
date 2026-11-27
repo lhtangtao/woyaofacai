@@ -2456,7 +2456,8 @@ def get_after_hours_store():
 def api_ai_after_hours_reports():
     """获取盘后复盘日报历史列表与可选人员范围。"""
     from portfolio.db.connection import readonly_connection
-    from portfolio.services.after_hours_report import resolve_default_trade_date
+    from portfolio.domain.us_market_calendar import format_session_hint, get_us_market_session
+    from portfolio.services.after_hours_report import current_ny_now, resolve_default_trade_date
 
     ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
     scoped_pid, scoped_pname = get_current_user_scope()
@@ -2487,9 +2488,14 @@ def api_ai_after_hours_reports():
 
     store = get_after_hours_store()
     reports = store.list_reports(person_key=req_person)
+    today_session = get_us_market_session(current_ny_now().date())
     return jsonify({
         "status": "ok",
         "default_trade_date": resolve_default_trade_date().isoformat(),
+        "market_session": {
+            **today_session.to_dict(),
+            "hint": format_session_hint(today_session),
+        },
         "is_isolated": is_isolated,
         "can_sync": bool(ctx and ctx.is_admin()),
         "person_options": persons_list,
@@ -2513,6 +2519,24 @@ def api_ai_after_hours_report_detail(report_id: str):
     if is_isolated and report.get("person_key") != scoped_pname:
         return jsonify({"status": "error", "message": "无权查看其他人员的盘后复盘日报"}), 403
     return jsonify({"status": "ok", "report": ensure_structured(report)})
+
+
+@api_v1.route("/ai/after-hours/report/<path:report_id>", methods=["DELETE"])
+@require_capability(CAP_AI_CHAT)
+def api_ai_after_hours_report_delete(report_id: str):
+    """删除单份历史盘后复盘日报存档（用于清理休市日误生成存档等）。"""
+    ctx: Optional[AuthContext] = getattr(g, "auth_context", None)
+    _, scoped_pname = get_current_user_scope()
+    is_isolated = bool(ctx and ctx.principal_type == "USER" and scoped_pname)
+
+    store = get_after_hours_store()
+    report = store.get_report(report_id)
+    if not report:
+        return jsonify({"status": "error", "message": "未找到对应的盘后复盘日报"}), 404
+    if is_isolated and report.get("person_key") != scoped_pname:
+        return jsonify({"status": "error", "message": "无权删除其他人员的盘后复盘日报"}), 403
+    store.delete_report(report_id)
+    return jsonify({"status": "ok", "deleted_id": report_id})
 
 
 @api_v1.route("/ai/after-hours/report/<path:report_id>/checklist", methods=["POST"])
@@ -2609,6 +2633,7 @@ def _snapshot_after_hours_task(task: Dict[str, Any]) -> Dict[str, Any]:
 @require_capability(CAP_AI_CHAT)
 def api_ai_after_hours_generate():
     """手动触发生成（或重新生成）指定交易日与人员范围的盘后复盘日报（支持后台异步模式）。"""
+    from portfolio.domain.us_market_calendar import get_us_market_session
     from portfolio.services.after_hours_report import (
         ensure_structured,
         generate_after_hours_report,
@@ -2625,6 +2650,14 @@ def api_ai_after_hours_generate():
         target_date = date.fromisoformat(raw_date) if raw_date else resolve_default_trade_date()
     except ValueError:
         return jsonify({"status": "error", "message": "交易日期格式无效，应为 YYYY-MM-DD"}), 400
+
+    session = get_us_market_session(target_date)
+    if not session.is_trading_day:
+        return jsonify({
+            "status": "error",
+            "code": "MARKET_CLOSED",
+            "message": f"{target_date.isoformat()} 美股休市（{session.holiday_name}），今日美股休市，已跳过生成盘后复盘日报。",
+        }), 400
 
     req_person = str(data.get("person") or "个人").strip() or "个人"
     req_person_id = data.get("person_id")

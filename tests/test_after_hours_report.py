@@ -593,3 +593,158 @@ def test_desktop_after_hours_sync_person_bidirectional(demo_path, tmp_path, qtbo
     idx_lake = page.person_combo.findData("拉科")
     page.person_combo.setCurrentIndex(idx_lake)
     assert emitted == [5]
+
+
+def test_after_hours_market_calendar_holiday_and_early_close():
+    """验证感恩节休市跳过与黑五半日市 17:10 ET 自动触发逻辑。"""
+    from portfolio.services.after_hours_report import resolve_default_trade_date
+
+    # 2026-11-26 感恩节全天休市：不触发，默认日期回退至 11-25
+    ready_tg, _ = is_after_hours_ready(datetime(2026, 11, 26, 20, 30, tzinfo=NY_TZ))
+    assert ready_tg is False
+    assert resolve_default_trade_date(datetime(2026, 11, 26, 20, 30, tzinfo=NY_TZ)) == date(2026, 11, 25)
+
+    # 2026-11-27 黑五半日市：13:00 ET 收盘后默认日期切到 11-27，17:10 ET 到达触发窗口
+    assert resolve_default_trade_date(datetime(2026, 11, 27, 12, 59, tzinfo=NY_TZ)) == date(2026, 11, 25)
+    assert resolve_default_trade_date(datetime(2026, 11, 27, 13, 0, tzinfo=NY_TZ)) == date(2026, 11, 27)
+    ready_bf_before, _ = is_after_hours_ready(datetime(2026, 11, 27, 17, 9, tzinfo=NY_TZ))
+    ready_bf_after, target_bf = is_after_hours_ready(datetime(2026, 11, 27, 17, 10, tzinfo=NY_TZ))
+    assert ready_bf_before is False
+    assert ready_bf_after is True
+    assert target_bf == date(2026, 11, 27)
+
+
+def test_after_hours_leverage_profile_cost_anomaly_and_total_assets(demo_path, monkeypatch):
+    """验证杠杆倍数解析、异常成本熔断告警及总资产净值口径。"""
+    from decimal import Decimal
+
+    from portfolio.services.after_hours_report import (
+        build_after_hours_snapshot,
+        resolve_leverage_profile,
+    )
+
+    assert resolve_leverage_profile("QQQM") == (False, Decimal("1"))
+    assert resolve_leverage_profile("TQQQ") == (True, Decimal("3"))
+    assert resolve_leverage_profile("SQQQ") == (True, Decimal("-3"))
+
+    # 构造带异常成本（现价与均价偏离 >50% 且比值 >=2x）的持仓，验证仅告警不篡改
+    class _FakeRow:
+        def __init__(self, values):
+            self.values = values
+
+    class _FakeTable:
+        def __init__(self, columns, rows):
+            self.columns = columns
+            self.rows = rows
+
+    class _FakeResult:
+        def __init__(self, reports):
+            self.reports = reports
+
+    class _FakeService:
+        def __init__(self, db_path):
+            pass
+
+        def calculate(self, scope):
+            return _FakeResult({
+                "当前持仓": _FakeTable(
+                    ["渠道", "分类", "Ticker", "持仓数量", "累计净投入($)", "持仓成本价($)", "持仓市值($)", "持仓盈亏金额($)"],
+                    [
+                        _FakeRow(["IBKR", "股票", "AAPL", "10", "100.00", "10.00", "2000.00", "1900.00"]),
+                        _FakeRow(["IBKR", "杠杆", "TQQQ", "10", "500.00", "50.00", "600.00", "100.00"]),
+                    ],
+                ),
+                "每日持仓收益": _FakeTable([], []),
+                "交易回放": _FakeTable([], []),
+            })
+
+    monkeypatch.setattr("portfolio.services.after_hours_report.AnalyticsService", _FakeService)
+    monkeypatch.setattr(
+        "portfolio.services.after_hours_report.fetch_after_hours_quotes",
+        lambda symbols: {
+            "AAPL": {
+                "regular_close": Decimal("200.00"),
+                "regular_change_pct": Decimal("0.01"),
+                "after_hours_price": None,
+                "after_hours_change_pct": None,
+                "source": "mock",
+            },
+            "TQQQ": {
+                "regular_close": Decimal("60.00"),
+                "regular_change_pct": Decimal("0.02"),
+                "after_hours_price": None,
+                "after_hours_change_pct": None,
+                "source": "mock",
+            },
+            "QQQ": {"regular_close": Decimal("500.00"), "regular_change_pct": Decimal("0.01"), "source": "mock"},
+            "SPY": {"regular_close": Decimal("600.00"), "regular_change_pct": Decimal("0.005"), "source": "mock"},
+        },
+    )
+    monkeypatch.setattr(
+        "portfolio.services.after_hours_report.resolve_channel_cash_details",
+        lambda result: {"IBKR": {"channel": "IBKR", "amount": Decimal("400.00"), "source": "mock"}},
+    )
+    monkeypatch.setattr("portfolio.services.after_hours_report.fetch_ticker_news", lambda symbols: {})
+
+    snap = build_after_hours_snapshot(demo_path, date(2026, 11, 25), person_key="个人", person_id=1, person_name="个人")
+    summary = snap["summary"]
+    assert summary["cost_anomaly_symbols"] == ["AAPL"]
+    assert summary["unrealized_pnl_ex_anomaly"] == 100.0
+    assert summary["total_market_value"] == 2600.0
+    assert summary["cash_balance"] == 400.0
+    assert summary["total_assets"] == 3000.0
+    # 组合等效敞口：(2000*1 + 600*3) / 2600 = 3800 / 2600 ≈ 1.4615
+    assert round(summary["effective_leverage"], 4) == round(3800 / 2600, 4)
+    assert round(summary["effective_leverage_total_assets"], 4) == round(3800 / 3000, 4)
+
+
+def test_after_hours_delete_api_and_market_closed_guard(tmp_path, monkeypatch):
+    """验证休市日生成拦截 (MARKET_CLOSED) 与 DELETE 删除历史日报权限隔离。"""
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    store.save_report({
+        "id": "2026-11-26::个人",
+        "trade_date": "2026-11-26",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-26T21:00:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {"summary": {"day_pnl": 0.0, "total_market_value": 1000.0}},
+        "markdown": "## 一、今日总览\n\n误生成休市日报",
+    })
+    monkeypatch.setattr(api_module, "get_after_hours_store", lambda: store)
+
+    admin_ctx = build_auth_context(
+        "REMOTE_PUBLIC",
+        session_user={"user_id": 1, "username": "admin", "role": "admin", "person_id": None, "person_name": "管理员"},
+    )
+    admin_client = _make_client(admin_ctx)
+
+    # 1. GET /reports 应返回 market_session
+    res_list = admin_client.get("/api/v1/ai/after-hours/reports?person=个人")
+    assert res_list.status_code == 200
+    assert "market_session" in res_list.get_json()
+
+    # 2. 休市日 (2026-11-26 感恩节) 触发生成返回 400 MARKET_CLOSED
+    res_closed = admin_client.post(
+        "/api/v1/ai/after-hours/generate",
+        json={"trade_date": "2026-11-26", "person": "个人", "async": True},
+    )
+    assert res_closed.status_code == 400
+    assert res_closed.get_json()["code"] == "MARKET_CLOSED"
+
+    # 3. 隔离用户无权删除他人日报，管理员可删除
+    lake_ctx = build_auth_context(
+        "REMOTE_PUBLIC",
+        session_user={"user_id": 2, "username": "拉科", "role": "user", "person_id": 5, "person_name": "拉科"},
+    )
+    lake_client = _make_client(lake_ctx)
+    res_forbid = lake_client.delete("/api/v1/ai/after-hours/report/2026-11-26::个人")
+    assert res_forbid.status_code == 403
+
+    res_del = admin_client.delete("/api/v1/ai/after-hours/report/2026-11-26::个人")
+    assert res_del.status_code == 200
+    assert store.get_report("2026-11-26::个人") is None
