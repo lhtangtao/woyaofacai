@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QDateEdit,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -47,6 +46,7 @@ from portfolio.services.after_hours_report import (
     generate_after_hours_report,
     resolve_default_trade_date,
 )
+from portfolio.ui.date_picker import DatePicker
 
 logger = logging.getLogger(__name__)
 
@@ -236,11 +236,12 @@ class AfterHoursReportPage(QWidget):
         top.setSpacing(8)
 
         top.addWidget(QLabel("交易日："))
-        self.date_edit = QDateEdit()
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDisplayFormat("yyyy-MM-dd")
         default_d = resolve_default_trade_date()
-        self.date_edit.setDate(QDate(default_d.year, default_d.month, default_d.day))
+        self.date_edit = DatePicker(QDate(default_d.year, default_d.month, default_d.day))
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.date_edit.setDateRange(QDate(2020, 1, 1), QDate.currentDate())
+        self.date_edit.track_today_max = True
+        self.date_edit.setMinimumWidth(148)
         top.addWidget(self.date_edit)
 
         top.addWidget(QLabel("范围："))

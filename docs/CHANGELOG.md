@@ -1,3 +1,9 @@
+## 2026-11-27 22:13 修复桌面端盘后复盘日期选择器无法点选日历及滚轮误触问题
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/ui/after_hours_report_page.py` 将交易日选择器替换为 `DatePicker`（支持点击全区域弹出日历、修复日历格子样式，并限制最大日期为今日），同时在 `src/portfolio/ui/date_picker.py` 禁用 `wheelEvent` 防止误滚至未来年份。
+- `tests/test_after_hours_report.py` 14 项测试与 `ruff check` 全部通过。
+
 ## 2026-11-27 22:09 盘后复盘补完：双端接入「删除存档」按钮、修正成本偏离熔断阈值并清理休市日误生成存档
 
 - 修改者：Antigravity（代码修改与收尾补完）

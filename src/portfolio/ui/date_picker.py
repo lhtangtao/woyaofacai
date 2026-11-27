@@ -106,6 +106,10 @@ class DatePicker(QDateEdit):
             return True
         return super().eventFilter(watched, event)
 
+    def wheelEvent(self, event):
+        # 防止鼠标滚轮或触控板误滚修改年份/日期
+        event.ignore()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         painter = QPainter(self)

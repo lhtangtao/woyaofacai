@@ -1,5 +1,17 @@
 [
   {
+    "title": "修复桌面端盘后复盘日期选择器无法点选日历及滚轮误触跳转未来年份的问题",
+    "time": "2026-11-27 22:13",
+    "author": "Antigravity",
+    "tag": "日期选择器修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "替换日期控件（`src/portfolio/ui/after_hours_report_page.py`）：将「盘后复盘日报」顶部交易日控件由裸 `QDateEdit` 替换为项目封装的 `DatePicker`（自带日历图标、点击任意位置弹出日历并修复日历格子 padding），并限制最大可选日期为今日（`track_today_max=True`）。",
+      "禁用滚轮误触（`src/portfolio/ui/date_picker.py`）：在 `DatePicker` 新增 `wheelEvent` 忽略逻辑，防止鼠标滚轮或触控板滑动误将年份滚动至未来年份（如 `2031-11-28`）。",
+      "验证范围：`tests/test_after_hours_report.py` 14 项测试（含滚轮防误触与最大日期上限断言）全部通过；`ruff check` 0 错误。"
+    ]
+  },
+  {
     "title": "盘后复盘补完：双端接入「删除存档」按钮、修正成本偏离熔断阈值并清理休市日误生成存档",
     "time": "2026-11-27 22:09",
     "author": "Antigravity",

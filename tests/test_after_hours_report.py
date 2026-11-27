@@ -823,6 +823,28 @@ def test_desktop_after_hours_session_badges_closed_guard_and_delete(demo_path, t
     page = AfterHoursReportPage(store=store, db_path=demo_path)
     qtbot.addWidget(page)
 
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+
+    from portfolio.ui.date_picker import DatePicker
+
+    assert isinstance(page.date_edit, DatePicker)
+    assert page.date_edit.calendarPopup() is True
+    assert page.date_edit.maximumDate() <= QDate.currentDate()
+    before_wheel = page.date_edit.date()
+    wheel_ev = QWheelEvent(
+        QPointF(10, 10),
+        QPointF(10, 10),
+        QPointF(0, 0).toPoint(),
+        QPointF(0, 120).toPoint(),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    page.date_edit.wheelEvent(wheel_ev)
+    assert page.date_edit.date() == before_wheel
+
     assert not page.session_badge.isHidden()
     assert "半日市" in page.session_badge.text()
     assert "$12,000.00" in page.kpi_mv_val.text()
