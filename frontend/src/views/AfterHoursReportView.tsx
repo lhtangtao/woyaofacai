@@ -136,6 +136,7 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
   const [moverFilter, setMoverFilter] = useState<"all" | "up" | "down" | "after" | "news">("all");
   const [moverSort, setMoverSort] = useState<"day_pnl" | "weight" | "change">("day_pnl");
   const [expandedSyms, setExpandedSyms] = useState<string[]>([]);
+  const [prevReviewExpanded, setPrevReviewExpanded] = useState<boolean>(true);
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
   const [followupInput, setFollowupInput] = useState("");
   const [followupLoading, setFollowupLoading] = useState(false);
@@ -398,8 +399,12 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
 
   const snap = detail?.snapshot || {};
   const summary = snap?.summary || {};
+  const trendStats = summary?.trend || null;
   const benchmarks = snap?.market_benchmarks || {};
+  const exposureBreakdown = snap?.exposure_breakdown || {};
+  const upcomingEvents = snap?.upcoming_events || {};
   const structured = detail?.structured || {};
+  const prevChecklistReview = structured?.prev_checklist_review || null;
   const holdings: any[] = snap?.holdings || [];
   const trades: any[] = snap?.trades || [];
   const newsMap: Record<string, any[]> = snap?.news || {};
@@ -959,6 +964,70 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                           常规 {fmtMoney(summary.regular_day_pnl, true)} · 盘后 {fmtMoney(summary.after_hours_day_pnl, true)}
                         </span>
                       )}
+                      {trendStats &&
+                        (trendStats.pnl_5d != null ||
+                          trendStats.pct_mtd != null ||
+                          trendStats.drawdown_30d_pct != null ||
+                          Boolean(trendStats.streak_days)) && (
+                          <span
+                            style={{
+                              display: "block",
+                              fontSize: "10.5px",
+                              marginTop: "3px",
+                              color: "var(--text-muted)",
+                              lineHeight: 1.4,
+                            }}
+                            title={
+                              trendStats.pnl_wtd != null
+                                ? `本周 WTD：${fmtMoney(trendStats.pnl_wtd, true)} (${fmtPct(trendStats.pct_wtd)})`
+                                : undefined
+                            }
+                          >
+                            {[
+                              trendStats.pnl_5d != null && (
+                                <span key="5d">
+                                  近5日{" "}
+                                  <strong style={{ color: toneColor(trendStats.pnl_5d) }}>
+                                    {fmtMoney(trendStats.pnl_5d, true)}
+                                  </strong>
+                                </span>
+                              ),
+                              trendStats.pct_mtd != null && (
+                                <span key="mtd">
+                                  本月{" "}
+                                  <strong style={{ color: toneColor(trendStats.pct_mtd) }}>
+                                    {fmtPct(trendStats.pct_mtd)}
+                                  </strong>
+                                </span>
+                              ),
+                              trendStats.drawdown_30d_pct != null && (
+                                <span key="dd">
+                                  距30日高点{" "}
+                                  <strong style={{ color: Number(trendStats.drawdown_30d_pct) < 0 ? "#DC2626" : "#16A34A" }}>
+                                    {(Number(trendStats.drawdown_30d_pct) * 100).toFixed(1)}%
+                                  </strong>
+                                </span>
+                              ),
+                              Boolean(trendStats.streak_days) && (
+                                <strong
+                                  key="st"
+                                  style={{ color: Number(trendStats.streak_days) > 0 ? "#16A34A" : "#DC2626" }}
+                                >
+                                  {Number(trendStats.streak_days) > 0
+                                    ? `连盈${trendStats.streak_days}日`
+                                    : `连跌${Math.abs(Number(trendStats.streak_days))}日`}
+                                </strong>
+                              ),
+                            ]
+                              .filter(Boolean)
+                              .map((node, i) => (
+                                <React.Fragment key={i}>
+                                  {i > 0 ? " · " : ""}
+                                  {node}
+                                </React.Fragment>
+                              ))}
+                          </span>
+                        )}
                     </div>
                   </div>
 
@@ -1030,6 +1099,70 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                           </div>
                         );
                       })}
+                      {(() => {
+                        const smh = benchmarks["SMH"];
+                        const vix = benchmarks["^VIX"];
+                        const tnx = benchmarks["^TNX"];
+                        const items: React.ReactNode[] = [];
+                        if (smh && smh.regular_change_pct != null) {
+                          items.push(
+                            <span key="smh">
+                              <strong>SMH</strong>{" "}
+                              <span style={{ color: toneColor(smh.regular_change_pct) }}>
+                                {fmtPct(smh.regular_change_pct)}
+                              </span>
+                            </span>
+                          );
+                        }
+                        if (vix && vix.regular_close != null) {
+                          const vixChg = vix.regular_change_pct;
+                          const vixCol =
+                            vixChg != null && Number(vixChg) > 0
+                              ? "#DC2626"
+                              : vixChg != null && Number(vixChg) < 0
+                                ? "#16A34A"
+                                : "var(--text-muted)";
+                          items.push(
+                            <span key="vix">
+                              <strong>VIX</strong> {Number(vix.regular_close).toFixed(1)}
+                              {vixChg != null && (
+                                <span style={{ color: vixCol }}> ({fmtPct(vixChg)})</span>
+                              )}
+                            </span>
+                          );
+                        }
+                        if (tnx && tnx.regular_close != null) {
+                          let tnxVal = Number(tnx.regular_close);
+                          if (tnxVal > 20) tnxVal = tnxVal / 10;
+                          items.push(
+                            <span key="tnx">
+                              <strong>US10Y</strong> {tnxVal.toFixed(2)}%
+                            </span>
+                          );
+                        }
+                        if (items.length === 0) return null;
+                        return (
+                          <div
+                            style={{
+                              fontSize: "10.5px",
+                              color: "var(--text-muted)",
+                              borderTop: "1px dashed var(--border-color)",
+                              paddingTop: "4px",
+                              marginTop: "2px",
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: "4px",
+                            }}
+                          >
+                            {items.map((node, i) => (
+                              <React.Fragment key={i}>
+                                {i > 0 && <span>·</span>}
+                                {node}
+                              </React.Fragment>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -1084,6 +1217,71 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* 未来 7 天关键事件预警胶囊条（仅当存在持仓财报或宏观大事件时显示） */}
+                {(() => {
+                  const earnEvs: any[] = Array.isArray(upcomingEvents?.earnings) ? upcomingEvents.earnings : [];
+                  const macroEvs: any[] = Array.isArray(upcomingEvents?.macro) ? upcomingEvents.macro : [];
+                  if (earnEvs.length === 0 && macroEvs.length === 0) return null;
+                  return (
+                    <div
+                      style={{
+                        borderRadius: "8px",
+                        border: "1px solid rgba(245, 158, 11, 0.38)",
+                        background: "rgba(254, 243, 199, 0.45)",
+                        padding: "7px 11px",
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: "6px",
+                        fontSize: "11.5px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "10.5px",
+                          fontWeight: 700,
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                          background: "#FEF3C7",
+                          color: "#92400E",
+                        }}
+                      >
+                        未来7天预警
+                      </span>
+                      {earnEvs.slice(0, 4).map((ev, idx) => (
+                        <span
+                          key={`e-${idx}`}
+                          style={{
+                            padding: "1px 7px",
+                            borderRadius: "999px",
+                            background: "#FFFFFF",
+                            border: "1px solid #FDE68A",
+                            color: "#92400E",
+                            fontWeight: 600,
+                          }}
+                        >
+                          财报 T+{ev.days_away}天 · {ev.title || ev.symbol} ({ev.date})
+                        </span>
+                      ))}
+                      {macroEvs.slice(0, 4).map((ev, idx) => (
+                        <span
+                          key={`m-${idx}`}
+                          style={{
+                            padding: "1px 7px",
+                            borderRadius: "999px",
+                            background: "#EFF6FF",
+                            border: "1px solid #BFDBFE",
+                            color: "#1D4ED8",
+                            fontWeight: 600,
+                          }}
+                        >
+                          宏观 T+{ev.days_away}天 · {ev.title} ({ev.date})
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* 2. 多视角 Tab 容器 */}
@@ -1148,6 +1346,57 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                                 : "风险整体可控"}
                             </span>
                           </div>
+                          {Array.isArray(exposureBreakdown?.by_underlying) && exposureBreakdown.by_underlying.length > 0 && (
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                flexWrap: "wrap",
+                                gap: "6px",
+                                padding: "6px 9px",
+                                borderRadius: "8px",
+                                border: "1px solid var(--border-color)",
+                                background: "var(--bg-panel)",
+                                fontSize: "11.5px",
+                              }}
+                              title={
+                                [
+                                  "底层资产 Top 5：" +
+                                    exposureBreakdown.by_underlying
+                                      .slice(0, 5)
+                                      .map((x: any) => `${x.label} ${(Number(x.pct_of_mv || 0) * 100).toFixed(1)}%`)
+                                      .join("，"),
+                                  Array.isArray(exposureBreakdown?.by_sector) && exposureBreakdown.by_sector.length > 0
+                                    ? "主题板块 Top 4：" +
+                                      exposureBreakdown.by_sector
+                                        .slice(0, 4)
+                                        .map((x: any) => `${x.label} ${(Number(x.pct_of_mv || 0) * 100).toFixed(1)}%`)
+                                        .join("，")
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join("\n")
+                              }
+                            >
+                              <span style={{ fontWeight: 600, color: "var(--text-muted)" }}>穿透敞口 Top 3：</span>
+                              {exposureBreakdown.by_underlying.slice(0, 3).map((it: any, idx: number) => (
+                                <span
+                                  key={idx}
+                                  className="font-mono"
+                                  style={{
+                                    padding: "1px 7px",
+                                    borderRadius: "999px",
+                                    background: "var(--brand-selected)",
+                                    color: "var(--brand)",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {it.label || it.key}{" "}
+                                  {it.pct_of_mv != null ? `${(Number(it.pct_of_mv) * 100).toFixed(0)}%` : "—"}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           {risks.length === 0 ? (
                             <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>暂无额外结构性风险提醒。</div>
                           ) : (
@@ -1177,6 +1426,60 @@ export const AfterHoursReportView: React.FC<AfterHoursReportViewProps> = ({
                               {doneChecklistCount} / {checklist.length} 已核查
                             </span>
                           </div>
+                          {prevChecklistReview && (prevChecklistReview.summary || (prevChecklistReview.items || []).length > 0) && (
+                            <div
+                              style={{
+                                borderRadius: "8px",
+                                border: "1px solid rgba(37, 99, 235, 0.25)",
+                                background: "var(--brand-selected)",
+                                padding: "8px 10px",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: "5px",
+                                fontSize: "11.5px",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setPrevReviewExpanded((v) => !v)}
+                                style={{
+                                  border: "none",
+                                  background: "transparent",
+                                  padding: 0,
+                                  textAlign: "left",
+                                  fontWeight: 700,
+                                  color: "var(--brand)",
+                                  cursor: "pointer",
+                                  fontSize: "11.5px",
+                                }}
+                              >
+                                {prevReviewExpanded ? "▾" : "▸"} 昨日计划复盘
+                                {prevChecklistReview.prev_date ? ` (${prevChecklistReview.prev_date})` : ""}
+                              </button>
+                              {prevReviewExpanded && (
+                                <div style={{ display: "flex", flexDirection: "column", gap: "4px", color: "var(--text-main)", lineHeight: 1.5 }}>
+                                  {prevChecklistReview.summary && <div>{prevChecklistReview.summary}</div>}
+                                  {Array.isArray(prevChecklistReview.items) &&
+                                    prevChecklistReview.items.slice(0, 5).map((it: any, idx: number) => {
+                                      const stCol =
+                                        it.status === "已执行"
+                                          ? "#15803D"
+                                          : it.status === "已触发"
+                                            ? "#B45309"
+                                            : it.status === "未执行"
+                                              ? "#DC2626"
+                                              : "var(--text-muted)";
+                                      return (
+                                        <div key={idx} style={{ fontSize: "11px" }}>
+                                          <strong>{it.ticker}</strong>{" "}
+                                          <span style={{ color: stCol, fontWeight: 600 }}>[{it.status}]</span> {it.note}
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {checklist.length === 0 ? (
                             <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>暂无次日盘前待办事项。</div>
                           ) : (

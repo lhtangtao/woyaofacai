@@ -1,5 +1,20 @@
 [
   {
+    "title": "盘后复盘日报 2.0 扩充 5 项每日高价值汇总维度（趋势回撤、风向标、7天预警、昨日复盘与穿透敞口）",
+    "time": "2026-11-28 00:52",
+    "author": "Antigravity",
+    "tag": "5项高价值汇总维度",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "近期趋势与回撤坐标（`src/portfolio/services/after_hours_report.py`）：基于 `每日持仓收益` 纯 `Decimal` 计算近 5 日、WTD、MTD 盈亏与时间加权收益率、连盈/连亏天数及距近 30 日高点回撤，融入双端 KPI 卡片 1 底部。",
+      "市场风向标补齐（`SMH` / `^VIX` / `^TNX`）：长桥行情自动跳过 `^` 指数前缀并走 Yahoo 降级，精准归一化 `^TNX` 为真实百分点（防 10x 量纲误读），融入双端 KPI 卡片 3 底部。",
+      "未来 7 天关键事件预警（`src/portfolio/domain/us_market_calendar.py`、`after_hours_report.py`）：新增 FOMC/CPI/PCE/NFP 年度宏观日程，并复用 `EarningsService` 本地缓存与核实表扫描持仓及关联正股财报倒计时，有事件时在 Hero 底部展示紧凑胶囊条，无事件零占位。",
+      "昨日关注清单执行闭环：自动查询同人员上一份日报清单与勾选状态注入 Prompt，新增结构化可选字段 `prev_checklist_review`，在双端「次日盘前关注清单」顶部以可折叠浅色块展示。",
+      "底层资产与板块穿透敞口：合并杠杆 ETF 精确倍数与正股/指数输出 Top 5 底层资产与 Top 4 板块净敞口，在双端「仓位结构与风险雷达」顶部展示 Top 3 胶囊；全部新字段对历史旧存档完全向后兼容。",
+      "验证范围：`frontend npm run build` 0 错误打包至 `src/portfolio/web/static_dist/`；`ruff check` 0 错误；`tests/test_after_hours_report.py` 与 `tests/test_us_market_calendar.py` 共 21 项测试全部通过；真实库 `2026-11-25`（个人）快照验算全部 5 项维度准确；8888 服务已重启验证。"
+    ]
+  },
+  {
     "title": "盘后复盘日报细节打磨：统一筛选折叠口径、补回盘后具体价、平滑滚动聚焦与重算重置",
     "time": "2026-11-27 23:40",
     "author": "Antigravity",

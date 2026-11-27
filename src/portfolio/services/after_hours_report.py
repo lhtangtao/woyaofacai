@@ -21,7 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
 from decimal import Decimal
 from pathlib import Path
@@ -30,10 +30,11 @@ from zoneinfo import ZoneInfo
 
 from portfolio.domain.models import QueryScope
 from portfolio.domain.us_market_calendar import (
+    get_upcoming_us_macro_events,
     get_us_market_session,
     previous_us_trading_day,
 )
-from portfolio.paths import DATABASE_PATH, PROJECT_DIR
+from portfolio.paths import CREDENTIALS_PATH, DATABASE_PATH, PROJECT_DIR, quote_cache_path
 from portfolio.services.ai_service import CodexAIService, normalize_ai_provider
 from portfolio.services.analytics_service import AnalyticsService
 from portfolio.services.channel_cash import resolve_channel_cash_details
@@ -85,9 +86,147 @@ LEVERAGED_ETF_MULTIPLES: Dict[str, Decimal] = {
     "WDCX": Decimal("2"),
 }
 LEVERAGED_ETF_SYMBOLS = frozenset(LEVERAGED_ETF_MULTIPLES.keys())
+BENCHMARK_SYMBOLS = ("SPY", "QQQ", "SMH", "^VIX", "^TNX")
+
+# 底层资产穿透映射：补充常见宽基/行业/单股杠杆 ETF 的底层标的键
+_EXTRA_UNDERLYING_MAP: Dict[str, str] = {
+    "TQQQ": "QQQ",
+    "SQQQ": "QQQ",
+    "QLD": "QQQ",
+    "QQQM": "QQQ",
+    "QQQ": "QQQ",
+    "UPRO": "SPY",
+    "SPXL": "SPY",
+    "SSO": "SPY",
+    "VOO": "SPY",
+    "IVV": "SPY",
+    "SPY": "SPY",
+    "SOXL": "SOX",
+    "SOXS": "SOX",
+    "SMH": "SOX",
+    "SOXX": "SOX",
+    "TNA": "IWM",
+    "IWM": "IWM",
+    "KORU": "EWY",
+    "EWY": "EWY",
+    "DXJ": "DXJ",
+    "NVDL": "NVDA",
+    "NVDS": "NVDA",
+    "CONL": "COIN",
+    "MSTU": "MSTR",
+    "MSTX": "MSTR",
+}
+
+_UNDERLYING_LABEL_MAP: Dict[str, str] = {
+    "QQQ": "纳指100",
+    "SPY": "标普500",
+    "SOX": "费城半导体",
+    "IWM": "罗素2000",
+    "EWY": "韩国指数",
+    "DXJ": "日本指数",
+}
+
+_SECTOR_TICKER_MAP: Dict[str, str] = {
+    # 纳指指数
+    "QQQ": "纳指指数",
+    "QQQM": "纳指指数",
+    "TQQQ": "纳指指数",
+    "SQQQ": "纳指指数",
+    "QLD": "纳指指数",
+    # 半导体
+    "SOX": "半导体",
+    "SOXL": "半导体",
+    "SOXS": "半导体",
+    "SMH": "半导体",
+    "SOXX": "半导体",
+    "NVDA": "半导体",
+    "NVDL": "半导体",
+    "NVDS": "半导体",
+    "AMD": "半导体",
+    "AVGO": "半导体",
+    "AVGX": "半导体",
+    "TSM": "半导体",
+    "MU": "半导体",
+    "MUU": "半导体",
+    "INTC": "半导体",
+    "INTW": "半导体",
+    "MRVL": "半导体",
+    "SNDK": "半导体",
+    "SNXX": "半导体",
+    "STX": "半导体",
+    "STXL": "半导体",
+    "WDC": "半导体",
+    "WDCX": "半导体",
+    "LITE": "半导体",
+    "LITX": "半导体",
+    "AAOI": "半导体",
+    "AAOX": "半导体",
+    "QCOM": "半导体",
+    "ASML": "半导体",
+    "AMAT": "半导体",
+    "LRCX": "半导体",
+    "KLAC": "半导体",
+    "ARM": "半导体",
+    # 科技/AI
+    "AAPL": "科技/AI",
+    "MSFT": "科技/AI",
+    "GOOGL": "科技/AI",
+    "GOOG": "科技/AI",
+    "GGLL": "科技/AI",
+    "AMZN": "科技/AI",
+    "META": "科技/AI",
+    "TSLA": "科技/AI",
+    "TSLL": "科技/AI",
+    "TSLS": "科技/AI",
+    "ORCL": "科技/AI",
+    "ORCX": "科技/AI",
+    "PLTR": "科技/AI",
+    "NFLX": "科技/AI",
+    "CRM": "科技/AI",
+    "NOW": "科技/AI",
+    "CRWD": "科技/AI",
+    "SNOW": "科技/AI",
+    "APP": "科技/AI",
+    # 宽基/海外指数
+    "SPY": "宽基/海外指数",
+    "VOO": "宽基/海外指数",
+    "IVV": "宽基/海外指数",
+    "UPRO": "宽基/海外指数",
+    "SPXL": "宽基/海外指数",
+    "SSO": "宽基/海外指数",
+    "DIA": "宽基/海外指数",
+    "IWM": "宽基/海外指数",
+    "TNA": "宽基/海外指数",
+    "KORU": "宽基/海外指数",
+    "EWY": "宽基/海外指数",
+    "DXJ": "宽基/海外指数",
+    # 加密概念
+    "COIN": "加密概念",
+    "CONL": "加密概念",
+    "MSTR": "加密概念",
+    "MSTU": "加密概念",
+    "MSTX": "加密概念",
+    "IBIT": "加密概念",
+    "MARA": "加密概念",
+    # 防御/固收
+    "SGOV": "防御/固收",
+    "TLT": "防御/固收",
+    "GLD": "防御/固收",
+    "SLV": "防御/固收",
+    "SCHD": "防御/固收",
+}
 _STORE_LOCK = threading.RLock()
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
+
+
+def _normalize_tnx_yield(val: Optional[Decimal]) -> Optional[Decimal]:
+    """归一化 10Y 美债收益率 (^TNX) 为真实百分点（例如 42.5 -> 4.25，4.922 保持 4.922）。"""
+    if val is None:
+        return None
+    if val > Decimal("20"):
+        return val / Decimal("10")
+    return val
 
 
 def resolve_leverage_profile(symbol: str, category: str = "") -> tuple[bool, Decimal]:
@@ -248,6 +387,27 @@ class AfterHoursReportStore:
             data["reports"][rid] = report
             self._save_raw(data)
             return report
+
+    def get_previous_report(self, person_key: str, before_trade_date: str) -> Optional[Dict[str, Any]]:
+        """查找同一人员范围严格早于 before_trade_date 的最近一份历史盘后日报。"""
+        with _STORE_LOCK:
+            data = self._load_raw()
+            candidates: List[Dict[str, Any]] = []
+            for rep in data["reports"].values():
+                if not isinstance(rep, dict):
+                    continue
+                if rep.get("person_key") != person_key:
+                    continue
+                td = str(rep.get("trade_date") or "").strip()[:10]
+                if td and td < before_trade_date:
+                    candidates.append(dict(rep))
+            if not candidates:
+                return None
+            candidates.sort(
+                key=lambda x: (str(x.get("trade_date") or ""), str(x.get("generated_at") or "")),
+                reverse=True,
+            )
+            return ensure_structured(candidates[0])
 
     def delete_report(self, report_id: str) -> bool:
         """删除指定 ID 的历史盘后日报存档（用于清理误生成的休市日日报等）。"""
@@ -417,8 +577,9 @@ def fetch_after_hours_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
             else:
                 cfg = Config(app_key, app_secret, access_token)
             ctx = QuoteContext(cfg)
-            lb_syms = [f"{s}.US" for s in clean_syms]
-            quotes = ctx.quote(lb_syms)
+            # 长桥不支持 ^VIX / ^TNX 等 Yahoo 指数前缀符号，跳过交由下方 Yahoo 降级拉取
+            lb_syms = [f"{s}.US" for s in clean_syms if not s.startswith("^")]
+            quotes = ctx.quote(lb_syms) if lb_syms else []
             for q in quotes:
                 sym = str(getattr(q, "symbol", "")).upper().removesuffix(".US")
                 last_done = _to_dec(getattr(q, "last_done", None))
@@ -441,7 +602,7 @@ def fetch_after_hours_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
     except Exception as exc:
         logger.warning("长桥盘后行情获取失败，将尝试 Yahoo Finance 降级补齐: %s", exc)
 
-    # 2. 对未获取到行情的标的降级查询 Yahoo Finance Chart API
+    # 2. 对未获取到行情的标的（及 ^VIX / ^TNX 等指数）降级查询 Yahoo Finance Chart API
     missing = [s for s in clean_syms if s not in result]
     if missing:
         def _fetch_yahoo_quote(sym: str) -> Optional[Dict[str, Any]]:
@@ -450,12 +611,24 @@ def fetch_after_hours_quotes(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
             try:
                 with urllib.request.urlopen(req, timeout=6) as resp:
                     payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-                meta = (((payload.get("chart") or {}).get("result") or [{}])[0]).get("meta") or {}
+                chart_res = ((payload.get("chart") or {}).get("result") or [{}])[0] or {}
+                meta = chart_res.get("meta") or {}
                 reg_price = _to_dec(meta.get("regularMarketPrice"))
-                prev_close = _to_dec(meta.get("chartPreviousClose") or meta.get("previousClose"))
+                prev_close = _to_dec(meta.get("previousClose"))
+                if prev_close is None:
+                    closes_raw = ((((chart_res.get("indicators") or {}).get("quote") or [{}])[0]) or {}).get("close") or []
+                    valid_closes = [_to_dec(c) for c in closes_raw if _to_dec(c) is not None]
+                    if len(valid_closes) >= 2:
+                        prev_close = valid_closes[-2]
+                if prev_close is None:
+                    prev_close = _to_dec(meta.get("chartPreviousClose"))
                 post_price = _to_dec(meta.get("postMarketPrice"))
                 if reg_price is None:
                     return None
+                if sym == "^TNX":
+                    reg_price = _normalize_tnx_yield(reg_price)
+                    prev_close = _normalize_tnx_yield(prev_close)
+                    post_price = _normalize_tnx_yield(post_price)
                 reg_pct = ((reg_price - prev_close) / prev_close) if (prev_close and prev_close > 0) else None
                 post_pct = ((post_price - reg_price) / reg_price) if (post_price is not None and reg_price > 0) else None
                 total_pct = ((post_price - prev_close) / prev_close) if (post_price is not None and prev_close and prev_close > 0) else reg_pct
@@ -579,6 +752,327 @@ def resolve_person_scope(db_path: Path, person_key: Optional[str] = None, person
     return "ALL", None, "全部人员"
 
 
+def fetch_upcoming_earnings_events(
+    holdings_list: List[Dict[str, Any]],
+    trade_date: date,
+    days_ahead: int = 7,
+) -> List[Dict[str, Any]]:
+    """扫描当前持仓及其关联正股未来 1~days_ahead 天内的财报日（优先复用 EarningsService 本地缓存与核实表，绝不阻塞）。"""
+    if not holdings_list or days_ahead <= 0:
+        return []
+
+    target_to_held: Dict[str, List[str]] = {}
+    for h in holdings_list:
+        sym = str(h.get("symbol") or "").strip().upper().removesuffix(".US")
+        if not sym:
+            continue
+        underlying = str(h.get("underlying") or "").strip().upper().removesuffix(".US")
+        if not underlying:
+            underlying = _EXTRA_UNDERLYING_MAP.get(sym, "")
+        # 对单一正股杠杆 ETF，同时关注其关联正股的财报；宽基指数 ETF 不查单公司财报
+        if underlying and underlying not in _UNDERLYING_LABEL_MAP:
+            target_key = f"{underlying}.US"
+            target_to_held.setdefault(target_key, [])
+            if sym not in target_to_held[target_key]:
+                target_to_held[target_key].append(sym)
+        if sym not in _UNDERLYING_LABEL_MAP and sym not in _EXTRA_UNDERLYING_MAP:
+            target_key = f"{sym}.US"
+            target_to_held.setdefault(target_key, [])
+            if sym not in target_to_held[target_key]:
+                target_to_held[target_key].append(sym)
+
+    if not target_to_held:
+        return []
+
+    try:
+        from portfolio.services.earnings_service import EarningsService, reconciled_events
+        from portfolio.services.quote_store import QuoteStore
+
+        q_path = quote_cache_path()
+        q_store = QuoteStore(q_path) if q_path.is_file() else None
+        esvc = EarningsService(store=q_store)
+
+        end_date = trade_date + timedelta(days=days_ahead)
+        months_to_scan = sorted({(trade_date.year, trade_date.month), (end_date.year, end_date.month)})
+        targets = set(target_to_held.keys())
+
+        raw_events = []
+        for y, m in months_to_scan:
+            cached = esvc.get_cached(CREDENTIALS_PATH, y, m, ("US",), max_age_seconds=None)
+            if cached is None:
+                # 兼容其他 path key 的已持久化财报缓存：按核实表兜底
+                month_events = reconciled_events([], year=y, month=m)
+            else:
+                month_events = reconciled_events(cached.events, year=y, month=m)
+            for ev in month_events:
+                if ev.symbol in targets:
+                    raw_events.append(ev)
+
+        upcoming: List[Dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for ev in raw_events:
+            delta = (ev.day - trade_date).days
+            if not (1 <= delta <= days_ahead):
+                continue
+            sym_clean = str(ev.symbol).upper().removesuffix(".US")
+            dedup_key = (ev.day.isoformat(), sym_clean)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            t_lbl = str(ev.time_label or "").strip()
+            held_syms = sorted(target_to_held.get(ev.symbol) or [sym_clean])
+            held_note = (
+                f"（关联持仓 {'/'.join(s for s in held_syms if s != sym_clean)}）"
+                if any(s != sym_clean for s in held_syms)
+                else ""
+            )
+            title = f"{sym_clean} 财报" + (f" ({t_lbl})" if t_lbl else "") + held_note
+            upcoming.append({
+                "date": ev.day.isoformat(),
+                "days_away": delta,
+                "symbol": sym_clean,
+                "held_symbols": held_syms,
+                "time_label": t_lbl,
+                "title": title,
+            })
+        upcoming.sort(key=lambda x: (x["days_away"], x["symbol"]))
+        return upcoming
+    except Exception as exc:
+        logger.debug("扫描未来 7 天持仓财报日程失败（已静默跳过）: %s", exc)
+        return []
+
+
+def _compute_recent_trend(
+    daily_rep,
+    trade_date: date,
+    *,
+    current_day_pnl: Optional[Decimal] = None,
+    current_prev_mv: Optional[Decimal] = None,
+    current_total_mv: Optional[Decimal] = None,
+) -> Optional[Dict[str, Any]]:
+    """基于本地「每日持仓收益」按 Decimal 精确计算近 5 日、WTD、MTD、连盈/连亏天数与近 30 日高点回撤。"""
+    date_str = trade_date.isoformat()
+    by_day: Dict[str, Dict[str, Decimal]] = {}
+
+    if daily_rep and getattr(daily_rep, "rows", None):
+        cols = list(daily_rep.columns)
+        idx = {name: i for i, name in enumerate(cols)}
+
+        def _pick(vals, names: tuple[str, ...], fallback_idx: Optional[int] = None):
+            for name in names:
+                if name in idx and idx[name] < len(vals):
+                    return vals[idx[name]]
+            if fallback_idx is not None and 0 <= fallback_idx < len(vals):
+                return vals[fallback_idx]
+            return None
+
+        for row in daily_rep.rows:
+            vals = row.values
+            r_date = str(_pick(vals, ("日期", "交易日期"), 0) or "").strip()[:10]
+            if not r_date or r_date > date_str:
+                continue
+            bucket = by_day.setdefault(
+                r_date,
+                {"pnl": Decimal("0"), "prev_mv": Decimal("0"), "end_mv": Decimal("0")},
+            )
+            dp = _to_dec(_pick(vals, ("当日收益($)", "当日盈亏($)", "当日盈亏", "今日盈亏($)", "今日盈亏"), 19))
+            if dp is not None:
+                bucket["pnl"] += dp
+            pmv = _to_dec(_pick(vals, ("期初市值($)", "期初市值"), 15))
+            if pmv is not None and pmv > 0:
+                bucket["prev_mv"] += pmv
+            emv = _to_dec(_pick(vals, ("日末市值($)", "期末市值($)", "日末市值"), 11))
+            if emv is not None and emv > 0:
+                bucket["end_mv"] += emv
+
+    # 将目标日最终口径（含盘后变动，或账本尚无收盘行时的行情估算）并入序列末尾
+    if current_day_pnl is not None:
+        if date_str in by_day:
+            by_day[date_str]["pnl"] = current_day_pnl
+            if current_prev_mv is not None and current_prev_mv > 0 and by_day[date_str]["prev_mv"] <= 0:
+                by_day[date_str]["prev_mv"] = current_prev_mv
+            if current_total_mv is not None and current_total_mv > 0:
+                by_day[date_str]["end_mv"] = current_total_mv
+        else:
+            by_day[date_str] = {
+                "pnl": current_day_pnl,
+                "prev_mv": current_prev_mv if (current_prev_mv is not None and current_prev_mv > 0) else Decimal("0"),
+                "end_mv": current_total_mv if (current_total_mv is not None and current_total_mv > 0) else Decimal("0"),
+            }
+
+    if not by_day:
+        return None
+
+    ordered_days = sorted(by_day.keys())
+    series: List[Dict[str, Any]] = []
+    for ds in ordered_days:
+        try:
+            d_obj = date.fromisoformat(ds)
+        except ValueError:
+            continue
+        item = by_day[ds]
+        ret: Optional[Decimal] = None
+        if item["prev_mv"] > 0:
+            ret = item["pnl"] / item["prev_mv"]
+        series.append({
+            "date": d_obj,
+            "date_str": ds,
+            "pnl": item["pnl"],
+            "prev_mv": item["prev_mv"],
+            "end_mv": item["end_mv"],
+            "ret": ret,
+        })
+
+    if not series:
+        return None
+
+    def _window_stats(items: List[Dict[str, Any]]) -> tuple[Optional[Decimal], Optional[Decimal]]:
+        if not items:
+            return None, None
+        pnl_sum = sum((it["pnl"] for it in items), Decimal("0"))
+        # 优先使用时间加权复利收益率，消除出入金扭曲；若窗口内存在缺失日收益率则回退期初市值口径
+        if all(it["ret"] is not None for it in items):
+            nav = Decimal("1")
+            for it in items:
+                nav *= Decimal("1") + it["ret"]
+            return pnl_sum, nav - Decimal("1")
+        base_mv = next((it["prev_mv"] for it in items if it["prev_mv"] > 0), None)
+        pct = (pnl_sum / base_mv) if (base_mv is not None and base_mv > 0) else None
+        return pnl_sum, pct
+
+    # 1. 近 5 个交易日
+    win_5d = series[-5:]
+    pnl_5d, pct_5d = _window_stats(win_5d)
+
+    # 2. 本周 (WTD)
+    iso_week = trade_date.isocalendar()[:2]
+    win_wtd = [it for it in series if it["date"].isocalendar()[:2] == iso_week]
+    pnl_wtd, pct_wtd = _window_stats(win_wtd)
+
+    # 3. 本月 (MTD)
+    win_mtd = [it for it in series if it["date"].year == trade_date.year and it["date"].month == trade_date.month]
+    pnl_mtd, pct_mtd = _window_stats(win_mtd)
+
+    # 4. 截至目标日的连续盈利/亏损天数
+    last_pnl = series[-1]["pnl"]
+    if last_pnl > 0:
+        streak_days = 0
+        for it in reversed(series):
+            if it["pnl"] > 0:
+                streak_days += 1
+            else:
+                break
+    elif last_pnl < 0:
+        streak_days = 0
+        for it in reversed(series):
+            if it["pnl"] < 0:
+                streak_days -= 1
+            else:
+                break
+    else:
+        streak_days = 0
+
+    # 5. 近 30 个交易日高点回撤（优先按累计净值曲线计算，无日收益率时退化按日末市值计算）
+    win_30d = series[-30:]
+    drawdown_30d_pct: Optional[Decimal] = None
+    if win_30d and all(it["ret"] is not None for it in win_30d):
+        nav = Decimal("1")
+        peak = Decimal("1")
+        for it in win_30d:
+            nav *= Decimal("1") + it["ret"]
+            if nav > peak:
+                peak = nav
+        if peak > 0:
+            drawdown_30d_pct = (nav - peak) / peak
+    else:
+        mvs = [it["end_mv"] for it in win_30d if it["end_mv"] > 0]
+        if mvs:
+            peak_mv = max(mvs)
+            if peak_mv > 0:
+                drawdown_30d_pct = (mvs[-1] - peak_mv) / peak_mv
+
+    return {
+        "pnl_5d": _serialize_dec(pnl_5d),
+        "pct_5d": _serialize_dec(pct_5d),
+        "pnl_wtd": _serialize_dec(pnl_wtd),
+        "pct_wtd": _serialize_dec(pct_wtd),
+        "pnl_mtd": _serialize_dec(pnl_mtd),
+        "pct_mtd": _serialize_dec(pct_mtd),
+        "streak_days": streak_days,
+        "drawdown_30d_pct": _serialize_dec(drawdown_30d_pct),
+    }
+
+
+def _compute_exposure_breakdown(
+    holdings_list: List[Dict[str, Any]],
+    total_mv: Decimal,
+    total_assets: Optional[Decimal],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """按底层资产与主题板块穿透聚合等效净敞口（杠杆 ETF * 倍数 + 对应正股/指数，全程 Decimal）。"""
+    by_under: Dict[str, Dict[str, Any]] = {}
+    by_sec: Dict[str, Dict[str, Any]] = {}
+
+    for h in holdings_list:
+        sym = str(h.get("symbol") or "").strip().upper().removesuffix(".US")
+        mv = _to_dec(h.get("market_value"))
+        if not sym or mv is None or mv <= 0:
+            continue
+        lev_factor = _to_dec(h.get("leverage_factor"))
+        if lev_factor is None:
+            lev_factor = Decimal("1")
+        net_exp = mv * lev_factor
+
+        # 底层资产归属：优先单股杠杆映射 -> 扩展宽基/杠杆映射 -> 自身 Ticker
+        raw_u = str(h.get("underlying") or "").strip().upper().removesuffix(".US")
+        under_key = raw_u or _EXTRA_UNDERLYING_MAP.get(sym) or sym
+        under_label = _UNDERLYING_LABEL_MAP.get(under_key, under_key)
+
+        u_bucket = by_under.setdefault(
+            under_key,
+            {"key": under_key, "label": under_label, "net_exposure": Decimal("0"), "symbols": []},
+        )
+        u_bucket["net_exposure"] += net_exp
+        if sym not in u_bucket["symbols"]:
+            u_bucket["symbols"].append(sym)
+
+        # 主题/板块归属：先按 Ticker/底层映射，再回退账本分类或「其他」
+        sec_label = (
+            _SECTOR_TICKER_MAP.get(sym)
+            or _SECTOR_TICKER_MAP.get(under_key)
+            or (str(h.get("category") or "").strip() if str(h.get("category") or "").strip() not in ("", "杠杆", "正股") else "")
+            or "其他"
+        )
+        s_bucket = by_sec.setdefault(
+            sec_label,
+            {"key": sec_label, "label": sec_label, "net_exposure": Decimal("0"), "symbols": []},
+        )
+        s_bucket["net_exposure"] += net_exp
+        if sym not in s_bucket["symbols"]:
+            s_bucket["symbols"].append(sym)
+
+    def _finalize(buckets: Dict[str, Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        ranked = sorted(buckets.values(), key=lambda x: abs(x["net_exposure"]), reverse=True)[:limit]
+        out: List[Dict[str, Any]] = []
+        for item in ranked:
+            exp_val: Decimal = item["net_exposure"]
+            pct_mv = (exp_val / total_mv) if total_mv > 0 else None
+            pct_ta = (exp_val / total_assets) if (total_assets is not None and total_assets > 0) else None
+            out.append({
+                "key": item["key"],
+                "label": item["label"],
+                "net_exposure": _serialize_dec(exp_val),
+                "pct_of_mv": _serialize_dec(pct_mv),
+                "pct_of_total_assets": _serialize_dec(pct_ta),
+                "symbols": item["symbols"],
+            })
+        return out
+
+    return {
+        "by_underlying": _finalize(by_under, 5),
+        "by_sector": _finalize(by_sec, 4),
+    }
+
+
 def build_after_hours_snapshot(
     db_path: Path,
     trade_date: date,
@@ -587,6 +1081,8 @@ def build_after_hours_snapshot(
     person_name: str,
     quote_fetcher: Callable[[List[str]], Dict[str, Dict[str, Any]]] = fetch_after_hours_quotes,
     news_fetcher: Callable[[List[str]], Dict[str, List[Dict[str, Any]]]] = fetch_ticker_news,
+    earnings_fetcher: Callable[[List[Dict[str, Any]], date, int], List[Dict[str, Any]]] = fetch_upcoming_earnings_events,
+    prev_checklist_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """构建目标交易日的完整盘后事实快照（严格只读业务库 + 盘后行情 + 突发新闻）。"""
     svc = AnalyticsService(db_path)
@@ -711,18 +1207,26 @@ def build_after_hours_snapshot(
         if matched_rows > 0:
             total_day_pnl = day_sum
 
-    # 4. 采集盘后行情（持仓 + 当日交易标的 + SPY/QQQ 大盘基准）
+    # 4. 采集盘后行情（持仓 + 当日交易标的 + SPY/QQQ/SMH/^VIX/^TNX 市场风向标）
     all_symbols = set(holdings_map.keys()) | {t["symbol"] for t in trades if t.get("symbol")}
-    quote_symbols = sorted(all_symbols | {"SPY", "QQQ"})
+    quote_symbols = sorted(all_symbols | set(BENCHMARK_SYMBOLS))
     quotes = quote_fetcher(quote_symbols) if quote_symbols else {}
     if all_symbols and not quotes:
         warnings.append("未能拉取到盘后实时/收盘行情，部分标的价格将保持为空。")
 
-    benchmarks = {
-        sym: quotes[sym]
-        for sym in ("SPY", "QQQ")
-        if sym in quotes
-    }
+    benchmarks: Dict[str, Dict[str, Any]] = {}
+    for sym in BENCHMARK_SYMBOLS:
+        if sym in quotes and isinstance(quotes[sym], dict):
+            q_item = dict(quotes[sym])
+            if sym == "^TNX":
+                reg_d = _normalize_tnx_yield(_to_dec(q_item.get("regular_close")))
+                prev_d = _normalize_tnx_yield(_to_dec(q_item.get("prev_close")))
+                q_item["regular_close"] = _serialize_dec(reg_d)
+                if prev_d is not None:
+                    q_item["prev_close"] = _serialize_dec(prev_d)
+                    if reg_d is not None and prev_d > 0 and q_item.get("regular_change_pct") is None:
+                        q_item["regular_change_pct"] = _serialize_dec((reg_d - prev_d) / prev_d)
+            benchmarks[sym] = q_item
 
     # 为当日每笔成交补充收盘价与相对收盘价差口径
     for t in trades:
@@ -948,6 +1452,29 @@ def build_after_hours_snapshot(
                 if prev_total_assets > 0:
                     day_pnl_pct_total_assets = total_day_pnl / prev_total_assets
 
+    # 4.6 计算近期趋势与回撤坐标（纯本地 Decimal 计算）
+    trend_stats = _compute_recent_trend(
+        daily_rep,
+        trade_date,
+        current_day_pnl=total_day_pnl,
+        current_prev_mv=day_pnl_denominator,
+        current_total_mv=total_mv,
+    )
+
+    # 4.7 底层资产与板块穿透敞口聚合
+    exposure_breakdown = _compute_exposure_breakdown(holdings_list, total_mv, total_assets)
+
+    # 4.8 未来 7 天关键事件预警（持仓财报倒计时 + 美股高影响宏观大事件）
+    try:
+        upcoming_earnings = earnings_fetcher(holdings_list, trade_date, 7) if earnings_fetcher else []
+    except Exception:
+        upcoming_earnings = []
+    upcoming_macro = get_upcoming_us_macro_events(trade_date, days_ahead=7)
+    upcoming_events = {
+        "earnings": upcoming_earnings or [],
+        "macro": upcoming_macro or [],
+    }
+
     # 5. 采集近期突发新闻
     news_map = news_fetcher(sorted(all_symbols)) if all_symbols else {}
 
@@ -984,8 +1511,12 @@ def build_after_hours_snapshot(
             "cash_balance": _serialize_dec(cash_total),
             "cash_pct": _serialize_dec(cash_pct),
             "cash_breakdown": cash_breakdown,
+            "trend": trend_stats,
         },
         "market_benchmarks": benchmarks,
+        "exposure_breakdown": exposure_breakdown,
+        "upcoming_events": upcoming_events,
+        "prev_checklist_context": prev_checklist_context,
         "trades": trades,
         "holdings": holdings_list,
         "news": news_map,
@@ -1051,7 +1582,7 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
     warnings = snapshot.get("warnings") or []
 
     bench_lines = []
-    for sym in ("SPY", "QQQ"):
+    for sym in ("SPY", "QQQ", "SMH"):
         b = benchmarks.get(sym)
         if b:
             bench_lines.append(
@@ -1060,6 +1591,19 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
                 f"盘后 {_fmt_dec(_to_dec(b.get('after_hours_price')))} "
                 f"({_fmt_dec(_to_dec(b.get('after_hours_change_pct')), signed=True, pct=True)})"
             )
+    vix_b = benchmarks.get("^VIX")
+    if vix_b:
+        bench_lines.append(
+            f"- VIX 恐慌指数: {_fmt_dec(_to_dec(vix_b.get('regular_close')))} "
+            f"({_fmt_dec(_to_dec(vix_b.get('regular_change_pct')), signed=True, pct=True)})"
+        )
+    tnx_b = benchmarks.get("^TNX")
+    if tnx_b and tnx_b.get("regular_close") is not None:
+        tnx_val = _to_dec(tnx_b.get("regular_close"))
+        bench_lines.append(
+            f"- 10Y 美债收益率 (US10Y): {tnx_val:.2f}% "
+            f"({_fmt_dec(_to_dec(tnx_b.get('regular_change_pct')), signed=True, pct=True)})"
+        )
     bench_text = "\n".join(bench_lines) if bench_lines else "- 暂无大盘基准行情"
 
     trade_lines = []
@@ -1146,6 +1690,79 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         else ""
     )
 
+    # 近期趋势与回撤坐标
+    trend = summary.get("trend") or {}
+    trend_parts = []
+    if trend.get("pnl_5d") is not None:
+        t5 = f"近5日 ${_fmt_dec(_to_dec(trend.get('pnl_5d')), signed=True)}"
+        if trend.get("pct_5d") is not None:
+            t5 += f" ({_fmt_dec(_to_dec(trend.get('pct_5d')), signed=True, pct=True)})"
+        trend_parts.append(t5)
+    if trend.get("pnl_wtd") is not None:
+        tw = f"本周 ${_fmt_dec(_to_dec(trend.get('pnl_wtd')), signed=True)}"
+        if trend.get("pct_wtd") is not None:
+            tw += f" ({_fmt_dec(_to_dec(trend.get('pct_wtd')), signed=True, pct=True)})"
+        trend_parts.append(tw)
+    if trend.get("pnl_mtd") is not None:
+        tm = f"本月 ${_fmt_dec(_to_dec(trend.get('pnl_mtd')), signed=True)}"
+        if trend.get("pct_mtd") is not None:
+            tm += f" ({_fmt_dec(_to_dec(trend.get('pct_mtd')), signed=True, pct=True)})"
+        trend_parts.append(tm)
+    if trend.get("drawdown_30d_pct") is not None:
+        trend_parts.append(f"距30日高点回撤 {_fmt_dec(_to_dec(trend.get('drawdown_30d_pct')), signed=True, pct=True)}")
+    if trend.get("streak_days"):
+        sd = int(trend["streak_days"])
+        trend_parts.append(f"连盈 {sd} 日" if sd > 0 else f"连亏 {abs(sd)} 日")
+    trend_line = f"- 近期趋势与回撤：{' | '.join(trend_parts)}\n" if trend_parts else ""
+
+    # 底层资产与板块穿透敞口
+    exp_bd = snapshot.get("exposure_breakdown") or {}
+    under_items = exp_bd.get("by_underlying") or []
+    sec_items = exp_bd.get("by_sector") or []
+    exp_lines = []
+    if under_items:
+        u_str = "、".join(
+            f"{it['label']} {_fmt_dec(_to_dec(it.get('pct_of_mv')), pct=True)} (${_fmt_dec(_to_dec(it.get('net_exposure')))})"
+            for it in under_items[:5]
+        )
+        exp_lines.append(f"- 按底层资产穿透 Top 5（占持仓市值）：{u_str}")
+    if sec_items:
+        s_str = "、".join(
+            f"{it['label']} {_fmt_dec(_to_dec(it.get('pct_of_mv')), pct=True)}"
+            for it in sec_items[:4]
+        )
+        exp_lines.append(f"- 按主题板块穿透 Top 4（占持仓市值）：{s_str}")
+    exposure_block = ("\n【底层资产与板块穿透敞口】\n" + "\n".join(exp_lines) + "\n") if exp_lines else ""
+
+    # 未来 7 天关键事件预警
+    up_ev = snapshot.get("upcoming_events") or {}
+    up_lines = []
+    for ev in up_ev.get("earnings") or []:
+        up_lines.append(f"- [财报 · T+{ev.get('days_away')}天 · {ev.get('date')}] {ev.get('title')}")
+    for ev in up_ev.get("macro") or []:
+        up_lines.append(f"- [宏观 · T+{ev.get('days_away')}天 · {ev.get('date')}] {ev.get('title')}")
+    upcoming_block = (
+        "\n【未来 7 天关键事件预警（持仓财报 + 宏观大事件）】\n" + "\n".join(up_lines) + "\n"
+        if up_lines
+        else ""
+    )
+
+    # 昨日关注清单执行闭环
+    prev_ctx = snapshot.get("prev_checklist_context") or {}
+    prev_cl = prev_ctx.get("checklist") or []
+    prev_checked = set(prev_ctx.get("checked_ids") or [])
+    prev_block = ""
+    if prev_cl:
+        p_lines = [
+            f"- [{'已勾选' if c.get('id') in prev_checked else '未勾选'}] [{c.get('ticker')} · {c.get('level')}] {c.get('text')}"
+            for c in prev_cl[:8]
+        ]
+        prev_block = (
+            f"\n【上一交易日 ({prev_ctx.get('prev_date')}) 关注清单及执行勾选情况】\n"
+            + "\n".join(p_lines)
+            + "\n"
+        )
+
     return (
         f"你是一位资深美股投资组合经理与盘后复盘分析师。请严格基于以下真实账本、盘后行情与抓取到的新闻事实，"
         f"为【{snapshot.get('person_name')}】撰写一份 {snapshot.get('trade_date')} 的《美股盘后复盘日报》。\n\n"
@@ -1160,8 +1777,11 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         f"总持仓成本：${_fmt_dec(_to_dec(summary.get('total_cost')))} | "
         f"累计浮盈：${_fmt_dec(_to_dec(summary.get('total_unrealized_pnl')), signed=True)} | "
         f"当日真实盈亏：${_fmt_dec(_to_dec(summary.get('day_pnl')), signed=True)} (持仓日收益率 {_fmt_dec(_to_dec(summary.get('day_pnl_pct')), signed=True, pct=True)}{ta_day_txt}){pnl_split}\n"
-        f"{cash_line}\n"
-        f"【大盘基准 (盘中 + 盘后)】\n{bench_text}\n\n"
+        f"{cash_line}{trend_line}"
+        f"{exposure_block}"
+        f"\n【大盘基准与市场风向标】\n{bench_text}\n"
+        f"{upcoming_block}"
+        f"{prev_block}\n"
         f"【当日真实交易记录】\n{trade_text}\n\n"
         f"【当前持仓与盘后最终行情】\n{holding_text}\n\n"
         f"【近 36 小时抓取到的相关新闻】\n{news_text}\n\n"
@@ -1176,6 +1796,7 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         '  "news_digest": [{"symbol": "Ticker", "original_title": "上方新闻原标题", "zh_title": "精炼中文标题(15~32字)", "summary": "一句话中文核心影响摘要(25~55字)", "sentiment": "利好|利空|中性"}],\n'
         '  "risks": [{"level": "高危|中危|提示", "title": "风险标题", "detail": "具体说明"}],\n'
         '  "checklist": [{"id": "c1", "ticker": "标的或大盘", "level": "关键价位或触发条件", "text": "具体可执行的盘前关注动作（写明价格阈值与应对动作）"}],\n'
+        '  "prev_checklist_review": {"prev_date": "YYYY-MM-DD", "summary": "2~3句简明复盘昨日关键价位是否触发及执行纪律（无昨日清单时输出 null）", "items": [{"ticker": "标的", "status": "已触发|未触发|已执行|未执行", "note": "一句话说明"}]},\n'
         '  "trades_summary": "今日操作总体点评（一句话）",\n'
         '  "trade_reviews": [{"symbol": "Ticker", "side": "BUY|SELL", "verdict": "四字短评", "tone": "success|warning|neutral", "comment": "逐笔点评"}],\n'
         '  "followups": ["适合继续追问的简短问题1", "问题2", "问题3"]\n'
@@ -1183,7 +1804,9 @@ def _build_after_hours_prompt(snapshot: Dict[str, Any], sync_status: Dict[str, A
         "```\n\n"
         f"补充要求：\n"
         f"- `news_digest` 必须对上方抓取的英文新闻去噪，每只重点持仓筛选 1~2 条最相关的高价值新闻，全部翻译为流畅简体中文标题 `zh_title`，并写明一句话核心影响摘要 `summary`；若无新闻则输出空数组 `[]`。\n"
-        f"- `checklist` 输出 3~5 条，每条必须包含具体标的 + 关键价位/触发条件 + 明确应对动作（如「若盘前跌破 $XX 则减仓 Y%」）。\n\n"
+        f"- `checklist` 输出 3~5 条，每条必须包含具体标的 + 关键价位/触发条件 + 明确应对动作（如「若盘前跌破 $XX 则减仓 Y%」）。\n"
+        f"- 若上方提供了未来 7 天持仓财报或宏观大事件（FOMC/CPI/PCE/NFP），务必在 `risks` 与 `checklist` 中明确提示杠杆降仓或事件前避险安排；严禁编造未列出的事件。\n"
+        f"- 若上方提供了上一交易日关注清单，请结合今日实际行情与交易记录在 `prev_checklist_review` 中如实复盘执行闭环；若未提供昨日清单，输出 `null`。\n\n"
         f"第二步：在 JSON 代码块之后，继续输出完整的 5 章节 Markdown 正文：\n"
         f"1. 严禁编造任何未在上方提供的价格、涨跌幅、成交记录或新闻；若某标的盘后价为「—」或无新闻，如实说明即可。\n"
         f"2. 章节标题严格使用：\n"
@@ -1402,7 +2025,36 @@ def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snaps
                 "comment": str(r.get("comment") or "").strip(),
             })
 
-    # 8. followups
+    # 8. prev_checklist_review（可选昨日计划复盘，老日报无此字段时保持 None）
+    raw_prev_rev = src.get("prev_checklist_review")
+    prev_checklist_review: Optional[Dict[str, Any]] = None
+    if isinstance(raw_prev_rev, dict):
+        p_sum = str(raw_prev_rev.get("summary") or "").strip()
+        p_date = str(
+            raw_prev_rev.get("prev_date")
+            or (snapshot.get("prev_checklist_context") or {}).get("prev_date")
+            or ""
+        ).strip()
+        p_items: List[Dict[str, str]] = []
+        raw_p_items = raw_prev_rev.get("items") if isinstance(raw_prev_rev.get("items"), list) else []
+        for it in raw_p_items[:8]:
+            if not isinstance(it, dict):
+                continue
+            tk = str(it.get("ticker") or "").strip()
+            nt = str(it.get("note") or "").strip()
+            st_val = str(it.get("status") or "未触发").strip()
+            if st_val not in ("已触发", "未触发", "已执行", "未执行"):
+                st_val = "未触发"
+            if tk or nt:
+                p_items.append({"ticker": tk or "组合", "status": st_val, "note": nt})
+        if p_sum or p_items:
+            prev_checklist_review = {
+                "prev_date": p_date,
+                "summary": p_sum,
+                "items": p_items,
+            }
+
+    # 9. followups
     raw_fq = src.get("followups") if isinstance(src.get("followups"), list) else []
     followups = [str(q).strip() for q in raw_fq if str(q).strip()][:4]
     if not followups:
@@ -1422,6 +2074,7 @@ def _normalize_structured(parsed: Optional[Dict[str, Any]], markdown: str, snaps
         "news_zh_map": news_zh_map,
         "risks": risks,
         "checklist": checklist,
+        "prev_checklist_review": prev_checklist_review,
         "trades_summary": trades_summary,
         "trade_reviews": trade_reviews,
         "followups": followups,
@@ -1534,6 +2187,7 @@ def generate_after_hours_report(
     sync_runner: Callable[[], Dict[str, Any]] = run_broker_sync,
     quote_fetcher: Callable[[List[str]], Dict[str, Dict[str, Any]]] = fetch_after_hours_quotes,
     news_fetcher: Callable[[List[str]], Dict[str, List[Dict[str, Any]]]] = fetch_ticker_news,
+    earnings_fetcher: Callable[[List[Dict[str, Any]], date, int], List[Dict[str, Any]]] = fetch_upcoming_earnings_events,
     ai_asker: Optional[Callable[[str, str, Optional[str]], str]] = None,
     allow_non_trading_day: bool = False,
 ) -> Dict[str, Any]:
@@ -1558,8 +2212,19 @@ def generate_after_hours_report(
             "finished_at": datetime.now(BJ_TZ).isoformat(timespec="seconds"),
         }
 
-    # 2. 解析人员范围并构建结构化快照
+    # 2. 解析人员范围、提取昨日关注清单上下文并构建结构化快照
     p_key, p_id, p_name = resolve_person_scope(db_path, person_key=person_key, person_id=person_id)
+    prev_checklist_context: Optional[Dict[str, Any]] = None
+    prev_rep = target_store.get_previous_report(p_key, target_date.isoformat())
+    if prev_rep:
+        prev_cl = (prev_rep.get("structured") or {}).get("checklist") or []
+        if prev_cl:
+            prev_checklist_context = {
+                "prev_date": str(prev_rep.get("trade_date") or ""),
+                "checklist": prev_cl,
+                "checked_ids": list(prev_rep.get("checked_ids") or []),
+            }
+
     snapshot = build_after_hours_snapshot(
         db_path=db_path,
         trade_date=target_date,
@@ -1568,6 +2233,8 @@ def generate_after_hours_report(
         person_name=p_name,
         quote_fetcher=quote_fetcher,
         news_fetcher=news_fetcher,
+        earnings_fetcher=earnings_fetcher,
+        prev_checklist_context=prev_checklist_context,
     )
     if sync_status.get("ran") and not sync_status.get("ok"):
         snapshot.setdefault("warnings", []).append(sync_status.get("message") or "券商同步失败")

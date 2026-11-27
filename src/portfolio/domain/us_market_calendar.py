@@ -9,11 +9,43 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from functools import lru_cache
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # 特殊非周期性美股全天休市日（如总统国葬等）
 SPECIAL_MARKET_CLOSURES: Dict[date, str] = {
     date(2025, 1, 9): "前总统卡特国葬休市",
+}
+
+# 美联储 FOMC 利率决议公布日（每年 8 次议息会议第二天，官方日程）
+FOMC_DECISION_DATES: Dict[int, tuple[tuple[int, int], ...]] = {
+    2025: (
+        (1, 29), (3, 19), (5, 7), (6, 18),
+        (7, 30), (9, 17), (10, 29), (12, 10),
+    ),
+    2026: (
+        (1, 28), (3, 18), (4, 29), (6, 17),
+        (7, 29), (9, 16), (10, 28), (12, 9),
+    ),
+    2027: (
+        (1, 27), (3, 17), (4, 28), (6, 9),
+        (7, 28), (9, 22), (11, 3), (12, 15),
+    ),
+}
+
+# 美国劳工统计局 (BLS) CPI 通胀数据公布日
+US_CPI_DATES: Dict[int, tuple[tuple[int, int], ...]] = {
+    2025: (
+        (1, 15), (2, 12), (3, 12), (4, 10), (5, 13), (6, 11),
+        (7, 15), (8, 12), (9, 11), (10, 15), (11, 13), (12, 10),
+    ),
+    2026: (
+        (1, 13), (2, 11), (3, 11), (4, 10), (5, 12), (6, 10),
+        (7, 14), (8, 12), (9, 11), (10, 14), (11, 12), (12, 10),
+    ),
+    2027: (
+        (1, 13), (2, 10), (3, 10), (4, 13), (5, 12), (6, 10),
+        (7, 14), (8, 11), (9, 14), (10, 13), (11, 10), (12, 10),
+    ),
 }
 
 
@@ -235,3 +267,73 @@ def format_session_hint(session: USMarketSession) -> str:
         return f"今日美股半日市（13:00 ET 收盘），美东 {trig} 自动同步并生成「个人」日报"
     trig = session.recommended_trigger_et.strftime("%H:%M") if session.recommended_trigger_et else "20:10"
     return f"美东 {trig} 自动同步并生成「个人」日报"
+
+
+@lru_cache(maxsize=32)
+def us_macro_events_for_year(year: int) -> tuple[tuple[date, str], ...]:
+    """返回指定年份高影响美股宏观日程（FOMC 利率决议、CPI、核心 PCE、非农 NFP）。"""
+    events: List[tuple[date, str]] = []
+
+    # 1. FOMC 利率决议日
+    for month, day in FOMC_DECISION_DATES.get(year, ()):
+        events.append((date(year, month, day), "FOMC 利率决议与鲍威尔发布会"))
+
+    # 2. 美国 CPI 通胀数据
+    cpi_entries = US_CPI_DATES.get(year)
+    if cpi_entries:
+        for month, day in cpi_entries:
+            events.append((date(year, month, day), "美国 CPI 通胀数据"))
+    else:
+        for month in range(1, 13):
+            d = _nth_weekday_of_month(year, month, 2, 2)  # 第 2 个周三窗口
+            while not is_us_trading_day(d):
+                d += timedelta(days=1)
+            events.append((d, "美国 CPI 通胀数据"))
+
+    # 3. 美国非农就业报告 (NFP：每月第 1 个周五；若休市如独立日/元旦则顺延至次周或前移交易日)
+    for month in range(1, 13):
+        nfp = _nth_weekday_of_month(year, month, 4, 1)
+        if not is_us_trading_day(nfp):
+            if nfp.month == 1 and nfp.day <= 2:
+                nfp = _nth_weekday_of_month(year, month, 4, 2)
+            else:
+                nfp = previous_us_trading_day(nfp)
+        events.append((nfp, "美国非农就业报告 (NFP)"))
+
+    # 4. 美国核心 PCE 物价指数（通常在每月最后一个交易周五公布）
+    for month in range(1, 13):
+        pce = _last_weekday_of_month(year, month, 4)
+        if not is_us_trading_day(pce):
+            pce = previous_us_trading_day(pce)
+        # 感恩节次日黑五半日市通常提前至周三发布
+        if month == 11 and get_us_market_session(pce).is_early_close:
+            pce = previous_us_trading_day(pce)
+        events.append((pce, "美国核心 PCE 物价指数"))
+
+    events.sort(key=lambda item: (item[0], item[1]))
+    return tuple(events)
+
+
+def get_upcoming_us_macro_events(trade_date: date, days_ahead: int = 7) -> List[Dict[str, Any]]:
+    """返回 trade_date 之后 1~days_ahead 个自然日内的美股高影响宏观大事件。"""
+    if days_ahead <= 0:
+        return []
+    end_date = trade_date + timedelta(days=days_ahead)
+    years = sorted({trade_date.year, end_date.year})
+    upcoming: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for y in years:
+        for ev_date, title in us_macro_events_for_year(y):
+            delta = (ev_date - trade_date).days
+            if 1 <= delta <= days_ahead:
+                key = (ev_date.isoformat(), title)
+                if key in seen:
+                    continue
+                seen.add(key)
+                upcoming.append({
+                    "date": ev_date.isoformat(),
+                    "days_away": delta,
+                    "title": title,
+                })
+    upcoming.sort(key=lambda x: (x["days_away"], x["title"]))
+    return upcoming

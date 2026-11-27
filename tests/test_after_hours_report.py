@@ -993,3 +993,370 @@ def test_desktop_after_hours_ui_layout_sorting_folding_kpis_and_sidebar(demo_pat
     assert not page.left_card.isHidden()
     assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert page.right_container.width() <= page.right_scroll.viewport().width() + 2
+
+
+def test_after_hours_five_new_dimensions_backend_and_prompt(demo_path, tmp_path, monkeypatch):
+    """验证 5 项新汇总维度：趋势回撤、SMH/VIX/TNX 风向标、7天事件预警、昨日清单闭环与穿透敞口。"""
+    from decimal import Decimal
+
+    from portfolio.services.after_hours_report import (
+        _normalize_tnx_yield,
+        build_after_hours_snapshot,
+        fetch_upcoming_earnings_events,
+    )
+
+    # 1. ^TNX 量纲归一化防 10 倍误差 + 真实 fetch_upcoming_earnings_events 路径验证（内置 verified_earnings.json）
+    assert _normalize_tnx_yield(Decimal("42.5")) == Decimal("4.25")
+    assert _normalize_tnx_yield(Decimal("4.922")) == Decimal("4.922")
+    real_earn = fetch_upcoming_earnings_events(
+        [{"symbol": "GGLL", "underlying": "GOOGL"}, {"symbol": "MSFT", "underlying": None}],
+        date(2026, 10, 25),
+        days_ahead=7,
+    )
+    earn_syms = {e["symbol"] for e in real_earn}
+    assert {"GOOGL", "MSFT"}.issubset(earn_syms)
+    assert all(1 <= e["days_away"] <= 7 for e in real_earn)
+
+    # 构造多日「每日持仓收益」用于验证近 5 日、WTD、MTD、连跌 2 日与 30 日高点回撤，以及穿透敞口组合
+    class _FakeRow:
+        def __init__(self, values):
+            self.values = values
+
+    class _FakeTable:
+        def __init__(self, columns, rows):
+            self.columns = columns
+            self.rows = rows
+
+    class _FakeResult:
+        def __init__(self, reports):
+            self.reports = reports
+
+    # 持仓：TQQQ(3x, $3000) + QQQM(1x, $2000) -> 纳指100 净敞口 $11000 (110%)
+    #       GGLL(2x, $1000) + GOOGL(1x, $1000) -> GOOGL 净敞口 $3000 (30%)
+    #       TSLL(2x, $1000) + TSLA(1x, $1000) -> TSLA 净敞口 $3000 (30%)
+    #       SOXL(3x, $1000) -> 费城半导体 净敞口 $3000 (30%)
+    # 总市值 = $10,000
+    class _FakeService:
+        def __init__(self, db_path):
+            pass
+
+        def calculate(self, scope):
+            daily_cols = ["日期", "渠道", "分类", "Ticker", "日末状态"] + [f"c{i}" for i in range(5, 11)] + [
+                "日末市值($)", "c12", "c13", "c14", "期初市值($)", "c16", "c17", "c18", "当日收益($)"
+            ]
+
+            def _drow(ds: str, end_mv: str, prev_mv: str, pnl: str):
+                vals = [ds, "IBKR", "杠杆", "TQQQ", "持仓"] + [""] * 6 + [end_mv, "", "", "", prev_mv, "", "", "", pnl]
+                return _FakeRow(vals)
+
+            return _FakeResult({
+                "当前持仓": _FakeTable(
+                    ["渠道", "分类", "Ticker", "持仓数量", "累计净投入($)", "持仓成本价($)", "持仓市值($)", "持仓盈亏金额($)"],
+                    [
+                        _FakeRow(["IBKR", "杠杆", "TQQQ", "50", "2800", "56", "3000", "200"]),
+                        _FakeRow(["IBKR", "大盘", "QQQM", "10", "1900", "190", "2000", "100"]),
+                        _FakeRow(["IBKR", "杠杆", "GGLL", "20", "900", "45", "1000", "100"]),
+                        _FakeRow(["IBKR", "正股", "GOOGL", "5", "950", "190", "1000", "50"]),
+                        _FakeRow(["IBKR", "杠杆", "TSLL", "50", "950", "19", "1000", "50"]),
+                        _FakeRow(["IBKR", "正股", "TSLA", "3", "950", "316.67", "1000", "50"]),
+                        _FakeRow(["IBKR", "杠杆", "SOXL", "30", "1050", "35", "1000", "-50"]),
+                    ],
+                ),
+                "每日持仓收益": _FakeTable(
+                    daily_cols,
+                    [
+                        # 12 月第 1 周上涨至高点，随后连跌 2 日 (12-07, 12-08)
+                        _drow("2026-12-01", "10000", "9800", "200"),
+                        _drow("2026-12-02", "10500", "10000", "500"),
+                        _drow("2026-12-03", "11000", "10500", "500"),
+                        _drow("2026-12-04", "11000", "11000", "0"),
+                        _drow("2026-12-07", "10450", "11000", "-550"),  # -5%
+                        _drow("2026-12-08", "10000", "10450", "-450"),  # -4.306%
+                    ],
+                ),
+                "交易回放": _FakeTable([], []),
+            })
+
+    monkeypatch.setattr("portfolio.services.after_hours_report.AnalyticsService", _FakeService)
+    monkeypatch.setattr(
+        "portfolio.services.after_hours_report.resolve_channel_cash_details",
+        lambda result: {"IBKR": {"channel": "IBKR", "amount": Decimal("2000.00"), "source": "mock"}},
+    )
+
+    def _fake_quotes(symbols):
+        assert {"SPY", "QQQ", "SMH", "^VIX", "^TNX"}.issubset(set(symbols))
+        return {
+            "SPY": {"regular_close": 600.0, "regular_change_pct": -0.005, "after_hours_change_pct": 0.001, "source": "mock"},
+            "QQQ": {"regular_close": 500.0, "regular_change_pct": -0.01, "after_hours_change_pct": 0.002, "source": "mock"},
+            "SMH": {"regular_close": 240.0, "regular_change_pct": -0.015, "source": "mock"},
+            "^VIX": {"regular_close": 18.4, "regular_change_pct": 0.062, "source": "yahoo"},
+            "^TNX": {"regular_close": 42.5, "prev_close": 42.0, "source": "yahoo"},  # 故意传入 10x 量纲
+        }
+
+    def _fake_earnings(holdings_list, td, days_ahead=7):
+        return [
+            {
+                "date": "2026-12-11",
+                "days_away": 3,
+                "symbol": "GOOGL",
+                "held_symbols": ["GGLL", "GOOGL"],
+                "time_label": "盘后",
+                "title": "GOOGL 财报 (盘后)（关联持仓 GGLL）",
+            }
+        ]
+
+    # 测试：earnings_fetcher 抛异常时静默跳过，绝不阻塞
+    snap_err = build_after_hours_snapshot(
+        demo_path,
+        date(2026, 12, 8),
+        person_key="个人",
+        person_id=1,
+        person_name="个人",
+        quote_fetcher=_fake_quotes,
+        news_fetcher=lambda syms: {},
+        earnings_fetcher=lambda hs, td, d=7: (_ for _ in ()).throw(RuntimeError("timeout")),
+    )
+    assert snap_err["upcoming_events"]["earnings"] == []
+    assert any("FOMC" in e["title"] for e in snap_err["upcoming_events"]["macro"])
+
+    # 昨日存档 + 今日生成完整闭环（使用 ALL 避免受 demo_path 演示人员名称影响）
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    store.save_report({
+        "id": "2026-12-07::ALL",
+        "trade_date": "2026-12-07",
+        "person_key": "ALL",
+        "person_id": None,
+        "person_name": "全部人员",
+        "generated_at": "2026-12-08T09:10:00+08:00",
+        "trigger": "auto",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {"summary": {"day_pnl": -550.0, "total_market_value": 10450.0}},
+        "structured": {
+            "tldr": "昨日承压",
+            "checklist": [
+                {"id": "c1", "ticker": "TQQQ", "level": "$60", "text": "跌破 $60 减仓 20%"},
+                {"id": "c2", "ticker": "GOOGL", "level": "$195", "text": "财报前控制杠杆"},
+            ],
+        },
+        "checked_ids": ["c1"],
+        "markdown": "## 一、今日总览\n\n昨日",
+    })
+
+    captured_prompts: list[str] = []
+
+    def _fake_ai(prompt, prov, model):
+        captured_prompts.append(prompt)
+        return (
+            "```json\n"
+            + json.dumps(
+                {
+                    "regime": {"label": "避险降档", "tone": "error"},
+                    "tldr": "连跌两日回撤扩大，临近 FOMC 与 GOOGL 财报需降杠杆。",
+                    "risks": [{"level": "高危", "title": "FOMC 前杠杆偏高", "detail": "纳指穿透敞口超 110%"}],
+                    "checklist": [{"id": "c1", "ticker": "TQQQ", "level": "$58", "text": "事件前降至 30% 以下"}],
+                    "prev_checklist_review": {
+                        "prev_date": "2026-12-07",
+                        "summary": "昨日已勾选 TQQQ 止损线，GOOGL 财报降杠杆尚未执行。",
+                        "items": [
+                            {"ticker": "TQQQ", "status": "已执行", "note": "已按纪律核查"},
+                            {"ticker": "GOOGL", "status": "未执行", "note": "仍持有 GGLL 2x 杠杆"},
+                        ],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n```\n\n## 一、今日总览与大盘对比\n\n测试正文"
+        )
+
+    rep = generate_after_hours_report(
+        trade_date=date(2026, 12, 8),
+        person_key="ALL",
+        run_sync=False,
+        db_path=demo_path,
+        store=store,
+        quote_fetcher=_fake_quotes,
+        news_fetcher=lambda syms: {},
+        earnings_fetcher=_fake_earnings,
+        ai_asker=_fake_ai,
+    )
+
+    snap = rep["snapshot"]
+    # 断言 1：近期趋势与回撤
+    trend = snap["summary"]["trend"]
+    assert trend["pnl_5d"] == 0.0  # 500 + 500 + 0 - 550 - 450 = 0
+    assert trend["pnl_wtd"] == -1000.0  # 12-07(-550) + 12-08(-450)
+    assert trend["pnl_mtd"] == 200.0  # 200 + 500 + 500 + 0 - 550 - 450 = 200
+    assert trend["streak_days"] == -2
+    assert trend["drawdown_30d_pct"] < -0.08  # 从峰值 11000 回落约 -9.09%
+
+    # 断言 2：SMH / VIX / TNX（TNX 归一化为 4.25）
+    assert snap["market_benchmarks"]["SMH"]["regular_change_pct"] == -0.015
+    assert snap["market_benchmarks"]["^VIX"]["regular_close"] == 18.4
+    assert snap["market_benchmarks"]["^TNX"]["regular_close"] == 4.25
+
+    # 断言 3：未来 7 天持仓财报与宏观大事件
+    assert len(snap["upcoming_events"]["earnings"]) == 1
+    assert snap["upcoming_events"]["earnings"][0]["symbol"] == "GOOGL"
+    assert any("FOMC" in e["title"] for e in snap["upcoming_events"]["macro"])
+    assert any("CPI" in e["title"] for e in snap["upcoming_events"]["macro"])
+
+    # 断言 4：昨日清单上下文与 AI 复盘结构化输出
+    assert snap["prev_checklist_context"]["prev_date"] == "2026-12-07"
+    assert snap["prev_checklist_context"]["checked_ids"] == ["c1"]
+    prev_rev = rep["structured"]["prev_checklist_review"]
+    assert prev_rev["prev_date"] == "2026-12-07"
+    assert len(prev_rev["items"]) == 2
+    assert prev_rev["items"][0]["status"] == "已执行"
+
+    # 断言 5：底层资产与板块穿透敞口
+    under = {x["key"]: x for x in snap["exposure_breakdown"]["by_underlying"]}
+    assert under["QQQ"]["label"] == "纳指100"
+    assert under["QQQ"]["net_exposure"] == 11000.0
+    assert round(under["QQQ"]["pct_of_mv"], 4) == 1.1
+    assert under["GOOGL"]["net_exposure"] == 3000.0
+    assert under["TSLA"]["net_exposure"] == 3000.0
+    assert under["SOX"]["net_exposure"] == 3000.0
+    sectors = {x["key"]: x for x in snap["exposure_breakdown"]["by_sector"]}
+    assert sectors["纳指指数"]["net_exposure"] == 11000.0
+    assert sectors["科技/AI"]["net_exposure"] == 6000.0
+    assert sectors["半导体"]["net_exposure"] == 3000.0
+
+    # Prompt 完整注入了 5 项新维度
+    assert captured_prompts
+    p_txt = captured_prompts[0]
+    assert "近期趋势与回撤" in p_txt
+    assert "US10Y" in p_txt and "VIX" in p_txt and "SMH" in p_txt
+    assert "未来 7 天关键事件预警" in p_txt and "GOOGL 财报" in p_txt
+    assert "上一交易日 (2026-12-07) 关注清单" in p_txt
+    assert "底层资产与板块穿透敞口" in p_txt and "纳指100" in p_txt
+
+
+def test_desktop_after_hours_new_dimensions_and_legacy_compat(demo_path, tmp_path, qtbot):
+    """验证桌面端完整渲染 5 项新维度，且切换旧版无新字段存档时全部优雅隐藏、零报错与零横向溢出。"""
+    from PySide6.QtCore import Qt
+
+    store = AfterHoursReportStore(tmp_path / "reports.json")
+    # 新版全字段存档
+    store.save_report({
+        "id": "2026-12-08::个人",
+        "trade_date": "2026-12-08",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-12-08T21:10:00+08:00",
+        "trigger": "auto",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {
+            "summary": {
+                "day_pnl": -450.0,
+                "day_pnl_pct": -0.043,
+                "total_market_value": 10000.0,
+                "cash_balance": 2000.0,
+                "total_assets": 12000.0,
+                "leverage_pct": 0.60,
+                "effective_leverage": 2.0,
+                "trade_count": 0,
+                "holding_count": 2,
+                "trend": {
+                    "pnl_5d": 180.0,
+                    "pct_5d": 0.018,
+                    "pnl_wtd": -1000.0,
+                    "pct_wtd": -0.09,
+                    "pnl_mtd": 200.0,
+                    "pct_mtd": 0.02,
+                    "streak_days": -2,
+                    "drawdown_30d_pct": -0.091,
+                },
+            },
+            "market_benchmarks": {
+                "SPY": {"regular_change_pct": -0.005, "after_hours_change_pct": 0.001},
+                "QQQ": {"regular_change_pct": -0.01, "after_hours_change_pct": 0.002},
+                "SMH": {"regular_change_pct": -0.012},
+                "^VIX": {"regular_close": 18.4, "regular_change_pct": 0.062},
+                "^TNX": {"regular_close": 4.25},
+            },
+            "upcoming_events": {
+                "earnings": [{"date": "2026-12-11", "days_away": 3, "symbol": "GOOGL", "title": "GOOGL 财报 (盘后)"}],
+                "macro": [{"date": "2026-12-09", "days_away": 1, "title": "FOMC 利率决议与鲍威尔发布会"}],
+            },
+            "exposure_breakdown": {
+                "by_underlying": [
+                    {"key": "QQQ", "label": "纳指100", "net_exposure": 14500.0, "pct_of_mv": 1.45},
+                    {"key": "SOX", "label": "费城半导体", "net_exposure": 1600.0, "pct_of_mv": 0.16},
+                    {"key": "GOOGL", "label": "GOOGL", "net_exposure": 1200.0, "pct_of_mv": 0.12},
+                ],
+                "by_sector": [
+                    {"key": "纳指指数", "label": "纳指指数", "net_exposure": 14500.0, "pct_of_mv": 1.45},
+                ],
+            },
+            "holdings": [],
+            "trades": [],
+        },
+        "structured": {
+            "tldr": "连跌两日注意控制杠杆",
+            "risks": [{"level": "高危", "title": "FOMC 风险", "detail": "关注决议"}],
+            "checklist": [{"id": "c1", "ticker": "TQQQ", "level": "$58", "text": "关注支撑"}],
+            "prev_checklist_review": {
+                "prev_date": "2026-12-07",
+                "summary": "昨日 TQQQ 止损线未触发，纪律执行良好。",
+                "items": [{"ticker": "TQQQ", "status": "未触发", "note": "全天维持在 $60 上方"}],
+            },
+        },
+        "markdown": "## 一、今日总览\n\n新版",
+    })
+    # 旧版缺失 5 项新字段存档
+    store.save_report({
+        "id": "2026-11-20::个人",
+        "trade_date": "2026-11-20",
+        "person_key": "个人",
+        "person_id": 1,
+        "person_name": "个人",
+        "generated_at": "2026-11-20T21:10:00+08:00",
+        "trigger": "manual",
+        "provider": "gemini",
+        "model": "gemini-4-neon-high",
+        "sync_status": {"ran": True, "ok": True, "message": "ok"},
+        "snapshot": {
+            "summary": {"day_pnl": 100.0, "total_market_value": 8000.0, "trade_count": 0, "holding_count": 1},
+            "market_benchmarks": {"SPY": {"regular_change_pct": 0.005}},
+            "holdings": [],
+            "trades": [],
+        },
+        "markdown": "## 一、今日总览\n\n老版旧存档",
+    })
+
+    page = AfterHoursReportPage(store=store, db_path=demo_path)
+    qtbot.addWidget(page)
+    page.resize(1280, 800)
+    page.show()
+    qtbot.wait(50)
+
+    # 新版全部 5 项维度可见且内容准确
+    assert not page.kpi_trend_sub.isHidden()
+    assert "近5日" in page.kpi_trend_sub.text() and "连跌2日" in page.kpi_trend_sub.text()
+    assert not page.kpi_macro_sub.isHidden()
+    assert "SMH" in page.kpi_macro_sub.text() and "VIX" in page.kpi_macro_sub.text() and "US10Y" in page.kpi_macro_sub.text()
+    assert not page.events_frame.isHidden()
+    assert "GOOGL 财报" in page.events_lbl.text() and "FOMC" in page.events_lbl.text()
+    assert not page.exposure_frame.isHidden()
+    assert "纳指100 145%" in page.exposure_lbl.text()
+    assert not page.prev_review_frame.isHidden()
+    assert "2026-12-07" in page.prev_review_toggle_btn.text()
+    assert not page.prev_review_lbl.isHidden()
+    page.prev_review_toggle_btn.click()
+    assert page.prev_review_lbl.isHidden()
+    assert page.right_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert page.right_container.width() <= page.right_scroll.viewport().width() + 2
+
+    # 切到旧版存档（row 1）：全部 5 项新区域优雅隐藏且零报错
+    page.report_list.setCurrentRow(1)
+    qtbot.wait(30)
+    assert page.kpi_trend_sub.isHidden()
+    assert page.kpi_macro_sub.isHidden()
+    assert page.events_frame.isHidden()
+    assert page.exposure_frame.isHidden()
+    assert page.prev_review_frame.isHidden()

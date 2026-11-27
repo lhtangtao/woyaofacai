@@ -1,3 +1,10 @@
+## 2026-11-28 00:52 盘后复盘日报 2.0 扩充 5 项每日高价值汇总维度
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/domain/us_market_calendar.py` 新增美股年度高影响宏观日程（FOMC、CPI、核心 PCE、非农 NFP）及 `get_upcoming_us_macro_events()` 未来 7 天窗口筛选。
+- 在 `src/portfolio/services/after_hours_report.py` 扩充 5 项汇总维度并注入 Prompt 与结构化解析：1) 基于 `每日持仓收益` 纯 `Decimal` 计算近期趋势与 30 日高点回撤（`pnl_5d`/`pct_5d`/`pnl_wtd`/`pnl_mtd`/`streak_days`/`drawdown_30d_pct`）；2) 市场风向标补齐 `SMH`/`^VIX`/`^TNX`（长桥自动跳过 `^` 前缀、Yahoo 降级并归一化 `^TNX` 真实百分点）；3) 复用 `EarningsService` 缓存与核实表扫描未来 7 天持仓财报并合并宏观预警；4) 自动提取同人员昨日关注清单与勾选状态实现闭环复盘（`prev_checklist_context` + `prev_checklist_review`）；5) 合并杠杆 ETF 与正股/指数输出底层资产 Top 5 与板块 Top 4 穿透敞口（`exposure_breakdown`）。
+- 同步升级桌面端 `src/portfolio/ui/after_hours_report_page.py` 与 Web 端 `frontend/src/views/AfterHoursReportView.tsx`（完全兼容旧存档优雅隐藏零报错），`frontend npm run build`、`ruff check` 与 21 项 `pytest` 测试全部通过，真实库 `2026-11-25`（个人）快照验算与 8888 服务重启均通过。
+
 ## 2026-11-27 23:39 盘后复盘日报细节打磨：统一筛选折叠口径、补回盘后具体价、平滑滚动聚焦与重算重置
 
 - 修改者：Antigravity（代码修改）

@@ -254,6 +254,7 @@ class AfterHoursReportPage(QWidget):
         self._expand_all_movers: bool = False
         self._expanded_syms: set[str] = set()
         self._sidebar_collapsed: bool = False
+        self._prev_review_expanded: bool = True
         self._scroll_anim: Optional[QPropertyAnimation] = None
         self._worker: Optional[_AfterHoursWorker] = None
         self._followup_worker: Optional[_FollowupWorker] = None
@@ -481,12 +482,23 @@ class AfterHoursReportPage(QWidget):
         kpi_grid = QGridLayout()
         kpi_grid.setSpacing(8)
         self.kpi_pnl_val, self.kpi_pnl_sub, self.kpi_alpha_lbl, self.kpi_card_1 = self._make_kpi_card("当日真实盈亏")
+        self.kpi_trend_sub = _make_wrap_label("", "font-size: 10.5px; color: #64748B; border: none; padding-top: 2px;")
+        self.kpi_trend_sub.setTextFormat(Qt.TextFormat.RichText)
+        self.kpi_trend_sub.hide()
+        self.kpi_card_1.layout().addWidget(self.kpi_trend_sub)
+
         self.kpi_mv_val, self.kpi_un_sub, _, self.kpi_card_2 = self._make_kpi_card("总资产（净值）/ 持仓")
         self.kpi_cash_sub = _make_wrap_label("", "font-size: 11px; color: #64748B; border: none;")
         self.kpi_card_2.layout().addWidget(self.kpi_cash_sub)
+
         self.kpi_bench_val, self.kpi_bench_sub, _, self.kpi_card_3 = self._make_kpi_card("大盘基准")
         self.kpi_bench_val.hide()
         self.kpi_bench_sub.setTextFormat(Qt.TextFormat.RichText)
+        self.kpi_macro_sub = _make_wrap_label("", "font-size: 10.5px; color: #64748B; border: none; padding-top: 2px;")
+        self.kpi_macro_sub.setTextFormat(Qt.TextFormat.RichText)
+        self.kpi_macro_sub.hide()
+        self.kpi_card_3.layout().addWidget(self.kpi_macro_sub)
+
         self.kpi_lev_val, self.kpi_lev_sub, self.kpi_eff_lev_badge, self.kpi_card_4 = self._make_kpi_card("杠杆仓位暴露")
         self.kpi_trades_lbl = self.kpi_eff_lev_badge
         self.kpi_eff_lev_badge.hide()
@@ -500,6 +512,23 @@ class AfterHoursReportPage(QWidget):
             kpi_grid.addWidget(card, 0, col)
             kpi_grid.setColumnStretch(col, 1)
         hero_l.addLayout(kpi_grid)
+
+        # 未来 7 天关键事件预警条（仅当存在持仓财报或宏观大事件时显示，无事件零占位）
+        self.events_frame = QFrame()
+        self.events_frame.setMinimumWidth(0)
+        self.events_frame.setStyleSheet("QFrame { border: 1px solid #FDE68A; border-radius: 8px; background: #FFFBEB; }")
+        ev_row = QHBoxLayout(self.events_frame)
+        ev_row.setContentsMargins(10, 6, 10, 6)
+        ev_row.setSpacing(8)
+        ev_tag = QLabel("未来7天预警")
+        ev_tag.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        ev_tag.setStyleSheet("font-size: 10.5px; font-weight: 700; color: #92400E; background: #FEF3C7; border-radius: 4px; padding: 2px 6px; border: none;")
+        ev_row.addWidget(ev_tag, 0, Qt.AlignmentFlag.AlignTop)
+        self.events_lbl = _make_wrap_label("", "font-size: 11.5px; color: #78350F; border: none; background: transparent;")
+        self.events_lbl.setTextFormat(Qt.TextFormat.RichText)
+        ev_row.addWidget(self.events_lbl, 1)
+        self.events_frame.hide()
+        hero_l.addWidget(self.events_frame)
 
         right_layout.addWidget(self.hero_card)
 
@@ -536,6 +565,20 @@ class AfterHoursReportPage(QWidget):
         self.risk_tag = QLabel("")
         r_hdr.addWidget(self.risk_tag)
         risk_outer.addLayout(r_hdr)
+
+        # 底层资产与板块穿透敞口 Top 3 胶囊行（无数据时自动隐藏）
+        self.exposure_frame = QFrame()
+        self.exposure_frame.setMinimumWidth(0)
+        self.exposure_frame.setStyleSheet("QFrame { border: 1px solid #E2E8F0; border-radius: 6px; background: #F8FAFC; }")
+        exp_l = QHBoxLayout(self.exposure_frame)
+        exp_l.setContentsMargins(8, 5, 8, 5)
+        exp_l.setSpacing(6)
+        self.exposure_lbl = _make_wrap_label("", "font-size: 11.5px; color: #334155; border: none; background: transparent;")
+        self.exposure_lbl.setTextFormat(Qt.TextFormat.RichText)
+        exp_l.addWidget(self.exposure_lbl, 1)
+        self.exposure_frame.hide()
+        risk_outer.addWidget(self.exposure_frame)
+
         self.risks_box = QVBoxLayout()
         self.risks_box.setSpacing(6)
         risk_outer.addLayout(self.risks_box)
@@ -556,6 +599,28 @@ class AfterHoursReportPage(QWidget):
         self.cl_progress_lbl.setStyleSheet("font-size: 11.5px; font-weight: 600; color: #2563EB;")
         c_hdr.addWidget(self.cl_progress_lbl)
         cl_outer.addLayout(c_hdr)
+
+        # 昨日计划复盘可折叠浅色提示块（无昨日复盘数据时自动隐藏）
+        self.prev_review_frame = QFrame()
+        self.prev_review_frame.setMinimumWidth(0)
+        self.prev_review_frame.setStyleSheet("QFrame { border: 1px solid #BFDBFE; border-radius: 6px; background: #EFF6FF; }")
+        pr_outer = QVBoxLayout(self.prev_review_frame)
+        pr_outer.setContentsMargins(8, 6, 8, 6)
+        pr_outer.setSpacing(4)
+        self.prev_review_toggle_btn = QPushButton("▾ 昨日计划复盘")
+        self.prev_review_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.prev_review_toggle_btn.setStyleSheet(
+            "QPushButton { text-align: left; font-size: 11.5px; font-weight: 700; color: #1D4ED8; "
+            "border: none; background: transparent; padding: 0; min-height: 16px; }"
+        )
+        self.prev_review_toggle_btn.clicked.connect(self._toggle_prev_review)
+        pr_outer.addWidget(self.prev_review_toggle_btn)
+        self.prev_review_lbl = _make_wrap_label("", "font-size: 11.5px; color: #1E293B; border: none; background: transparent;")
+        self.prev_review_lbl.setTextFormat(Qt.TextFormat.RichText)
+        pr_outer.addWidget(self.prev_review_lbl)
+        self.prev_review_frame.hide()
+        cl_outer.addWidget(self.prev_review_frame)
+
         self.checklist_box = QVBoxLayout()
         self.checklist_box.setSpacing(6)
         cl_outer.addLayout(self.checklist_box)
@@ -837,6 +902,11 @@ class AfterHoursReportPage(QWidget):
             self.session_badge.hide()
             self.regime_badge.hide()
             self.sync_badge.hide()
+            self.kpi_trend_sub.hide()
+            self.kpi_macro_sub.hide()
+            self.events_frame.hide()
+            self.exposure_frame.hide()
+            self.prev_review_frame.hide()
             self.detail_title.setText("暂无盘后复盘日报")
             self.detail_meta.setText("点击右上角「生成 / 重算日报」可立即生成")
             self.tldr_frame.hide()
@@ -1016,6 +1086,36 @@ class AfterHoursReportPage(QWidget):
         else:
             self.kpi_pnl_sub.setToolTip("日收益率分母：前日持仓市值")
 
+        # 近期趋势与回撤坐标（旧存档无 trend 字段时自动隐藏）
+        trend = summary.get("trend") or {}
+        t_parts = []
+        if trend.get("pnl_5d") is not None:
+            p5 = trend.get("pnl_5d")
+            t_parts.append(f"近5日 <span style='color:{_tone_color(p5)}; font-weight:600;'>{_fmt_money(p5, signed=True)}</span>")
+        if trend.get("pct_mtd") is not None:
+            pm = trend.get("pct_mtd")
+            t_parts.append(f"本月 <span style='color:{_tone_color(pm)}; font-weight:600;'>{_fmt_pct(pm)}</span>")
+        if trend.get("drawdown_30d_pct") is not None:
+            dd = float(trend.get("drawdown_30d_pct"))
+            dd_col = "#DC2626" if dd < 0 else "#16A34A"
+            t_parts.append(f"距30日高点 <span style='color:{dd_col}; font-weight:600;'>{dd * 100:.1f}%</span>")
+        if trend.get("streak_days"):
+            sd = int(trend["streak_days"])
+            s_col = "#16A34A" if sd > 0 else "#DC2626"
+            t_parts.append(f"<span style='color:{s_col}; font-weight:600;'>{'连盈' if sd > 0 else '连跌'}{abs(sd)}日</span>")
+        if t_parts:
+            self.kpi_trend_sub.setText(" · ".join(t_parts))
+            wtd_tip = (
+                f"本周 WTD：{_fmt_money(trend.get('pnl_wtd'), signed=True)} ({_fmt_pct(trend.get('pct_wtd'))})"
+                if trend.get("pnl_wtd") is not None
+                else ""
+            )
+            self.kpi_trend_sub.setToolTip(wtd_tip)
+            self.kpi_trend_sub.show()
+        else:
+            self.kpi_trend_sub.setText("")
+            self.kpi_trend_sub.hide()
+
         alpha = summary.get("alpha_vs_qqq")
         if alpha is not None:
             self.kpi_alpha_lbl.setText(f"vs QQQ {_fmt_pct(alpha)}")
@@ -1067,6 +1167,52 @@ class AfterHoursReportPage(QWidget):
             self.kpi_bench_sub.setText(f"<table cellspacing='0' cellpadding='0' style='font-size:11.5px;'>{''.join(b_rows)}</table>")
         else:
             self.kpi_bench_sub.setText("<span style='color:#64748B;'>暂无大盘基准行情</span>")
+
+        # 市场风向标行：SMH / VIX / US10Y（缺项自动略过，全无则隐藏）
+        m_parts = []
+        smh_b = benchmarks.get("SMH")
+        if smh_b and smh_b.get("regular_change_pct") is not None:
+            smh_chg = smh_b.get("regular_change_pct")
+            m_parts.append(f"<b>SMH</b> <span style='color:{_tone_color(smh_chg)}; font-weight:600;'>{_fmt_pct(smh_chg)}</span>")
+        vix_b = benchmarks.get("^VIX")
+        if vix_b and vix_b.get("regular_close") is not None:
+            vix_p = float(vix_b["regular_close"])
+            vix_chg = vix_b.get("regular_change_pct")
+            vix_col = "#DC2626" if (vix_chg is not None and float(vix_chg) > 0) else ("#16A34A" if (vix_chg is not None and float(vix_chg) < 0) else "#64748B")
+            chg_txt = f" (<span style='color:{vix_col};'>{_fmt_pct(vix_chg)}</span>)" if vix_chg is not None else ""
+            m_parts.append(f"<b>VIX</b> {vix_p:.1f}{chg_txt}")
+        tnx_b = benchmarks.get("^TNX")
+        if tnx_b and tnx_b.get("regular_close") is not None:
+            tnx_p = float(tnx_b["regular_close"])
+            if tnx_p > 20:
+                tnx_p = tnx_p / 10.0
+            m_parts.append(f"<b>US10Y</b> {tnx_p:.2f}%")
+        if m_parts:
+            self.kpi_macro_sub.setText(" · ".join(m_parts))
+            self.kpi_macro_sub.show()
+        else:
+            self.kpi_macro_sub.setText("")
+            self.kpi_macro_sub.hide()
+
+        # 未来 7 天事件预警条（仅当存在持仓财报或宏观大事件时显示）
+        up_ev = snap.get("upcoming_events") or {}
+        ev_items = []
+        for ev in (up_ev.get("earnings") or [])[:4]:
+            ev_items.append(
+                f"<span style='background:#FEF3C7; color:#92400E; font-weight:600;'>[财报 T+{ev.get('days_away')}天]</span> "
+                f"<b>{html.escape(str(ev.get('title') or ev.get('symbol') or ''))}</b> ({html.escape(str(ev.get('date') or ''))})"
+            )
+        for ev in (up_ev.get("macro") or [])[:4]:
+            ev_items.append(
+                f"<span style='background:#DBEAFE; color:#1D4ED8; font-weight:600;'>[宏观 T+{ev.get('days_away')}天]</span> "
+                f"{html.escape(str(ev.get('title') or ''))} ({html.escape(str(ev.get('date') or ''))})"
+            )
+        if ev_items:
+            self.events_lbl.setText(" &nbsp;·&nbsp; ".join(ev_items))
+            self.events_frame.show()
+        else:
+            self.events_lbl.setText("")
+            self.events_frame.hide()
 
         lev_pct = float(summary.get("leverage_pct") or 0) * 100.0
         eff_lev = summary.get("effective_leverage")
@@ -1342,14 +1488,81 @@ class AfterHoursReportPage(QWidget):
         if self._current_report:
             self._render_movers(self._current_report)
 
+    def _toggle_prev_review(self):
+        self._prev_review_expanded = not self._prev_review_expanded
+        self.prev_review_lbl.setVisible(self._prev_review_expanded)
+        cur_txt = self.prev_review_toggle_btn.text()
+        if cur_txt.startswith(("▾ ", "▸ ")):
+            self.prev_review_toggle_btn.setText(("▾ " if self._prev_review_expanded else "▸ ") + cur_txt[2:])
+
     def _render_risks_and_checklist(self, rep: dict):
         _clear_layout(self.risks_box)
         _clear_layout(self.checklist_box)
 
+        snap = rep.get("snapshot") or {}
         structured = rep.get("structured") or {}
         risks = structured.get("risks") or []
         checklist = structured.get("checklist") or []
         checked = set(rep.get("checked_ids") or [])
+
+        # 底层资产穿透敞口 Top 3（旧存档无 exposure_breakdown 时自动隐藏）
+        exp_bd = snap.get("exposure_breakdown") or {}
+        under_top = exp_bd.get("by_underlying") or []
+        sec_top = exp_bd.get("by_sector") or []
+        if under_top:
+            chips = []
+            for it in under_top[:3]:
+                pct_v = it.get("pct_of_mv")
+                pct_s = f"{float(pct_v) * 100:.0f}%" if pct_v is not None else "—"
+                chips.append(
+                    f"<span style='background:#EFF6FF; color:#1D4ED8; font-weight:600;'>"
+                    f"{html.escape(str(it.get('label') or it.get('key') or ''))} {pct_s}</span>"
+                )
+            self.exposure_lbl.setText("<b style='color:#475569;'>穿透敞口 Top 3：</b>" + " · ".join(chips))
+            tip_lines = [
+                "底层资产 Top 5：" + "，".join(
+                    f"{x.get('label')} {float(x.get('pct_of_mv') or 0) * 100:.1f}%"
+                    for x in under_top[:5]
+                )
+            ]
+            if sec_top:
+                tip_lines.append(
+                    "主题板块 Top 4：" + "，".join(
+                        f"{x.get('label')} {float(x.get('pct_of_mv') or 0) * 100:.1f}%"
+                        for x in sec_top[:4]
+                    )
+                )
+            self.exposure_frame.setToolTip("\n".join(tip_lines))
+            self.exposure_frame.show()
+        else:
+            self.exposure_lbl.setText("")
+            self.exposure_frame.hide()
+
+        # 昨日计划复盘（旧存档或无昨日复盘时自动隐藏）
+        prev_rev = structured.get("prev_checklist_review")
+        if isinstance(prev_rev, dict) and (prev_rev.get("summary") or prev_rev.get("items")):
+            p_date = str(prev_rev.get("prev_date") or "").strip()
+            prefix = "▾ " if self._prev_review_expanded else "▸ "
+            self.prev_review_toggle_btn.setText(
+                f"{prefix}昨日计划复盘" + (f" ({p_date})" if p_date else "")
+            )
+            lines = []
+            if prev_rev.get("summary"):
+                lines.append(html.escape(str(prev_rev["summary"])))
+            for it in (prev_rev.get("items") or [])[:5]:
+                st_val = str(it.get("status") or "未触发")
+                st_col = "#15803D" if st_val == "已执行" else ("#B45309" if st_val == "已触发" else ("#DC2626" if st_val == "未执行" else "#64748B"))
+                lines.append(
+                    f"• <b>{html.escape(str(it.get('ticker') or ''))}</b> "
+                    f"<span style='color:{st_col}; font-weight:600;'>[{html.escape(st_val)}]</span> "
+                    f"{html.escape(str(it.get('note') or ''))}"
+                )
+            self.prev_review_lbl.setText("<br>".join(lines))
+            self.prev_review_lbl.setVisible(self._prev_review_expanded)
+            self.prev_review_frame.show()
+        else:
+            self.prev_review_lbl.setText("")
+            self.prev_review_frame.hide()
 
         high_cnt = sum(1 for r in risks if r.get("level") == "高危")
         self.risk_tag.setText(f"{high_cnt} 项高危" if high_cnt > 0 else "风险可控")

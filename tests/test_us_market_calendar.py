@@ -64,3 +64,19 @@ def test_previous_us_trading_day_skips_holidays_and_weekends():
     # 2026-07-06（周一）上一个交易日应跳过周末和 07-03（独立日补休）回到 07-02（周四）
     assert is_us_trading_day(date(2026, 7, 3)) is False
     assert previous_us_trading_day(date(2026, 7, 6)) == date(2026, 7, 2)
+
+
+def test_us_macro_events_and_upcoming_window():
+    """验证 FOMC/CPI/NFP/PCE 宏观日程与 1~7 天窗口筛选及跨年兼容。"""
+    from portfolio.domain.us_market_calendar import get_upcoming_us_macro_events
+
+    # 2026-12-08 之后 7 天内包含 12-09 FOMC 与 12-10 CPI
+    evs = get_upcoming_us_macro_events(date(2026, 12, 8), days_ahead=7)
+    titles = [e["title"] for e in evs]
+    assert any("FOMC" in t for t in titles)
+    assert any("CPI" in t for t in titles)
+    assert all(1 <= e["days_away"] <= 7 for e in evs)
+
+    # 跨年窗口：2026-12-30 之后 7 天不应包含当日（0 天），可覆盖次年初非农（2027-01-08 超过 7 天则不含）
+    ny_evs = get_upcoming_us_macro_events(date(2026, 12, 30), days_ahead=7)
+    assert all(e["date"] > "2026-12-30" for e in ny_evs)
