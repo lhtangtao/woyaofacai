@@ -209,3 +209,47 @@ def test_cash_summary_banner_ui_offscreen():
     banner.update_cash(other_analytics, Decimal("10000.00"))
     assert banner.isHidden()
     app.processEvents()
+
+
+def test_fetch_longbridge_cash_includes_frozen_and_settling(monkeypatch):
+    """验证长桥现金口径包含可用、挂单冻结与待结算美元现金之和。"""
+    import sys
+    from types import ModuleType
+
+    from portfolio.services.channel_cash import fetch_longbridge_cash
+
+    fake_usd = SimpleNamespace(
+        currency="USD",
+        available_cash=Decimal("1522.61"),
+        frozen_cash=Decimal("2158.23"),
+        settling_cash=Decimal("100.00"),
+    )
+    fake_hkd = SimpleNamespace(
+        currency="HKD",
+        available_cash=Decimal("500.00"),
+        frozen_cash=Decimal("0"),
+        settling_cash=Decimal("0"),
+    )
+
+    class _FakeConfig:
+        @classmethod
+        def from_apikey(cls, app_key, app_secret, access_token):
+            return cls()
+
+    class _FakeTradeContext:
+        def __init__(self, cfg):
+            pass
+
+        def account_balance(self):
+            return [SimpleNamespace(cash_infos=[fake_hkd, fake_usd])]
+
+    fake_lb_mod = ModuleType("longbridge.openapi")
+    fake_lb_mod.Config = _FakeConfig
+    fake_lb_mod.TradeContext = _FakeTradeContext
+    monkeypatch.setitem(sys.modules, "longbridge.openapi", fake_lb_mod)
+    monkeypatch.setattr(
+        "portfolio.sync.longbridge_credentials.load_longbridge_credentials",
+        lambda: ("tok", "key", "sec"),
+    )
+
+    assert fetch_longbridge_cash() == Decimal("3780.84")

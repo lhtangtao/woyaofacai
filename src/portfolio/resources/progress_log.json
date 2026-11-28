@@ -1,5 +1,16 @@
 [
   {
+    "title": "对齐长桥实时现金口径（包含挂单冻结与待结算美元资金）",
+    "time": "2026-11-28 12:46",
+    "author": "Antigravity",
+    "tag": "长桥现金口径对齐",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "修正长桥实时现金口径（`src/portfolio/services/channel_cash.py`）：将 `fetch_longbridge_cash()` 由仅读取 `available_cash` 改为使用 `Decimal` 精确加总 `available_cash + frozen_cash + settling_cash`，与长桥账户总现金及嘉信口径完全一致，避免挂单冻结或 T+1 卖出待结算时总现金与总资产缩水。",
+      "验证范围：`tests/test_channel_cash_anchors.py` 6 项测试全部通过；实盘调用 `fetch_longbridge_cash()` 返回 `$3,680.84`（可用 `$1,522.61` + 冻结 `$2,158.23`），与长桥 `total_cash` 完全一致。"
+    ]
+  },
+  {
     "title": "修复盘后自动调度判重逻辑（支持盘前/盘中提前手动生成在盘后自动覆盖）",
     "time": "2026-11-28 12:40",
     "author": "Antigravity",

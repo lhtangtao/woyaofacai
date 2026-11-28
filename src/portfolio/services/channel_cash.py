@@ -255,10 +255,11 @@ def resolve_channel_cash_details(snapshot_or_analytics) -> dict[str, dict[str, A
 
 
 def fetch_longbridge_cash() -> Optional[Decimal]:
-    """Fetch USD available cash from Longbridge OpenAPI."""
+    """Fetch USD total cash (available + frozen + settling) from Longbridge OpenAPI."""
     try:
-        from portfolio.sync.longbridge_credentials import load_longbridge_credentials
         from longbridge.openapi import Config, TradeContext
+
+        from portfolio.sync.longbridge_credentials import load_longbridge_credentials
         token, key, secret = load_longbridge_credentials()
         cfg = Config.from_apikey(app_key=key, app_secret=secret, access_token=token)
         ctx = TradeContext(cfg)
@@ -266,7 +267,10 @@ def fetch_longbridge_cash() -> Optional[Decimal]:
         if balances:
             for c in balances[0].cash_infos:
                 if getattr(c, "currency", "").upper() == "USD":
-                    return Decimal(str(c.available_cash))
+                    avail = Decimal(str(getattr(c, "available_cash", 0) or 0))
+                    frozen = Decimal(str(getattr(c, "frozen_cash", 0) or 0))
+                    settling = Decimal(str(getattr(c, "settling_cash", 0) or 0))
+                    return avail + frozen + settling
     except Exception as exc:
         logger.warning("获取长桥账户现金失败：%s", exc)
     return None

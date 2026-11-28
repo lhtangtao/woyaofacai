@@ -1,3 +1,9 @@
+## 2026-11-28 12:46 对齐长桥实时现金口径（包含挂单冻结与待结算资金）
+
+- 修改者：Antigravity（代码修改）
+- 在 `src/portfolio/services/channel_cash.py` 将 `fetch_longbridge_cash()` 由仅取 `available_cash` 调整为 `available_cash + frozen_cash + settling_cash`（使用 `Decimal` 精确相加），与长桥账户总现金及嘉信现金口径保持一致，避免买入挂单冻结或 T+1 卖出待结算导致总现金与总资产少算。
+- 在 `tests/test_channel_cash_anchors.py` 补充单测并全部通过，实盘验证长桥美元总现金为 `$3,680.84`（可用 `$1,522.61` + 冻结 `$2,158.23`）。
+
 ## 2026-11-28 12:40 修复盘后自动调度判重逻辑（支持盘前/盘中草稿在盘后自动覆盖）并补跑 2026-11-27 最终版日报
 
 - 修改者：Antigravity（代码修改）
