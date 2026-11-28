@@ -1360,3 +1360,23 @@ def test_desktop_after_hours_new_dimensions_and_legacy_compat(demo_path, tmp_pat
     assert page.events_frame.isHidden()
     assert page.exposure_frame.isHidden()
     assert page.prev_review_frame.isHidden()
+
+
+def test_should_auto_generate_report_overwrites_intraday_draft():
+    """验证盘前/盘中提前手动生成的临时日报，在盘后结束窗口到来后仍会被自动调度覆盖重算。"""
+    from portfolio.services.after_hours_report import should_auto_generate_report
+
+    # 无存档 -> 应生成
+    assert should_auto_generate_report(None, date(2026, 11, 27)) is True
+
+    # 2026-11-27 黑五半日市（盘后触发时间 17:10 ET = 北京时间次日 06:10）
+    # 昨晚北京时间 22:20（美东 09:20 开盘前）手动生成 -> 应允许盘后覆盖
+    assert should_auto_generate_report({"generated_at": "2026-11-27T22:20:17+08:00"}, date(2026, 11, 27)) is True
+    # 次日北京时间 06:15（美东 17:15，已过 17:10 窗口）生成 -> 不重复触发
+    assert should_auto_generate_report({"generated_at": "2026-11-28T06:15:00+08:00"}, date(2026, 11, 27)) is False
+
+    # 2026-11-25 常规交易日（触发时间 20:10 ET = 北京时间次日 09:10）
+    # 盘中北京时间 23:00（美东 10:00）生成 -> 应允许盘后覆盖
+    assert should_auto_generate_report({"generated_at": "2026-11-25T23:00:00+08:00"}, date(2026, 11, 25)) is True
+    # 次日北京时间 09:12（美东 20:12）生成 -> 不重复触发
+    assert should_auto_generate_report({"generated_at": "2026-11-26T09:12:00+08:00"}, date(2026, 11, 25)) is False

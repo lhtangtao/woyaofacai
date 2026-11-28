@@ -2272,15 +2272,45 @@ def generate_after_hours_report(
     return target_store.save_report(report)
 
 
+def should_auto_generate_report(existing_report: Optional[Dict[str, Any]], ny_day: date) -> bool:
+    """判断自动调度器是否应为指定美东交易日生成/覆盖盘后复盘日报。
+
+    - 若当日尚无存档，返回 True；
+    - 若当日已有存档，但生成时间早于当日盘后自动触发时间（常规日美东 20:10 / 半日市美东 17:10），
+      说明是盘前或盘中提前手动生成的临时版本，盘后结束后应自动用最终收盘+盘后数据重算覆盖，返回 True；
+    - 若已在盘后触发窗口之后生成过，返回 False 避免重复触发。
+    """
+    if not existing_report:
+        return True
+    gen_raw = str(existing_report.get("generated_at") or "").strip()
+    if not gen_raw:
+        return False
+    try:
+        gen_dt = datetime.fromisoformat(gen_raw.replace("Z", "+00:00"))
+        if gen_dt.tzinfo is None:
+            gen_dt = gen_dt.replace(tzinfo=BJ_TZ)
+        gen_ny = gen_dt.astimezone(NY_TZ)
+    except Exception:
+        return False
+
+    session = get_us_market_session(ny_day)
+    if not session.is_trading_day:
+        return False
+    trig_time = session.recommended_trigger_et or dt_time(20, 10)
+    cutoff_ny = datetime.combine(ny_day, trig_time, tzinfo=NY_TZ)
+    return gen_ny < cutoff_ny
+
+
 def _scheduler_loop(store: AfterHoursReportStore, db_path: Path, poll_seconds: int = 60):
-    """后台轻量化定时线程：美东每个交易日 20:10 后自动为「个人」生成盘后复盘日报。"""
+    """后台轻量化定时线程：美东每个交易日盘后结束窗口自动为「个人」生成或补全盘后复盘日报。"""
     lock_path = store.path.with_name("after_hours_scheduler.lock")
     while True:
         try:
             ready, ny_day = is_after_hours_ready()
             if ready and db_path.is_file():
                 p_key, _, _ = resolve_person_scope(db_path, person_key="个人")
-                if not store.has_report(ny_day.isoformat(), p_key):
+                rid = make_report_id(ny_day.isoformat(), p_key)
+                if should_auto_generate_report(store.get_report(rid), ny_day):
                     lock_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(lock_path, "w", encoding="utf-8") as lock_file:
                         try:
@@ -2291,7 +2321,7 @@ def _scheduler_loop(store: AfterHoursReportStore, db_path: Path, poll_seconds: i
                             continue
                         try:
                             # 拿到文件锁后二次确认，避免重复生成
-                            if not store.has_report(ny_day.isoformat(), p_key):
+                            if should_auto_generate_report(store.get_report(rid), ny_day):
                                 logger.info("[盘后复盘调度] 检测到美股交易日 %s 盘后已结束，开始自动同步并生成日报", ny_day)
                                 generate_after_hours_report(
                                     trade_date=ny_day,

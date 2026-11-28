@@ -1,5 +1,17 @@
 [
   {
+    "title": "修复盘后自动调度判重逻辑（支持盘前/盘中提前手动生成在盘后自动覆盖）",
+    "time": "2026-11-28 12:40",
+    "author": "Antigravity",
+    "tag": "调度判重修复",
+    "details": [
+      "修改者：Antigravity（代码修改）",
+      "优化盘后自动调度判重（`src/portfolio/services/after_hours_report.py`）：新增 `should_auto_generate_report()` 并在 `_scheduler_loop()` 中替换原 `has_report()` 简单判重；当已有存档的 `generated_at` 早于当日盘后自动触发时间（常规日美东 20:10 / 半日市 17:10）时，盘后结束后仍会自动同步并覆盖生成最终完整版。",
+      "已完成 `2026-11-27::个人` 黑五半日市最终版盘后复盘日报补跑（完整生成趋势回撤、市场风向标、未来 7 天预警、昨日复盘闭环与穿透敞口）。",
+      "验证范围：`tests/test_after_hours_report.py` 18 项测试全部通过；`ruff check` 0 错误；8888 服务已重启加载最新调度逻辑。"
+    ]
+  },
+  {
     "title": "盘后复盘日报 2.0 扩充 5 项每日高价值汇总维度（趋势回撤、风向标、7天预警、昨日复盘与穿透敞口）",
     "time": "2026-11-28 00:52",
     "author": "Antigravity",
