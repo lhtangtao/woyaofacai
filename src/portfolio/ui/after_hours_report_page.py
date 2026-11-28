@@ -47,6 +47,7 @@ from portfolio.services.after_hours_report import (
     resolve_default_trade_date,
 )
 from portfolio.ui.date_picker import DatePicker
+from portfolio.ui.markdown_render import markdown_to_qt_html
 
 logger = logging.getLogger(__name__)
 
@@ -1248,7 +1249,7 @@ class AfterHoursReportPage(QWidget):
         news_cnt = self._render_news(rep)
         self.tabs.setTabText(1, f"今日操作复盘 ({len(trades)})")
         self.tabs.setTabText(2, f"突发新闻情报 ({news_cnt})")
-        self.viewer.setMarkdown(str(rep.get("markdown") or ""))
+        self.viewer.setHtml(markdown_to_qt_html(str(rep.get("markdown") or "")))
         self._render_followups(rep)
         self.right_scroll._sync_widget_width()
 

@@ -34,6 +34,7 @@ from portfolio.ui.ai_google_api_dialog import (
 )
 from portfolio.ui.filters import TickerSearch
 from portfolio.ui.icons import icon
+from portfolio.ui.markdown_render import markdown_to_qt_html
 from portfolio.ui.theme import numeric_font, tokens
 
 
@@ -100,7 +101,7 @@ class AutoResizingStockBrowser(QTextBrowser):
             self.document().setTextWidth(w)
             doc_h = int(self.document().size().height())
             if doc_h > 0:
-                self.setFixedHeight(doc_h + 4)
+                self.setFixedHeight(doc_h + 10)
 
 
 class StockChatMessageWidget(QFrame):
@@ -177,7 +178,7 @@ class StockChatMessageWidget(QFrame):
         # 正文展示
         if role == "assistant":
             self.body_view = AutoResizingStockBrowser(self)
-            self.body_view.setMarkdown(content)
+            self.body_view.setHtml(markdown_to_qt_html(content))
             self.body_view.adjust_content_height()
             layout.addWidget(self.body_view)
         else:

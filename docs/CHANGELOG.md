@@ -1,3 +1,10 @@
+## 2026-11-28 17:51 修复桌面端 AI 问答与复盘 Markdown 表格吞字 Bug 并全面升级研报排版
+
+- 修改者：Antigravity（代码修改）
+- 新增 `src/portfolio/ui/markdown_render.py`（`markdown_to_qt_html`），替换桌面端 `ai_stock_analysis_page.py`、`ai_assistant_page.py` 与 `after_hours_report_page.py` 中直接调用的 `QTextBrowser.setMarkdown()`，彻底解决 Qt 6 MD4C 遇到表格内 `<br>` 导致后续单元格与整篇文章变成空壳的解析 Bug。
+- 同步升级研报视觉排版：斑马纹全宽表格与柔和边框、单元格内 `<br>` 真实换行、分明标题层级、多级嵌套列表、蓝色左侧边栏引用块、等宽代码块，以及含反斜杠命令的 LaTeX 公式 Unicode 美化（严格区分 `$30.00` 等美元金额不误伤）。
+- 新增 `tests/test_markdown_render.py`，联合 `tests/test_after_hours_report.py` 21 项测试全部通过，并使用真实 CRCL 研报全文验证完整渲染。
+
 ## 2026-11-28 12:46 对齐长桥实时现金口径（包含挂单冻结与待结算资金）
 
 - 修改者：Antigravity（代码修改）
